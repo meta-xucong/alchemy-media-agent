@@ -9,7 +9,8 @@ without a complete reviewed result and explicit user confirmation.
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Callable
+from typing import Any, Literal
 
 from pydantic import ConfigDict, field_validator
 
@@ -57,8 +58,14 @@ class PeopleAssetActivationRequest(V3BaseModel):
 class PeopleAssetLifecycleService:
     """Project-scoped catalog operations used by Product API and hosts."""
 
-    def __init__(self, catalog: InMemoryVisualAssetCatalog) -> None:
+    def __init__(
+        self,
+        catalog: InMemoryVisualAssetCatalog,
+        *,
+        root_source_resolver: Callable[[str], Any | None] | None = None,
+    ) -> None:
         self.catalog = catalog
+        self.root_source_resolver = root_source_resolver
 
     def create_draft(
         self,
@@ -68,6 +75,11 @@ class PeopleAssetLifecycleService:
         project_id = project_id.strip()
         if not project_id:
             raise ValueError("project_id is required")
+        if self.root_source_resolver is not None:
+            source = self.root_source_resolver(request.root_source_asset_id)
+            status = str(getattr(source, "status", "") or "").lower() if source is not None else ""
+            if source is None or status != "ready":
+                raise ValueError("root_source_asset_not_ready")
         people_asset_id = (request.people_asset_id or "").strip() or self._new_asset_id()
         if self.catalog.get(project_id, people_asset_id) is not None:
             raise ValueError("people_asset_already_exists")

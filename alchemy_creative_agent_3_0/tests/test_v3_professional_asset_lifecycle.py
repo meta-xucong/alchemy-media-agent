@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
@@ -15,7 +17,7 @@ from alchemy_creative_agent_3_0.app.visual_assets import (
 )
 
 
-def _pack(people_asset_id: str, project_id: str) -> IdentityAnchorPackVersion:
+def _pack(people_asset_id: str, project_id: str, root_source_asset_id: str) -> IdentityAnchorPackVersion:
     views = [
         AnchorView(
             view_id=f"view_{role}",
@@ -38,7 +40,7 @@ def _pack(people_asset_id: str, project_id: str) -> IdentityAnchorPackVersion:
         anchor_views=views,
         root_source_provenance=RootSourceProvenance(
             source_type="uploaded_portrait",
-            source_asset_id="uploaded_child_portrait",
+            source_asset_id=root_source_asset_id,
             project_id=project_id,
             consent_reference="user-authorized-child-source-20260718",
         ),
@@ -49,19 +51,35 @@ def _pack(people_asset_id: str, project_id: str) -> IdentityAnchorPackVersion:
 def _handlers(tmp_path):
     catalog = PersistentVisualAssetCatalog(tmp_path / "visual-assets")
     service = V3ProductApiService(visual_asset_catalog=catalog)
+    content = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    upload = service.create_uploaded_asset(
+        {
+            "filename": "child.png",
+            "mime_type": "image/png",
+            "size_bytes": len(content),
+            "role": "face_reference",
+        }
+    )
+    assert service.store_uploaded_asset_content(
+        upload.asset_id,
+        {"content_base64": base64.b64encode(content).decode("ascii"), "mime_type": "image/png"},
+    ) is not None
+    assert service.complete_uploaded_asset(upload.asset_id) is not None
     handlers = V3ProductRouteHandlers(service=service, project_store=InMemoryProjectStore())
     project = handlers.post_projects({"user_goal": "Professional child face asset"})["project"]
-    return handlers, catalog, project["project_id"]
+    return handlers, catalog, project["project_id"], upload.asset_id
 
 
 def test_people_asset_formal_entry_persists_project_scoped_draft(tmp_path) -> None:
-    handlers, catalog, project_id = _handlers(tmp_path)
+    handlers, catalog, project_id, root_source_asset_id = _handlers(tmp_path)
 
     created = handlers.post_project_people_asset(
         project_id,
         {
             "people_asset_id": "child_asset",
-            "root_source_asset_id": "uploaded_child_portrait",
+            "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
         },
     )
@@ -70,22 +88,35 @@ def test_people_asset_formal_entry_persists_project_scoped_draft(tmp_path) -> No
     assert created["people_asset"]["status"] == "draft"
     restored = PersistentVisualAssetCatalog(tmp_path / "visual-assets")
     assert restored.get(project_id, "child_asset").status == "draft"
-    assert restored.get(project_id, "child_asset").root_source_provenance.source_asset_id == "uploaded_child_portrait"
+    assert restored.get(project_id, "child_asset").root_source_provenance.source_asset_id == root_source_asset_id
     assert restored.list_history(project_id, "child_asset")[0].event_type == "create"
     assert catalog.list_assets(project_id)[0].people_asset_id == "child_asset"
 
 
+def test_people_asset_formal_entry_rejects_non_ready_root_source(tmp_path) -> None:
+    handlers, _, project_id, _ = _handlers(tmp_path)
+    with pytest.raises(ValueError, match="root_source_asset_not_ready"):
+        handlers.post_project_people_asset(
+            project_id,
+            {
+                "people_asset_id": "child_asset",
+                "root_source_asset_id": "v3_asset_0000000000000000",
+                "consent_reference": "user-authorized-child-source-20260718",
+            },
+        )
+
+
 def test_people_asset_activation_requires_a_complete_pack_and_explicit_confirmation(tmp_path) -> None:
-    handlers, catalog, project_id = _handlers(tmp_path)
+    handlers, catalog, project_id, root_source_asset_id = _handlers(tmp_path)
     handlers.post_project_people_asset(
         project_id,
         {
             "people_asset_id": "child_asset",
-            "root_source_asset_id": "uploaded_child_portrait",
+            "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
         },
     )
-    catalog.save_pack(_pack("child_asset", project_id), project_id=project_id, event_type="activate")
+    catalog.save_pack(_pack("child_asset", project_id, root_source_asset_id), project_id=project_id, event_type="activate")
 
     with pytest.raises(ValueError, match="explicit user confirmation"):
         handlers.post_project_people_asset_activate(
@@ -109,12 +140,12 @@ def test_people_asset_activation_requires_a_complete_pack_and_explicit_confirmat
 
 
 def test_people_asset_activation_rejects_missing_or_unreviewed_pack(tmp_path) -> None:
-    handlers, _, project_id = _handlers(tmp_path)
+    handlers, _, project_id, root_source_asset_id = _handlers(tmp_path)
     handlers.post_project_people_asset(
         project_id,
         {
             "people_asset_id": "child_asset",
-            "root_source_asset_id": "uploaded_child_portrait",
+            "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
         },
     )
@@ -128,16 +159,16 @@ def test_people_asset_activation_rejects_missing_or_unreviewed_pack(tmp_path) ->
 
 
 def test_people_asset_activation_rejects_pack_with_different_root(tmp_path) -> None:
-    handlers, catalog, project_id = _handlers(tmp_path)
+    handlers, catalog, project_id, root_source_asset_id = _handlers(tmp_path)
     handlers.post_project_people_asset(
         project_id,
         {
             "people_asset_id": "child_asset",
-            "root_source_asset_id": "uploaded_child_portrait",
+            "root_source_asset_id": root_source_asset_id,
             "consent_reference": "user-authorized-child-source-20260718",
         },
     )
-    wrong_root = _pack("child_asset", project_id).model_copy(
+    wrong_root = _pack("child_asset", project_id, root_source_asset_id).model_copy(
         update={
             "root_source_provenance": RootSourceProvenance(
                 source_type="uploaded_portrait",
@@ -158,7 +189,7 @@ def test_people_asset_activation_rejects_pack_with_different_root(tmp_path) -> N
 
 
 def test_standard_job_does_not_consult_people_asset_lifecycle(tmp_path) -> None:
-    handlers, _, project_id = _handlers(tmp_path)
+    handlers, _, project_id, _ = _handlers(tmp_path)
     result = handlers.post_jobs({"user_input": "Create a simple still life."})
     assert result["status"] == "planned"
     assert handlers.get_project_people_assets(project_id)["people_assets"] == []
