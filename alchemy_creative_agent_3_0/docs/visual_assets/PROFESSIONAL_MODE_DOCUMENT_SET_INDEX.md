@@ -128,6 +128,23 @@ shared Vision still rejected all of them for human-skin/AI-polish defects, so
 the serial chain stopped before three-quarter and profile. It is non-counting
 evidence and does not open any production gate.
 
+### Doc165 Technical M5 And Doc166 Quality Reopening
+
+`../165_V3_PROFESSIONAL_ANCHOR_VIEW_SIGNOFF_AND_STAGE_REPAIR_BUDGET_SPEC.md`
+
+Records the completed local serial M5 execution, unchanged identity/view gates,
+shared review, bounded repair, winner persistence and explicit activation. This
+remains valid technical evidence for that exact run.
+
+`../166_V3_SHARED_DEVELOPMENTAL_AGE_COHERENCE_AND_PROFESSIONAL_NEUTRAL_ANCHOR_QUALITY_SPEC.md`
+
+Reopens the narrower approximately-six-year-old visual-quality claim after
+side-by-side human review found developmental-age drift, adult gaze/styling,
+yellow/muddy skin, synthetic texture and inconsistent grey capture conditions.
+It keeps the same architecture and requires a shared, Brain-owned age-coherence
+refinement plus a Professional-only neutral evidence-capture objective. It does
+not invalidate Doc165 lifecycle evidence, add a child module or open production.
+
 ### Persistent People Asset Lifecycle And Controlled Runtime Handoff
 
 `PROFESSIONAL_MODE_PERSISTENT_ASSET_LIFECYCLE_AND_CONTROLLED_RUNTIME_HANDOFF_20260718.md`

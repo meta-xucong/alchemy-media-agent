@@ -3,6 +3,15 @@
 Status: implementation, regression and local formal M5 pixel acceptance complete.
 Production/browser activation remains a separate release decision and stays off.
 
+> **Doc166 visual-quality forward note:** the formal run below remains valid
+> technical evidence for serial execution, reference parity, review, bounded
+> repair, winner persistence and pack activation. A later side-by-side human
+> audit reopened the clarified approximately-six-year-old developmental-age,
+> neutral model-card capture and commercial complexion quality claim. The
+> Doc165 scores and activation must not be cited as proof that those newer
+> visual requirements passed. Doc166 governs the next quality implementation
+> and rerun without rewriting this historical evidence.
+
 ## 1. Live failure evidence
 
 The latest bounded M5 run passed `standard_front` and `three_quarter`. The frozen
