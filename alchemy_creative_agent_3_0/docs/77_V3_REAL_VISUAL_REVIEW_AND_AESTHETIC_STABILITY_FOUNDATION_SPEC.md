@@ -1,5 +1,14 @@
 # 77 V3 Real Visual Review And Aesthetic Stability Foundation
 
+Doc94/159 correction note:
+
+```text
+Any named demographic complexion wording below is retained only as historical
+validation context. Under Doc94 and Doc159 it must not activate or word a fresh runtime prompt.
+Fresh work follows user-owned complexion intent and otherwise
+uses scene-balanced neutrality through the shared Brain-authored direction.
+```
+
 ## 1. Purpose
 
 Doc77 is a foundation-quality pass.

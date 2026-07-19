@@ -1,6 +1,15 @@
 # 78 V3 Long-Term Identity And Beautiful Realism Final Tuning
 
-Doc94/95 correction note:
+Doc94/159 correction note:
+
+```text
+Any named demographic complexion wording below is retained only as historical
+validation context. Under Doc94 and Doc159 it must not activate or word a fresh runtime prompt.
+Fresh work follows user-owned complexion intent and otherwise
+uses scene-balanced neutrality through the shared Brain-authored direction.
+```
+
+Doc94/95 identity correction note:
 
 ```text
 Doc78 remains a long-term identity and beautiful-realism objective. Named
