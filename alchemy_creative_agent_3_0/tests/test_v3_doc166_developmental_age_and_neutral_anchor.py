@@ -239,9 +239,9 @@ def test_doc166_finalizer_requires_current_request_owned_age_receipt() -> None:
         "owner": "remote_v3_llm_brain",
     }
     assert "source portrait remains identity evidence" in payload["remote_response_contract"]
-    assert "merely repeats an age number or age label" in payload["remote_response_contract"]
-    assert "independent observer who cannot read the prompt" in payload["remote_response_contract"]
-    assert "do not append feature instructions" in payload["remote_response_contract"]
+    assert "A stated stage remains valid renderer language" in payload["remote_response_contract"]
+    assert "do not explain or manufacture the stage through inferred facial morphology" in payload["remote_response_contract"]
+    assert "Do not append feature instructions" in payload["remote_response_contract"]
 
 
 def test_doc166_runtime_carries_age_capture_and_view_to_one_brain_signoff(

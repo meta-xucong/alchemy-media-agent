@@ -226,7 +226,8 @@ When the user or selected Professional brief explicitly owns a bright commercial
 complexion direction, Doc159 applies. The desired reading is:
 
 - bright, clean and naturally fair rather than yellow, orange, grey or muddy;
-- neutral with restrained peach-pink vitality rather than bleached white;
+- faithful to the user-owned hue and undertone, or scene-balanced neutral when
+  unspecified, rather than automatically warm, yellow or bleached white;
 - age-appropriate natural smoothness with subtle camera-resolved variation;
 - clean shadow color around cheeks, nose, mouth, jaw and neck;
 - restrained highlights that follow facial planes without oily sheen, waxiness

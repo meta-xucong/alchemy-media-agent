@@ -124,9 +124,9 @@ def test_doc167_brain_receipt_requires_integrated_developmental_presence() -> No
         "owner": "remote_v3_llm_brain",
     }
     contract = payload["remote_response_contract"]
-    assert "explicit age words were removed" in contract
-    assert "generic age label" in contract
-    assert "one integrated person" in contract
+    assert "do not explain or manufacture the stage through inferred facial morphology" in contract
+    assert "A stated stage remains valid renderer language" in contract
+    assert "complete person and situation" in contract
     assert "facial measurement" in contract
     assert "developmental_presence_requirement" in SYSTEM_PROMPT
 

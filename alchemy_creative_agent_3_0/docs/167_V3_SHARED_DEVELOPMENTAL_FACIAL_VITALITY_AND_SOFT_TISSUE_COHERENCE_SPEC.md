@@ -129,12 +129,12 @@ receipts remain readable but cannot certify this stronger application duty.
 
 ## 5. Remote Brain final-signoff duty
 
-When the obligation applies, the Brain must ask a perceptual question before
-approving the canonical Provider prompt:
-
-> If the explicit age words were removed, would this particular person's face,
-> attention and expression still communicate the requested developmental
-> stage in this exact scene?
+When the obligation applies, the Brain must ask whether the complete person,
+attention and situation coherently inhabit the requested developmental stage.
+That is an internal semantic judgement; it does not require the renderer
+prompt to explain the stage through facial morphology or to make the age words
+redundant. A direct stage statement remains valid when the rest of the complete
+direction supports it.
 
 If not, it rewrites the entire direction. The rewrite must remain natural,
 person-specific prose. It must resolve the person's developmental presence in
@@ -155,11 +155,12 @@ looks similar. This is not local age estimation: it is the Brain honoring the
 user's unambiguous ownership decision. `preserve_reference_stage` is reserved
 for continuity requests that leave developmental stage owned by the reference.
 
-The Brain must not satisfy the contract with generic labels alone, including
+The Brain must not use a generic label to excuse a contradictory whole-person
+direction. Labels such as
 `childlike`, `youthful`, `cute`, `natural`, `lively`, `baby fat`, `big eyes` or
-`age appropriate`. These may appear only when genuinely useful inside a
-complete person-and-scene direction; they are never sufficient evidence by
-themselves.
+`age appropriate` may appear only when user-owned or genuinely useful inside a
+complete person-and-scene direction. The Brain must never invent facial
+morphology so an age label is no longer needed.
 
 ## 6. Shared pixel review
 

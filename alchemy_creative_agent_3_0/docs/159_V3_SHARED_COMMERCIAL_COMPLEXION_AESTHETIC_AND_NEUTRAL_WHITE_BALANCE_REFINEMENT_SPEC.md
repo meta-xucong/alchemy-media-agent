@@ -36,12 +36,18 @@ reference may guide complexion, white balance, and skin material only when the
 user explicitly assigns that role. It must not transfer the reference person's
 identity, age, face, hair, wardrobe, scene, or mood.
 
-The Brain must resolve the preference as a whole photographic decision:
+The Brain must resolve the preference as a whole photographic decision. The
+explicitly user-owned hue and undertone are authoritative; this document does
+not impose a universal warm, cool, peach or pink complexion:
 
-- neutral-to-slightly-warm white balance rather than a yellow/amber cast;
-- a modestly brighter, clean, naturally light complexion whose overall reading
-  is softly neutral and light, with restrained peach-pink warmth rather than a
-  golden or orange cast;
+- a user-requested cool or cool-neutral fair presentation remains cool-neutral,
+  without a compensatory peach, amber, golden or generic warm-beauty bias;
+- a user-requested warmer, darker, tanned, documentary, historical or
+  mood-specific complexion remains owned by that request;
+- when hue or undertone is not assigned, scene-balanced neutrality is used
+  instead of inventing warmth or coolness;
+- a modestly brighter, clean and naturally light complexion when that
+  brightness is explicitly owned by the brief;
 - brightness coming from clean scene light rather than lifted exposure;
 - fine-grained, irregular real skin texture and restrained matte highlights
   that follow facial planes instead of diffusing across the whole face;
@@ -68,10 +74,10 @@ identity anchor, fixed palette, or universal treatment.
 
 When the commercial complexion decision is active, the Brain must perform a
 silent completeness check before returning its final provider prompt. The
-complete natural-language direction must carry the resolved neutral hue,
-restrained warmth, and face-plane highlight behavior; a generic word such as
-“natural” or “fair” alone is not sufficient. This is a Brain self-check, not a
-local string validator or a prompt suffix.
+complete natural-language direction must carry the resolved user-owned hue and
+undertone, separation from scene cast, and face-plane highlight behavior; a
+generic word such as “natural” or “fair” alone is not sufficient. This is a
+Brain self-check, not a local string validator or a prompt suffix.
 
 ## Authoritative path
 
@@ -128,11 +134,14 @@ activate this behaviour through ethnicity or East Asian keywords.
 
 ## Final acceptance closure
 
-The final controlled comparison establishes the accepted commercial form for
-this foundation capability:
+The earlier controlled comparison established the material-realism part of
+this foundation capability, but its fixed warm-language conclusion is
+superseded by the user-owned-undertone correction above. The current accepted
+contract is:
 
-- complexion reads bright and neutral with restrained peach-pink warmth, not
-  yellow, orange, muddy, or artificially bleached;
+- complexion follows the explicit user-owned hue and undertone without an
+  automatic warm or cool bias, and does not become yellow, orange, muddy or
+  artificially bleached;
 - skin retains age-appropriate, camera-resolved variation and restrained
   face-plane highlights without oily shine, waxiness, or uniform airbrushing;
 - the person's complexion remains stable when the set or practical light is
@@ -144,9 +153,9 @@ this foundation capability:
   for complexion direction and material principles, not literal pixel identity
   or identical texture scale.
 
-The controlled blue-dress MCP comparison scored approximately 8.8/10 against
-the adult standard sample's 9.2/10. The remaining difference was attributable
-to framing, age, and scene lighting rather than a material yellow cast,
-plastic skin, or an AI-specific complexion defect. This closes the current
-commercial complexion refinement; future work should open a new evidence-based
-document rather than silently changing this accepted standard.
+The earlier blue-dress MCP comparison scored approximately 8.8/10 against the
+adult standard sample's 9.2/10. Later zero-reference controlled evidence showed
+that the old fixed `peach-pink` and `neutral-to-slightly-warm` wording could
+still override an explicit cool-fair request. That conclusion is therefore
+reopened and corrected by Doc170 evidence; the material-realism protections
+remain valid, while fixed warmth is no longer authoritative.

@@ -38,19 +38,23 @@ def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -
     assert "Do not infer a preferred complexion from ethnicity alone" in SYSTEM_PROMPT
     assert "Do not bleach" in SYSTEM_PROMPT
     assert "restrained matte highlights" in SYSTEM_PROMPT
-    assert "neutral-to-slightly-warm scene white balance" in SYSTEM_PROMPT
-    assert "muddy yellow or green cast" in SYSTEM_PROMPT
-    assert "modestly brighter" in SYSTEM_PROMPT
+    assert "explicit complexion hue and undertone are authoritative" in SYSTEM_PROMPT
+    assert "unintended muddy yellow, green, gray, or orange cast" in SYSTEM_PROMPT
+    assert "requested brightness come from clean scene light and color management" in SYSTEM_PROMPT
     assert "fine-grained and irregular real skin microtexture" in SYSTEM_PROMPT
     assert "airbrush or wax" in SYSTEM_PROMPT
     assert "visibly includes a person or model" in SYSTEM_PROMPT
     assert "do not invent a hidden bright-complexion treatment" in SYSTEM_PROMPT
     assert "never inherit that reference's identity, age, face, hair, wardrobe, scene, or mood" in SYSTEM_PROMPT
     assert "historical demographic sample" in SYSTEM_PROMPT
-    assert "softly neutral and light with restrained peach-pink warmth" in SYSTEM_PROMPT
-    assert "brightness come from clean scene light, not lifted exposure" in SYSTEM_PROMPT
+    assert "without adding compensatory peach, amber, golden, or generic warm-beauty bias" in SYSTEM_PROMPT
+    assert "When hue or undertone is not assigned" in SYSTEM_PROMPT
+    assert "rather than inventing either warmth or coolness" in SYSTEM_PROMPT
+    assert "warmer, darker, tanned, documentary, historical" in SYSTEM_PROMPT
+    assert "not lifted exposure, bleaching, or recolouring" in SYSTEM_PROMPT
     assert "follow the face's planes instead of diffusing across the whole face" in SYSTEM_PROMPT
     assert "Keep the person's complexion as its own material judgement" in SYSTEM_PROMPT
+    assert "user-owned hue and undertone" in SYSTEM_PROMPT
     assert "separation from scene color cast" in SYSTEM_PROMPT
     assert "camera-resolved, nonuniform skin microvariation" in SYSTEM_PROMPT
     assert "do not approve it until" in SYSTEM_PROMPT
