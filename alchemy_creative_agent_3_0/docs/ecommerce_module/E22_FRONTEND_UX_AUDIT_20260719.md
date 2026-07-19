@@ -1,7 +1,7 @@
 # E22：E-Commerce 前端 UX 专项审计
 
-日期：2026-07-19  
-审计基线：`origin/main@56fbac6b7a0ac1b1cad66fa293a469cd4347492c`  
+日期：2026-07-19
+审计基线：`origin/main@56fbac6b7a0ac1b1cad66fa293a469cd4347492c`
 范围：V3 E-Commerce 模板的普通用户路径与前端投射；不修改 Provider、
 Central Brain、共享 review/retry 或生产门禁。
 
