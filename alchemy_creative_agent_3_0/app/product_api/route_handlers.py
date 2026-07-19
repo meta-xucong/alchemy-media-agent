@@ -8,10 +8,15 @@ from ..app_shell import get_scenario_hub_contract
 from ..project_mode import InMemoryProjectStore, ProjectTemplateRegistry, V3ProjectModeService
 from ..visual_assets import (
     AnchorPackPreparationHost,
+    LibraryVisualAssetCreateRequest,
     PeopleAssetActivationRequest,
     PeopleAssetCreateRequest,
     PeopleAssetLifecycleService,
     PeopleAssetPrepareRequest,
+    ProjectVisualAssetBindingRequest,
+    ProjectVisualAssetBindingService,
+    VisualAssetLibraryCatalog,
+    VisualAssetLibraryLifecycleService,
 )
 from .service import V3ProductApiService
 
@@ -25,6 +30,9 @@ class V3ProductRouteHandlers:
         project_store: InMemoryProjectStore | None = None,
         template_registry: ProjectTemplateRegistry | None = None,
         anchor_pack_preparation_host: AnchorPackPreparationHost | None = None,
+        visual_asset_library_catalog: VisualAssetLibraryCatalog | None = None,
+        project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
+        visual_asset_owner_scope: str = "local_default",
     ) -> None:
         self.service = service or V3ProductApiService()
         self.project_service = V3ProjectModeService(
@@ -36,6 +44,17 @@ class V3ProductRouteHandlers:
             self.service.visual_asset_catalog,
             root_source_resolver=self.service.asset_store.get_upload,
             anchor_pack_host=anchor_pack_preparation_host,
+        )
+        self.visual_asset_owner_scope = visual_asset_owner_scope.strip() or "local_default"
+        self.visual_asset_library_catalog = visual_asset_library_catalog or VisualAssetLibraryCatalog()
+        self.visual_asset_library_service = VisualAssetLibraryLifecycleService(
+            self.visual_asset_library_catalog,
+            root_source_resolver=self.service.asset_store.get_upload,
+            anchor_pack_host=anchor_pack_preparation_host,
+        )
+        self.project_visual_asset_binding_service = (
+            project_visual_asset_binding_service
+            or ProjectVisualAssetBindingService(self.visual_asset_library_catalog)
         )
 
     def post_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -108,6 +127,157 @@ class V3ProductRouteHandlers:
 
     def get_project_context(self, project_id: str) -> dict[str, Any]:
         return self.project_service.get_project_context(project_id).model_dump(mode="json")
+
+    # Doc173 library-first public surface.  These methods deliberately do not
+    # call the historical project-scoped People Asset lifecycle above.  Legacy
+    # routes stay available for read/recovery only while new assets are owned
+    # by the user/workspace library and projects only hold explicit bindings.
+    def get_visual_assets(self, owner_scope: str | None = None) -> dict[str, Any]:
+        resolved_owner_scope = self._visual_asset_owner_scope(owner_scope)
+        return {
+            "visual_assets": [
+                self._visual_asset_public_record(item)
+                for item in self.visual_asset_library_service.list(owner_scope=resolved_owner_scope)
+            ]
+        }
+
+    def post_visual_assets(self, payload: dict[str, Any], owner_scope: str | None = None) -> dict[str, Any]:
+        request = LibraryVisualAssetCreateRequest.model_validate(payload)
+        asset = self.visual_asset_library_service.create_draft(
+            owner_scope=self._visual_asset_owner_scope(owner_scope),
+            request=request,
+        )
+        return {"visual_asset": self._visual_asset_public_record(asset)}
+
+    def get_visual_asset(self, visual_asset_id: str, owner_scope: str | None = None) -> dict[str, Any]:
+        asset = self.visual_asset_library_service.get(
+            owner_scope=self._visual_asset_owner_scope(owner_scope),
+            visual_asset_id=visual_asset_id,
+        )
+        return {"visual_asset": self._visual_asset_public_record(asset)}
+
+    def post_visual_asset_prepare(
+        self,
+        visual_asset_id: str,
+        payload: dict[str, Any],
+        owner_scope: str | None = None,
+    ) -> dict[str, Any]:
+        if payload:
+            raise ValueError("visual_asset_prepare_payload_must_be_empty")
+        asset = self.visual_asset_library_service.prepare(
+            owner_scope=self._visual_asset_owner_scope(owner_scope),
+            visual_asset_id=visual_asset_id,
+        )
+        return {"visual_asset": self._visual_asset_public_record(asset)}
+
+    def post_visual_asset_activate(
+        self,
+        visual_asset_id: str,
+        payload: dict[str, Any],
+        owner_scope: str | None = None,
+    ) -> dict[str, Any]:
+        version_id = str(payload.get("version_id") or "").strip()
+        confirmed = payload.get("confirm_activation") is True
+        if not version_id:
+            raise ValueError("visual_asset_version_required")
+        asset = self.visual_asset_library_service.activate(
+            owner_scope=self._visual_asset_owner_scope(owner_scope),
+            visual_asset_id=visual_asset_id,
+            version_id=version_id,
+            confirm_activation=confirmed,
+        )
+        return {"visual_asset": self._visual_asset_public_record(asset)}
+
+    def post_visual_asset_archive(
+        self,
+        visual_asset_id: str,
+        payload: dict[str, Any],
+        owner_scope: str | None = None,
+    ) -> dict[str, Any]:
+        if payload.get("confirm_archive") is not True:
+            raise ValueError("visual_asset_archive_confirmation_required")
+        asset = self.visual_asset_library_service.archive(
+            owner_scope=self._visual_asset_owner_scope(owner_scope),
+            visual_asset_id=visual_asset_id,
+        )
+        return {"visual_asset": self._visual_asset_public_record(asset)}
+
+    def get_project_visual_asset_bindings(self, project_id: str) -> dict[str, Any]:
+        self.project_service.get_project(project_id)
+        binding_set = self.project_visual_asset_binding_service.current(project_id=project_id)
+        return self._project_visual_asset_binding_public_record(binding_set)
+
+    def post_project_visual_asset_binding(
+        self,
+        project_id: str,
+        payload: dict[str, Any],
+        owner_scope: str | None = None,
+    ) -> dict[str, Any]:
+        self.project_service.get_project(project_id)
+        request = ProjectVisualAssetBindingRequest.model_validate(payload)
+        self.project_visual_asset_binding_service.bind(
+            owner_scope=self._visual_asset_owner_scope(owner_scope),
+            project_id=project_id,
+            request=request,
+        )
+        return self.get_project_visual_asset_bindings(project_id)
+
+    def delete_project_visual_asset_binding(
+        self,
+        project_id: str,
+        binding_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.project_service.get_project(project_id)
+        self.project_visual_asset_binding_service.remove(
+            project_id=project_id,
+            binding_id=binding_id,
+            confirm_removal=payload.get("confirm_removal") is True,
+        )
+        return self.get_project_visual_asset_bindings(project_id)
+
+    def _visual_asset_owner_scope(self, supplied_owner_scope: str | None) -> str:
+        value = str(supplied_owner_scope or self.visual_asset_owner_scope).strip()
+        return value or "local_default"
+
+    @staticmethod
+    def _visual_asset_public_record(asset: Any) -> dict[str, Any]:
+        """Safe browser projection: no source IDs, prompt or review internals."""
+
+        active_version = asset.active_version()
+        return {
+            "visual_asset_id": asset.visual_asset_id,
+            "display_name": asset.display_name,
+            "asset_type": asset.asset_type,
+            "lifecycle_status": asset.lifecycle_status,
+            "active_version_id": asset.active_version_id,
+            "available_for_projects": bool(active_version and asset.lifecycle_status == "active"),
+            "latest_preparation": (
+                {
+                    "status": active_version.lifecycle_status,
+                    "user_activation_confirmed": active_version.activation_confirmed,
+                }
+                if active_version is not None
+                else None
+            ),
+        }
+
+    @staticmethod
+    def _project_visual_asset_binding_public_record(binding_set: Any) -> dict[str, Any]:
+        return {
+            "project_id": binding_set.project_id,
+            "state": binding_set.state,
+            "bindings": [
+                {
+                    "binding_id": item.binding_id,
+                    "visual_asset_id": item.visual_asset_id,
+                    "selected_version_id": item.selected_version_id,
+                    "asset_type": item.asset_type,
+                    "status": item.status,
+                }
+                for item in binding_set.bindings
+            ],
+        }
 
     def get_project_people_assets(self, project_id: str) -> dict[str, Any]:
         self.project_service.get_project(project_id)

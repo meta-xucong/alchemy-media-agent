@@ -27,7 +27,11 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
-from alchemy_creative_agent_3_0.app.visual_assets import PersistentVisualAssetCatalog
+from alchemy_creative_agent_3_0.app.visual_assets import (
+    PersistentProjectVisualAssetBindingService,
+    PersistentVisualAssetCatalog,
+    PersistentVisualAssetLibraryCatalog,
+)
 from app.config import persist_runtime_settings_to_env, settings, update_runtime_settings
 from app.providers.registry import registry
 from app.repositories import repository
@@ -107,14 +111,24 @@ V2_IDEMPOTENCY_PREFIX = "v2:"
 V3_VISUAL_ASSET_CATALOG_ROOT = Path(
     os.getenv("V3_VISUAL_ASSET_CATALOG_ROOT", str(Path(".media_storage") / "v3_visual_assets"))
 )
+V3_VISUAL_ASSET_LIBRARY_ROOT = Path(
+    os.getenv("V3_VISUAL_ASSET_LIBRARY_ROOT", str(Path(".media_storage") / "v3_visual_asset_library"))
+)
 _v3_product_service = V3ProductApiService(
     job_store=PersistentProductJobStore(),
     visual_asset_catalog=PersistentVisualAssetCatalog(V3_VISUAL_ASSET_CATALOG_ROOT),
+)
+_v3_visual_asset_library_catalog = PersistentVisualAssetLibraryCatalog(V3_VISUAL_ASSET_LIBRARY_ROOT)
+_v3_project_visual_asset_binding_service = PersistentProjectVisualAssetBindingService(
+    _v3_visual_asset_library_catalog,
+    V3_VISUAL_ASSET_LIBRARY_ROOT,
 )
 v3_route_handlers = V3ProductRouteHandlers(
     service=_v3_product_service,
     project_store=PersistentProjectStore(),
     anchor_pack_preparation_host=ProductApiAnchorPackPreparationHost(_v3_product_service),
+    visual_asset_library_catalog=_v3_visual_asset_library_catalog,
+    project_visual_asset_binding_service=_v3_project_visual_asset_binding_service,
 )
 v3_output_store = V3GeneratedOutputStore()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -634,6 +648,124 @@ def v3_project_timeline_endpoint(project_id: str, request: Request, authorizatio
 def v3_project_context_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     _require_v3_project_visible(request, project_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_project_context, project_id)
+
+
+@app.get("/api/v3/creative-agent/visual-assets")
+def v3_visual_assets_endpoint(request: Request, authorization: str = Header(default="")):
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.get_visual_assets, _v3_visual_asset_owner_scope(user_id))
+
+
+@app.post("/api/v3/creative-agent/visual-assets")
+async def v3_create_visual_asset_endpoint(request: Request, authorization: str = Header(default="")):
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_visual_assets,
+        payload,
+        _v3_visual_asset_owner_scope(user_id),
+    )
+
+
+@app.get("/api/v3/creative-agent/visual-assets/{visual_asset_id}")
+def v3_get_visual_asset_endpoint(visual_asset_id: str, request: Request, authorization: str = Header(default="")):
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(
+        v3_route_handlers.get_visual_asset,
+        visual_asset_id,
+        _v3_visual_asset_owner_scope(user_id),
+    )
+
+
+@app.post("/api/v3/creative-agent/visual-assets/{visual_asset_id}/prepare")
+async def v3_prepare_visual_asset_endpoint(
+    visual_asset_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_visual_asset_prepare,
+        visual_asset_id,
+        payload,
+        _v3_visual_asset_owner_scope(user_id),
+    )
+
+
+@app.post("/api/v3/creative-agent/visual-assets/{visual_asset_id}/activate")
+async def v3_activate_visual_asset_endpoint(
+    visual_asset_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_visual_asset_activate,
+        visual_asset_id,
+        payload,
+        _v3_visual_asset_owner_scope(user_id),
+    )
+
+
+@app.post("/api/v3/creative-agent/visual-assets/{visual_asset_id}/archive")
+async def v3_archive_visual_asset_endpoint(
+    visual_asset_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_visual_asset_archive,
+        visual_asset_id,
+        payload,
+        _v3_visual_asset_owner_scope(user_id),
+    )
+
+
+@app.get("/api/v3/creative-agent/projects/{project_id}/visual-asset-bindings")
+def v3_project_visual_asset_bindings_endpoint(
+    project_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(v3_route_handlers.get_project_visual_asset_bindings, project_id)
+
+
+@app.post("/api/v3/creative-agent/projects/{project_id}/visual-asset-bindings")
+async def v3_create_project_visual_asset_binding_endpoint(
+    project_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    user_id = _require_v3_project_visible(request, project_id, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_project_visual_asset_binding,
+        project_id,
+        payload,
+        _v3_visual_asset_owner_scope(user_id),
+    )
+
+
+@app.delete("/api/v3/creative-agent/projects/{project_id}/visual-asset-bindings/{binding_id}")
+async def v3_delete_project_visual_asset_binding_endpoint(
+    project_id: str,
+    binding_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    _require_v3_project_visible(request, project_id, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.delete_project_visual_asset_binding,
+        project_id,
+        binding_id,
+        payload,
+    )
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/people-assets")
@@ -1427,6 +1559,12 @@ def _require_v3_project_visible(request: Request, project_id: str, authorization
     if owner_id is None or owner_id == user_id:
         return user_id
     raise HTTPException(status_code=403, detail={"error_code": "v3_project_forbidden", "message": "V3 project is not visible to this account."})
+
+
+def _v3_visual_asset_owner_scope(user_id: int | None) -> str:
+    """Resolve library ownership server-side; never accept it from a browser."""
+
+    return f"v3_user_{user_id}" if user_id is not None else "local_default"
 
 
 @app.post("/v1/sessions")

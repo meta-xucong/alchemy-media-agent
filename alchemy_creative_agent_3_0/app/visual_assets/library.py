@@ -11,13 +11,23 @@ and evidence contracts exist.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal
+import json
+from pathlib import Path
+import re
+from typing import Any, Callable, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
-from .contracts import FACE_IDENTITY_CHANNELS
+from .anchor_pack import AnchorPackPreparationResult
+from .contracts import (
+    FACE_IDENTITY_CHANNELS,
+    FaceIdentityModule,
+    IdentityAnchorPackVersion,
+    PeopleAsset,
+    RootSourceProvenance,
+)
 
 
 VisualAssetType = Literal["people", "product", "scene", "brand"]
@@ -36,6 +46,7 @@ BindingSetState = Literal["valid", "empty", "blocked"]
 
 _RELEASED_ASSET_TYPES = frozenset({"people"})
 _PEOPLE_OWNED_CHANNELS = ("face_geometry", "face_feature_relationships", "same_person_continuity")
+_SAFE_STORAGE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
 class _StrictLibraryModel(V3BaseModel):
@@ -69,6 +80,10 @@ class VisualAssetVersion(_StrictLibraryModel):
     approved_evidence_ids: list[str] = Field(default_factory=list)
     activation_confirmed: bool = False
     immutable_source_provenance: LibraryRootSourceProvenance
+    # Metadata only: this is the existing append-only Anchor Pack contract,
+    # not an alternate pixel store.  It lets the generic library lifecycle
+    # reuse the shared three-view preparation and explicit activation host.
+    anchor_pack: IdentityAnchorPackVersion | None = None
 
     @field_validator("version_id", "visual_asset_id")
     @classmethod
@@ -105,13 +120,14 @@ class VisualAsset(_StrictLibraryModel):
     owner_scope: str
     lifecycle_status: VisualAssetStatus = "draft"
     root_source_provenance: LibraryRootSourceProvenance
+    preparation_intent: str
     active_version_id: str | None = None
     versions: list[VisualAssetVersion] = Field(default_factory=list)
     created_at: str
     updated_at: str
     provenance: dict[str, str] = Field(default_factory=dict)
 
-    @field_validator("visual_asset_id", "display_name", "owner_scope")
+    @field_validator("visual_asset_id", "display_name", "owner_scope", "preparation_intent")
     @classmethod
     def require_nonempty_text(cls, value: str) -> str:
         value = value.strip()
@@ -281,6 +297,7 @@ class VisualAssetLibraryCatalog:
                 source_asset_id=request.root_source_asset_id,
                 consent_reference=request.consent_reference,
             ),
+            preparation_intent=request.preparation_intent,
             created_at=now,
             updated_at=now,
             provenance={"preparation_intent": request.preparation_intent},
@@ -334,6 +351,104 @@ class VisualAssetLibraryCatalog:
         )
         self._assets[(owner_scope, visual_asset_id)] = updated
         return updated.model_copy(deep=True)
+
+    def save(self, asset: VisualAsset) -> VisualAsset:
+        """Persist a validated current metadata revision without mutating history."""
+
+        key = (asset.owner_scope, asset.visual_asset_id)
+        if key not in self._assets:
+            raise KeyError("visual_asset_not_found")
+        self._assets[key] = asset.model_copy(deep=True)
+        return asset.model_copy(deep=True)
+
+
+class PersistentVisualAssetLibraryCatalog(VisualAssetLibraryCatalog):
+    """JSON-backed library metadata catalog.
+
+    The backing root is deliberately separate from the historical
+    ``PersistentVisualAssetCatalog`` project directory.  It persists metadata
+    and evidence pointers only; uploads, outputs, candidates and review
+    receipts remain in their existing shared stores.
+    """
+
+    def __init__(self, storage_root: str | Path) -> None:
+        super().__init__()
+        self.storage_root = Path(storage_root)
+        self._loaded_scopes: set[str] = set()
+
+    def create(self, *, owner_scope: str, request: LibraryVisualAssetCreateRequest) -> VisualAsset:
+        self._load_scope(owner_scope)
+        created = super().create(owner_scope=owner_scope, request=request)
+        self._write_scope(owner_scope)
+        return created
+
+    def get(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset | None:
+        self._load_scope(owner_scope)
+        return super().get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+
+    def list_assets(self, *, owner_scope: str, include_archived: bool = False) -> list[VisualAsset]:
+        self._load_scope(owner_scope)
+        return super().list_assets(owner_scope=owner_scope, include_archived=include_archived)
+
+    def activate_version(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        version_id: str,
+        approved_evidence_ids: list[str],
+    ) -> VisualAsset:
+        self._load_scope(owner_scope)
+        activated = super().activate_version(
+            owner_scope=owner_scope,
+            visual_asset_id=visual_asset_id,
+            version_id=version_id,
+            approved_evidence_ids=approved_evidence_ids,
+        )
+        self._write_scope(owner_scope)
+        return activated
+
+    def save(self, asset: VisualAsset) -> VisualAsset:
+        self._load_scope(asset.owner_scope)
+        saved = super().save(asset)
+        self._write_scope(asset.owner_scope)
+        return saved
+
+    def _load_scope(self, owner_scope: str) -> None:
+        _validate_storage_component(owner_scope, "owner_scope")
+        if owner_scope in self._loaded_scopes:
+            return
+        self._loaded_scopes.add(owner_scope)
+        path = self._scope_path(owner_scope)
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(payload, list):
+            return
+        for item in payload:
+            try:
+                asset = VisualAsset.model_validate(item)
+            except Exception:
+                continue
+            if asset.owner_scope == owner_scope:
+                self._assets[(owner_scope, asset.visual_asset_id)] = asset
+
+    def _write_scope(self, owner_scope: str) -> None:
+        path = self._scope_path(owner_scope)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = [
+            item.model_dump(mode="json")
+            for (scope, _), item in sorted(self._assets.items())
+            if scope == owner_scope
+        ]
+        _atomic_write_json(path, payload)
+
+    def _scope_path(self, owner_scope: str) -> Path:
+        _validate_storage_component(owner_scope, "owner_scope")
+        return self.storage_root / "library" / owner_scope / "visual_assets.json"
 
 
 class ProjectVisualAssetBindingService:
@@ -425,14 +540,319 @@ class ProjectVisualAssetBindingService:
         return snapshot.model_copy(deep=True) if snapshot is not None else None
 
 
+class PersistentProjectVisualAssetBindingService(ProjectVisualAssetBindingService):
+    """Persist project selections and append-only frozen job snapshots.
+
+    Current bindings and historical snapshots are separate files.  Updating or
+    removing a project selection therefore cannot mutate an old Job's frozen
+    evidence truth.
+    """
+
+    def __init__(self, catalog: VisualAssetLibraryCatalog, storage_root: str | Path) -> None:
+        super().__init__(catalog)
+        self.storage_root = Path(storage_root)
+        self._loaded_projects: set[str] = set()
+        self._loaded_frozen_projects: set[str] = set()
+
+    def current(self, *, project_id: str) -> ProjectVisualAssetBindingSet:
+        self._load_project(project_id)
+        return super().current(project_id=project_id)
+
+    def bind(
+        self,
+        *,
+        owner_scope: str,
+        project_id: str,
+        request: ProjectVisualAssetBindingRequest,
+    ) -> ProjectVisualAssetBinding:
+        self._load_project(project_id)
+        binding = super().bind(owner_scope=owner_scope, project_id=project_id, request=request)
+        self._write_current(project_id)
+        return binding
+
+    def remove(self, *, project_id: str, binding_id: str, confirm_removal: bool) -> ProjectVisualAssetBinding:
+        self._load_project(project_id)
+        removed = super().remove(
+            project_id=project_id,
+            binding_id=binding_id,
+            confirm_removal=confirm_removal,
+        )
+        self._write_current(project_id)
+        return removed
+
+    def freeze_for_job(self, *, project_id: str, job_id: str) -> FrozenVisualAssetBindingSet:
+        self._load_project(project_id)
+        snapshot = super().freeze_for_job(project_id=project_id, job_id=job_id)
+        self._write_frozen(project_id)
+        return snapshot
+
+    def frozen_for_job(self, *, project_id: str, job_id: str) -> FrozenVisualAssetBindingSet | None:
+        self._load_frozen(project_id)
+        return super().frozen_for_job(project_id=project_id, job_id=job_id)
+
+    def _load_project(self, project_id: str) -> None:
+        _validate_storage_component(project_id, "project_id")
+        if project_id in self._loaded_projects:
+            return
+        self._loaded_projects.add(project_id)
+        path = self._current_path(project_id)
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(payload, list):
+            return
+        records: list[ProjectVisualAssetBinding] = []
+        for item in payload:
+            try:
+                binding = ProjectVisualAssetBinding.model_validate(item)
+            except Exception:
+                continue
+            if binding.project_id == project_id:
+                records.append(binding)
+        self._current[project_id] = records
+
+    def _load_frozen(self, project_id: str) -> None:
+        _validate_storage_component(project_id, "project_id")
+        if project_id in self._loaded_frozen_projects:
+            return
+        self._loaded_frozen_projects.add(project_id)
+        path = self._frozen_path(project_id)
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(payload, list):
+            return
+        for item in payload:
+            try:
+                snapshot = FrozenVisualAssetBindingSet.model_validate(item)
+            except Exception:
+                continue
+            if snapshot.project_id == project_id:
+                self._frozen[(project_id, snapshot.job_id)] = snapshot
+
+    def _write_current(self, project_id: str) -> None:
+        path = self._current_path(project_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(path, [item.model_dump(mode="json") for item in self._current.get(project_id, [])])
+
+    def _write_frozen(self, project_id: str) -> None:
+        path = self._frozen_path(project_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = [
+            item.model_dump(mode="json")
+            for (owner, _), item in sorted(self._frozen.items())
+            if owner == project_id
+        ]
+        _atomic_write_json(path, payload)
+
+    def _current_path(self, project_id: str) -> Path:
+        _validate_storage_component(project_id, "project_id")
+        return self.storage_root / "project_bindings" / project_id / "current_bindings.json"
+
+    def _frozen_path(self, project_id: str) -> Path:
+        _validate_storage_component(project_id, "project_id")
+        return self.storage_root / "project_bindings" / project_id / "frozen_job_bindings.json"
+
+
+class LibraryAssetPreparationHost(Protocol):
+    """The already-existing shared Anchor Pack host, expressed generically."""
+
+    def prepare(
+        self,
+        *,
+        project_id: str,
+        people_asset: PeopleAsset,
+        root_source_provenance: RootSourceProvenance,
+    ) -> AnchorPackPreparationResult:
+        """Prepare through shared Brain/Provider/Vision only."""
+
+    def activate(self, pack: IdentityAnchorPackVersion, *, confirmed: bool) -> IdentityAnchorPackVersion:
+        """Activate an already reviewed pack after user confirmation."""
+
+
+class VisualAssetLibraryLifecycleService:
+    """Library lifecycle that adapts the existing shared Face Identity host.
+
+    The adapter owns no prompt, provider or reviewer.  Its only job is to map
+    a library asset's immutable provenance to the existing Face Identity
+    preparation contract and save the resulting metadata version back under
+    the library owner scope.
+    """
+
+    def __init__(
+        self,
+        catalog: VisualAssetLibraryCatalog,
+        *,
+        root_source_resolver: Callable[[str], Any | None] | None = None,
+        anchor_pack_host: LibraryAssetPreparationHost | None = None,
+    ) -> None:
+        self.catalog = catalog
+        self.root_source_resolver = root_source_resolver
+        self.anchor_pack_host = anchor_pack_host
+
+    def create_draft(
+        self,
+        *,
+        owner_scope: str,
+        request: LibraryVisualAssetCreateRequest,
+    ) -> VisualAsset:
+        if self.root_source_resolver is not None:
+            source = self.root_source_resolver(request.root_source_asset_id)
+            if source is None or str(getattr(source, "status", "") or "").lower() != "ready":
+                raise ValueError("root_source_asset_not_ready")
+        return self.catalog.create(owner_scope=owner_scope, request=request)
+
+    def get(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset:
+        asset = self.catalog.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        if asset is None:
+            raise KeyError("visual_asset_not_found")
+        return asset
+
+    def list(self, *, owner_scope: str) -> list[VisualAsset]:
+        return self.catalog.list_assets(owner_scope=owner_scope)
+
+    def prepare(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset:
+        if self.anchor_pack_host is None:
+            raise RuntimeError("visual_asset_prepare_unavailable")
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        if asset.asset_type != "people":
+            raise ValueError("visual_asset_type_not_available")
+        staging_project_id = _library_staging_scope(owner_scope)
+        people_asset = PeopleAsset(
+            people_asset_id=asset.visual_asset_id,
+            project_id=staging_project_id,
+            subject_kind="human_person",
+            face_identity_module=FaceIdentityModule(
+                module_id=f"face_{asset.visual_asset_id}",
+                people_asset_id=asset.visual_asset_id,
+                status="draft",
+            ),
+            root_source_provenance=RootSourceProvenance(
+                source_type="uploaded_portrait",
+                source_asset_id=asset.root_source_provenance.source_asset_id,
+                project_id=staging_project_id,
+                consent_reference=asset.root_source_provenance.consent_reference,
+            ),
+            preparation_intent=asset.preparation_intent,
+            status="draft",
+        )
+        result = self.anchor_pack_host.prepare(
+            project_id=staging_project_id,
+            people_asset=people_asset,
+            root_source_provenance=people_asset.root_source_provenance,
+        )
+        pack = result.pack
+        if (
+            pack.people_asset_id != asset.visual_asset_id
+            or pack.root_source_provenance.source_asset_id != asset.root_source_provenance.source_asset_id
+        ):
+            raise ValueError("visual_asset_prepare_binding_mismatch")
+        version = VisualAssetVersion(
+            version_id=pack.pack_version_id,
+            visual_asset_id=asset.visual_asset_id,
+            lifecycle_status="review" if pack.status == "review" else "failed",
+            approved_evidence_ids=[item.output_id for item in pack.anchor_views if item.active],
+            activation_confirmed=False,
+            immutable_source_provenance=asset.root_source_provenance,
+            anchor_pack=pack,
+        )
+        existing_versions = [item for item in asset.versions if item.version_id != version.version_id]
+        updated = asset.model_copy(
+            update={
+                "versions": [*existing_versions, version],
+                "lifecycle_status": "review" if version.lifecycle_status == "review" else "blocked",
+                "updated_at": _utc_now(),
+            }
+        )
+        return self.catalog.save(updated)
+
+    def activate(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        version_id: str,
+        confirm_activation: bool,
+    ) -> VisualAsset:
+        if not confirm_activation:
+            raise ValueError("visual_asset_activation_confirmation_required")
+        if self.anchor_pack_host is None:
+            raise RuntimeError("visual_asset_activate_unavailable")
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        version = next((item for item in asset.versions if item.version_id == version_id), None)
+        if version is None or version.lifecycle_status != "review" or version.anchor_pack is None:
+            raise ValueError("visual_asset_version_not_ready_for_activation")
+        active_pack = self.anchor_pack_host.activate(version.anchor_pack, confirmed=True)
+        if active_pack.status != "active" or not active_pack.user_activation_confirmed:
+            raise ValueError("visual_asset_activation_not_confirmed")
+        active_version = version.model_copy(
+            update={
+                "lifecycle_status": "active",
+                "activation_confirmed": True,
+                "approved_evidence_ids": [item.output_id for item in active_pack.anchor_views if item.active],
+                "anchor_pack": active_pack,
+            }
+        )
+        versions = [
+            active_version
+            if item.version_id == version_id
+            else item.model_copy(update={"lifecycle_status": "superseded"})
+            if item.lifecycle_status == "active"
+            else item
+            for item in asset.versions
+        ]
+        return self.catalog.save(
+            asset.model_copy(
+                update={
+                    "versions": versions,
+                    "active_version_id": version_id,
+                    "lifecycle_status": "active",
+                    "updated_at": _utc_now(),
+                }
+            )
+        )
+
+    def archive(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset:
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        return self.catalog.save(
+            asset.model_copy(update={"lifecycle_status": "archived", "updated_at": _utc_now()})
+        )
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _validate_storage_component(value: str, label: str) -> None:
+    if not _SAFE_STORAGE_COMPONENT.fullmatch(str(value or "")):
+        raise ValueError(f"invalid {label}")
+
+
+def _atomic_write_json(path: Path, payload: object) -> None:
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _library_staging_scope(owner_scope: str) -> str:
+    """Internal compatibility scope for existing project-scoped Anchor Pack types."""
+
+    import hashlib
+
+    return f"library_{hashlib.sha256(owner_scope.encode('utf-8')).hexdigest()[:20]}"
 
 
 __all__ = [
     "FrozenVisualAssetBindingSet",
     "LibraryRootSourceProvenance",
     "LibraryVisualAssetCreateRequest",
+    "LibraryAssetPreparationHost",
     "ProjectVisualAssetBinding",
     "ProjectVisualAssetBindingRequest",
     "ProjectVisualAssetBindingService",
@@ -440,4 +860,7 @@ __all__ = [
     "VisualAsset",
     "VisualAssetLibraryCatalog",
     "VisualAssetVersion",
+    "VisualAssetLibraryLifecycleService",
+    "PersistentProjectVisualAssetBindingService",
+    "PersistentVisualAssetLibraryCatalog",
 ]
