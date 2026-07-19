@@ -712,6 +712,10 @@ class VisualAssetLibraryLifecycleService:
             source = self.root_source_resolver(request.root_source_asset_id)
             if source is None or str(getattr(source, "status", "") or "").lower() != "ready":
                 raise ValueError("root_source_asset_not_ready")
+            role = getattr(source, "role", None)
+            resolved_role = str(getattr(role, "value", role) or "").strip().lower()
+            if request.asset_type == "people" and resolved_role != "face_reference":
+                raise ValueError("visual_asset_root_requires_face_reference")
         return self.catalog.create(owner_scope=owner_scope, request=request)
 
     def get(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset:

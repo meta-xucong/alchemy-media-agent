@@ -79,7 +79,7 @@ class _PreparationHost:
         return pack.model_copy(update={"status": "active", "user_activation_confirmed": True})
 
 
-def _handlers(tmp_path, *, anchor_pack_preparation_host=None):
+def _handlers(tmp_path, *, anchor_pack_preparation_host=None, root_role: str = "face_reference"):
     catalog = PersistentVisualAssetLibraryCatalog(tmp_path / "visual-asset-library")
     service = V3ProductApiService()
     content = base64.b64decode(
@@ -90,7 +90,7 @@ def _handlers(tmp_path, *, anchor_pack_preparation_host=None):
             "filename": "child.png",
             "mime_type": "image/png",
             "size_bytes": len(content),
-            "role": "face_reference",
+            "role": root_role,
         }
     )
     assert service.store_uploaded_asset_content(
@@ -141,6 +141,13 @@ def test_library_asset_rejects_non_ready_root_source(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="root_source_asset_not_ready"):
         _create_library_asset(handlers, "v3_asset_not_ready")
+
+
+def test_library_asset_rejects_ready_nonidentity_root_source(tmp_path) -> None:
+    handlers, _, _, root_source_asset_id = _handlers(tmp_path, root_role="subject_reference")
+
+    with pytest.raises(ValueError, match="visual_asset_root_requires_face_reference"):
+        _create_library_asset(handlers, root_source_asset_id)
 
 
 def test_library_asset_requires_immutable_preparation_intent(tmp_path) -> None:

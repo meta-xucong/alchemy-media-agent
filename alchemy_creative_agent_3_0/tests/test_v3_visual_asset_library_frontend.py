@@ -48,8 +48,11 @@ def test_doc173_uses_library_and_binding_routes_not_legacy_project_asset_writes(
     library = _function(source, "v3VisualAssetsPath", "v3VisualAssetPath")
     assert "/visual-assets" in library
     create = _function(source, "createV3VisualAsset", "prepareV3VisualAsset")
+    upload = _function(source, "v3UploadVisualAssetRoot", "createV3VisualAsset")
     assert "root_source_asset_id: ready.asset_id" in create
     assert 'asset_type: "people"' in create
+    assert 'role: "face_reference"' in upload
+    assert 'role: "subject_reference"' not in upload
     assert "candidate" not in create
     assert "prompt_hash" not in create
     assert "v3PeopleAssetsPath" not in create

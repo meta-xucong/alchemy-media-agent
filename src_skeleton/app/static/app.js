@@ -5247,7 +5247,11 @@ async function v3UploadVisualAssetRoot(file) {
       filename: file.name || "visual-asset-root.png",
       mime_type: file.type || "image/png",
       size_bytes: file.size || 0,
-      role: "subject_reference",
+      // A People Asset root is identity evidence, not a product reference.
+      // The shared Anchor Pack admission deliberately accepts only this
+      // explicit role so it cannot mistake a generic/project upload for a
+      // reusable person identity.
+      role: "face_reference",
       metadata: { frontend_surface: "v3_visual_asset_library" },
     },
   });
