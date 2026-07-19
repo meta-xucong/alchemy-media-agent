@@ -9,10 +9,7 @@ from ..project_mode import InMemoryProjectStore, ProjectTemplateRegistry, V3Proj
 from ..visual_assets import (
     AnchorPackPreparationHost,
     LibraryVisualAssetCreateRequest,
-    PeopleAssetActivationRequest,
-    PeopleAssetCreateRequest,
     PeopleAssetLifecycleService,
-    PeopleAssetPrepareRequest,
     ProjectVisualAssetBindingRequest,
     ProjectVisualAssetBindingService,
     VisualAssetLibraryCatalog,
@@ -299,9 +296,7 @@ class V3ProductRouteHandlers:
 
     def post_project_people_asset(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.project_service.get_project(project_id)
-        request = PeopleAssetCreateRequest.model_validate(payload)
-        asset = self.people_asset_service.create_draft(project_id, request)
-        return {"people_asset": asset.model_dump(mode="json"), "lifecycle_state": "draft"}
+        raise ValueError("legacy_project_people_asset_forward_write_forbidden")
 
     def get_project_people_asset(self, project_id: str, people_asset_id: str) -> dict[str, Any]:
         self.project_service.get_project(project_id)
@@ -344,9 +339,7 @@ class V3ProductRouteHandlers:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         self.project_service.get_project(project_id)
-        PeopleAssetPrepareRequest.model_validate(payload)
-        result = self.people_asset_service.prepare_pack(project_id, people_asset_id)
-        return {"preparation": result.model_dump(mode="json")}
+        raise ValueError("legacy_project_people_asset_forward_write_forbidden")
 
     def post_project_people_asset_activate(
         self,
@@ -355,9 +348,7 @@ class V3ProductRouteHandlers:
         payload: dict[str, Any],
     ) -> dict[str, Any]:
         self.project_service.get_project(project_id)
-        request = PeopleAssetActivationRequest.model_validate(payload)
-        asset = self.people_asset_service.activate_pack(project_id, people_asset_id, request)
-        return {"people_asset": asset.model_dump(mode="json"), "lifecycle_state": "active"}
+        raise ValueError("legacy_project_people_asset_forward_write_forbidden")
 
     def post_project_reference(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.project_service.add_project_reference(project_id, payload).model_dump(mode="json")

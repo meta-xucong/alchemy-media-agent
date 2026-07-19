@@ -262,6 +262,31 @@ def test_doc173_library_routes_create_assets_and_bind_projects_without_legacy_wr
     assert legacy_service.visual_asset_catalog.list_assets(project_id) == []
 
 
+def test_doc173_legacy_project_people_asset_writes_are_read_only_compatibility() -> None:
+    handlers = V3ProductRouteHandlers(project_store=InMemoryProjectStore())
+    project_id = handlers.post_projects({"user_goal": "历史项目兼容读取"})["project"]["project_id"]
+
+    with pytest.raises(ValueError, match="legacy_project_people_asset_forward_write_forbidden"):
+        handlers.post_project_people_asset(project_id, {})
+    with pytest.raises(ValueError, match="legacy_project_people_asset_forward_write_forbidden"):
+        handlers.post_project_people_asset_prepare(project_id, "people_asset_legacy", {})
+    with pytest.raises(ValueError, match="legacy_project_people_asset_forward_write_forbidden"):
+        handlers.post_project_people_asset_activate(project_id, "people_asset_legacy", {})
+
+
+def test_doc173_public_job_rejects_legacy_professional_mode_forward_write() -> None:
+    service = V3ProductApiService()
+
+    with pytest.raises(ValueError, match="legacy_professional_mode_forward_write_forbidden"):
+        service.create_creative_job(
+            {
+                "user_input": "制作人物创意图",
+                "professional_mode": "professional",
+                "people_asset_id": "people_asset_legacy",
+            }
+        )
+
+
 def test_doc173_public_routes_expose_library_and_project_binding_surfaces() -> None:
     routes = get_route_contracts()
     assert routes["visual_assets"].endswith("/visual-assets")

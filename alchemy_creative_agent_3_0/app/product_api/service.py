@@ -842,6 +842,10 @@ class V3ProductApiService:
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
+        self._reject_legacy_professional_mode_forward_write(
+            create_request,
+            trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
+        )
         self._assert_runtime_metadata_server_owned(
             create_request,
             trusted_capability_plan_reuse=trusted_capability_plan_reuse,
@@ -7829,6 +7833,40 @@ class V3ProductApiService:
             "professional_mode_binding": binding.to_brain_evidence(),
             "professional_mode_binding_record": binding.model_dump(mode="json"),
         }
+
+    @staticmethod
+    def _reject_legacy_professional_mode_forward_write(
+        request: CreateCreativeJobRequest,
+        *,
+        trusted_professional_anchor_preparation: bool,
+    ) -> None:
+        """Keep project-scoped Professional fields readable, never forward-writable.
+
+        Doc173 replaces public ``professional_mode`` / ``people_asset_id``
+        selection with the server-frozen VisualAssetBindingSet.  Anchor-pack
+        preparation is an internal shared-service adapter, not a public job
+        creation route, and is the only temporary caller that may carry its
+        preparation contract while the asset is being built.
+        """
+
+        if trusted_professional_anchor_preparation:
+            return
+        metadata = dict(request.metadata or {})
+        legacy_metadata_keys = {
+            "professional_mode",
+            "professional_mode_binding",
+            "professional_mode_binding_record",
+            "professional_reference_channel_plans",
+            "professional_planning_metadata",
+            "professional_mode_execution",
+        }
+        if (
+            request.professional_mode != "standard"
+            or request.people_asset_id is not None
+            or bool(request.professional_identity_view_ids)
+            or any(key in metadata for key in legacy_metadata_keys)
+        ):
+            raise ValueError("legacy_professional_mode_forward_write_forbidden")
 
     def _planned_job_id_for_request(self, request: CreateCreativeJobRequest) -> str:
         """Mirror ScenarioRuntime's deterministic job-id inputs before Brain."""
