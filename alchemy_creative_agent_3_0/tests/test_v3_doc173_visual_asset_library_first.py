@@ -13,9 +13,11 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore
 from alchemy_creative_agent_3_0.app.app_shell.routes import get_route_contracts
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
+    FrozenVisualAssetBindingSet,
     LibraryVisualAssetCreateRequest,
     PersistentProjectVisualAssetBindingService,
     PersistentVisualAssetLibraryCatalog,
@@ -23,6 +25,14 @@ from alchemy_creative_agent_3_0.app.visual_assets.library import (
     ProjectVisualAssetBindingService,
     VisualAssetLibraryCatalog,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.authority import VisualAssetBindingSet
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
+    EcommerceRemoteBrainTestProvider,
+    ecommerce_test_service,
+)
+
+
+_ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 
 
 def _active_people_asset(catalog: VisualAssetLibraryCatalog):
@@ -258,3 +268,98 @@ def test_doc173_public_routes_expose_library_and_project_binding_surfaces() -> N
     assert routes["prepare_visual_asset"].endswith("/prepare")
     assert routes["activate_visual_asset"].endswith("/activate")
     assert routes["project_visual_asset_bindings"].endswith("/visual-asset-bindings")
+
+
+def test_doc173_new_project_job_freezes_library_binding_and_strips_legacy_mode_from_brain(tmp_path) -> None:
+    provider = EcommerceRemoteBrainTestProvider()
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = ecommerce_test_service(brain_provider=provider, output_store=output_store)
+    catalog = VisualAssetLibraryCatalog()
+    bindings = ProjectVisualAssetBindingService(catalog)
+    handlers = V3ProductRouteHandlers(
+        service=service,
+        project_store=InMemoryProjectStore(),
+        visual_asset_library_catalog=catalog,
+        project_visual_asset_binding_service=bindings,
+    )
+    rendered_anchor = output_store.save_base64_output(
+        job_id="job_anchor",
+        candidate_id="candidate_anchor",
+        asset_id="asset_anchor",
+        provider="fixture",
+        model="fixture",
+        encoded_image=_ONE_PIXEL_PNG,
+    )
+    asset = _active_people_asset(catalog)
+    asset = catalog.activate_version(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        version_id="pack_people_a_v2",
+        approved_evidence_ids=[rendered_anchor.output_id],
+    )
+    project_id = handlers.post_projects({"user_goal": "制作一张人物品牌肖像"})["project"]["project_id"]
+    handlers.post_project_visual_asset_binding(
+        project_id,
+        {
+            "visual_asset_id": asset.visual_asset_id,
+            "selected_version_id": asset.active_version_id,
+            "confirm_binding": True,
+        },
+    )
+
+    status = handlers.post_project_job(
+        project_id,
+        {"template_id": "general_template", "user_input": "制作一张自然、简洁的人物肖像"},
+    )
+    record = service.get_job_record(status["job_id"])
+
+    assert record is not None
+    frozen = record.request.metadata["frozen_visual_asset_binding_set"]
+    assert frozen["job_id"] == status["job_id"]
+    assert frozen["bindings"][0]["visual_asset_id"] == asset.visual_asset_id
+    assert record.request.metadata["visual_asset_library_reference_assets"][0]["output_id"] == rendered_anchor.output_id
+    assert "professional_mode" not in record.request.metadata
+    assert "people_asset_id" not in record.request.metadata
+    brain_metadata = provider.requests[0]["metadata"]
+    assert brain_metadata["visual_asset_library_binding"]["claims"][0]["asset_id"] == asset.visual_asset_id
+    assert "frozen_visual_asset_binding_set" not in brain_metadata
+    assert "visual_asset_library_reference_assets" not in brain_metadata
+    assert "professional_mode" not in brain_metadata
+
+
+def test_doc173_browser_cannot_inject_a_frozen_library_snapshot() -> None:
+    service = V3ProductApiService()
+
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_job(
+            {
+                "user_input": "创建一张图",
+                "metadata": {"frozen_visual_asset_binding_set": {"state": "empty"}},
+            }
+        )
+
+
+def test_doc173_historical_library_snapshot_remains_readable_but_cannot_execute_without_evidence() -> None:
+    snapshot = FrozenVisualAssetBindingSet.model_validate(
+        {
+            "binding_set_id": "frozen_legacy",
+            "project_id": "project_legacy",
+            "job_id": "job_legacy",
+            "state": "valid",
+            "bindings": [
+                {
+                    "binding_id": "binding_legacy",
+                    "project_id": "project_legacy",
+                    "visual_asset_id": "visual_asset_legacy",
+                    "selected_version_id": "version_legacy",
+                    "owner_scope": "local_default",
+                    "user_confirmed": True,
+                    "created_at": "2026-07-19T00:00:00+00:00",
+                }
+            ],
+        }
+    )
+
+    assert snapshot.bindings[0].approved_evidence_ids == []
+    with pytest.raises(ValueError, match="at least 1 item"):
+        VisualAssetBindingSet.from_library_snapshot(snapshot)

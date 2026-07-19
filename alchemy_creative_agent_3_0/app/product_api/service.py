@@ -33,7 +33,13 @@ from ..photography_profiles import (
 from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest
-from ..visual_assets import InMemoryVisualAssetCatalog, ProfessionalModeRuntimeBridge, bind_professional_mode
+from ..visual_assets import (
+    FrozenVisualAssetBindingSet,
+    InMemoryVisualAssetCatalog,
+    ProfessionalModeRuntimeBridge,
+    ProjectVisualAssetBindingService,
+    bind_professional_mode,
+)
 from ..shared_capabilities import CapabilityRunResult
 from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from ..shared_capabilities.visual_cluster import (
@@ -770,6 +776,24 @@ class V3ProductApiService:
     def create_creative_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
         return self._create_creative_job(request)
 
+    def create_project_visual_asset_bound_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+        *,
+        binding_service: ProjectVisualAssetBindingService,
+    ) -> ProductJobStatus:
+        """Internal Project Mode seam for an explicit library asset selection.
+
+        The public request cannot provide a frozen binding.  Project Mode owns
+        the current selection; this server-only seam assigns the fresh Job ID
+        and freezes that selection before ScenarioRuntime or the Brain see it.
+        """
+
+        return self._create_creative_job(
+            request,
+            project_visual_asset_binding_service=binding_service,
+        )
+
     def create_trusted_photography_continuation_job(
         self,
         request: CreateCreativeJobRequest | dict[str, Any],
@@ -815,6 +839,7 @@ class V3ProductApiService:
         trusted_professional_anchor_preparation: bool = False,
         professional_anchor_view_role: Literal["standard_front", "three_quarter", "profile"] | None = None,
         professional_anchor_reference_evidence_ids: list[str] | None = None,
+        project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         self._assert_runtime_metadata_server_owned(
@@ -822,6 +847,11 @@ class V3ProductApiService:
             trusted_capability_plan_reuse=trusted_capability_plan_reuse,
         )
         self._bind_server_job_instance_id(create_request)
+        if project_visual_asset_binding_service is not None:
+            self._bind_project_visual_asset_library_snapshot(
+                create_request,
+                binding_service=project_visual_asset_binding_service,
+            )
         if trusted_professional_anchor_preparation:
             if professional_anchor_view_role is None:
                 raise ValueError("professional_anchor_pack_preparation_stage_invalid")
@@ -904,6 +934,7 @@ class V3ProductApiService:
                 "specialized_execution_summary",
                 "professional_mode",
                 "professional_mode_execution",
+                "visual_asset_library_execution",
             )
             if key in runtime_result.metadata
         }
@@ -7599,11 +7630,18 @@ class V3ProductApiService:
         trusted_reuse = has_frozen_plan if trusted_capability_plan_reuse is None else trusted_capability_plan_reuse
         resolved_uploads = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
         uploaded_assets: list[Any] = list(resolved_uploads)
-        anchor_references = metadata.get("professional_anchor_reference_assets")
-        if isinstance(anchor_references, list):
-            frozen_anchor_references = [
-                dict(item) for item in anchor_references if isinstance(item, dict)
-            ]
+        anchored_reference_groups = (
+            metadata.get("professional_anchor_reference_assets"),
+            metadata.get("visual_asset_library_reference_assets"),
+        )
+        frozen_anchor_references = [
+            dict(item)
+            for group in anchored_reference_groups
+            if isinstance(group, list)
+            for item in group
+            if isinstance(item, dict)
+        ]
+        if frozen_anchor_references:
             uploaded_assets.extend(frozen_anchor_references)
             # Keep the server-resolved selected-output binding intact when
             # Scenario Runtime freezes the generation plan.  Treating that
@@ -7708,6 +7746,9 @@ class V3ProductApiService:
             "professional_reference_stage",
             "professional_anchor_reference_assets",
             "professional_anchor_stage_plan_reuse",
+            "frozen_visual_asset_binding_set",
+            "visual_asset_library_reference_assets",
+            "visual_asset_library_execution",
         }
     )
 
@@ -7796,6 +7837,89 @@ class V3ProductApiService:
         runtime_request = ScenarioRuntimeRequest.model_validate(payload)
         resolution = self.scenario_runtime.scenario_registry.resolve(runtime_request.scenario_selection)
         return self.scenario_runtime._runtime_job_id(runtime_request, resolution)  # noqa: SLF001
+
+    def _bind_project_visual_asset_library_snapshot(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        binding_service: ProjectVisualAssetBindingService,
+    ) -> None:
+        """Freeze the current explicit library selection for this fresh Job.
+
+        Empty selection is an ordinary Standard project state. A selected but
+        invalid library binding is a hard stop: silently treating it as an
+        unbound project would violate the user's explicit asset choice.
+        """
+
+        project_id = str(dict(request.metadata or {}).get("project_id") or "").strip()
+        if not project_id:
+            raise ValueError("visual_asset_library_project_id_required")
+        runtime_job_id = self._planned_job_id_for_request(request)
+        snapshot = binding_service.freeze_for_job(project_id=project_id, job_id=runtime_job_id)
+        if snapshot.state == "blocked":
+            raise ValueError("visual_asset_binding_set_blocked")
+        if snapshot.state == "valid":
+            references = self._library_visual_asset_reference_assets(snapshot)
+        else:
+            references = []
+        request.metadata = {
+            **dict(request.metadata or {}),
+            # Full binding stays server-owned provenance. ScenarioRuntime
+            # validates it and strips it from the Brain payload.
+            "frozen_visual_asset_binding_set": snapshot.model_dump(mode="json"),
+            # Shared materialization sees only server-resolved references;
+            # neither browser paths nor arbitrary caller metadata are trusted.
+            "visual_asset_library_reference_assets": references,
+        }
+
+    def _library_visual_asset_reference_assets(
+        self,
+        snapshot: FrozenVisualAssetBindingSet,
+    ) -> list[dict[str, Any]]:
+        """Resolve approved library evidence through the existing output store."""
+
+        references: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for binding in snapshot.bindings:
+            for output_id in binding.approved_evidence_ids:
+                if output_id in seen:
+                    continue
+                seen.add(output_id)
+                output = self.output_store.get_output(output_id)
+                path = Path(output.file_path) if output is not None and output.file_path else None
+                if output is None or path is None or not path.is_file():
+                    raise ValueError("visual_asset_library_evidence_not_materialized")
+                references.append(
+                    {
+                        "asset_id": output.output_id,
+                        "output_id": output.output_id,
+                        "role": "face_reference",
+                        "source_type": "visual_asset_library",
+                        "use_policy": "identity",
+                        "strength": "hard",
+                        "provider_input_required": True,
+                        "file_path": str(path),
+                        "uri": output.preview_url,
+                        "filename": path.name,
+                        "mime_type": output.mime_type,
+                        "metadata": {
+                            "source_type": "visual_asset_library",
+                            "output_id": output.output_id,
+                            "source_job_id": output.job_id,
+                            "visual_asset_id": binding.visual_asset_id,
+                            "visual_asset_version_id": binding.selected_version_id,
+                            "use_policy": "identity",
+                            "strength": "hard",
+                            "provider_input_required": True,
+                            "canonical_output_binding": True,
+                            "visual_asset_library_evidence": True,
+                            "source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                        },
+                    }
+                )
+        if snapshot.state == "valid" and not references:
+            raise ValueError("visual_asset_library_evidence_missing")
+        return references
 
     @staticmethod
     def _bind_server_job_instance_id(request: CreateCreativeJobRequest) -> None:

@@ -57,6 +57,7 @@ from ..shared_capabilities.visual_cluster.human_photorealism import (
 )
 from ..visual_assets import (
     CanonicalProviderPromptReceipt,
+    FrozenVisualAssetBindingSet,
     ProfessionalConsumerRequest,
     ProfessionalModeBinding,
     ProfessionalModeExecutionAdapter,
@@ -64,6 +65,7 @@ from ..visual_assets import (
     ProfessionalModePreparationResult,
     ProfessionalModeRuntimeBridge,
     ReferenceChannelPlan,
+    VisualAssetBindingSet,
 )
 from ..schemas import PlanningResult, ProviderStrategy
 from .contracts import (
@@ -275,6 +277,11 @@ class ScenarioRuntime:
         quality_mode: str | None = None,
     ) -> CapabilityPreparationResult:
         mode = self._capability_activation_mode(request)
+        library_binding, request = self._prepare_library_visual_asset_binding(
+            request,
+            resolution,
+            activation_mode=mode,
+        )
         professional_request, professional_preparation, request = self._prepare_professional_mode(
             request,
             resolution,
@@ -310,6 +317,7 @@ class ScenarioRuntime:
                 template_deliverable_plan=deliverable_plan,
                 specialized_scenario_plan=specialized_plan,
                 professional_mode_preparation=professional_preparation,
+                visual_asset_library_binding=library_binding,
             )
 
         pre_activation_run = self._run_pre_activation_capabilities(request, resolution)
@@ -352,6 +360,7 @@ class ScenarioRuntime:
                 template_deliverable_plan=deliverable_plan,
                 specialized_scenario_plan=specialized_plan,
                 professional_mode_preparation=professional_preparation,
+                visual_asset_library_binding=library_binding,
             )
 
         brain_result = self._run_llm_brain(
@@ -438,7 +447,48 @@ class ScenarioRuntime:
             activation_mode=mode,
             specialized_scenario_plan=specialized_plan,
             professional_mode_preparation=professional_preparation,
+            visual_asset_library_binding=library_binding,
         )
+
+    def _prepare_library_visual_asset_binding(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        *,
+        activation_mode: str,
+    ) -> tuple[VisualAssetBindingSet | None, ScenarioRuntimeRequest]:
+        """Validate the Product API's immutable library snapshot before Brain.
+
+        This path is intentionally generic: it handles an explicit asset
+        binding set, not a Professional project mode or a People-specific
+        template.  The current release happens to expose only Face Identity.
+        """
+
+        metadata = dict(request.metadata or {})
+        raw_snapshot = metadata.get("frozen_visual_asset_binding_set")
+        if raw_snapshot is None:
+            return None, request
+        try:
+            snapshot = FrozenVisualAssetBindingSet.model_validate(raw_snapshot)
+        except (TypeError, ValueError) as exc:
+            raise CapabilityActivationError("visual_asset_library_snapshot_invalid") from exc
+        if snapshot.project_id != str(metadata.get("project_id") or "").strip():
+            raise CapabilityActivationError("visual_asset_library_snapshot_project_mismatch")
+        if snapshot.job_id != self._runtime_job_id(request, resolution):
+            raise CapabilityActivationError("visual_asset_library_snapshot_job_mismatch")
+        if snapshot.state == "empty":
+            return None, request
+        if activation_mode != "enforced":
+            raise CapabilityActivationError("visual_asset_library_requires_enforced_activation")
+        try:
+            binding = VisualAssetBindingSet.from_library_snapshot(snapshot)
+        except ValueError as exc:
+            raise CapabilityActivationError("visual_asset_library_snapshot_binding_invalid") from exc
+        safe_metadata = {
+            **metadata,
+            "visual_asset_library_binding": binding.to_provenance(),
+        }
+        return binding, request.model_copy(update={"metadata": safe_metadata})
 
     def _prepare_professional_mode(
         self,
@@ -1491,6 +1541,7 @@ class ScenarioRuntime:
             metadata.get("require_real_images")
             or metadata.get("real_image_generation")
             or ScenarioRuntime._is_professional_mode_selected(request)
+            or ScenarioRuntime._has_visual_asset_library_binding(request)
         )
 
     @staticmethod
@@ -1508,6 +1559,12 @@ class ScenarioRuntime:
         if value is True:
             return True
         return str(value or "").strip().lower() == "professional"
+
+    @staticmethod
+    def _has_visual_asset_library_binding(request: ScenarioRuntimeRequest) -> bool:
+        """Return whether the server has frozen an explicit library binding."""
+
+        return isinstance(request.metadata.get("visual_asset_library_binding"), dict)
 
     @staticmethod
     def _remote_creative_brain_block(
@@ -3095,6 +3152,19 @@ class ScenarioRuntime:
                 "creative_direction_owner": "remote_v3_llm_brain",
                 "shared_execution_owner": "v3_shared_runtime",
             }
+        library_binding = preparation.visual_asset_library_binding
+        if library_binding is not None:
+            # This projection is deliberately opaque: ordinary project status
+            # can prove that a frozen asset binding was honoured without
+            # exposing source paths, candidate details, prompts or hashes.
+            metadata["visual_asset_library_execution"] = {
+                "contract_version": library_binding.contract_version,
+                "binding_set_id": library_binding.binding_set_id,
+                "claim_count": len(library_binding.claims),
+                "asset_types": sorted({item.asset_type for item in library_binding.claims}),
+                "creative_direction_owner": "remote_v3_llm_brain",
+                "shared_execution_owner": "v3_shared_runtime",
+            }
         return metadata
 
     def _specialized_metadata(self, preparation: CapabilityPreparationResult) -> dict[str, Any]:
@@ -3481,6 +3551,17 @@ class ScenarioRuntime:
                     # paths, and server-owned reference plans never cross the
                     # Brain boundary.
                     base_metadata["professional_face_identity_quality_contract"] = dict(quality_contract)
+        if self._has_visual_asset_library_binding(request):
+            # New jobs carry a generic library binding, never the historical
+            # Professional-mode record. The Brain gets only authority facts;
+            # full snapshots and resolved reference paths remain local.
+            safe_binding = request.metadata.get("visual_asset_library_binding")
+            base_metadata.pop("frozen_visual_asset_binding_set", None)
+            base_metadata.pop("visual_asset_library_reference_assets", None)
+            base_metadata.pop("visual_asset_library_execution", None)
+            if not isinstance(safe_binding, dict):
+                raise CapabilityActivationError("visual_asset_library_brain_binding_missing")
+            base_metadata["visual_asset_library_binding"] = dict(safe_binding)
         uploaded_assets = [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)]
         brain_request = self.llm_brain_adapter.build_request(
             user_input=request.user_input,

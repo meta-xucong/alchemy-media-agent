@@ -35,26 +35,27 @@ class V3ProductRouteHandlers:
         visual_asset_owner_scope: str = "local_default",
     ) -> None:
         self.service = service or V3ProductApiService()
+        self.visual_asset_owner_scope = visual_asset_owner_scope.strip() or "local_default"
+        self.visual_asset_library_catalog = visual_asset_library_catalog or VisualAssetLibraryCatalog()
+        self.project_visual_asset_binding_service = (
+            project_visual_asset_binding_service
+            or ProjectVisualAssetBindingService(self.visual_asset_library_catalog)
+        )
         self.project_service = V3ProjectModeService(
             product_service=self.service,
             project_store=project_store,
             template_registry=template_registry,
+            project_visual_asset_binding_service=self.project_visual_asset_binding_service,
         )
         self.people_asset_service = PeopleAssetLifecycleService(
             self.service.visual_asset_catalog,
             root_source_resolver=self.service.asset_store.get_upload,
             anchor_pack_host=anchor_pack_preparation_host,
         )
-        self.visual_asset_owner_scope = visual_asset_owner_scope.strip() or "local_default"
-        self.visual_asset_library_catalog = visual_asset_library_catalog or VisualAssetLibraryCatalog()
         self.visual_asset_library_service = VisualAssetLibraryLifecycleService(
             self.visual_asset_library_catalog,
             root_source_resolver=self.service.asset_store.get_upload,
             anchor_pack_host=anchor_pack_preparation_host,
-        )
-        self.project_visual_asset_binding_service = (
-            project_visual_asset_binding_service
-            or ProjectVisualAssetBindingService(self.visual_asset_library_catalog)
         )
 
     def post_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:

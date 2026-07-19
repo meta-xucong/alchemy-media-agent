@@ -19,7 +19,7 @@ from ..shared_capabilities.activation import (
     TemplateDeliverablePlan,
 )
 from ..llm_brain import BrainRunResult
-from ..visual_assets import ProfessionalModePreparationResult
+from ..visual_assets import ProfessionalModePreparationResult, VisualAssetBindingSet
 from ..schemas import PlanningResult
 from ..schemas.models import V3BaseModel
 
@@ -135,3 +135,4 @@ class CapabilityPreparationResult(V3BaseModel):
     activation_mode: str = "legacy"
     specialized_scenario_plan: SpecializedScenarioPlanningResult | None = None
     professional_mode_preparation: ProfessionalModePreparationResult | None = None
+    visual_asset_library_binding: VisualAssetBindingSet | None = None

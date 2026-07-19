@@ -30,6 +30,7 @@ from ..scenario_packs.photography.continuation import PhotographySetContinuation
 from ..schemas import BrandProfile, ReferenceAsset
 from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityPlanAmendment
 from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
+from ..visual_assets import ProjectVisualAssetBindingService
 from .contracts import (
     ECOMMERCE_TEMPLATE_ID,
     GENERAL_TEMPLATE_ID,
@@ -120,12 +121,14 @@ class V3ProjectModeService:
         project_store: InMemoryProjectStore | None = None,
         template_registry: ProjectTemplateRegistry | None = None,
         reference_channel_policy_module: ReferenceChannelPolicyModule | None = None,
+        project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
     ) -> None:
         self.product_service = product_service or V3ProductApiService()
         self.project_store = project_store or InMemoryProjectStore()
         scenario_registry = getattr(getattr(self.product_service, "scenario_runtime", None), "scenario_registry", None)
         self.template_registry = template_registry or ProjectTemplateRegistry(scenario_registry=scenario_registry)
         self.reference_channel_policy_module = reference_channel_policy_module or ReferenceChannelPolicyModule()
+        self.project_visual_asset_binding_service = project_visual_asset_binding_service
 
     def list_projects(self, limit: int = 20, owner_user_id: int | None = None) -> ProjectListResponse:
         projects = [
@@ -833,6 +836,11 @@ class V3ProjectModeService:
             if _trusted_photography_continuation
             else self.product_service.create_trusted_capability_continuation_job(create_payload)
             if _trusted_capability_continuation
+            else self.product_service.create_project_visual_asset_bound_job(
+                create_payload,
+                binding_service=self.project_visual_asset_binding_service,
+            )
+            if self.project_visual_asset_binding_service is not None
             else self.product_service.create_job(create_payload)
         )
         bound_context_snapshot = status.metadata.get("project_context_snapshot")

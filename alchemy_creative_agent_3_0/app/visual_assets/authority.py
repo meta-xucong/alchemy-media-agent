@@ -13,6 +13,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from .contracts import FACE_IDENTITY_CHANNELS, ProfessionalModeBinding
+from .library import FrozenVisualAssetBindingSet
 
 
 _CHANNEL_TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -85,9 +86,13 @@ class VisualAssetBindingSet(V3BaseModel):
 
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
-    mode: Literal["professional"] = "professional"
+    # ``professional`` remains readable for historical jobs. New library-first
+    # jobs use the generic asset-library value and do not require a global
+    # project mode field.
+    mode: Literal["professional", "visual_asset_library"] = "professional"
     project_id: str
     job_id: str
+    binding_set_id: str | None = None
     claims: list[AssetChannelClaim] = Field(min_length=1)
     contract_version: Literal["visual_asset_authority_v1"] = "visual_asset_authority_v1"
 
@@ -129,6 +134,30 @@ class VisualAssetBindingSet(V3BaseModel):
             ],
         )
 
+    @classmethod
+    def from_library_snapshot(cls, snapshot: FrozenVisualAssetBindingSet) -> "VisualAssetBindingSet":
+        """Adapt one immutable library snapshot to shared channel authority."""
+
+        if snapshot.state != "valid" or not snapshot.bindings:
+            raise ValueError("visual_asset_library_binding_missing_or_invalid")
+        return cls(
+            mode="visual_asset_library",
+            project_id=snapshot.project_id,
+            job_id=snapshot.job_id,
+            binding_set_id=snapshot.binding_set_id,
+            claims=[
+                AssetChannelClaim(
+                    project_id=snapshot.project_id,
+                    asset_type=item.asset_type,
+                    asset_id=item.visual_asset_id,
+                    asset_version_id=item.selected_version_id,
+                    owned_channels=list(item.owned_channels),
+                    evidence_ids=list(item.approved_evidence_ids),
+                )
+                for item in snapshot.bindings
+            ],
+        )
+
     def to_provenance(self) -> dict[str, object]:
         """Return safe claim metadata without raw paths or creative content."""
 
@@ -136,6 +165,7 @@ class VisualAssetBindingSet(V3BaseModel):
             "contract_version": self.contract_version,
             "project_id": self.project_id,
             "job_id": self.job_id,
+            "binding_set_id": self.binding_set_id,
             "claims": [claim.to_provenance() for claim in self.claims],
         }
 

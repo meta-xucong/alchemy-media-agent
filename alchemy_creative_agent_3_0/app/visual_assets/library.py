@@ -175,6 +175,7 @@ class ProjectVisualAssetBinding(_StrictLibraryModel):
     selected_version_id: str
     asset_type: Literal["people"] = "people"
     owned_channels: tuple[str, ...] = _PEOPLE_OWNED_CHANNELS
+    approved_evidence_ids: list[str] = Field(default_factory=list)
     owner_scope: str
     user_confirmed: bool
     status: ProjectBindingStatus = "active"
@@ -242,6 +243,7 @@ class FrozenVisualAssetBindingSet(_StrictLibraryModel):
                     "selected_version_id": item.selected_version_id,
                     "asset_type": item.asset_type,
                     "owned_channels": list(item.owned_channels),
+                    "approved_evidence_ids": list(item.approved_evidence_ids),
                 }
                 for item in self.bindings
             ],
@@ -492,6 +494,9 @@ class ProjectVisualAssetBindingService:
         selected_version_id = request.selected_version_id or asset.active_version_id
         if asset.lifecycle_status != "active" or selected_version_id != asset.active_version_id:
             raise ValueError("visual_asset_version_not_active")
+        version = asset.active_version()
+        if version is None or not version.approved_evidence_ids:
+            raise ValueError("visual_asset_binding_evidence_required")
         existing = self.current(project_id=project_id)
         if existing.state == "blocked":
             raise ValueError("visual_asset_binding_set_blocked")
@@ -502,6 +507,7 @@ class ProjectVisualAssetBindingService:
             project_id=project_id,
             visual_asset_id=asset.visual_asset_id,
             selected_version_id=selected_version_id,
+            approved_evidence_ids=list(version.approved_evidence_ids),
             owner_scope=owner_scope,
             user_confirmed=True,
             created_at=_utc_now(),

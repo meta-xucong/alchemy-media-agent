@@ -384,11 +384,16 @@ class V3LLMBrainAdapter:
             capability_hints = []
         specialized_plan = metadata.get("specialized_scenario_plan")
         specialized_plan_present = isinstance(specialized_plan, dict) and bool(specialized_plan.get("planning_id"))
+        visual_asset_library_binding = _visual_asset_library_binding(metadata)
         request_metadata = {
             "project_context_version": project_context.get("context_version"),
             "negative_note_count": len(negative_notes_from_context(project_context)),
             "positive_context_from_selected_outputs_only": True,
-            "require_real_images": bool(metadata.get("require_real_images") or metadata.get("real_image_generation")),
+            "require_real_images": bool(
+                metadata.get("require_real_images")
+                or metadata.get("real_image_generation")
+                or visual_asset_library_binding
+            ),
             "quality_mode": clean_text(metadata.get("quality_mode"), 40) or None,
             "requested_image_count": requested_count,
             "requested_image_size": clean_text(metadata.get("requested_image_size"), 80) or None,
@@ -409,6 +414,12 @@ class V3LLMBrainAdapter:
             # original direction to each frozen Photography role without
             # inheriting a local shot/camera/lighting recipe.
             request_metadata["photography_creative_context"] = photography_creative_context
+        if visual_asset_library_binding:
+            # This is an immutable authority receipt, not a local prompt
+            # fragment. Keep it deliberately small so library source paths,
+            # candidate records and planning metadata cannot cross the Brain
+            # boundary.
+            request_metadata["visual_asset_library_binding"] = visual_asset_library_binding
         return BrainRunRequest(
             user_input=user_input,
             job_id=job_id,
@@ -614,6 +625,41 @@ def _semantic_contract_recovery_request(
         "same_frozen_request": True,
     }
     return request.model_copy(update={"metadata": metadata}, deep=True)
+
+
+def _visual_asset_library_binding(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return the small, immutable library-authority receipt for Brain input."""
+
+    raw = metadata.get("visual_asset_library_binding")
+    if not isinstance(raw, dict):
+        return {}
+    claims = raw.get("claims")
+    if not isinstance(claims, list) or not claims:
+        return {}
+    safe_claims: list[dict[str, Any]] = []
+    for item in claims:
+        if not isinstance(item, dict):
+            return {}
+        claim = {
+            key: item.get(key)
+            for key in (
+                "project_id",
+                "asset_type",
+                "asset_id",
+                "asset_version_id",
+                "owned_channels",
+                "evidence_ids",
+            )
+        }
+        if not all(str(claim.get(key) or "").strip() for key in ("project_id", "asset_type", "asset_id", "asset_version_id")):
+            return {}
+        if not isinstance(claim["owned_channels"], list) or not isinstance(claim["evidence_ids"], list):
+            return {}
+        safe_claims.append(claim)
+    return {
+        key: raw.get(key)
+        for key in ("contract_version", "project_id", "job_id", "binding_set_id")
+    } | {"claims": safe_claims}
 
 
 def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | None) -> dict[str, Any]:
