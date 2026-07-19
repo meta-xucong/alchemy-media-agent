@@ -2716,7 +2716,7 @@ function setupMobileV3Adapter() {
   [tab, els.mobileViewLayer, els.mobileSheetLayer].filter(Boolean).forEach((root) => {
     root.addEventListener("click", handleMobileV3Click);
   });
-  document.querySelector("#mobileV3CountInput")?.addEventListener("input", handleMobileV3CountInput);
+  document.querySelector("#mobileV3CountInput")?.addEventListener("change", handleMobileV3CountInput);
   document.querySelector("#mobileV3ReferenceInput")?.addEventListener("change", handleMobileV3ReferenceFiles);
   [
     "#mobileV3PreservePersonIdentityInput",
@@ -2769,7 +2769,7 @@ function normalizeMobileV3HomeSurface() {
 function mobileV3TemplateCards() {
   return [
     { template_id: "general_template", display_name: "通用模板", short_title: "海报 / 社媒", short_description: "封面、活动图、主视觉", project_can_create_jobs: true },
-    { template_id: "ecommerce_template", display_name: "电商模板", short_title: "商品套图", short_description: "商品图、详情图、场景图", project_can_create_jobs: true },
+    { template_id: "ecommerce_template", display_name: "电商模板", short_title: "商品图片", short_description: "上传商品参考图，说明需求并选择数量", project_can_create_jobs: true },
     { template_id: "photographer_template", display_name: "摄影师模板", short_title: "稍后开放", short_description: "写真、镜头、布光", project_can_create_jobs: false },
     { template_id: "brand_ip_template", display_name: "品牌 IP", short_title: "稍后开放", short_description: "长期风格资产", project_can_create_jobs: false },
     { template_id: "new_media_template", display_name: "新媒体模板", short_title: "稍后开放", short_description: "笔记、封面、栏目图", project_can_create_jobs: false },
@@ -3175,7 +3175,8 @@ function handleMobileV3Click(event) {
     document.querySelectorAll("[data-mobile-v3-template]").forEach((item) => item.classList.remove("active"));
     templateButton.classList.add("active");
     mobileV3State.selectedTemplate = templateButton.dataset.mobileV3Template || "general_template";
-    setText("#mobileV3CreateProjectBtn", mobileV3State.selectedTemplate === "ecommerce_template" ? "创建电商套图项目" : "创建通用创意项目");
+    setText("#mobileV3CreateProjectBtn", mobileV3State.selectedTemplate === "ecommerce_template" ? "创建电商图片项目" : "创建通用创意项目");
+    updateMobileV3ControlState();
     return;
   }
   const openProjectButton = event.target.closest("[data-mobile-v3-open-project]");
@@ -3219,23 +3220,62 @@ function setMobileV3Size(size) {
 }
 
 function handleMobileV3CountInput(event) {
-  const value = mobileV3BoundedCount(event.target?.value || 1);
-  mobileV3State.generationCount = value;
-  if (event.target) event.target.value = String(value);
-  setText("#mobileV3CountValue", String(value));
+  try {
+    const value = mobileV3BoundedCount(event.target?.value || 1);
+    mobileV3State.generationCount = value;
+    if (event.target) event.target.value = String(value);
+    setText("#mobileV3CountValue", String(value));
+  } catch (error) {
+    updateMobileV3Status(friendlyError(error));
+    syncMobileV3GenerationCountControl();
+  }
 }
 
-function mobileV3BoundedCount(value) {
+const mobileV3EcommerceExactCountContract = Object.freeze([1, 2, 4, 7]);
+
+function mobileV3ActiveTemplateId() {
+  return mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate || "general_template";
+}
+
+function mobileV3SupportedGenerationCounts(templateId = mobileV3ActiveTemplateId()) {
+  if (templateId === "ecommerce_template") return [...mobileV3EcommerceExactCountContract];
+  // The mobile photography entry remains unavailable today.  Keep its future
+  // professional-set contract independent of the E-Commerce count choices.
+  if (templateId === "photographer_template") {
+    return mobileV3State.selectedPreset === "professional_set" ? [3] : [1];
+  }
+  return [1, 2, 3, 4];
+}
+
+function mobileV3BoundedCount(value, templateId = mobileV3ActiveTemplateId()) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
-  return Math.max(1, Math.min(4, Number.isFinite(parsed) ? parsed : 1));
+  const supported = mobileV3SupportedGenerationCounts(templateId);
+  if (Number.isFinite(parsed) && supported.includes(parsed)) return parsed;
+  throw new Error(`当前模板支持 ${supported.join("、")} 张，请重新选择。`);
+}
+
+function syncMobileV3GenerationCountControl() {
+  const input = document.querySelector("#mobileV3CountInput");
+  const supported = mobileV3SupportedGenerationCounts();
+  const current = Number.parseInt(String(mobileV3State.generationCount ?? ""), 10);
+  const requiresNewSelection = Number.isFinite(current) && !supported.includes(current);
+  const selected = supported.includes(current) ? current : (supported.includes(2) ? 2 : supported[0]);
+  if (input) {
+    input.innerHTML = supported.map((count) => `<option value="${count}">${count}</option>`).join("");
+    input.value = String(selected);
+  }
+  mobileV3State.generationCount = selected;
+  setText("#mobileV3CountValue", String(selected));
+  if (requiresNewSelection) {
+    updateMobileV3Status(`当前模板支持 ${supported.join("、")} 张，已切换为 ${selected} 张；请确认数量后再提交。`);
+  }
+  return selected;
 }
 
 function updateMobileV3ControlState() {
   setMobileV3Mode(mobileV3State.selectedMode || "auto");
   setMobileV3Size(mobileV3State.selectedSize || "");
-  const countInput = document.querySelector("#mobileV3CountInput");
-  if (countInput) countInput.value = String(mobileV3State.generationCount || 1);
-  setText("#mobileV3CountValue", String(mobileV3State.generationCount || 1));
+  syncMobileV3GenerationCountControl();
   updateMobileV3FullPromptButton();
 }
 
@@ -3540,7 +3580,10 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   if (!userInput) throw new Error("请先写一句这次想继续做什么");
   const scenarioId = mobileV3ScenarioForTemplate(project.primary_template_id || mobileV3State.selectedTemplate || "general_template");
   const templateId = mobileV3TemplateIdForScenario(scenarioId);
-  const count = mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
+  const count = mobileV3BoundedCount(
+    document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1,
+    project.primary_template_id || mobileV3State.selectedTemplate || "general_template",
+  );
   const selectedMode = mobileV3State.selectedMode || "auto";
   const inferredMode = scenarioId === "general_creative" ? mobileV3InferVariationMode(userInput) : "";
   const effectiveMode = scenarioId === "general_creative" ? mobileV3BackendVariationMode(selectedMode, userInput) : "";
@@ -3606,7 +3649,10 @@ async function generateMobileV3Job() {
     return;
   }
   const projectId = mobileV3State.currentProject.project_id;
-  const count = mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
+  const count = mobileV3BoundedCount(
+    document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1,
+    mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate || "general_template",
+  );
   try {
     setMobileV3Busy(true);
     setMobileV3Progress("uploading", mobileV3State.files.length ? "正在上传参考图" : "正在准备项目上下文");

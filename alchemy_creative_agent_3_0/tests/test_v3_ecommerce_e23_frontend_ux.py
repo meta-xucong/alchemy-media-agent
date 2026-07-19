@@ -13,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
+MOBILE_JS = ROOT / "src_skeleton" / "app" / "mobile_static" / "mobile.js"
+MOBILE_HTML = ROOT / "src_skeleton" / "app" / "mobile_static" / "index.html"
 
 
 def _section(source: str, start: str, end: str) -> str:
@@ -62,6 +64,27 @@ def test_e23_count_projection_does_not_depend_on_or_enrich_catalog_fallback_card
     assert "v3LoadedTemplateById(templateId)" in projection
     assert "v3TemplateById(templateId)" not in projection
     assert "generation_count_contract: [1, 2, 4, 7]" not in defaults
+
+
+def test_e23_mobile_ecommerce_count_control_preserves_exact_n_without_general_clamping() -> None:
+    html = MOBILE_HTML.read_text(encoding="utf-8")
+    script = MOBILE_JS.read_text(encoding="utf-8")
+    count_control = _section(html, '<span>生成数量 <strong id="mobileV3CountValue">', '</label>')
+    bounded = _section(script, "function mobileV3BoundedCount", "function syncMobileV3GenerationCountControl")
+    supported = _section(script, "function mobileV3SupportedGenerationCounts", "function mobileV3BoundedCount")
+    job_payload = _section(script, "function buildMobileV3JobPayload", "function mobileV3SizeLabel")
+
+    assert '<select id="mobileV3CountInput"' in count_control
+    assert 'type="range"' not in count_control
+    assert [f'<option value="{count}"' in count_control for count in (1, 2, 4, 7)] == [True, True, True, True]
+    assert "const mobileV3EcommerceExactCountContract = Object.freeze([1, 2, 4, 7]);" in script
+    assert 'templateId === "ecommerce_template"' in supported
+    assert 'templateId === "photographer_template"' in supported
+    assert 'mobileV3State.selectedPreset === "professional_set" ? [3] : [1]' in supported
+    assert "Math.max(1, Math.min(4" not in bounded
+    assert 'throw new Error(`当前模板支持 ${supported.join("、")} 张，请重新选择。`);' in bounded
+    assert "请确认数量后再提交。" in script
+    assert "mobileV3BoundedCount(" in job_payload
 
 
 def test_e23_visual_tone_and_confirmed_selling_points_have_separate_payload_fields() -> None:
