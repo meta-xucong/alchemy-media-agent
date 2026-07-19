@@ -324,7 +324,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function openV3Home" in script.text
     assert "function v3HomeTemplateCopy" in script.text
     assert "function v3ProjectTemplateId" in script.text
-    assert "primary_template_id: project.primary_template_id || \"general_template\"" in script.text
+    # P14: a missing persisted template must remain unconfirmed, never be
+    # relabelled as General during recent-project or refresh recovery.
+    assert "primary_template_id: templateId || null" in script.text
     assert "正在读取模板可用状态" in script.text
     assert 'if (templateId === "photographer_template")' in script.text
     assert 'photography: "single_hero"' in script.text

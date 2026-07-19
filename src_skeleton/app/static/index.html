@@ -1418,7 +1418,8 @@
                   </div>
                 </div>
                 <div id="v3ProjectSnapshot" class="v3-project-snapshot" aria-live="polite"></div>
-                <div id="v3PersistentDisplayRegion" class="v3-persistent-display-region" aria-label="项目成果展示区">
+                  <div id="v3PersistentDisplayRegion" class="v3-persistent-display-region" aria-label="项目成果展示区">
+                  <section id="v3PhotographyRoleBoard" class="v3-photography-role-board" hidden aria-live="polite" aria-label="专业套图进度"></section>
                   <div id="v3ProjectOutputBoard" class="v3-project-output-board empty-v3-list" aria-live="polite">生成图片后，会优先显示在这里。</div>
                   <div id="v3UsefulReferenceBoard" class="v3-useful-reference-board empty-v3-list" aria-live="polite">选中的图片会成为后续参考。</div>
                   <details class="v3-artifact-details">
@@ -1525,6 +1526,24 @@
                           <small>生成主作品、环境关系和细节/瞬间三张最终作品</small>
                         </button>
                       </div>
+                      <div id="v3PhotographySceneRow" class="v3-preset-row v3-photography-scene-row" aria-label="摄影场景" hidden>
+                        <button class="v3-preset-card" data-v3-photography-scene="portrait" type="button" aria-pressed="false">
+                          <span>人像摄影</span>
+                          <small>拍人物、肖像或写真；人物参考图可保留同一个人的长相</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-photography-scene="landscape" type="button" aria-pressed="false">
+                          <span>风景摄影</span>
+                          <small>拍自然、城市或旅行场景；可以上传场景参考图</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-photography-scene="still_life" type="button" aria-pressed="false">
+                          <span>静物摄影</span>
+                          <small>拍物品、食物或陈设；可以上传物品参考图</small>
+                        </button>
+                        <button class="v3-preset-card" data-v3-photography-scene="animal" type="button" aria-pressed="false">
+                          <span>动物摄影</span>
+                          <small>拍动物或宠物；要保留同一只动物时，请上传它的清晰原图</small>
+                        </button>
+                      </div>
                     </details>
 
                     <label class="field v3-prompt-field">
@@ -1558,6 +1577,19 @@
                       </label>
                       <div id="v3AssetList" class="v3-asset-list empty-v3-list">还没有上传图片</div>
                     </div>
+
+                    <section id="v3PhotographyReferenceFields" class="v3-photography-reference-fields" hidden aria-label="摄影参考图用途">
+                      <label class="field">
+                        <span>这张参考图要保留什么</span>
+                        <select id="v3PhotographyReferenceRoleInput">
+                          <option value="face_reference">人物参考：保留同一个人的长相</option>
+                          <option value="nonhuman_identity_reference">动物/宠物身份：保留同一只动物</option>
+                          <option value="background_reference">风景/场景参考：延续地点和环境</option>
+                          <option value="subject_reference">静物/物品参考：保持同一个物品</option>
+                        </select>
+                        <small id="v3PhotographyReferenceRoleHint" class="v3-field-hint">选择用途后再上传。动物身份参考需要清晰、可识别的原图；不支持时本次会停止，不会改成纯文字生成。</small>
+                      </label>
+                    </section>
 
                     <details id="v3AdvancedReferenceControls" class="v3-optional-details v3-reference-priority-controls v3-general-advanced-controls">
                       <summary>
