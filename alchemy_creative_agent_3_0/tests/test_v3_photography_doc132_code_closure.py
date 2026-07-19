@@ -150,6 +150,24 @@ def test_p14_browser_contract_uses_trusted_catalog_and_visible_photo_role_state(
     assert 'id="mobileV3PhotographerProfileInput"' in mobile_html
 
 
+def test_p14_photography_next_actions_do_not_hide_shared_template_actions() -> None:
+    """Photography owns only its branch; General/E-Commerce keep E23 actions."""
+
+    source = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("function renderV3ProjectNextActions()")
+    end = source.index("function renderV3BrandMemoryPanel()", start)
+    body = source[start:end]
+
+    assert 'if (projectScenario === "photography")' in body
+    assert 'data-v3-project-action="continue_photography"' in body
+    assert "Photography owns only the branch above" in body
+    assert 'els.v3ProjectNextActions.hidden = false;' in body
+    assert 'const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;' in body
+    assert 'els.v3ProjectNextActions.hidden = true;\n  return;\n  const hasSelectedRefs' not in body
+
+
 def test_doc132_metadata_only_professional_set_is_held_not_a_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-certifying review preserves all role truth but cannot become P10 success."""
 

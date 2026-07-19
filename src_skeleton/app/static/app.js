@@ -4372,8 +4372,10 @@ function renderV3ProjectNextActions() {
     `;
     return;
   }
-  els.v3ProjectNextActions.hidden = true;
-  return;
+  // General and E-Commerce share the mainline continuation/held-state
+  // renderer below.  Photography owns only the branch above and must never
+  // hide or replace those shared actions.
+  els.v3ProjectNextActions.hidden = false;
   const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
   const hasSelectableJob = Boolean(v3State.currentJob?.job_id && Array.isArray(v3State.currentJob.candidates) && v3State.currentJob.candidates.length);
   const ecommerceActive = v3State.selectedScenario === "ecommerce";
