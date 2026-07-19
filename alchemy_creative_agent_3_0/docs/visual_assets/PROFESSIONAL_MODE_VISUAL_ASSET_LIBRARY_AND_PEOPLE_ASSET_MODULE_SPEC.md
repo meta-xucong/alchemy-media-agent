@@ -7,6 +7,18 @@
 > product boundary and must not be used to rewrite Standard Mode, General
 > Template, E-Commerce, Photography, Central Brain, or the Web Provider path.
 
+> **Forward-architecture revision — Doc173 takes precedence.** This document
+> records the original project-scoped Professional Mode contract and retains
+> the valid Face Identity, root/consent, Anchor Pack, shared-runtime and
+> no-local-prompt invariants. For all *new* asset creation, project binding,
+> frontend and runtime write paths, follow
+> `173_V3_VISUAL_ASSET_LIBRARY_FIRST_PROFESSIONAL_WORKSPACE_RECONSTRUCTION_SPEC.md`.
+> In particular, its project-scoped catalog, explicit mode toggle, and
+> one-project/one-selected-People-Asset forward rules are historical
+> compatibility descriptions, not new implementation authority. Existing
+> records remain readable and auditable; this note does not rewrite historical
+> M5 evidence.
+
 ## 0. Status And Authority
 
 Status:
@@ -32,7 +44,7 @@ Professional Mode
 It does not activate Professional Mode, certify an identity provider, or make
 any existing mode use a visual asset pack automatically.
 
-### 0.1 Compatibility And Precedence
+### 0.1 Historical Compatibility And Precedence
 
 This document is a scoped overlay, not a replacement authority for the
 numbered V3 documents. The precedence rule is:
@@ -52,7 +64,8 @@ Professional Mode, only after an explicit mode choice and selected People Asset
 
 The overlay may narrow or strengthen an existing shared contract for the
 selected People Asset, but it may not weaken, bypass, or globally rewrite it.
-No old document is edited, renumbered, or made obsolete by this specification.
+Doc173 now updates this document's former project-scoped forward path without
+renumbering any existing V3 authority; its historical evidence remains intact.
 
 ### 0.2 Current Shared Forward Path
 
@@ -138,9 +151,11 @@ reads, activates, or upgrades a People Asset as a side effect.
 
 ## 3. Visual Asset Library Mother Boundary
 
-The library is a project-scoped asset catalog, not a new image generation
-template. A project may contain multiple independent People Assets; selecting
-one is an explicit per-job choice. Its initial conceptual layout is:
+This version described the library as a project-scoped asset catalog. That
+ownership model is superseded for new work by Doc173: the Visual Asset Library
+is library-scoped and projects hold explicit versioned bindings. It remains
+true that the library is not an image generation template and that it must not
+become a second reference registry. The historical conceptual layout was:
 
 ```text
 visual_asset_library
@@ -417,6 +432,12 @@ unwanted person's pixels will be ignored.
 
 ## 7. User Experience Contract
 
+> **Superseded for new UI.** The original `Standard Mode / Professional Mode`
+> project-creation choice and project-scoped selector below are retained only
+> to explain legacy records. Doc173 defines the forward UI: a dedicated Visual
+> Asset Library entry plus an optional project binding selector after a template
+> project exists.
+
 The top-level UI exposes:
 
 ```text
@@ -497,13 +518,20 @@ current contracts:
 | shared vision review/retry/history | Review every candidate, keep append-only attempts, and activate only the reviewed winner/pack. |
 
 No People Asset implementation may create a second Brain, provider, review
-system, retry system, image store, or reference registry. It may add a
-project-scoped catalog/index and a Doc101-governed typed binding adapter, but
-reference admission, semantic judgment, evidence preparation, Provider prompt
+system, retry system, image store, or reference registry. The forward adapter
+is a Doc173 library-scoped catalog plus a Doc101-governed typed project/Job
+binding; the older project-scoped catalog/index remains read-compatible only.
+Reference admission, semantic judgment, evidence preparation, Provider prompt
 finalization, Provider execution, review, retry, and final delivery remain
 shared.
 
 ## 9. Ownership And Isolation
+
+> **Ownership migration.** The project-scoped catalog and per-project asset
+> ownership named in this section are legacy. Doc173 moves asset ownership to
+> the Visual Asset Library and keeps project/job selection as an explicit,
+> versioned binding/frozen snapshot. The shared-runtime ownership stated here
+> remains current.
 
 ### 9.1 Visual Asset Library owns
 
@@ -552,6 +580,11 @@ other modules. Adding a future module must not expand Face Identity's channel
 ownership or change Standard Mode behavior.
 
 ## 10. Conceptual Data Contracts
+
+> **Legacy schema note.** The `project_id` ownership fields in the following
+> illustrative contracts are not valid for new Visual Asset records. They are
+> retained to read historical records; Doc173 §3 is authoritative for new
+> library assets, project bindings and frozen Job snapshots.
 
 The eventual contracts should be additive and versioned. Names below are
 conceptual and are not yet public API commitments.
@@ -620,6 +653,12 @@ pack as a new module, silently migrate a selected asset, or copy Standard Mode
 defaults into Professional Mode.
 
 ## 11. Runtime Integration Boundary
+
+> **Forward runtime note.** The `Professional Mode selection` seam below
+> describes the legacy adapter. New Jobs resolve a Doc173
+> `VisualAssetBindingSet`; no-asset Jobs remain Standard without a mode flag.
+> The same Brain, capability-plan, provider, review and retry boundaries remain
+> mandatory in both descriptions.
 
 The intended execution seam is:
 
@@ -712,6 +751,10 @@ frame-to-frame consistency.
 
 ## 13. Implementation Phases
 
+> **Historical implementation plan.** Do not add new project-scoped catalog
+> writes or new mode-toggle consumers from these phases. Use Doc173 §7 for the
+> library-first migration and frontend reconstruction sequence.
+
 ### Phase A — Documentation And Mode Boundary
 
 ```text
@@ -774,6 +817,10 @@ No phase authorizes a production claim before the existing real provider,
 review, and template gates pass.
 
 ## 14. Required Isolation Tests
+
+> New isolation tests must additionally enforce Doc173: new assets are not
+> project-owned, new jobs use frozen binding sets, and an unbound project is a
+> normal Standard job rather than a disabled Professional job.
 
 At minimum:
 

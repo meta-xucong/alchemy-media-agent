@@ -13,6 +13,14 @@ This document records the minimum runtime seam required to make a project
 scoped People Asset resolvable after a controlled-service restart. It does not
 certify any pixels and does not activate a pack by metadata alone.
 
+> **Forward lifecycle replacement.** The persisted catalog, ready-upload
+> admission and shared `AnchorPackPreparationService` described here remain
+> reusable. Its project-scoped ownership and routes are legacy compatibility
+> only after Doc173. New assets are library-scoped, new projects receive
+> explicit bindings, and new Jobs freeze that binding set as defined in Doc173
+> §§3–4. This historical handoff must not be used to introduce new
+> `/projects/{project_id}/people-assets` writes.
+
 ## Root cause of the pre-Provider block
 
 The Professional contracts and `AnchorPackPreparationService` already existed,
@@ -23,6 +31,9 @@ therefore discarded the catalog and `_bind_professional_mode()` correctly
 returned `professional_people_asset_not_found`.
 
 ## Formal lifecycle now available
+
+> The following routes are retained for historical reads and controlled
+> promotion only. Doc173 defines their replacement public surface.
 
 The additive Product API seam is:
 
@@ -79,6 +90,10 @@ path, temporary pytest catalog record, historical image, or caller-claimed
 provenance cannot create a draft binding.
 
 ## Persistence and binding
+
+> For new paths, `PersistentVisualAssetCatalog` is a physical persistence
+> mechanism, not proof that ownership remains project-scoped. New resolvers
+> must resolve a library asset then a project binding/frozen snapshot.
 
 The controlled app now injects `PersistentVisualAssetCatalog` into the V3
 Product API. Its root is `V3_VISUAL_ASSET_CATALOG_ROOT` when configured, or the

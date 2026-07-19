@@ -3,8 +3,9 @@
 ## Status And Scope
 
 ```text
-BACKEND_AUTHORITY_CONTRACT_IMPLEMENTED_ON_FEATURE_BRANCH
-FRONTEND_DEFERRED_UNTIL_BACKEND_AUDIT
+DOC173_LIBRARY_FIRST_RECONSTRUCTION_AUTHORITATIVE
+LEGACY_PROJECT_SCOPED_COMPATIBILITY_RETAINED_READ_ONLY
+FRONTEND_RECONSTRUCTION_REQUIRED
 NO_STANDARD_MODE_CHANGE
 NO_PRODUCTION_ASSET_CLAIM
 ```
@@ -13,9 +14,13 @@ This is the index for the independent Professional Mode document set. The set
 is intentionally unnumbered and lives under `docs/visual_assets/`. It does not
 rename, edit, supersede, or reinterpret the existing numbered V3 documents.
 
-Professional Mode is an explicit opt-in asset-source mode. It is not a new
-General Template mode, E-Commerce slot system, Photography role system, or
-second image-generation product.
+The forward product model is **Visual Asset Library first**: users build and
+explicitly activate reusable assets in a dedicated library, then optionally
+bind one or more compatible assets to a normal template project. It is not a
+new General Template mode, E-Commerce slot system, Photography role system, or
+second image-generation product. “Professional Mode” is retained as a
+historical name for the Face Identity/Anchor Pack capability, not a required
+new-project toggle.
 
 The first release intentionally implements only Face Identity. Future body,
 hair, styling, or other identity dimensions must enter as independently
@@ -24,6 +29,25 @@ activation contracts.
 
 ## Document Inventory
 
+### Current Forward Authority — Doc173
+
+`../173_V3_VISUAL_ASSET_LIBRARY_FIRST_PROFESSIONAL_WORKSPACE_RECONSTRUCTION_SPEC.md`
+
+Defines the authoritative forward architecture:
+
+```text
+library-scoped Visual Assets rather than project-owned assets
+People Asset / Face Identity as the first asset type
+explicit project VisualAssetBindingSet and immutable Job snapshot
+dedicated Visual Asset Library workspace plus project binding modal
+legacy project-scoped read compatibility and explicit promotion only
+Brain-owned canonical prompt and shared Provider/Review/Retry reuse
+future multi-asset composition without a product/scene implementation today
+```
+
+All new implementation must use Doc173. It does not invalidate historical M5
+or Provider evidence, and it does not open a production gate.
+
 ### Primary Product Contract
 
 `PROFESSIONAL_MODE_VISUAL_ASSET_LIBRARY_AND_PEOPLE_ASSET_MODULE_SPEC.md`
@@ -31,9 +55,9 @@ activation contracts.
 Defines:
 
 ```text
-Standard Mode / Professional Mode separation
+original Standard/Professional separation and Face Identity boundary
 Visual Asset Library mother boundary
-project-scoped People Assets and multiple-asset selection
+historical project-scoped People Asset and mode-toggle design
 modular People Asset structure with Face Identity as the first module
 Identity Anchor Pack preparation and activation
 root truth and prompt-owned channel rules
@@ -41,8 +65,9 @@ shared-module reuse and non-duplication boundaries
 future Video compatibility boundary
 ```
 
-This is the product and architecture authority for the Professional Mode
-overlay.
+It remains the source for inherited Face Identity, Anchor Pack and shared-path
+invariants. Its project-scoped ownership, explicit creation-mode and forward
+frontend sections are superseded by Doc173.
 
 ### Implementation And Acceptance Handoff
 
@@ -158,11 +183,11 @@ open the Professional production gate.
 
 `PROFESSIONAL_MODE_PERSISTENT_ASSET_LIFECYCLE_AND_CONTROLLED_RUNTIME_HANDOFF_20260718.md`
 
-Defines the additive project-scoped People Asset create/read/activate routes,
-explicit user-confirmation boundary, append-only catalog history, and the
-controlled app's `PersistentVisualAssetCatalog` injection. This makes a real
-binding resolvable after restart; it does not create a passing pack or certify
-M5.
+Records the historical project-scoped create/read/activate routes, explicit
+user-confirmation boundary, append-only catalog history, and controlled app's
+`PersistentVisualAssetCatalog` injection. The persistence and Anchor Pack
+seam may be reused, but new writes/UX are superseded by Doc173's library and
+binding contracts.
 
 ## Compatibility Authority
 
@@ -170,9 +195,9 @@ The effective authority is selected by the execution mode:
 
 | Execution context | Authority | Allowed effect |
 | --- | --- | --- |
-| Standard Mode | Existing numbered V3 documents and current implementation | No People Asset lookup, no Professional Mode metadata, no new block or fallback. |
-| Professional Mode with an active selected People Asset | This document set for asset selection/lifecycle, plus existing shared V3 documents for execution | Use exactly one selected project People Asset and its active Face Identity module/pack version in the first release. |
-| Professional Mode without a valid asset/pack | This document set | Block safely; never silently run Standard Mode. |
+| Asset-free project | Existing numbered V3 documents and current implementation | Current Standard path; no Visual Asset lookup or implicit block. |
+| Asset-bound project / Job | Doc173 for library/binding/freeze, plus existing shared V3 documents for execution | Use one or more explicitly bound, active, non-overlapping asset versions; first release UI exposes one People Asset only. |
+| Explicit invalid binding | Doc173 | Block safely; never silently discard the selected asset or run as asset-free. |
 | Shared Provider / review / retry / delivery | Existing Doc93/95/96/97/100/101/121/128 contracts | No replacement provider, registry, reviewer, retry loop, or storage. |
 | Shared Brain semantic/prompt gates | Existing Doc134/135/136/137/138/139/140 contracts | Face Identity supplies typed evidence only; missing profile, activation intent, canonical prompt/hash, or required Human Realism sign-off blocks. |
 
@@ -204,7 +229,7 @@ Doc140 complete Remote Brain semantic task-profile requirement
 The current integration target is the post-Doc140 shared forward path:
 
 ```text
-sanitized Professional Mode selection + asset evidence
+sanitized frozen VisualAssetBindingSet + asset evidence
   -> complete Remote Brain semantic task profile and activation intent
   -> frozen CapabilityActivationPlan
   -> complete signed canonical Provider prompt and hashes
@@ -215,7 +240,7 @@ sanitized Professional Mode selection + asset evidence
 
 The People Asset/Face Identity documents add lifecycle and evidence binding to
 this path. They do not author prompt prose, perform local semantic fallback,
-create a second reviewer/provider, or change the Standard Mode path.
+create a second reviewer/provider, or change the asset-free Standard path.
 
 Standard Mode's existing `ProjectIdentityAnchor`, `SubjectIdentityCard`,
 `auto_batch_identity_anchor`, and Doc97 continuity records remain valid. They
@@ -225,7 +250,8 @@ are not automatically converted into People Assets.
 
 ```text
 Do not edit or renumber old documents to make this mode fit.
-Do not put Professional Mode into General variation_mode or a vertical role.
+Do not put Visual Asset Library or asset-binding semantics into General
+variation_mode or a vertical role.
 Do not add a second reference registry, image store, Provider, Brain, review,
   retry, or final-delivery system.
 Do not send a synthetic white-background face card as unrestricted Provider

@@ -4,6 +4,13 @@ Status: implementation specification for the independent Professional M5
 acceptance branch. This document does not open a browser entry, a production
 gate, or a second Provider/review/retry/storage path.
 
+> **Doc173 compatibility note.** The view-conditioned evidence, serial 2/3/5
+> budget and renderer-parity requirements remain valid. References below to a
+> project-scoped Professional resolver or `bind_professional_mode` describe the
+> historical integration seam. New preparation/Jobs must resolve the same
+> evidence from a library asset selected through a Doc173 binding and frozen
+> snapshot; this document does not define asset ownership or a forward UI.
+
 ## 1. Why the previous M5 attempts remained blocked
 
 The shared Vision review was correctly rejecting the three-quarter candidates;

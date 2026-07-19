@@ -8,6 +8,14 @@ existing numbered V3 contract. It is a backend-first contract: no frontend
 implementation is authorized by this document until the backend gates and
 tests are complete.
 
+> **Doc173 ownership revision.** The channel-authority, Brain-first, safe
+> admission and evidence-parity rules in this document remain current. Its
+> references to an explicit Professional Mode toggle and project-scoped claim
+> ownership are superseded for new work: assets are library-scoped and a
+> project/Job uses a Doc173 `VisualAssetBindingSet` / frozen snapshot. Do not
+> reintroduce a project-scoped catalog or use this document to add a second
+> asset runtime.
+
 The purpose is to make Professional Mode largely invisible during normal use:
 the user explicitly chooses Professional Mode and a visual asset, while the
 backend automatically decides which parts of every other reference are
@@ -92,11 +100,13 @@ shared review/retry/final-delivery contracts
 
 ## 3. Visual Asset Channel Claim
 
-Every future Visual Asset module must expose a typed, project-scoped claim:
+Every future Visual Asset module must expose a typed claim. For a new Job the
+claim is derived from its frozen binding set; `project_id` identifies the
+binding context, not ownership of the library asset:
 
 ```text
 AssetChannelClaim:
-  project_id
+  project_id                 # binding context only; never library-asset ownership
   asset_type
   asset_id
   asset_version_id
@@ -125,11 +135,11 @@ they do not modify the Face Identity module or create a second runtime.
 
 ## 4. Professional Asset Binding Set
 
-The internal Professional Mode job context is a binding set:
+The internal asset-bound Job context is a frozen binding set:
 
 ```text
-ProfessionalAssetBindingSet:
-  mode = professional
+FrozenVisualAssetBindingSet:
+  binding_set_id
   project_id
   job_id
   claims[]
@@ -139,7 +149,9 @@ ProfessionalAssetBindingSet:
 The first implementation may contain exactly one People Asset claim. The
 binding set is intentionally extensible so that a future job can explicitly
 bind a People Asset and a Product Asset together, provided their owned channel
-sets do not overlap.
+sets do not overlap. It is created from a library asset plus an explicit
+project binding and is then frozen; it is not an implicit “professional mode”
+side effect.
 
 The binding set is created after project/lifecycle validation and before the
 frozen CapabilityActivationPlan. It is never inferred from a keyword, old
@@ -419,8 +431,8 @@ pass independently.
 The frontend will expose only:
 
 ```text
-ordinary mode / Professional Mode
-selected Visual Asset
+asset-free project / selected Visual Assets
+plain-language asset library and project binding actions
 plain-language preparation or blocked status
 ```
 

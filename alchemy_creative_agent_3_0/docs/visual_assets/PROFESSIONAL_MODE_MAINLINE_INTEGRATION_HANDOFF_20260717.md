@@ -6,9 +6,17 @@ This record closes the backend integration seam for the first Professional
 Mode release. It does not enable the browser experience, claim real-pixel
 quality, or open a production gate.
 
-Professional Mode is an explicit request mode. It is not inferred from
-keywords and it never falls back to Standard or General when its identity
-asset is unavailable.
+> **Historical integration record.** The project-scoped mode/asset API below
+> describes the integrated seam at this record's date. Doc173 supersedes it
+> for all new asset creation, project binding and forward UI/runtime writes.
+> Retain this file for historical job readback and evidence only; do not use it
+> as a new public API design.
+
+The historical Professional Mode request was explicit, never inferred from
+keywords, and never fell back to Standard or General when its identity asset
+was unavailable. The equivalent forward rule is an explicit Doc173 asset
+binding: invalid selected bindings block; no selected binding is a normal
+asset-free Standard project.
 
 ## Mainline flow
 

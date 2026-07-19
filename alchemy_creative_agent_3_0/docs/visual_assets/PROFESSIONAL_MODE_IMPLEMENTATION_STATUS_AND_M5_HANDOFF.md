@@ -17,6 +17,13 @@ Professional Mode document set. It does not alter the existing numbered V3
 contracts or authorize production activation. The backend integration status
 and merge result are determined by the mainline commit and verification record.
 
+> **Historical status scope.** References below to `professional_mode`, a
+> project-scoped People Asset catalog or a project-scoped resolver accurately
+> describe the implementation/evidence at the time. They are no longer a
+> forward architecture target after Doc173. New work must preserve historical
+> readback while moving creation to the Visual Asset Library and usage to
+> explicit project bindings/frozen snapshots.
+
 ## Implemented scope
 
 The feature branch contains the following additive, isolated seams:

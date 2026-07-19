@@ -12,6 +12,11 @@ This is an unnumbered Professional Mode operating document. It does not change
 Standard Mode, General Template, E-Commerce, Photography, or any numbered V3
 authority.
 
+> **Doc173 terminology update.** For forward work, “Professional Mode
+> binding” in this protocol means a library-scoped Visual Asset selected through
+> an explicit project binding and frozen Job snapshot. The historical
+> project-scoped mode/asset adapter is reviewed only for backward compatibility.
+
 ## Trigger
 
 Run this review whenever a Standard Mode change touches any of the following:
@@ -93,10 +98,10 @@ The audit is performed in the dedicated Professional Mode worktree and branch:
 9. if BLOCKED, record the exact invariant and stop before implementation
 ```
 
-The current Professional Mode forward path remains:
+The current asset-bound forward path remains:
 
 ```text
-explicit mode + selected People Asset evidence
+explicit project binding + selected library Visual Asset evidence
   -> complete Remote Brain semantic task profile and capability intent
   -> frozen CapabilityActivationPlan
   -> complete signed canonical Provider prompt and hashes
@@ -113,8 +118,8 @@ heuristics, local prompt fragments, or scenario-specific recipes.
 
 ```text
 Standard Mode behavior remains unchanged by the Professional Mode adaptation.
-Professional Mode remains explicit opt-in and binds one project asset/version
-per job.
+Asset usage remains explicit and each Job freezes its selected library asset
+version/binding set.
 Face Identity supplies evidence and lifecycle state, not creative prompt prose.
 Remote Brain remains the owner of semantic judgment and canonical Provider
 prompt creation/signing.

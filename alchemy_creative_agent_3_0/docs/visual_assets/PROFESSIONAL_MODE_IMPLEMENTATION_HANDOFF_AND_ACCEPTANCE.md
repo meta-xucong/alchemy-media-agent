@@ -17,6 +17,14 @@ The primary authority is:
 
 `PROFESSIONAL_MODE_VISUAL_ASSET_LIBRARY_AND_PEOPLE_ASSET_MODULE_SPEC.md`
 
+> **Forward-authority replacement.** For all new implementation after
+> Doc173, the primary authority for asset ownership, project binding and UI is
+> `173_V3_VISUAL_ASSET_LIBRARY_FIRST_PROFESSIONAL_WORKSPACE_RECONSTRUCTION_SPEC.md`.
+> This handoff remains useful for Face Identity pack preparation, shared
+> execution and historical compatibility only. Do not use its project-scoped
+> catalog, explicit mode-toggle or single-asset forward path to implement new
+> writes.
+
 The implementation must target the current post-Doc140 shared V3 path, not an
 older local-prompt interpretation:
 
@@ -34,9 +42,9 @@ The Face Identity implementation contributes typed evidence and lifecycle
 state only. It must not author prompt prose, add negatives, locally classify
 the scene, patch retry prompts, or create a second reviewer/provider.
 
-## 1. Execution Boundary
+## 1. Historical Execution Boundary
 
-The only supported Professional Mode path is:
+The originally supported project-scoped path was:
 
 ```text
 explicit user mode choice
@@ -58,6 +66,11 @@ Missing or invalid Professional Mode assets produce a safe blocked state. They
 never trigger a Standard Mode fallback.
 
 ## 2. Milestones
+
+> **Superseded sequencing.** M0–M5 below record the original implementation
+> sequencing. New work must use Doc173 P0–P5: library ownership first, then
+> project binding/freeze, then the frontend reconstruction. The shared Anchor
+> Pack and real-pixel acceptance requirements remain unchanged.
 
 ### M0 — Contract And Red Tests
 
@@ -202,6 +215,10 @@ or video readiness.
 | Module extensibility | This document set | Face Identity is the only first-release module; each future dimension needs its own contract and activation. |
 
 ## 4. Required Failure Semantics
+
+> For forward Jobs, replace “selected project People Asset” with a validated
+> Doc173 frozen binding-set entry. The no-silent-fallback rule remains exactly
+> the same after a user has explicitly bound an asset.
 
 The job must be blocked or withheld when any of these occur:
 
