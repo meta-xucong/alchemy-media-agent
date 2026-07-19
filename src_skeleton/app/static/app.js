@@ -290,6 +290,9 @@ const v3State = {
   loaded: false,
   loading: false,
   view: "home",
+  // A workspace is a browser/product surface, not a generation template or
+  // runtime mode.  Only Professional projects may expose asset binding UI.
+  workspaceMode: "standard",
   scenarios: [],
   templates: [],
   templateCatalogStatus: "idle",
@@ -394,6 +397,9 @@ const els = {
   labNavMenu: document.querySelector(".lab-nav-menu"),
   labNavTab: document.querySelector(".lab-nav-menu [data-tab='lab']"),
   labNavDropdown: document.querySelector(".lab-nav-dropdown"),
+  v3WorkspaceMenu: document.querySelector("#v3WorkspaceMenu"),
+  v3WorkspaceMenuBtn: document.querySelector("#v3WorkspaceMenuBtn"),
+  v3WorkspaceMenuDropdown: document.querySelector("#v3WorkspaceMenuDropdown"),
   heroLine: document.querySelector(".hero-line"),
   providerList: document.querySelector("#providerList"),
   videoProviderList: document.querySelector("#videoProviderList"),
@@ -525,15 +531,23 @@ const els = {
   labRefreshHistoryBtn: document.querySelector("#labRefreshHistoryBtn"),
   labHistoryGrid: document.querySelector("#labHistoryGrid"),
   v3HomeView: document.querySelector("#v3HomeView"),
-  v3VisualAssetLibraryView: document.querySelector("#v3VisualAssetLibraryView"),
+  v3StandardHomeSurface: document.querySelector("#v3StandardHomeSurface"),
+  v3ProfessionalHomeSurface: document.querySelector("#v3ProfessionalHomeSurface"),
+  v3ProjectHub: document.querySelector("#v3ProjectHub"),
+  v3ProfessionalProjectHubSlot: document.querySelector("#v3ProfessionalProjectHubSlot"),
+  v3HomeEyebrow: document.querySelector("#v3HomeEyebrow"),
+  v3HomeTitle: document.querySelector("#v3HomeTitle"),
+  v3HomeIntro: document.querySelector("#v3HomeIntro"),
+  v3HistoryEyebrow: document.querySelector("#v3HistoryEyebrow"),
+  v3HistoryTitle: document.querySelector("#v3HistoryTitle"),
+  v3HistoryIntro: document.querySelector("#v3HistoryIntro"),
   v3WorkspaceView: document.querySelector("#v3WorkspaceView"),
   v3ScenarioGrid: document.querySelector("#v3ScenarioGrid"),
   v3TemplateChooser: document.querySelector("#v3TemplateChooser"),
-  v3OpenVisualAssetLibraryBtn: document.querySelector("#v3OpenVisualAssetLibraryBtn"),
-  v3BackToProjectsBtn: document.querySelector("#v3BackToProjectsBtn"),
   v3RefreshVisualAssetsBtn: document.querySelector("#v3RefreshVisualAssetsBtn"),
   v3VisualAssetLibraryStatus: document.querySelector("#v3VisualAssetLibraryStatus"),
   v3VisualAssetLibraryList: document.querySelector("#v3VisualAssetLibraryList"),
+  v3VisualAssetLibraryPanel: document.querySelector("#v3VisualAssetLibraryPanel"),
   v3VisualAssetCreateForm: document.querySelector("#v3VisualAssetCreateForm"),
   v3VisualAssetNameInput: document.querySelector("#v3VisualAssetNameInput"),
   v3VisualAssetRootInput: document.querySelector("#v3VisualAssetRootInput"),
@@ -896,8 +910,17 @@ function bindControls() {
         setLabNavOpen(canUseLabDropdown() && shouldOpenLabMenu);
         return;
       }
+      if (tabName === "v3") {
+        event.preventDefault();
+        const shouldOpenV3Menu = !els.v3WorkspaceMenu?.classList.contains("is-open");
+        switchTab("v3");
+        setV3WorkspaceMenuOpen(shouldOpenV3Menu);
+        setLabNavOpen(false);
+        return;
+      }
       switchTab(tabName);
       setLabNavOpen(false);
+      setV3WorkspaceMenuOpen(false);
     });
   });
 
@@ -1128,6 +1151,13 @@ function bindControls() {
   document.querySelectorAll("[data-lab-home-open]").forEach((button) => {
     button.addEventListener("click", openLabHome);
   });
+  document.querySelectorAll("[data-v3-workspace-entry]").forEach((button) => {
+    button.addEventListener("click", () => {
+      switchTab("v3");
+      setV3WorkspaceMode(button.dataset.v3WorkspaceEntry || "standard", { openHome: true });
+      setV3WorkspaceMenuOpen(false);
+    });
+  });
   document.querySelectorAll("[data-lab-aspect]").forEach((button) => {
     button.addEventListener("click", () => {
       setActive(button, "[data-lab-aspect]");
@@ -1157,8 +1187,6 @@ function bindControls() {
     button.addEventListener("click", () => setV3VariationMode(button.dataset.v3VariationMode || "auto"));
   });
   if (els.v3TemplateChooser) els.v3TemplateChooser.addEventListener("click", handleV3HomeTemplateChoice);
-  if (els.v3OpenVisualAssetLibraryBtn) els.v3OpenVisualAssetLibraryBtn.addEventListener("click", () => openV3VisualAssetLibrary());
-  if (els.v3BackToProjectsBtn) els.v3BackToProjectsBtn.addEventListener("click", () => openV3Home());
   if (els.v3RefreshVisualAssetsBtn) els.v3RefreshVisualAssetsBtn.addEventListener("click", () => loadV3VisualAssets({ silent: false, force: true }));
   if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.addEventListener("click", handleV3VisualAssetAction);
   if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.addEventListener("submit", createV3VisualAsset);
@@ -1277,6 +1305,7 @@ function bindControls() {
   });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") setLabNavOpen(false);
+    if (event.key === "Escape") setV3WorkspaceMenuOpen(false);
     if (event.key === "Escape" && !els.sampleGuideModal.hidden) closeSampleGuide();
     if (event.key === "Escape" && els.favoritePickerModal && !els.favoritePickerModal.hidden) closeFavoritePicker();
     if (event.key === "Escape" && els.v2FavoriteReferenceModal && !els.v2FavoriteReferenceModal.hidden) closeV2FavoriteReferencePicker();
@@ -1284,9 +1313,10 @@ function bindControls() {
     if (event.key === "Escape" && els.v3ProjectHistoryModal && !els.v3ProjectHistoryModal.hidden) closeV3ProjectHistoryModal();
   });
   document.addEventListener("click", (event) => {
-    if (!labState.navOpen) return;
-    if (els.labNavMenu?.contains(event.target)) return;
-    setLabNavOpen(false);
+    if (labState.navOpen && !els.labNavMenu?.contains(event.target)) setLabNavOpen(false);
+    if (els.v3WorkspaceMenu?.classList.contains("is-open") && !els.v3WorkspaceMenu.contains(event.target)) {
+      setV3WorkspaceMenuOpen(false);
+    }
   });
 }
 
@@ -1590,6 +1620,80 @@ function initialV3ScenarioFromPath() {
   return scenarioMap[scenarioToken] || "";
 }
 
+function initialV3WorkspaceFromRoute() {
+  const workspace = new URLSearchParams(window.location.search).get("workspace");
+  return workspace === "professional" ? "professional" : "standard";
+}
+
+function setV3WorkspaceMenuOpen(open) {
+  const nextOpen = Boolean(open && els.v3WorkspaceMenu && els.v3WorkspaceMenuDropdown);
+  if (els.v3WorkspaceMenu) els.v3WorkspaceMenu.classList.toggle("is-open", nextOpen);
+  if (els.v3WorkspaceMenuBtn) els.v3WorkspaceMenuBtn.setAttribute("aria-expanded", String(nextOpen));
+  if (els.v3WorkspaceMenuDropdown) {
+    if (nextOpen && els.v3WorkspaceMenuBtn) {
+      const rect = els.v3WorkspaceMenuBtn.getBoundingClientRect();
+      els.v3WorkspaceMenuDropdown.style.setProperty("--v3-workspace-menu-left", `${rect.left + rect.width / 2}px`);
+      els.v3WorkspaceMenuDropdown.style.setProperty("--v3-workspace-menu-top", `${rect.bottom + 8}px`);
+    }
+    els.v3WorkspaceMenuDropdown.hidden = !nextOpen;
+  }
+}
+
+function v3ProjectUsesProfessionalWorkspace(project) {
+  return String(project?.metadata?.v3_workspace || "").trim() === "professional";
+}
+
+function syncV3WorkspaceRoute() {
+  const path = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (!path.startsWith("/creative-agent-v3")) return;
+  const url = new URL(window.location.href);
+  if (v3State.workspaceMode === "professional") url.searchParams.set("workspace", "professional");
+  else url.searchParams.delete("workspace");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function renderV3WorkspaceMode() {
+  const professional = v3State.workspaceMode === "professional";
+  const v3HomeHref = professional ? "/creative-agent-v3?workspace=professional" : "/creative-agent-v3";
+  document.body.dataset.v3Workspace = professional ? "professional" : "standard";
+  document.querySelectorAll("[data-v3-route-link]").forEach((link) => {
+    link.setAttribute("href", v3HomeHref);
+  });
+  if (els.v3StandardHomeSurface) els.v3StandardHomeSurface.hidden = professional;
+  if (els.v3ProfessionalHomeSurface) els.v3ProfessionalHomeSurface.hidden = !professional;
+  if (els.v3VisualAssetLibraryPanel) els.v3VisualAssetLibraryPanel.hidden = !professional;
+  const hubTarget = professional ? els.v3ProfessionalProjectHubSlot : els.v3StandardHomeSurface;
+  if (hubTarget && els.v3ProjectHub && els.v3ProjectHub.parentElement !== hubTarget) hubTarget.appendChild(els.v3ProjectHub);
+  if (els.v3HomeEyebrow) els.v3HomeEyebrow.textContent = professional ? "Professional Mode · Projects" : "Alchemy Creative Agent 3.0";
+  if (els.v3HomeTitle) els.v3HomeTitle.textContent = professional ? "专业项目工作区" : "V3 项目工作台";
+  if (els.v3HomeIntro) {
+    els.v3HomeIntro.textContent = professional
+      ? "选择项目模板并创建专业项目。进入项目后可明确选择已启用视觉资产；资产只保护其负责的真实信息。"
+      : "先选要做的项目类型，再创建项目。后续每次继续创作都会读取本项目已确认的风格和结果。";
+  }
+  if (els.v3HistoryEyebrow) els.v3HistoryEyebrow.textContent = professional ? "Professional Projects" : "V3 Projects";
+  if (els.v3HistoryTitle) els.v3HistoryTitle.textContent = professional ? "最近专业项目" : "最近项目";
+  if (els.v3HistoryIntro) {
+    els.v3HistoryIntro.textContent = professional
+      ? "这里显示从专业版建立的项目。打开项目后，可以在项目概览选择或管理本项目使用的视觉资产。"
+      : "按项目展示最近生成的图片。点图片看整组产物，点“继续项目”回到工作页继续做。";
+  }
+}
+
+function setV3WorkspaceMode(mode, { openHome = false, updateRoute = true } = {}) {
+  v3State.workspaceMode = mode === "professional" ? "professional" : "standard";
+  if (openHome) openV3Home({ silent: true });
+  else {
+    renderV3ViewState();
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
+  }
+  if (v3State.workspaceMode === "professional" && !v3State.visualAssetsLoaded && !v3State.visualAssetsLoading) {
+    void loadV3VisualAssets({ silent: true, force: true });
+  }
+  if (updateRoute) syncV3WorkspaceRoute();
+}
+
 function panelExists(tabName) {
   return Array.from(els.panels).some((panel) => panel.dataset.panel === tabName);
 }
@@ -1608,6 +1712,7 @@ function restoreInitialModuleRoute() {
   }
   if (route === "v3") {
     switchTab("v3");
+    setV3WorkspaceMode(initialV3WorkspaceFromRoute(), { updateRoute: false });
     const scenarioFromPath = initialV3ScenarioFromPath();
     if (scenarioFromPath) {
       openV3Home({ silent: true });
@@ -1741,14 +1846,10 @@ function openV3Home({ silent = false } = {}) {
   }
 }
 
-function openV3VisualAssetLibrary() {
-  v3State.view = "visual_asset_library";
-  closeV3ProjectSubpage({ silent: true });
-  renderV3ViewState();
+function openV3ProfessionalWorkspace() {
+  setV3WorkspaceMode("professional", { updateRoute: true });
+  openV3Home({ silent: true });
   renderV3VisualAssetLibrary();
-  if (!v3State.visualAssetsLoaded && !v3State.visualAssetsLoading) {
-    void loadV3VisualAssets({ silent: true, force: true });
-  }
   window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
 }
 
@@ -1786,10 +1887,9 @@ function openV3ScenarioWorkspace(scenarioId = "general_creative", { fromRoute = 
 
 function renderV3ViewState() {
   const isWorkspace = v3State.view === "workspace";
-  const isLibrary = v3State.view === "visual_asset_library";
-  if (els.v3HomeView) els.v3HomeView.hidden = isWorkspace || isLibrary;
-  if (els.v3VisualAssetLibraryView) els.v3VisualAssetLibraryView.hidden = !isLibrary;
+  if (els.v3HomeView) els.v3HomeView.hidden = isWorkspace;
   if (els.v3WorkspaceView) els.v3WorkspaceView.hidden = !isWorkspace;
+  renderV3WorkspaceMode();
 }
 
 function v3ScenarioCanCreate(scenarioId) {
@@ -2714,6 +2814,9 @@ async function createV3Project() {
         linked_brand_id: v3State.selectedBrandMemory?.brand_id || null,
         metadata: {
           frontend_surface: "commercial_v3_project_mode",
+          // Workspace choice is UI provenance only.  It is not a template,
+          // a creative mode, or an authority to inject asset evidence.
+          v3_workspace: v3State.workspaceMode === "professional" ? "professional" : "standard",
           template_first_create: true,
           selected_template_id: templateId,
           selected_scenario_id: scenarioId,
@@ -2740,7 +2843,12 @@ async function createV3Project() {
     await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
     openV3ScenarioWorkspace(scenarioId);
     openV3ProjectSubpage("compose");
-    updateV3Notice("项目已创建。需要保持人物或其他资产一致时，可在项目概览中选择已启用的视觉资产。", "success");
+    updateV3Notice(
+      v3State.workspaceMode === "professional"
+        ? "专业项目已创建。可在项目概览中选择已启用视觉资产；后续新任务会冻结你确认的版本。"
+        : "项目已创建。现在可以继续上传参考图或开始生成。",
+      "success",
+    );
   } catch (error) {
     updateV3Notice(`项目创建失败：${friendlyError(error)}`, "error");
   } finally {
@@ -2752,14 +2860,16 @@ async function createV3Project() {
 
 function renderV3Projects() {
   if (!els.v3ProjectList) return;
+  const professional = v3State.workspaceMode === "professional";
   const items = [...v3State.projects]
     .filter((item) => item?.status !== "archived")
+    .filter((item) => v3ProjectUsesProfessionalWorkspace(item) === professional)
     .sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a));
   if (els.v3ProjectCount) els.v3ProjectCount.textContent = String(items.length);
   els.v3ProjectList.innerHTML = "";
   els.v3ProjectList.classList.toggle("empty-v3-list", items.length === 0);
   if (!items.length) {
-    els.v3ProjectList.textContent = "还没有 V3 项目";
+    els.v3ProjectList.textContent = professional ? "还没有专业项目。先建立视觉资产，或选择模板创建第一个专业项目。" : "还没有 V3 项目";
     return;
   }
   items.slice(0, v3State.projectRenderLimit).forEach((item) => {
@@ -5260,7 +5370,7 @@ function handleV3VisualAssetAction(event) {
 }
 
 function renderV3VisualAssetLibrary() {
-  if (!els.v3VisualAssetLibraryView) return;
+  if (!els.v3ProfessionalHomeSurface) return;
   const assets = Array.isArray(v3State.visualAssets) ? v3State.visualAssets : [];
   if (els.v3VisualAssetLibraryStatus) {
     if (v3State.visualAssetsLoading) {
@@ -5332,8 +5442,9 @@ function renderV3ProjectVisualAssetPanel() {
   const panel = els.v3ProjectVisualAssetPanel;
   if (!panel) return;
   const project = v3State.currentProject;
-  panel.hidden = !project?.project_id;
-  if (!project?.project_id) return;
+  const professionalProject = v3ProjectUsesProfessionalWorkspace(project);
+  panel.hidden = !project?.project_id || !professionalProject;
+  if (!project?.project_id || !professionalProject) return;
   const bindings = Array.isArray(v3State.projectVisualAssetBindings) ? v3State.projectVisualAssetBindings : [];
   if (els.v3OpenProjectVisualAssetDialogBtn) {
     els.v3OpenProjectVisualAssetDialogBtn.disabled = v3State.projectVisualAssetBindingsLoading;
@@ -5351,7 +5462,7 @@ function renderV3ProjectVisualAssetPanel() {
 }
 
 async function openV3VisualAssetBindingDialog() {
-  if (!v3State.currentProject?.project_id) return;
+  if (!v3State.currentProject?.project_id || !v3ProjectUsesProfessionalWorkspace(v3State.currentProject)) return;
   await Promise.all([
     loadV3VisualAssets({ silent: true, force: true }),
     loadV3ProjectVisualAssetBindings({ silent: true, force: true }),
@@ -5458,6 +5569,10 @@ async function openV3Project(projectId) {
   try {
     const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
     v3State.currentProject = payload.project || null;
+    setV3WorkspaceMode(
+      v3ProjectUsesProfessionalWorkspace(v3State.currentProject) ? "professional" : "standard",
+      { updateRoute: true },
+    );
     syncV3ProjectOutputsFromPayload(payload);
     if (Array.isArray(payload.templates) && payload.templates.length) {
       v3State.templates = payload.templates;

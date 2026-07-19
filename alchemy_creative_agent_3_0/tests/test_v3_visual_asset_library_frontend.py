@@ -1,9 +1,9 @@
 """Static contracts for the Doc173 library-first V3 browser surface.
 
 The production browser verification is deliberately separate.  These checks
-lock the non-negotiable information architecture: a Visual Asset Library is
-not a project template or an opt-in generation mode, and projects only use an
-asset after an explicit binding confirmation.
+lock the non-negotiable runtime ownership: a Visual Asset Library is not a
+project template or an opt-in generation mode, and projects only use an asset
+after an explicit binding confirmation.  Doc174 now owns the V3 page layout.
 """
 
 from pathlib import Path
@@ -24,17 +24,17 @@ def _function(source: str, name: str, next_name: str) -> str:
     return source[start:end]
 
 
-def test_doc173_library_is_an_explicit_peer_of_projects_not_a_project_mode() -> None:
+def test_doc173_library_is_not_a_template_or_generation_mode() -> None:
     source = APP_JS.read_text(encoding="utf-8")
     index = INDEX_HTML.read_text(encoding="utf-8")
 
-    assert 'id="v3OpenVisualAssetLibraryBtn"' in index
-    assert 'id="v3VisualAssetLibraryView"' in index
+    assert 'id="v3ProfessionalHomeSurface"' in index
+    assert 'id="v3VisualAssetLibraryPanel"' in index
     assert 'id="v3ProjectVisualAssetPanel"' in index
     assert 'id="v3VisualAssetBindingDialog"' in index
     assert 'data-v3-mode=' not in index
-    assert "function openV3VisualAssetLibrary()" in source
-    assert 'v3State.view = "visual_asset_library"' in source
+    assert "function openV3ProfessionalWorkspace()" in source
+    assert 'v3_workspace: v3State.workspaceMode === "professional" ? "professional" : "standard"' in source
     assert "professional_mode:" not in _function(source, "createV3Project", "renderV3Projects")
     assert "v3State.professionalMode" not in source[: source.index("async function openV3Project")]
 
@@ -68,7 +68,7 @@ def test_doc173_asset_lifecycle_and_binding_copy_is_human_readable_and_non_secre
         assert text in source or text in index
     assert "上传源图不等于启用" in index
     assert "开始生成后，本次使用的版本会固定在该任务中" in index
-    assert "候选" not in index[index.index("id=\"v3VisualAssetLibraryView\""):index.index("id=\"v3WorkspaceView\"")]
+    assert "候选" not in index[index.index("id=\"v3VisualAssetLibraryPanel\""):index.index("id=\"v3WorkspaceView\"")]
     helper_start = handlers.index("def _visual_asset_public_record")
     helper_end = handlers.index("    @staticmethod\n    def _project_visual_asset_binding_public_record", helper_start)
     helper = handlers[helper_start:helper_end]
@@ -99,7 +99,7 @@ def test_doc173_new_surface_is_responsive_and_does_not_reintroduce_template_fall
     assert "v3DefaultTemplateCards" not in source
     assert "templateCatalogStatus" in source
     for selector in (
-        ".v3-visual-asset-library-view",
+        ".v3-professional-home-surface",
         ".v3-visual-asset-binding-dialog",
         ".v3-project-visual-asset-panel",
     ):
