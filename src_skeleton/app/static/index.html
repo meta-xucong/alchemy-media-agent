@@ -1352,6 +1352,22 @@
 
                 <div id="v3TemplateChooser" class="v3-template-chooser" aria-label="选择项目类型"></div>
 
+                <div id="v3ModeChooser" class="v3-mode-chooser" role="radiogroup" aria-label="选择创作模式">
+                  <button class="v3-mode-card active" type="button" data-v3-mode="standard" aria-pressed="true">
+                    <span>标准创作</span>
+                    <strong>适合一次生成和普通项目续作</strong>
+                    <small>保持现有 V3 工作方式，不需要先建立人物资产。</small>
+                  </button>
+                  <button class="v3-mode-card" type="button" data-v3-mode="professional" aria-pressed="false">
+                    <span>专业模式：使用视觉资产</span>
+                    <strong>适合同一个人物长期保持一致</strong>
+                    <small>先建立并确认人物资产，后续项目才会使用这个人物版本。</small>
+                  </button>
+                </div>
+                <div id="v3ProfessionalHomeHint" class="v3-professional-home-hint" role="status" hidden>
+                  已选择专业模式。创建项目后，请先上传清晰源图、准备人物参考并确认启用；未完成前不会悄悄改用标准创作。
+                </div>
+
                 <div id="v3TemplateCreatePanel" class="v3-template-create-panel">
                   <div>
                     <p class="eyebrow">Create Project</p>
@@ -1418,6 +1434,37 @@
                   </div>
                 </div>
                 <div id="v3ProjectSnapshot" class="v3-project-snapshot" aria-live="polite"></div>
+                <section id="v3ProfessionalAssetPanel" class="v3-professional-asset-panel" aria-label="人物资产工作区" hidden>
+                  <div class="v3-professional-asset-heading">
+                    <div>
+                      <p class="eyebrow">专业视觉资产</p>
+                      <h4>人物资产</h4>
+                      <p>这里的图片只用于固定人物身份。上传源图不等于启用，必须完成多视角检查并由你确认。</p>
+                    </div>
+                    <button id="v3ProfessionalRefreshBtn" class="button compact ghost" type="button">刷新状态</button>
+                  </div>
+                  <div id="v3ProfessionalAssetStatus" class="v3-professional-asset-status" aria-live="polite"></div>
+                  <div id="v3ProfessionalAssetList" class="v3-professional-asset-list" aria-live="polite"></div>
+                  <form id="v3ProfessionalCreateForm" class="v3-professional-create-form" novalidate>
+                    <h5>新建人物资产</h5>
+                    <p class="v3-field-hint">先选择一张清晰正面源图，并写下你希望这套人物参考代表的样子。</p>
+                    <label class="field">
+                      <span>源图</span>
+                      <input id="v3ProfessionalRootInput" type="file" accept="image/png,image/jpeg,image/webp" required />
+                      <small>图片会先保存并检查，准备好后才能继续。</small>
+                    </label>
+                    <label class="field">
+                      <span>人物参考说明</span>
+                      <textarea id="v3ProfessionalIntentInput" rows="3" maxlength="1200" required placeholder="例如：保持这个人的真实长相，建立自然、年龄合适、正面和侧面都能辨认的身份参考"></textarea>
+                    </label>
+                    <label class="v3-confirm-checkbox">
+                      <input id="v3ProfessionalConsentInput" type="checkbox" required />
+                      <span>我确认有权使用这张源图，并同意把它用于本项目的人物资产。</span>
+                    </label>
+                    <button id="v3ProfessionalCreateBtn" class="button primary" type="submit">保存源图并建立人物资产</button>
+                  </form>
+                  <div id="v3ProfessionalReviewPanel" class="v3-professional-review-panel" hidden></div>
+                </section>
                 <div id="v3PersistentDisplayRegion" class="v3-persistent-display-region" aria-label="项目成果展示区">
                   <div id="v3ProjectOutputBoard" class="v3-project-output-board empty-v3-list" aria-live="polite">生成图片后，会优先显示在这里。</div>
                   <div id="v3UsefulReferenceBoard" class="v3-useful-reference-board empty-v3-list" aria-live="polite">选中的图片会成为后续参考。</div>

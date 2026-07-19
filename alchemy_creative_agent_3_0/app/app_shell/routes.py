@@ -13,6 +13,13 @@ ROUTE_CONTRACTS = {
     "create_photography_role_continuation": f"{API_NAMESPACE}/projects/{{project_id}}/jobs/{{parent_job_id}}/photography-roles/{{role_id}}/continuations",
     "get_photography_role_delivery": f"{API_NAMESPACE}/projects/{{project_id}}/jobs/{{root_job_id}}/photography-roles/{{role_id}}/delivery",
     "project_timeline": f"{API_NAMESPACE}/projects/{{project_id}}/timeline",
+    # Professional Mode uses the existing project-scoped People Asset
+    # lifecycle. These are public route contracts only; preparation and
+    # activation remain owned by the shared visual-asset service.
+    "project_people_assets": f"{API_NAMESPACE}/projects/{{project_id}}/people-assets",
+    "project_people_asset": f"{API_NAMESPACE}/projects/{{project_id}}/people-assets/{{people_asset_id}}",
+    "prepare_project_people_asset": f"{API_NAMESPACE}/projects/{{project_id}}/people-assets/{{people_asset_id}}/prepare",
+    "activate_project_people_asset": f"{API_NAMESPACE}/projects/{{project_id}}/people-assets/{{people_asset_id}}/activate",
     "create_job": f"{API_NAMESPACE}/jobs",
     "get_job": f"{API_NAMESPACE}/jobs/{{job_id}}",
     "generate": f"{API_NAMESPACE}/jobs/{{job_id}}/generate",

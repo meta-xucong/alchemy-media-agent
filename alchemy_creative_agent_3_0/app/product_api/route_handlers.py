@@ -113,7 +113,7 @@ class V3ProductRouteHandlers:
         self.project_service.get_project(project_id)
         return {
             "project_id": project_id,
-            "people_assets": [item.model_dump(mode="json") for item in self.people_asset_service.list(project_id)],
+            "people_assets": [self._people_asset_public_record(project_id, item) for item in self.people_asset_service.list(project_id)],
         }
 
     def post_project_people_asset(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -125,7 +125,36 @@ class V3ProductRouteHandlers:
     def get_project_people_asset(self, project_id: str, people_asset_id: str) -> dict[str, Any]:
         self.project_service.get_project(project_id)
         asset = self.people_asset_service.get(project_id, people_asset_id)
-        return {"people_asset": asset.model_dump(mode="json")}
+        return {"people_asset": self._people_asset_public_record(project_id, asset)}
+
+    def _people_asset_public_record(self, project_id: str, asset: Any) -> dict[str, Any]:
+        """Expose only lifecycle truth needed to restore the Professional UI.
+
+        The browser must be able to recover a pending review after refresh, but
+        it must not receive prompts, candidate payloads, provider details or
+        raw pixel evidence. Pack history is projected to view/status facts only.
+        """
+
+        record = asset.model_dump(mode="json")
+        latest = None
+        try:
+            history = self.people_asset_service.catalog.list_pack_history(project_id, asset.people_asset_id)
+            if history:
+                snapshot = history[-1].pack_snapshot
+                latest = {
+                    "status": snapshot.status,
+                    "pack_version_id": snapshot.pack_version_id,
+                    "user_activation_confirmed": snapshot.user_activation_confirmed,
+                    "anchor_views": [
+                        {"view_role": view.view_role, "active": view.active}
+                        for view in snapshot.anchor_views
+                    ],
+                }
+        except (AttributeError, KeyError, IndexError):
+            latest = None
+        if latest is not None:
+            record["latest_preparation"] = latest
+        return record
 
     def post_project_people_asset_prepare(
         self,
