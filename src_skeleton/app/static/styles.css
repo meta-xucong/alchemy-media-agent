@@ -3824,6 +3824,121 @@ button.v2-live-preview:focus-visible {
   }
 }
 
+/* Professional Mode is an explicit opt-in surface. It shares the V3 shell
+   but keeps the People Asset lifecycle visually separate from Standard,
+   General, E-Commerce and Photography controls. */
+.v3-mode-chooser {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.v3-mode-card {
+  display: grid;
+  gap: 4px;
+  padding: 15px;
+  border: 1px solid var(--line, #dfe3ea);
+  border-radius: 14px;
+  background: var(--surface, #fff);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v3-mode-card.active {
+  border-color: var(--accent, #4e67d8);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4e67d8) 16%, transparent);
+}
+
+.v3-mode-card span { font-size: 12px; color: var(--muted, #64748b); }
+.v3-mode-card strong { font-size: 15px; }
+.v3-mode-card small { color: var(--muted, #64748b); line-height: 1.5; }
+.v3-professional-home-hint {
+  margin: 10px 0 16px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: #f1f5ff;
+  color: #334a9b;
+  line-height: 1.55;
+}
+
+.v3-professional-asset-panel {
+  display: grid;
+  gap: 16px;
+  margin: 16px 0;
+  padding: 18px;
+  border: 1px solid #cfd8ff;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f8f9ff, #fff);
+}
+
+.v3-professional-asset-heading,
+.v3-professional-asset-card-head,
+.v3-professional-asset-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v3-professional-asset-heading h4,
+.v3-professional-create-form h5 { margin: 2px 0 6px; }
+.v3-professional-asset-heading p { max-width: 760px; margin: 0; color: var(--muted, #64748b); line-height: 1.55; }
+.v3-professional-asset-status {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--line, #dfe3ea);
+}
+.v3-professional-asset-status span,
+.v3-professional-asset-card p,
+.v3-professional-view-summary,
+.v3-professional-review-panel p { color: var(--muted, #64748b); line-height: 1.5; }
+.v3-professional-asset-list { display: grid; gap: 10px; }
+.v3-professional-asset-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line, #dfe3ea);
+  border-radius: 12px;
+  background: #fff;
+}
+.v3-professional-asset-card.selected { border-color: var(--accent, #4e67d8); }
+.v3-professional-asset-card.active { background: #f4fbf7; border-color: #9cd2ae; }
+.v3-professional-asset-card p { margin: 0; }
+.v3-professional-asset-card-head > div { display: grid; gap: 3px; }
+.v3-professional-asset-card-head span { color: var(--muted, #64748b); font-size: 13px; }
+.v3-professional-create-form {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line, #dfe3ea);
+}
+.v3-professional-create-form[hidden] { display: none; }
+.v3-confirm-checkbox { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+.v3-confirm-checkbox input { margin-top: 4px; }
+.v3-professional-review-panel {
+  padding: 13px 15px;
+  border: 1px solid #e8d9a7;
+  border-radius: 10px;
+  background: #fffaf0;
+}
+.v3-professional-review-panel ul { margin: 8px 0 0; padding-left: 20px; }
+.v3-professional-empty { padding: 10px 0; color: var(--muted, #64748b); }
+
+@media (max-width: 720px) {
+  .v3-mode-chooser { grid-template-columns: minmax(0, 1fr); }
+  .v3-professional-asset-heading,
+  .v3-professional-asset-card-head,
+  .v3-professional-asset-actions { flex-direction: column; align-items: stretch; }
+  .v3-professional-asset-heading .button,
+  .v3-professional-asset-card-head .button,
+  .v3-professional-asset-actions .button { width: 100%; }
+}
+
 /* Bright ivory premium theme refresh: visual-only overrides, keeps existing DOM and interactions intact. */
 :root {
   --ink: #171512;

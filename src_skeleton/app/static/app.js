@@ -299,6 +299,16 @@ const v3State = {
   currentProject: null,
   projectTimeline: [],
   selectedTemplate: "general_template",
+  // Professional Mode is opt-in and never inferred from text, uploads, or
+  // template keywords.  Standard remains the default for every new session.
+  professionalMode: "standard",
+  peopleAssets: [],
+  peopleAssetsLoaded: false,
+  peopleAssetsLoading: false,
+  peopleAssetBusy: false,
+  peopleAssetsError: "",
+  selectedPeopleAssetId: "",
+  peoplePreparations: {},
   selectedBrandMemory: null,
   selectedScenario: "general_creative",
   selectedPreset: "campaign_poster",
@@ -511,6 +521,8 @@ const els = {
   v3WorkspaceView: document.querySelector("#v3WorkspaceView"),
   v3ScenarioGrid: document.querySelector("#v3ScenarioGrid"),
   v3TemplateChooser: document.querySelector("#v3TemplateChooser"),
+  v3ModeChooser: document.querySelector("#v3ModeChooser"),
+  v3ProfessionalHomeHint: document.querySelector("#v3ProfessionalHomeHint"),
   v3TemplateCreatePanel: document.querySelector("#v3TemplateCreatePanel"),
   v3SelectedTemplateTitle: document.querySelector("#v3SelectedTemplateTitle"),
   v3SelectedTemplateIntro: document.querySelector("#v3SelectedTemplateIntro"),
@@ -527,6 +539,16 @@ const els = {
   v3ProjectGoal: document.querySelector("#v3ProjectGoal"),
   v3ProjectStyleChips: document.querySelector("#v3ProjectStyleChips"),
   v3ProjectSnapshot: document.querySelector("#v3ProjectSnapshot"),
+  v3ProfessionalAssetPanel: document.querySelector("#v3ProfessionalAssetPanel"),
+  v3ProfessionalRefreshBtn: document.querySelector("#v3ProfessionalRefreshBtn"),
+  v3ProfessionalAssetStatus: document.querySelector("#v3ProfessionalAssetStatus"),
+  v3ProfessionalAssetList: document.querySelector("#v3ProfessionalAssetList"),
+  v3ProfessionalCreateForm: document.querySelector("#v3ProfessionalCreateForm"),
+  v3ProfessionalRootInput: document.querySelector("#v3ProfessionalRootInput"),
+  v3ProfessionalIntentInput: document.querySelector("#v3ProfessionalIntentInput"),
+  v3ProfessionalConsentInput: document.querySelector("#v3ProfessionalConsentInput"),
+  v3ProfessionalCreateBtn: document.querySelector("#v3ProfessionalCreateBtn"),
+  v3ProfessionalReviewPanel: document.querySelector("#v3ProfessionalReviewPanel"),
   v3ProjectOutputBoard: document.querySelector("#v3ProjectOutputBoard"),
   v3UsefulReferenceBoard: document.querySelector("#v3UsefulReferenceBoard"),
   v3ProjectWorkflow: document.querySelector("#v3ProjectWorkflow"),
@@ -1108,6 +1130,7 @@ function bindControls() {
     button.addEventListener("click", () => setV3VariationMode(button.dataset.v3VariationMode || "auto"));
   });
   if (els.v3TemplateChooser) els.v3TemplateChooser.addEventListener("click", handleV3HomeTemplateChoice);
+  if (els.v3ModeChooser) els.v3ModeChooser.addEventListener("click", handleV3ModeChoice);
   if (els.v3SelectedBrandMemoryBar) els.v3SelectedBrandMemoryBar.addEventListener("click", handleV3SelectedBrandMemoryBarClick);
   if (els.v3NewProjectBtn) els.v3NewProjectBtn.addEventListener("click", createV3Project);
   if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.addEventListener("click", () => loadV3Projects({ silent: false, force: true }));
@@ -1119,6 +1142,11 @@ function bindControls() {
   if (els.v3UsefulReferenceBoard) els.v3UsefulReferenceBoard.addEventListener("click", handleV3ReferenceBoardClick);
   if (els.v3ProjectArchiveBtn) els.v3ProjectArchiveBtn.addEventListener("click", () => archiveV3Project(v3State.currentProject?.project_id));
   if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.addEventListener("click", () => deleteV3Project(v3State.currentProject?.project_id));
+  if (els.v3ProfessionalRefreshBtn) els.v3ProfessionalRefreshBtn.addEventListener("click", () => loadV3PeopleAssets({ silent: false, force: true }));
+  if (els.v3ProfessionalAssetList) els.v3ProfessionalAssetList.addEventListener("click", handleV3PeopleAssetAction);
+  if (els.v3ProfessionalAssetStatus) els.v3ProfessionalAssetStatus.addEventListener("click", handleV3PeopleAssetAction);
+  if (els.v3ProfessionalReviewPanel) els.v3ProfessionalReviewPanel.addEventListener("click", handleV3PeopleAssetAction);
+  if (els.v3ProfessionalCreateForm) els.v3ProfessionalCreateForm.addEventListener("submit", createV3PeopleAsset);
   if (els.v3BrandMemoryPanel) els.v3BrandMemoryPanel.addEventListener("click", handleV3BrandMemoryPanelClick);
   if (els.closeV3BrandMemoryBtn) els.closeV3BrandMemoryBtn.addEventListener("click", closeV3BrandMemoryModal);
   if (els.v3BrandMemoryCancelBtn) els.v3BrandMemoryCancelBtn.addEventListener("click", closeV3BrandMemoryModal);
@@ -1648,6 +1676,7 @@ function openV3Home({ silent = false } = {}) {
   renderV3Projects();
   renderV3History();
   renderV3ProjectDetail();
+  renderV3ProfessionalPanel();
   renderV3Job(null);
   window.setTimeout(() => window.scrollTo({ top: 0, behavior: "smooth" }), 0);
   const shouldLoadProjects = !v3State.projectsLoaded && !v3State.projectsLoading;
@@ -1694,6 +1723,7 @@ function openV3ScenarioWorkspace(scenarioId = "general_creative", { fromRoute = 
   setV3Scenario(requested, { fromRoute });
   renderV3ViewState();
   renderV3ProjectDetail();
+  renderV3ProfessionalPanel();
   renderV3Job(v3State.currentJob);
   if (!fromHistory) {
     updateV3Notice(v3ScenarioNotice(requested), "info");
@@ -1894,6 +1924,7 @@ function selectV3HomeTemplate(templateId, { silent = false } = {}) {
 
 function renderV3HomeTemplateChooser() {
   if (!els.v3TemplateChooser) return;
+  renderV3ModeChooser();
   if (v3State.loading && !v3State.templates.length) {
     els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-loading\">正在读取模板可用状态…</span>";
     return;
@@ -1955,6 +1986,44 @@ function handleV3SelectedBrandMemoryBarClick(event) {
   if (button.dataset.v3SelectedMemoryAction === "clear") {
     clearV3SelectedBrandMemory();
   }
+}
+
+function v3ProjectProfessionalMode(project = v3State.currentProject) {
+  const value = project?.metadata?.professional_mode
+    || project?.professional_mode
+    || project?.mode
+    || (project?.metadata?.visual_asset_mode ? "professional" : "");
+  return String(value).toLowerCase() === "professional";
+}
+
+function v3ProfessionalModeSelected() {
+  return v3State.professionalMode === "professional";
+}
+
+function handleV3ModeChoice(event) {
+  const card = event.target.closest("[data-v3-mode]");
+  if (!card || card.disabled) return;
+  const mode = card.dataset.v3Mode === "professional" ? "professional" : "standard";
+  v3State.professionalMode = mode;
+  renderV3ModeChooser();
+  renderV3HomeTemplateChooser();
+  renderV3ScenarioState();
+  updateV3Notice(
+    mode === "professional"
+      ? "已选择专业模式。创建项目后先建立并确认人物资产，未完成前不会改用标准创作。"
+      : "已回到标准创作。现有通用、电商和摄影项目语义保持不变。",
+    "info",
+  );
+}
+
+function renderV3ModeChooser() {
+  const mode = v3State.professionalMode === "professional" ? "professional" : "standard";
+  document.querySelectorAll("[data-v3-mode]").forEach((button) => {
+    const active = button.dataset.v3Mode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  if (els.v3ProfessionalHomeHint) els.v3ProfessionalHomeHint.hidden = mode !== "professional";
 }
 
 function handleV3HomeTemplateChoice(event) {
@@ -2091,6 +2160,7 @@ function setV3Scenario(scenarioId, { fromRoute = false } = {}) {
 function renderV3ScenarioState() {
   const selected = v3State.selectedScenario || "general_creative";
   const copy = v3ScenarioWorkspaceCopy(selected);
+  renderV3ModeChooser();
   const root = document.querySelector(".v3-workbench");
   if (root) root.dataset.v3ActiveScenario = selected;
   document.querySelectorAll("[data-v3-scenario]").forEach((button) => {
@@ -2099,7 +2169,10 @@ function renderV3ScenarioState() {
     button.setAttribute("aria-pressed", String(active));
   });
   const canCreate = v3ScenarioCanCreate(selected);
-  if (els.v3CreateJobBtn) els.v3CreateJobBtn.disabled = !canCreate || v3State.loading;
+  const professionalReady = !v3ProfessionalModeSelected()
+    || !v3State.peopleAssetsLoaded
+    || v3State.peopleAssets.some((item) => v3PeopleAssetIsActive(item));
+  if (els.v3CreateJobBtn) els.v3CreateJobBtn.disabled = !canCreate || v3State.loading || !professionalReady;
   if (els.v3GenerateBtn) {
     els.v3GenerateBtn.hidden = true;
     els.v3GenerateBtn.disabled = true;
@@ -2155,6 +2228,7 @@ function renderV3ScenarioState() {
   renderV3Assets();
   updateV3ReferencePriorityStatuses();
   renderV3ProjectDetail();
+  renderV3ProfessionalPanel();
   if (!v3State.currentJob) {
     if (selected === "ecommerce") {
       renderV3EcommerceSummary(null);
@@ -2467,6 +2541,7 @@ async function createV3Project() {
   const userGoal = (els.v3NewProjectGoalInput?.value || "").trim();
   const templateId = v3State.selectedTemplate || "general_template";
   const scenarioId = v3ScenarioForTemplate(templateId);
+  const requestedMode = v3State.professionalMode === "professional" ? "professional" : "standard";
   if (!userGoal) {
     showGlobalToast("先写一句这个项目想做什么。", "warning");
     if (els.v3NewProjectGoalInput) els.v3NewProjectGoalInput.focus();
@@ -2493,10 +2568,12 @@ async function createV3Project() {
           selected_scenario_id: scenarioId,
           selected_brand_memory_id: v3State.selectedBrandMemory?.brand_id || null,
           selected_brand_memory_name: v3State.selectedBrandMemory?.brand_name || null,
+          professional_mode: v3State.professionalMode === "professional" ? "professional" : "standard",
         },
       },
     });
     v3State.currentProject = payload.project || null;
+    v3State.professionalMode = v3ProjectProfessionalMode(v3State.currentProject) ? "professional" : requestedMode;
     syncV3ProjectOutputsFromPayload(payload);
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
     v3State.currentJob = null;
@@ -2510,9 +2587,22 @@ async function createV3Project() {
     await loadV3ProjectTimeline(v3State.currentProject?.project_id, { silent: true });
     openV3ScenarioWorkspace(scenarioId);
     openV3ProjectSubpage("compose");
-    updateV3Notice("项目已创建，直接开始生成第一组图片。", "success");
+    if (v3State.professionalMode === "professional") {
+      await loadV3PeopleAssets({ silent: true, force: true });
+    }
+    updateV3Notice(
+      v3State.professionalMode === "professional"
+        ? "项目已创建。请先在人物资产面板完成准备和确认，再开始生成。"
+        : "项目已创建，直接开始生成第一组图片。",
+      "success",
+    );
   } catch (error) {
-    updateV3Notice(`项目创建失败：${friendlyError(error)}`, "error");
+    updateV3Notice(
+      v3State.professionalMode === "professional"
+        ? v3ProfessionalErrorMessage(error)
+        : `项目创建失败：${friendlyError(error)}`,
+      "error",
+    );
   } finally {
     v3State.loading = false;
     if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = false;
@@ -2893,6 +2983,7 @@ function renderV3ProjectDetail() {
   renderV3StepCards();
   renderV3ProjectNextActions();
   renderV3BrandMemoryPanel();
+  renderV3ProfessionalPanel();
   renderV3ProjectTimeline();
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     renderV3ProjectSubpageScene(v3State.activeProjectStep || "compose");
@@ -4710,6 +4801,307 @@ function resumeV3ActiveProjectJobRecovery(job = v3State.currentJob) {
     });
 }
 
+function resetV3PeopleAssetsState() {
+  v3State.peopleAssets = [];
+  v3State.peopleAssetsLoaded = false;
+  v3State.peopleAssetsLoading = false;
+  v3State.peopleAssetBusy = false;
+  v3State.peopleAssetsError = "";
+  v3State.selectedPeopleAssetId = "";
+  v3State.peoplePreparations = {};
+  renderV3ProfessionalPanel();
+}
+
+function v3PeopleAssetsPath(projectId) {
+  return `${v3ApiBase}/projects/${encodeURIComponent(projectId)}/people-assets`;
+}
+
+function v3PeopleAssetPath(projectId, peopleAssetId) {
+  return `${v3PeopleAssetsPath(projectId)}/${encodeURIComponent(peopleAssetId)}`;
+}
+
+function v3ProfessionalErrorMessage(error) {
+  const raw = String(error?.message || error || "");
+  let detail = raw;
+  try {
+    const parsed = JSON.parse(raw);
+    detail = parsed?.detail?.code || parsed?.detail?.message || parsed?.detail || raw;
+  } catch (_error) {
+    // The response may be an HTML gateway page. It is intentionally never
+    // shown to a user.
+  }
+  const text = String(detail || "").toLowerCase();
+  if (text.includes("root_source_asset_not_ready") || text.includes("not ready")) {
+    return "这张源图还在保存或检查中。请稍等片刻后刷新，准备好后再继续。";
+  }
+  if (text.includes("unsupported") || text.includes("mime") || text.includes("format")) {
+    return "这张图片格式不支持或不够清晰，请换一张 PNG、JPG 或 WebP 图片。";
+  }
+  if (text.includes("unavailable") || text.includes("timeout") || text.includes("503") || text.includes("502")) {
+    return "人物参考服务暂时不可用。项目已保留，请稍后刷新再试。";
+  }
+  if (text.includes("binding") || text.includes("version") || text.includes("mismatch")) {
+    return "当前人物版本发生变化，请刷新后重新选择最新版本。";
+  }
+  if (text.includes("confirmation") || text.includes("confirm_activation")) {
+    return "启用前还需要你确认这套人物参考，确认后后续项目会使用它。";
+  }
+  if (text.includes("not_found") || text.includes("404")) {
+    return "没有找到这项人物资产，请刷新项目后重新选择。";
+  }
+  return "人物资产这一步暂时没有完成。项目已保留，请刷新后重试或换一张源图。";
+}
+
+function v3PeopleAssetViewLabel(role) {
+  return {
+    standard_front: "正面",
+    three_quarter: "三分之二侧面",
+    profile: "侧面",
+  }[role] || "视角";
+}
+
+function v3PeopleAssetLifecycleLabel(asset, preparation = null) {
+  if (!asset) return { title: "还没有人物资产", detail: "上传一张清晰源图后，才能建立人物参考。" };
+  if (asset.status === "active" && asset.active_pack_version_id) {
+    return { title: "已启用", detail: "这套人物参考已确认，后续专业模式项目会使用它。" };
+  }
+  if (preparation?.status === "review" || preparation?.pack?.status === "review") {
+    return { title: "人物资产已准备好，等待确认启用", detail: "请查看三个视角的检查结果，确认后才会用于后续项目。" };
+  }
+  if (preparation?.status === "blocked" || asset.status === "blocked") {
+    return { title: "无法完成，可重新准备", detail: "这次没有形成可启用的人物参考。可以重试或换一张源图。" };
+  }
+  if (asset.root_source_provenance?.source_asset_id) {
+    return { title: "源图已准备好，可以建立人物参考", detail: "下一步会准备正面、三分之二侧面和侧面三个视角。" };
+  }
+  return { title: "需要上传源图", detail: "请上传一张清晰、正面、光线自然的源图。" };
+}
+
+function v3PeopleAssetIsActive(asset) {
+  return Boolean(asset?.status === "active" && asset?.active_pack_version_id);
+}
+
+async function loadV3PeopleAssets({ silent = true, force = false } = {}) {
+  const projectId = v3State.currentProject?.project_id;
+  if (!projectId || !v3ProfessionalModeSelected()) return [];
+  if (v3State.peopleAssetsLoading || (v3State.peopleAssetsLoaded && !force)) {
+    renderV3ProfessionalPanel();
+    return v3State.peopleAssets;
+  }
+  v3State.peopleAssetsLoading = true;
+  v3State.peopleAssetsError = "";
+  renderV3ProfessionalPanel();
+  try {
+    const payload = await request(v3PeopleAssetsPath(projectId));
+    v3State.peopleAssets = Array.isArray(payload?.people_assets) ? payload.people_assets : [];
+    v3State.peopleAssets.forEach((asset) => {
+      if (asset?.latest_preparation) {
+        v3State.peoplePreparations[asset.people_asset_id] = {
+          status: asset.latest_preparation.status === "review" ? "review" : asset.latest_preparation.status === "active" ? "review" : "blocked",
+          pack: asset.latest_preparation,
+        };
+      }
+    });
+    v3State.peopleAssetsLoaded = true;
+    if (!v3State.selectedPeopleAssetId || !v3State.peopleAssets.some((item) => item.people_asset_id === v3State.selectedPeopleAssetId)) {
+      v3State.selectedPeopleAssetId = v3State.peopleAssets.find((item) => v3PeopleAssetIsActive(item))?.people_asset_id
+        || v3State.peopleAssets[0]?.people_asset_id || "";
+    }
+  } catch (error) {
+    v3State.peopleAssetsError = v3ProfessionalErrorMessage(error);
+    if (!silent) showGlobalToast(v3State.peopleAssetsError, "error");
+  } finally {
+    v3State.peopleAssetsLoading = false;
+    renderV3ProfessionalPanel();
+    if (v3State.view === "workspace") renderV3ScenarioState();
+  }
+  return v3State.peopleAssets;
+}
+
+async function v3ProfessionalUploadRoot(file) {
+  if (!file) throw new Error("professional_root_image_missing");
+  const created = await request(`${v3ApiBase}/uploads`, {
+    method: "POST",
+    body: {
+      filename: file.name || "people-asset-root.png",
+      mime_type: file.type || "image/png",
+      size_bytes: file.size || 0,
+      role: "subject_reference",
+      metadata: { frontend_surface: "v3_professional_people_asset" },
+    },
+  });
+  const contentBase64 = await v3FileToBase64(file);
+  await request(created.upload_url || `${v3ApiBase}/uploads/${encodeURIComponent(created.asset_id)}/content`, {
+    method: "PUT",
+    body: { content_base64: contentBase64, mime_type: file.type || created.mime_type || "image/png" },
+  });
+  return request(`${v3ApiBase}/uploads/${encodeURIComponent(created.asset_id)}/complete`, { method: "POST" });
+}
+
+async function createV3PeopleAsset(event) {
+  event?.preventDefault?.();
+  const projectId = v3State.currentProject?.project_id;
+  const file = els.v3ProfessionalRootInput?.files?.[0];
+  const intent = (els.v3ProfessionalIntentInput?.value || "").trim();
+  const confirmed = Boolean(els.v3ProfessionalConsentInput?.checked);
+  if (!projectId) return;
+  if (v3State.peopleAssetBusy) return;
+  if (!file || !intent || !confirmed) {
+    showGlobalToast("请上传源图、写下人物参考说明，并确认你有权使用这张图片。", "warning");
+    return;
+  }
+  v3State.peopleAssetBusy = true;
+  if (els.v3ProfessionalCreateBtn) els.v3ProfessionalCreateBtn.disabled = true;
+  renderV3ProfessionalPanel();
+  try {
+    updateV3Notice("正在保存源图并建立人物资产。", "info");
+    const ready = await v3ProfessionalUploadRoot(file);
+    if (!ready?.asset_id) throw new Error("professional_root_upload_incomplete");
+    await request(v3PeopleAssetsPath(projectId), {
+      method: "POST",
+      body: {
+        subject_kind: "human_person",
+        root_source_asset_id: ready.asset_id,
+        consent_reference: "user_confirmed_project_use",
+        preparation_intent: intent,
+      },
+    });
+    if (els.v3ProfessionalCreateForm) els.v3ProfessionalCreateForm.reset();
+    await loadV3PeopleAssets({ silent: true, force: true });
+    updateV3Notice("人物资产草稿已保存。下一步是准备三个视角，完成检查后再确认启用。", "success");
+  } catch (error) {
+    const message = v3ProfessionalErrorMessage(error);
+    v3State.peopleAssetsError = message;
+    updateV3Notice(message, "warning");
+  } finally {
+    v3State.peopleAssetBusy = false;
+    if (els.v3ProfessionalCreateBtn) els.v3ProfessionalCreateBtn.disabled = false;
+    renderV3ProfessionalPanel();
+  }
+}
+
+async function prepareV3PeopleAsset(peopleAssetId) {
+  const projectId = v3State.currentProject?.project_id;
+  if (!projectId || !peopleAssetId || v3State.peopleAssetBusy) return;
+  v3State.peopleAssetBusy = true;
+  renderV3ProfessionalPanel();
+  try {
+    updateV3Notice("正在准备人物的三个视角，请稍候。", "info");
+    const payload = await request(`${v3PeopleAssetPath(projectId, peopleAssetId)}/prepare`, { method: "POST", body: {} });
+    if (payload?.preparation) v3State.peoplePreparations[peopleAssetId] = payload.preparation;
+    v3State.selectedPeopleAssetId = peopleAssetId;
+    updateV3Notice("人物参考已准备好，请查看三个视角后确认是否启用。", "success");
+  } catch (error) {
+    v3State.peopleAssetsError = v3ProfessionalErrorMessage(error);
+    updateV3Notice(v3State.peopleAssetsError, "warning");
+  } finally {
+    v3State.peopleAssetBusy = false;
+    renderV3ProfessionalPanel();
+  }
+}
+
+async function activateV3PeopleAsset(peopleAssetId) {
+  const projectId = v3State.currentProject?.project_id;
+  const preparation = v3State.peoplePreparations[peopleAssetId];
+  const packVersionId = preparation?.pack?.pack_version_id;
+  if (!projectId || !peopleAssetId || !packVersionId || v3State.peopleAssetBusy) return;
+  if (!window.confirm("确认启用这套人物参考吗？启用后，专业模式的后续项目会使用这个人物版本。")) return;
+  v3State.peopleAssetBusy = true;
+  renderV3ProfessionalPanel();
+  try {
+    await request(`${v3PeopleAssetPath(projectId, peopleAssetId)}/activate`, {
+      method: "POST",
+      body: { pack_version_id: packVersionId, confirm_activation: true },
+    });
+    await loadV3PeopleAssets({ silent: true, force: true });
+    updateV3Notice("人物参考已启用。现在可以回到项目继续创作。", "success");
+  } catch (error) {
+    v3State.peopleAssetsError = v3ProfessionalErrorMessage(error);
+    updateV3Notice(v3State.peopleAssetsError, "warning");
+  } finally {
+    v3State.peopleAssetBusy = false;
+    renderV3ProfessionalPanel();
+  }
+}
+
+function handleV3PeopleAssetAction(event) {
+  const button = event.target.closest("[data-v3-people-action]");
+  if (!button || button.disabled) return;
+  const id = button.dataset.v3PeopleAssetId || "";
+  const action = button.dataset.v3PeopleAction;
+  if (action === "refresh") {
+    void loadV3PeopleAssets({ silent: false, force: true });
+  } else if (action === "select") {
+    v3State.selectedPeopleAssetId = id;
+    renderV3ProfessionalPanel();
+  } else if (action === "prepare") {
+    void prepareV3PeopleAsset(id);
+  } else if (action === "activate") {
+    void activateV3PeopleAsset(id);
+  } else if (action === "return_standard") {
+    v3State.professionalMode = "standard";
+    renderV3ModeChooser();
+    renderV3ScenarioState();
+    updateV3Notice("已按你的选择回到标准创作。人物资产仍保留在项目中。", "info");
+  }
+}
+
+function renderV3ProfessionalPanel() {
+  const panel = els.v3ProfessionalAssetPanel;
+  const visible = Boolean(panel && v3ProfessionalModeSelected() && v3State.currentProject?.project_id);
+  if (!panel) return;
+  panel.hidden = !visible;
+  if (!visible) return;
+  const assets = Array.isArray(v3State.peopleAssets) ? v3State.peopleAssets : [];
+  if (els.v3ProfessionalAssetStatus) {
+    if (v3State.peopleAssetsLoading) {
+      els.v3ProfessionalAssetStatus.innerHTML = "<strong>正在读取人物资产</strong><span>刷新不会改变服务端状态，请稍候。</span>";
+    } else if (v3State.peopleAssetsError) {
+      els.v3ProfessionalAssetStatus.innerHTML = `<strong>暂时无法读取</strong><span>${escapeHtml(v3State.peopleAssetsError)}</span><button class="button compact ghost" type="button" data-v3-people-action="refresh">重新加载</button>`;
+    } else if (!assets.length) {
+      els.v3ProfessionalAssetStatus.innerHTML = "<strong>还没有人物资产</strong><span>先完成下面的源图上传和确认，才能继续。</span>";
+    } else {
+      const active = assets.find((item) => v3PeopleAssetIsActive(item));
+      els.v3ProfessionalAssetStatus.innerHTML = active
+        ? "<strong>已找到已启用人物参考</strong><span>专业模式不会使用未确认的草稿或临时图片。</span>"
+        : "<strong>还没有已启用的人物参考</strong><span>请先准备并确认一个版本，或明确返回标准创作。</span>";
+    }
+  }
+  if (els.v3ProfessionalAssetList) {
+    els.v3ProfessionalAssetList.innerHTML = assets.length ? assets.map((asset) => {
+      const preparation = v3State.peoplePreparations[asset.people_asset_id];
+      const lifecycle = v3PeopleAssetLifecycleLabel(asset, preparation);
+      const selected = asset.people_asset_id === v3State.selectedPeopleAssetId;
+      const active = v3PeopleAssetIsActive(asset);
+      const views = preparation?.pack?.anchor_views || [];
+      const viewText = views.length
+        ? views.map((view) => `${v3PeopleAssetViewLabel(view.view_role)}：${view.active ? "已检查" : "需要处理"}`).join(" · ")
+        : "准备后会显示三个视角的检查状态";
+      const canPrepare = Boolean(asset.root_source_provenance?.source_asset_id) && !active;
+      const canActivate = preparation?.status === "review" && preparation?.pack?.status === "review" && Boolean(preparation?.pack?.pack_version_id);
+      return `<article class="v3-professional-asset-card${selected ? " selected" : ""}${active ? " active" : ""}">
+        <div class="v3-professional-asset-card-head"><div><strong>${active ? "当前人物参考" : "人物资产草稿"}</strong><span>${escapeHtml(lifecycle.title)}</span></div><button class="button compact ghost" type="button" data-v3-people-action="select" data-v3-people-asset-id="${escapeHtml(asset.people_asset_id)}">${selected ? "已选择" : "选择"}</button></div>
+        <p>${escapeHtml(lifecycle.detail)}</p>
+        <small class="v3-professional-view-summary">${escapeHtml(viewText)}</small>
+        <div class="v3-professional-asset-actions">
+          <button class="button secondary compact" type="button" data-v3-people-action="prepare" data-v3-people-asset-id="${escapeHtml(asset.people_asset_id)}" ${canPrepare && !v3State.peopleAssetBusy ? "" : "disabled"}>${preparation?.status === "blocked" ? "重新准备" : "准备人物参考"}</button>
+          <button class="button primary compact" type="button" data-v3-people-action="activate" data-v3-people-asset-id="${escapeHtml(asset.people_asset_id)}" ${canActivate && !v3State.peopleAssetBusy ? "" : "disabled"}>确认启用</button>
+        </div>
+      </article>`;
+    }).join("") : "<div class=\"v3-professional-empty\">上传源图后，这里会显示人物资产的准备和确认状态。</div>";
+  }
+  const active = assets.some((item) => v3PeopleAssetIsActive(item));
+  if (els.v3ProfessionalCreateForm) els.v3ProfessionalCreateForm.hidden = active && assets.length > 0;
+  if (els.v3ProfessionalReviewPanel) {
+    const selectedPrep = v3State.peoplePreparations[v3State.selectedPeopleAssetId];
+    els.v3ProfessionalReviewPanel.hidden = !selectedPrep;
+    if (selectedPrep) {
+      const views = selectedPrep.pack?.anchor_views || [];
+      els.v3ProfessionalReviewPanel.innerHTML = `<strong>视角检查</strong><p>这些结果仍在准备记录中，只有你确认后才会启用。</p><ul>${views.map((view) => `<li>${escapeHtml(v3PeopleAssetViewLabel(view.view_role))}：${view.active ? "检查完成" : "需要处理"}</li>`).join("")}</ul>`;
+    }
+  }
+}
+
 async function openV3Project(projectId) {
   if (!projectId) return;
   if (v3State.projectOpening) return;
@@ -4727,6 +5119,7 @@ async function openV3Project(projectId) {
   try {
     const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
     v3State.currentProject = payload.project || null;
+    v3State.professionalMode = v3ProjectProfessionalMode(v3State.currentProject) ? "professional" : "standard";
     syncV3ProjectOutputsFromPayload(payload);
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
     v3State.currentJob = null;
@@ -4736,6 +5129,11 @@ async function openV3Project(projectId) {
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
     await loadV3ProjectOutputs({ silent: true, force: true, limit: 80 });
+    if (v3State.professionalMode === "professional") {
+      await loadV3PeopleAssets({ silent: true, force: true });
+    } else {
+      resetV3PeopleAssetsState();
+    }
     const restoredJob = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
     recoveryJob = restoredJob || v3State.currentJob;
     const resumingActiveJob = v3ProjectJobNeedsRecovery(recoveryJob);
@@ -4753,7 +5151,12 @@ async function openV3Project(projectId) {
       resumingActiveJob ? "info" : "success",
     );
   } catch (error) {
-    updateV3Notice(`项目打开失败：${friendlyError(error)}`, "error");
+    updateV3Notice(
+      v3State.professionalMode === "professional"
+        ? v3ProfessionalErrorMessage(error)
+        : `项目打开失败：${friendlyError(error)}`,
+      "error",
+    );
   }
   v3State.projectOpening = false;
   if (els.v3WorkspaceView) delete els.v3WorkspaceView.dataset.v3Opening;
@@ -5362,6 +5765,15 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
 }
 
 async function createV3Job() {
+  if (v3ProfessionalModeSelected()) {
+    const active = v3State.peopleAssets.find((item) => v3PeopleAssetIsActive(item));
+    if (!active) {
+      await loadV3PeopleAssets({ silent: true, force: true });
+      showGlobalToast("专业模式还没有已启用的人物参考。请先完成准备和确认，或明确返回标准创作。", "warning");
+      renderV3ProfessionalPanel();
+      return;
+    }
+  }
   try {
     const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
     setV3Busy(true, v3State.files.length ? "上传并生成中..." : copy.busyLabel);
