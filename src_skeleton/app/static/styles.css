@@ -3862,6 +3862,16 @@ button.v2-live-preview:focus-visible {
   color: #334a9b;
   line-height: 1.55;
 }
+.v3-template-catalog-loading,
+.v3-template-catalog-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  color: var(--muted, #64748b);
+  line-height: 1.5;
+}
+.v3-template-catalog-error { color: #8a4c25; }
 
 .v3-professional-asset-panel {
   display: grid;

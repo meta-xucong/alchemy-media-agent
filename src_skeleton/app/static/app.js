@@ -292,6 +292,8 @@ const v3State = {
   view: "home",
   scenarios: [],
   templates: [],
+  templateCatalogStatus: "idle",
+  templateCatalogError: "",
   projects: [],
   projectsLoaded: false,
   projectsLoading: false,
@@ -1597,6 +1599,8 @@ async function initV3Shell({ force = false } = {}) {
     return;
   }
   v3State.loading = true;
+  v3State.templateCatalogStatus = "loading";
+  v3State.templateCatalogError = "";
   setV3PageLoading(true, "正在同步最近项目", "先显示项目框架，再读取最新图片。");
   renderV3ViewState();
   const localProjects = readV3LocalProjects();
@@ -1611,6 +1615,7 @@ async function initV3Shell({ force = false } = {}) {
     await waitForV3Paint();
     const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`);
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
+    v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
     v3State.projects = Array.isArray(payload.projects) ? payload.projects : [];
     v3State.projectsLoaded = true;
     writeV3LocalProjects(v3State.projects);
@@ -1626,6 +1631,9 @@ async function initV3Shell({ force = false } = {}) {
     renderV3Job(v3State.currentJob);
     updateV3Notice("V3 项目工作台已就绪。", "success");
   } catch (error) {
+    v3State.templates = [];
+    v3State.templateCatalogStatus = "failed";
+    v3State.templateCatalogError = "项目类型暂时无法读取";
     v3State.projects = readV3LocalProjects();
     v3State.projectsLoaded = true;
     v3State.loaded = true;
@@ -1754,7 +1762,8 @@ function v3ScenarioForTemplate(templateId) {
 }
 
 function v3TemplateCanCreate(templateId) {
-  const templates = v3State.templates.length ? v3State.templates : v3DefaultTemplateCards();
+  if (v3State.templateCatalogStatus !== "ready") return false;
+  const templates = Array.isArray(v3State.templates) ? v3State.templates : [];
   const template = templates.find((item) => item.template_id === templateId);
   return Boolean(template?.project_can_create_jobs);
 }
@@ -1769,7 +1778,8 @@ function v3DefaultPresetForScenario(scenarioId) {
 }
 
 function v3AvailableTemplates() {
-  const fromApi = Array.isArray(v3State.templates) && v3State.templates.length ? v3State.templates : v3DefaultTemplateCards();
+  if (v3State.templateCatalogStatus !== "ready") return [];
+  const fromApi = Array.isArray(v3State.templates) ? v3State.templates : [];
   const seen = new Set();
   return fromApi
     .filter((template) => template?.template_id && !seen.has(template.template_id) && seen.add(template.template_id))
@@ -1783,7 +1793,7 @@ function v3AvailableTemplates() {
 }
 
 function v3TemplateById(templateId) {
-  return v3AvailableTemplates().find((template) => template.template_id === templateId) || v3DefaultTemplateCards()[0];
+  return v3AvailableTemplates().find((template) => template.template_id === templateId) || null;
 }
 
 function v3TemplatePlainLabel(templateId) {
@@ -1794,7 +1804,7 @@ function v3TemplatePlainLabel(templateId) {
   };
   if (stableLabels[templateId]) return stableLabels[templateId];
   const template = v3TemplateById(templateId);
-  return template?.display_name || "通用模板";
+  return template?.display_name || "项目类型";
 }
 
 function v3ProjectTemplateId(project) {
@@ -1910,28 +1920,58 @@ function v3HomeTemplateCopy(templateId) {
 
 function selectV3HomeTemplate(templateId, { silent = false } = {}) {
   const template = v3TemplateById(templateId);
-  const fallbackId = v3TemplateCanCreate(template?.template_id) ? template.template_id : "general_template";
-  v3State.selectedTemplate = fallbackId;
-  const scenarioId = v3ScenarioForTemplate(fallbackId);
+  if (!template || !v3TemplateCanCreate(template.template_id)) {
+    if (!silent) updateV3Notice("项目类型还没有读取成功，暂时不能创建项目。", "warning");
+    return;
+  }
+  v3State.selectedTemplate = template.template_id;
+  const scenarioId = v3ScenarioForTemplate(template.template_id);
   v3State.selectedScenario = scenarioId;
   v3State.selectedPreset = v3State.presetByScenario[scenarioId] || v3DefaultPresetForScenario(scenarioId);
   renderV3HomeTemplateChooser();
   renderV3ScenarioState();
   if (!silent) {
-    updateV3Notice(`${v3TemplatePlainLabel(fallbackId)}已选好，写一句目标就可以创建项目。`, "info");
+    updateV3Notice(`${v3TemplatePlainLabel(template.template_id)}已选好，写一句目标就可以创建项目。`, "info");
   }
 }
 
 function renderV3HomeTemplateChooser() {
   if (!els.v3TemplateChooser) return;
   renderV3ModeChooser();
-  if (v3State.loading && !v3State.templates.length) {
-    els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-loading\">正在读取模板可用状态…</span>";
+  const catalogStatus = v3State.templateCatalogStatus;
+  if (catalogStatus === "idle" || catalogStatus === "loading") {
+    renderV3TemplateUnavailableCopy();
+    els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-loading\">正在读取可用项目类型，读取完成前不能创建项目…</span>";
+    if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = true;
+    return;
+  }
+  if (catalogStatus === "failed") {
+    renderV3TemplateUnavailableCopy();
+    els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-error\">项目类型暂时无法读取，未显示可创建模板。</span><button class=\"button compact ghost\" type=\"button\" data-v3-template-retry>重新加载</button>";
+    if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = true;
+    return;
+  }
+  if (catalogStatus === "empty") {
+    renderV3TemplateUnavailableCopy();
+    els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-error\">当前没有可创建的项目类型，请稍后重新加载。</span><button class=\"button compact ghost\" type=\"button\" data-v3-template-retry>重新加载</button>";
+    if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = true;
     return;
   }
   const templates = v3AvailableTemplates();
+  if (!templates.some((template) => template.project_can_create_jobs)) {
+    renderV3TemplateUnavailableCopy();
+    els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-error\">当前没有可创建的项目类型，请稍后重新加载。</span><button class=\"button compact ghost\" type=\"button\" data-v3-template-retry>重新加载</button>";
+    if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = true;
+    return;
+  }
   if (!templates.some((template) => template.template_id === v3State.selectedTemplate && template.project_can_create_jobs)) {
-    v3State.selectedTemplate = "general_template";
+    v3State.selectedTemplate = templates.find((template) => template.project_can_create_jobs)?.template_id || "";
+  }
+  if (!v3State.selectedTemplate) {
+    renderV3TemplateUnavailableCopy();
+    els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-error\">当前没有可创建的项目类型，请稍后重新加载。</span>";
+    if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = true;
+    return;
   }
   const copy = v3HomeTemplateCopy(v3State.selectedTemplate);
   if (els.v3SelectedTemplateTitle) els.v3SelectedTemplateTitle.textContent = copy.title;
@@ -2027,6 +2067,11 @@ function renderV3ModeChooser() {
 }
 
 function handleV3HomeTemplateChoice(event) {
+  const retry = event.target.closest("[data-v3-template-retry]");
+  if (retry) {
+    void loadV3Projects({ silent: false, force: true });
+    return;
+  }
   const card = event.target.closest("[data-v3-template-choice]");
   if (!card) return;
   const templateId = card.dataset.v3TemplateChoice || "general_template";
@@ -2035,6 +2080,14 @@ function handleV3HomeTemplateChoice(event) {
     return;
   }
   selectV3HomeTemplate(templateId);
+}
+
+function renderV3TemplateUnavailableCopy() {
+  if (els.v3SelectedTemplateTitle) els.v3SelectedTemplateTitle.textContent = "等待项目类型读取";
+  if (els.v3SelectedTemplateIntro) els.v3SelectedTemplateIntro.textContent = "项目类型目录还没有确认，当前不会猜测或替你选择通用项目。";
+  if (els.v3NewProjectGoalLabel) els.v3NewProjectGoalLabel.textContent = "项目目标";
+  if (els.v3NewProjectGoalHint) els.v3NewProjectGoalHint.textContent = "项目类型读取成功后，才能创建新项目。";
+  if (els.v3NewProjectBtn) els.v3NewProjectBtn.textContent = "等待项目类型";
 }
 
 function v3ScenarioNotice(scenarioId) {
@@ -2364,12 +2417,15 @@ async function loadV3Projects({ silent = false, force = false } = {}) {
     return;
   }
   v3State.projectsLoading = true;
+  v3State.templateCatalogStatus = "loading";
+  v3State.templateCatalogError = "";
   if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.disabled = true;
   const localItems = readV3LocalProjects();
   try {
     const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`);
     const apiItems = Array.isArray(payload.projects) ? payload.projects : [];
-    v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
+    v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
+    v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
     v3State.projects = mergeV3ProjectItems(apiItems, localItems);
     v3State.projectsLoaded = true;
     writeV3LocalProjects(v3State.projects);
@@ -2378,6 +2434,9 @@ async function loadV3Projects({ silent = false, force = false } = {}) {
     renderV3History();
     renderV3HeroHistory();
   } catch (error) {
+    v3State.templates = [];
+    v3State.templateCatalogStatus = "failed";
+    v3State.templateCatalogError = "项目类型暂时无法读取";
     v3State.projects = mergeV3ProjectItems(localItems, []);
     v3State.projectsLoaded = true;
     renderV3HomeTemplateChooser();
@@ -2547,6 +2606,10 @@ async function createV3Project() {
     if (els.v3NewProjectGoalInput) els.v3NewProjectGoalInput.focus();
     return;
   }
+  if (v3State.templateCatalogStatus !== "ready") {
+    showGlobalToast("项目类型还没有读取成功，暂时不能创建项目。请先重新加载。", "warning");
+    return;
+  }
   if (!v3TemplateCanCreate(templateId)) {
     showGlobalToast("请先选择一个可以创建项目的类型。", "warning");
     return;
@@ -2575,7 +2638,10 @@ async function createV3Project() {
     v3State.currentProject = payload.project || null;
     v3State.professionalMode = v3ProjectProfessionalMode(v3State.currentProject) ? "professional" : requestedMode;
     syncV3ProjectOutputsFromPayload(payload);
-    v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
+    if (Array.isArray(payload.templates) && payload.templates.length) {
+      v3State.templates = payload.templates;
+      v3State.templateCatalogStatus = "ready";
+    }
     v3State.currentJob = null;
     v3State.selectedResult = null;
     v3State.activeProjectStep = "compose";
@@ -4518,35 +4584,6 @@ function handleV3ProjectActionClick(event) {
   }
 }
 
-function v3DefaultTemplateCards() {
-  return [
-    {
-      template_id: "general_template",
-      scenario_id: "general_creative",
-      display_name: "通用模板",
-      status: "active",
-      project_can_create_jobs: true,
-      description: "海报、封面、活动图、品牌视觉都可以从这里继续。",
-    },
-    {
-      template_id: "ecommerce_template",
-      scenario_id: "ecommerce",
-      display_name: "电商模板",
-      status: "active",
-      project_can_create_jobs: true,
-      description: "上传商品图，说一句需求，在项目里生成电商套图。",
-    },
-    {
-      template_id: "photographer_template",
-      scenario_id: "future_photographer",
-      display_name: "摄影师模板",
-      status: "placeholder",
-      project_can_create_jobs: false,
-      description: "为后续摄影棚、镜头语言和拍摄方案预留入口。",
-    },
-  ];
-}
-
 function renderV3ProjectTimeline() {
   if (!els.v3ProjectTimeline) return;
   const items = Array.isArray(v3State.projectTimeline) ? v3State.projectTimeline : [];
@@ -5121,7 +5158,10 @@ async function openV3Project(projectId) {
     v3State.currentProject = payload.project || null;
     v3State.professionalMode = v3ProjectProfessionalMode(v3State.currentProject) ? "professional" : "standard";
     syncV3ProjectOutputsFromPayload(payload);
-    v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
+    if (Array.isArray(payload.templates) && payload.templates.length) {
+      v3State.templates = payload.templates;
+      v3State.templateCatalogStatus = "ready";
+    }
     v3State.currentJob = null;
     v3State.selectedResult = null;
     v3State.selectedTemplate = v3State.currentProject?.primary_template_id || "general_template";
@@ -5228,7 +5268,10 @@ async function refreshV3CurrentProject({ silent = true } = {}) {
     const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
     v3State.currentProject = payload.project || v3State.currentProject;
     syncV3ProjectOutputsFromPayload(payload);
-    v3State.templates = Array.isArray(payload.templates) ? payload.templates : v3State.templates;
+    if (Array.isArray(payload.templates) && payload.templates.length) {
+      v3State.templates = payload.templates;
+      v3State.templateCatalogStatus = "ready";
+    }
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
     await loadV3ProjectOutputs({ silent: true, force: true });

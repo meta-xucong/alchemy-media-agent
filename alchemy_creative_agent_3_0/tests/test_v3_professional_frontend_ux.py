@@ -89,6 +89,28 @@ def test_standard_verticals_do_not_receive_people_asset_semantics() -> None:
     assert 'const visible = Boolean(panel && v3ProfessionalModeSelected() && v3State.currentProject?.project_id);' in source
 
 
+def test_template_catalog_loading_failed_and_empty_states_fail_closed() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    assert 'templateCatalogStatus: "idle"' in source
+    for status in ("loading", "ready", "empty", "failed"):
+        assert f'"{status}"' in source
+    assert "v3DefaultTemplateCards" not in source
+    assert "正在读取可用项目类型，读取完成前不能创建项目" in source
+    assert "项目类型暂时无法读取，未显示可创建模板" in source
+    assert "当前没有可创建的项目类型，请稍后重新加载" in source
+    can_create = source[source.index("function v3TemplateCanCreate"):source.index("function v3DefaultPresetForScenario")]
+    assert 'if (v3State.templateCatalogStatus !== "ready") return false;' in can_create
+    assert "general_template" not in can_create
+    render = source[source.index("function renderV3HomeTemplateChooser"):source.index("function handleV3HomeTemplateChoice")]
+    assert 'els.v3NewProjectBtn.disabled = true' in render
+    assert "v3AvailableTemplates()" in render
+    # General and Professional share the same catalog gate; neither mode can
+    # become creatable from a stale local project or a failed directory call.
+    create = source[source.index("async function createV3Project"):source.index("function renderV3Projects")]
+    assert 'v3State.templateCatalogStatus !== "ready"' in create
+    assert 'professional_mode: v3State.professionalMode === "professional"' in create
+
+
 def test_refresh_projection_is_status_only_and_does_not_expose_prompt_or_candidates() -> None:
     source = HANDLERS.read_text(encoding="utf-8")
     helper_start = source.index("def _people_asset_public_record")

@@ -120,4 +120,3 @@ pack、prompt、reference path、candidate 或 retry 信息。
 Professional 前端只有在普通用户可以独立完成“创建人物资产→准备→确认启用→回到
 项目”，且没有任何静默回退、伪成功和内部错误泄漏时，才可标记
 `professional_frontend_ux_passed`。这不等于 M5 或生产门禁通过。
-
