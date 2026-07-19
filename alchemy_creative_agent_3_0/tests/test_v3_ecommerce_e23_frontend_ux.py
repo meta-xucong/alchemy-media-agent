@@ -54,6 +54,16 @@ def test_e23_ecommerce_count_control_projects_the_exact_shared_contract() -> Non
     assert "return Math.max(1, Math.min(4, number));" not in script
 
 
+def test_e23_count_projection_does_not_depend_on_or_enrich_catalog_fallback_cards() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    projection = _section(script, "function v3DeclaredGenerationCounts", "function v3BoundedGenerationCount")
+    defaults = _section(script, "function v3DefaultTemplateCards", "function v3EcommerceProfilePatch")
+
+    assert "v3LoadedTemplateById(templateId)" in projection
+    assert "v3TemplateById(templateId)" not in projection
+    assert "generation_count_contract: [1, 2, 4, 7]" not in defaults
+
+
 def test_e23_visual_tone_and_confirmed_selling_points_have_separate_payload_fields() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     profile = _section(script, "function v3EcommerceProfilePatch()", "function v3BoundedGenerationCount(")

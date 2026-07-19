@@ -4483,8 +4483,7 @@ function v3DefaultTemplateCards() {
       display_name: "电商模板",
       status: "active",
       project_can_create_jobs: true,
-      generation_count_contract: [1, 2, 4, 7],
-      description: "上传商品图、说明想要的画面并选择数量，在项目里生成完整商品图片。",
+      description: "上传商品图，说一句需求，在项目里生成电商套图。",
     },
     {
       template_id: "photographer_template",
@@ -5167,8 +5166,15 @@ function v3EcommerceProfilePatch() {
 
 const v3EcommerceExactCountContract = Object.freeze([1, 2, 4, 7]);
 
+function v3LoadedTemplateById(templateId) {
+  const templates = Array.isArray(v3State.templates) ? v3State.templates : [];
+  return templates.find((template) => template?.template_id === templateId) || null;
+}
+
 function v3DeclaredGenerationCounts(templateId = v3State.selectedTemplate) {
-  const template = v3TemplateById(templateId);
+  // Count projection must not make an unavailable template catalog usable.
+  // Shared catalog/create authorization owns the failure and recovery state.
+  const template = v3LoadedTemplateById(templateId);
   const declared = template?.generation_count_contract
     || template?.capability_contract?.generation_counts
     || template?.capabilities?.generation_counts;
