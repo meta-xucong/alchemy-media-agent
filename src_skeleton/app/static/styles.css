@@ -7762,9 +7762,35 @@ body.v3-page-loading-active {
   align-items: center;
 }
 
-.v3-count-control input {
+.v3-count-control input,
+.v3-count-control select {
   grid-column: 1 / -1;
   width: 100%;
+}
+
+.v3-count-control select {
+  min-height: 40px;
+}
+
+.v3-count-control .v3-field-hint {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+.v3-result-delivery-summary {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.v3-image-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .v3-count-control strong {

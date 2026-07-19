@@ -1463,7 +1463,7 @@
                 <div class="v3-workspace-grid">
                   <div class="module-stack">
                   <section class="panel flow-section v3-composer-panel">
-                    <details class="v3-intent-details v3-mode-selector" open>
+                    <details id="v3GenerationModeDetails" class="v3-intent-details v3-mode-selector" open>
                       <summary>
                         <span>生成方式</span>
                         <small>默认由 V3 智能选择，也可以手动指定</small>
@@ -1496,21 +1496,6 @@
                         </button>
                       </div>
 
-                      <div id="v3EcommercePresetRow" class="v3-preset-row v3-ecommerce-presets" aria-label="电商特调参考信息" hidden>
-                        <div class="v3-preset-card v3-ecommerce-direction-note">
-                          <span>一键商品图方向</span>
-                          <small>上传商品参考，再描述本次希望呈现的商品效果</small>
-                        </div>
-                        <div class="v3-preset-card v3-ecommerce-direction-note">
-                          <span>平台约束导向</span>
-                          <small>把已选择的平台约束交给中枢大脑与本次需求一起判断</small>
-                        </div>
-                        <div class="v3-preset-card v3-ecommerce-direction-note">
-                          <span>参考风格方向</span>
-                          <small>用参考图说明希望延续的视觉气质，不预设画面角色</small>
-                        </div>
-                      </div>
-
                       <div id="v3PhotographyPresetRow" class="v3-preset-row v3-photography-presets" aria-label="摄影师模板拍摄方式" hidden>
                         <button class="v3-preset-card" data-v3-preset="single_hero" data-v3-preset-scope="photography" type="button" aria-pressed="false">
                           <span>单张摄影作品</span>
@@ -1537,7 +1522,13 @@
                       <label class="v3-setting-control v3-count-control" for="v3CountInput">
                         <span>生成数量</span>
                         <strong><span id="v3CountValue">2</span> 张</strong>
-                        <input id="v3CountInput" type="range" min="1" max="4" step="1" value="2" />
+                        <select id="v3CountInput" aria-describedby="v3CountHint">
+                          <option value="1">1 张</option>
+                          <option value="2" selected>2 张</option>
+                          <option value="4">4 张</option>
+                          <option value="7">7 张</option>
+                        </select>
+                        <small id="v3CountHint" class="v3-field-hint">本次准备生成 2 张完整图片。</small>
                       </label>
                       <div class="v3-setting-control v3-aspect-control">
                         <span>画幅比例</span>
@@ -1602,6 +1593,11 @@
                     </details>
 
                     <div id="v3EcommerceFields" class="v3-ecommerce-fields" hidden>
+                      <details id="v3EcommerceAdvanced" class="v3-optional-details">
+                        <summary>
+                          <span>补充商品信息（可选）</span>
+                          <small>平台、市场、商品事实和参考图设置都在这里；不填不会替你补写卖点。</small>
+                        </summary>
                       <div class="v3-brand-grid">
                         <label class="field">
                           <span>目标平台</span>
@@ -1632,11 +1628,6 @@
                           <input id="v3EcommerceMarketInput" type="text" maxlength="40" placeholder="可选，例如：美国 / 日本 / 中国" />
                         </label>
                       </div>
-                      <details id="v3EcommerceAdvanced" class="v3-optional-details">
-                        <summary>
-                          <span>补充商品信息（可选）</span>
-                          <small>不填也能生成；填了会更稳</small>
-                        </summary>
                         <section class="v3-ecommerce-reference-controls" aria-label="参考图保持方式">
                           <div class="v3-ecommerce-reference-head">
                             <strong>参考图保持方式</strong>
@@ -1686,6 +1677,11 @@
                         <label class="field">
                           <span>产品参数 / 必须保留事实</span>
                           <textarea id="v3EcommerceSpecsInput" rows="3" placeholder="可选：材质、颜色、尺寸、功能、套装数量、不能改错的事实"></textarea>
+                        </label>
+                        <label class="field">
+                          <span>已确认的商品卖点</span>
+                          <textarea id="v3EcommerceSellingPointsInput" rows="2" placeholder="可选：只填写能够确认的商品功能或优势；一行一条"></textarea>
+                          <small class="v3-field-hint">店铺视觉感受不会当作商品卖点或宣传承诺。</small>
                         </label>
                         <div class="v3-brand-grid">
                           <label class="field">
