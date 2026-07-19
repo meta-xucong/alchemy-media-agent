@@ -205,5 +205,6 @@ def test_catalog_route_and_frontend_only_offer_named_profile_after_manual_confir
 
     frontend = (app_main.STATIC_DIR / "app.js").read_text(encoding="utf-8")
     assert 'photographer_profile_selection_source: namedPhotographerProfileConfirmed ? "user_explicit_ui" : undefined' in frontend
-    assert 'photographerProfile?.binding_mode === "named" ? "general_photography"' in frontend
+    assert 'photographerProfile?.binding_mode === "named"' in frontend
+    assert 'selectedPhotographerProfileId === "general_photography"' in frontend
     assert 'selected !== "photography"' in frontend

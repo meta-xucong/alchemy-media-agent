@@ -110,7 +110,7 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "创意探索模式" in index.text
     assert "尺寸/版式适配模式" in index.text
     assert "图片用途（可选）" not in index.text
-    assert "v3EcommercePresetRow" in index.text
+    assert "v3EcommercePresetRow" not in index.text
     assert "v3PhotographyPresetRow" in index.text
     assert "v3EcommerceAdvanced" in index.text
     assert "v3EcommerceFields" in index.text
@@ -324,8 +324,12 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function openV3Home" in script.text
     assert "function v3HomeTemplateCopy" in script.text
     assert "function v3ProjectTemplateId" in script.text
-    assert "primary_template_id: project.primary_template_id || \"general_template\"" in script.text
-    assert "正在读取模板可用状态" in script.text
+    # P14: a missing persisted template must remain unconfirmed, never be
+    # relabelled as General during recent-project or refresh recovery.
+    assert "primary_template_id: templateId || null" in script.text
+    assert "v3-template-catalog-loading" in script.text
+    assert "const catalogStatus = v3State.templateCatalogStatus" in script.text
+    assert "catalogStatus === \"idle\" || catalogStatus === \"loading\"" in script.text
     assert 'if (templateId === "photographer_template")' in script.text
     assert 'photography: "single_hero"' in script.text
     assert "v3PhotographyPresetRow" in script.text
@@ -411,7 +415,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function renderV3StepCards" in script.text
     assert "function renderV3ProductionEntry" in script.text
     assert "v3-production-entry" in script.text
-    assert 'const title = isEcommerce ? "继续生成电商图片" : "继续生成图片";' in script.text
+    assert "function renderV3ProjectNextActions" in script.text
+    assert 'data-v3-project-action="edit_ecommerce_details"' in script.text
     assert "function v3ProjectSubpageCopy" in script.text
     assert "function renderV3ProjectSubpageScene" in script.text
     assert "function renderV3BriefScene" in script.text
@@ -538,8 +543,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "v3ProgressFill" in script.text
     assert "run-progress-step" in script.text
     assert "function v3PlainWarningText" in script.text
-    assert "生成电商套图" in script.text
-    assert "写一句需求即可生成电商图；上传商品图后会更稳地保持实物一致。" in script.text
+    assert "生成电商套图" not in script.text
+    assert "写一句需求即可生成电商图；上传商品图后会更稳地保持实物一致。" not in script.text
     assert "function renderV3ClosureChecks" in script.text
     assert "require_real_images: true" in script.text
     assert "function v3OutputImageCandidates" in script.text
@@ -551,7 +556,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "已从本地历史快照恢复生成图片" not in script.text
     assert "v3-result-preview" in script.text
     assert "scenario_id: v3State.selectedScenario" not in script.text
-    assert "template_id: \"general_template\"" in script.text
+    assert "function v3TemplateCanCreate" in script.text
+    assert "templateCatalogStatus" in script.text
     assert "template_id: templateId" in script.text
     assert "commercial_v3_project_mode" in script.text
     assert "apply_memory_update: false" in script.text

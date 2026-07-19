@@ -319,6 +319,10 @@ const v3State = {
   photographerProfilesLoaded: false,
   selectedPhotographerProfileId: "general_photography",
   confirmedPhotographerProfileId: "",
+  confirmedPhotographerProfileVersion: "",
+  photographerProfilesError: "",
+  selectedPhotographyScene: "portrait",
+  selectedPhotographyReferenceRole: "face_reference",
   generationCount: 2,
   selectedSize: "",
   activeProjectStep: "compose",
@@ -552,6 +556,7 @@ const els = {
   v3ProfessionalCreateBtn: document.querySelector("#v3ProfessionalCreateBtn"),
   v3ProfessionalReviewPanel: document.querySelector("#v3ProfessionalReviewPanel"),
   v3ProjectOutputBoard: document.querySelector("#v3ProjectOutputBoard"),
+  v3PhotographyRoleBoard: document.querySelector("#v3PhotographyRoleBoard"),
   v3UsefulReferenceBoard: document.querySelector("#v3UsefulReferenceBoard"),
   v3ProjectWorkflow: document.querySelector("#v3ProjectWorkflow"),
   v3WorkflowArtifacts: document.querySelector("#v3WorkflowArtifacts"),
@@ -588,6 +593,7 @@ const els = {
   v3GeneralPresetRow: document.querySelector("#v3GeneralPresetRow"),
   v3EcommercePresetRow: document.querySelector("#v3EcommercePresetRow"),
   v3PhotographyPresetRow: document.querySelector("#v3PhotographyPresetRow"),
+  v3PhotographySceneRow: document.querySelector("#v3PhotographySceneRow"),
   v3PromptLabel: document.querySelector("#v3PromptLabel"),
   v3PromptHint: document.querySelector("#v3PromptHint"),
   v3PromptInput: document.querySelector("#v3PromptInput"),
@@ -599,6 +605,9 @@ const els = {
   v3AssetTitle: document.querySelector("#v3AssetTitle"),
   v3AssetSummary: document.querySelector("#v3AssetSummary"),
   v3AssetList: document.querySelector("#v3AssetList"),
+  v3PhotographyReferenceFields: document.querySelector("#v3PhotographyReferenceFields"),
+  v3PhotographyReferenceRoleInput: document.querySelector("#v3PhotographyReferenceRoleInput"),
+  v3PhotographyReferenceRoleHint: document.querySelector("#v3PhotographyReferenceRoleHint"),
   v3AdvancedReferenceControls: document.querySelector("#v3AdvancedReferenceControls"),
   v3GeneralAdvancedFieldsSlot: document.querySelector("#v3GeneralAdvancedFieldsSlot"),
   v3EcommerceAdvancedFieldsSlot: document.querySelector("#v3EcommerceAdvancedFieldsSlot"),
@@ -1131,6 +1140,9 @@ function bindControls() {
   document.querySelectorAll("[data-v3-preset]").forEach((button) => {
     button.addEventListener("click", () => setV3Preset(button.dataset.v3Preset || "campaign_poster"));
   });
+  document.querySelectorAll("[data-v3-photography-scene]").forEach((button) => {
+    button.addEventListener("click", () => setV3PhotographyScene(button.dataset.v3PhotographyScene || "portrait", { resetReferenceRole: true }));
+  });
   document.querySelectorAll("[data-v3-variation-mode]").forEach((button) => {
     button.addEventListener("click", () => setV3VariationMode(button.dataset.v3VariationMode || "auto"));
   });
@@ -1205,6 +1217,12 @@ function bindControls() {
   if (els.v3CreateJobBtn) els.v3CreateJobBtn.addEventListener("click", createV3Job);
   if (els.v3PhotographerProfileInput) els.v3PhotographerProfileInput.addEventListener("change", selectV3PhotographerProfile);
   if (els.v3ConfirmPhotographerProfileBtn) els.v3ConfirmPhotographerProfileBtn.addEventListener("click", confirmV3PhotographerProfile);
+  if (els.v3PhotographyReferenceRoleInput) {
+    els.v3PhotographyReferenceRoleInput.addEventListener("change", () => {
+      v3State.selectedPhotographyReferenceRole = els.v3PhotographyReferenceRoleInput.value || "face_reference";
+      renderV3PhotographyReferenceRole();
+    });
+  }
   if (els.v3GenerateBtn) els.v3GenerateBtn.addEventListener("click", generateV3Job);
   if (els.v3SelectBtn) els.v3SelectBtn.addEventListener("click", selectV3Job);
   if (els.v3ResetBtn) els.v3ResetBtn.addEventListener("click", resetV3Workspace);
@@ -1641,6 +1659,7 @@ async function initV3Shell({ force = false } = {}) {
     v3State.templateCatalogStatus = "failed";
     v3State.templateCatalogError = "项目类型暂时无法读取";
     v3State.projects = readV3LocalProjects();
+    v3State.templates = [];
     v3State.projectsLoaded = true;
     v3State.loaded = true;
     renderV3HomeTemplateChooser();
@@ -1831,7 +1850,12 @@ function v3ProjectTemplateId(project) {
     "电商模板": "ecommerce_template",
     "摄影师模板": "photographer_template",
   };
-  return legacyLabels[String(project?.active_template_label || "").trim()] || "general_template";
+  return legacyLabels[String(project?.active_template_label || "").trim()] || "";
+}
+
+function v3ProjectTemplateLabel(project) {
+  const templateId = v3ProjectTemplateId(project);
+  return templateId ? v3TemplatePlainLabel(templateId) : "项目类型待确认";
 }
 
 function v3LatestConfirmedBrandMemory(project = v3State.currentProject) {
@@ -1934,7 +1958,8 @@ function v3HomeTemplateCopy(templateId) {
 function selectV3HomeTemplate(templateId, { silent = false } = {}) {
   const template = v3TemplateById(templateId);
   if (!template || !v3TemplateCanCreate(template.template_id)) {
-    if (!silent) updateV3Notice("项目类型还没有读取成功，暂时不能创建项目。", "warning");
+    renderV3HomeTemplateChooser();
+    if (!silent) updateV3Notice("这个项目类型暂时无法创建。请重新读取可用状态后再试。", "warning");
     return;
   }
   v3State.selectedTemplate = template.template_id;
@@ -1967,8 +1992,6 @@ function renderV3HomeTemplateChooser() {
   if (catalogStatus === "empty") {
     renderV3TemplateUnavailableCopy();
     els.v3TemplateChooser.innerHTML = "<span class=\"v3-template-catalog-error\">当前没有可创建的项目类型，请稍后重新加载。</span><button class=\"button compact ghost\" type=\"button\" data-v3-template-retry>重新加载</button>";
-    if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = true;
-    return;
   }
   const templates = v3AvailableTemplates();
   if (!templates.some((template) => template.project_can_create_jobs)) {
@@ -1993,6 +2016,7 @@ function renderV3HomeTemplateChooser() {
   if (els.v3NewProjectGoalHint) els.v3NewProjectGoalHint.textContent = copy.goalHint;
   if (els.v3NewProjectGoalInput) els.v3NewProjectGoalInput.placeholder = copy.placeholder;
   if (els.v3NewProjectBtn) els.v3NewProjectBtn.textContent = copy.button;
+  if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = !v3TemplateCanCreate(v3State.selectedTemplate) || v3State.loading;
   renderV3SelectedBrandMemoryBar();
   els.v3TemplateChooser.innerHTML = "";
   templates.forEach((template) => {
@@ -2288,6 +2312,11 @@ function renderV3ScenarioState() {
   if (els.v3VariationModeRow) els.v3VariationModeRow.hidden = selected !== "general_creative";
   if (els.v3GeneralPresetRow) els.v3GeneralPresetRow.hidden = selected !== "general_creative";
   if (els.v3PhotographyPresetRow) els.v3PhotographyPresetRow.hidden = selected !== "photography";
+  if (els.v3PhotographySceneRow) els.v3PhotographySceneRow.hidden = selected !== "photography";
+  if (els.v3PhotographyReferenceFields) els.v3PhotographyReferenceFields.hidden = selected !== "photography";
+  if (selected === "photography") {
+    setV3PhotographyScene(v3State.selectedPhotographyScene);
+  }
   if (els.v3CreateJobBtn && !v3State.loading) els.v3CreateJobBtn.textContent = copy.createLabel;
   if (els.v3GenerateBtn) els.v3GenerateBtn.textContent = copy.generateLabel;
   if (els.v3SelectBtn) els.v3SelectBtn.textContent = copy.selectLabel;
@@ -2318,14 +2347,25 @@ async function loadV3PhotographerProfiles() {
     const payload = await request(`${v3ApiBase}/scenarios/photography/photographer-profiles`);
     v3State.photographerProfiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
     v3State.photographerProfilesLoaded = true;
+    v3State.photographerProfilesError = "";
   } catch (_error) {
     v3State.photographerProfiles = [];
+    v3State.photographerProfilesLoaded = false;
+    v3State.photographerProfilesError = "摄影师档案暂时无法读取";
   }
   renderV3PhotographerProfiles();
 }
 
 function renderV3PhotographerProfiles() {
   if (!els.v3PhotographerProfileInput) return;
+  if (v3State.photographerProfilesError) {
+    els.v3PhotographerProfileInput.innerHTML = '<option value="">档案暂时无法读取</option>';
+    els.v3PhotographerProfileInput.disabled = true;
+    if (els.v3ConfirmPhotographerProfileBtn) els.v3ConfirmPhotographerProfileBtn.hidden = true;
+    if (els.v3PhotographerProfileHint) els.v3PhotographerProfileHint.textContent = "为避免误用通用摄影，当前不能创建摄影任务。请刷新后重试。";
+    if (els.v3PhotographerProfileConfirmation) els.v3PhotographerProfileConfirmation.textContent = "档案目录未确认，未选择任何档案。";
+    return;
+  }
   const profiles = v3State.photographerProfiles.length
     ? v3State.photographerProfiles
     : [{ profile_id: "general_photography", display_name: "通用摄影", binding_mode: "general" }];
@@ -2333,8 +2373,9 @@ function renderV3PhotographerProfiles() {
     ? v3State.selectedPhotographerProfileId
     : "general_photography";
   v3State.selectedPhotographerProfileId = selectedId;
+  els.v3PhotographerProfileInput.disabled = false;
   els.v3PhotographerProfileInput.innerHTML = profiles.map((profile) => (
-    `<option value="${escapeHtml(profile.profile_id)}">${escapeHtml(profile.display_name || profile.profile_id)}</option>`
+    `<option value="${escapeHtml(profile.profile_id)}">${escapeHtml(profile.display_name || profile.profile_id)}${profile.profile_version ? ` · 版本 ${escapeHtml(profile.profile_version)}` : ""}</option>`
   )).join("");
   els.v3PhotographerProfileInput.value = selectedId;
   const current = profiles.find((profile) => profile.profile_id === selectedId) || profiles[0];
@@ -2345,13 +2386,13 @@ function renderV3PhotographerProfiles() {
   }
   if (els.v3PhotographerProfileHint) {
     els.v3PhotographerProfileHint.textContent = named
-      ? "具名档案需点击确认；确认会作为不可变任务绑定保存。"
+      ? `具名档案版本 ${current.profile_version || "待确认"}；需点击确认后才会创建任务，并会固定到本次任务。`
       : "通用摄影不会自动选择或模仿具名摄影师。";
   }
   if (els.v3PhotographerProfileConfirmation) {
-    els.v3PhotographerProfileConfirmation.textContent = named && v3State.confirmedPhotographerProfileId === selectedId
-      ? "已手动确认：该档案只会固定到本次新任务。"
-      : (named ? "尚未确认；本次不会提交该具名档案。" : "当前使用通用摄影。");
+    els.v3PhotographerProfileConfirmation.textContent = named && v3State.confirmedPhotographerProfileId === selectedId && v3State.confirmedPhotographerProfileVersion === (current.profile_version || "")
+      ? `已手动确认：版本 ${current.profile_version || "待确认"} 将只固定到本次新任务。`
+      : (named ? "尚未确认：请确认使用此档案，或改选通用摄影。" : "当前使用通用摄影。");
   }
 }
 
@@ -2360,6 +2401,7 @@ function selectV3PhotographerProfile() {
   v3State.selectedPhotographerProfileId = profileId;
   if (v3State.confirmedPhotographerProfileId !== profileId) {
     v3State.confirmedPhotographerProfileId = "";
+    v3State.confirmedPhotographerProfileVersion = "";
   }
   renderV3PhotographerProfiles();
 }
@@ -2369,7 +2411,55 @@ function confirmV3PhotographerProfile() {
   const profile = (v3State.photographerProfiles || []).find((item) => item.profile_id === profileId);
   if (!profile || profile.binding_mode !== "named") return;
   v3State.confirmedPhotographerProfileId = profileId;
+  v3State.confirmedPhotographerProfileVersion = profile.profile_version || "";
   renderV3PhotographerProfiles();
+}
+
+function v3PhotographySceneLabel(sceneId = v3State.selectedPhotographyScene) {
+  return {
+    portrait: "人像摄影",
+    landscape: "风景摄影",
+    still_life: "静物摄影",
+    animal: "动物摄影",
+  }[sceneId] || "摄影";
+}
+
+function v3PhotographyReferenceRoleHint(role = v3State.selectedPhotographyReferenceRole) {
+  return {
+    face_reference: "人物参考会优先保留同一个人的长相；造型、场景和光线仍由本次需求决定。",
+    nonhuman_identity_reference: "动物/宠物身份参考需要清晰、可识别的原图；不支持高保真参考时本次会停止，不会改成纯文字生成。",
+    background_reference: "风景/场景参考用于延续地点、环境或氛围。",
+    subject_reference: "静物/物品参考用于保持同一个物品的外观。",
+  }[role] || "请先说明这张参考图用于什么。";
+}
+
+function renderV3PhotographyReferenceRole() {
+  if (els.v3PhotographyReferenceRoleInput) {
+    els.v3PhotographyReferenceRoleInput.value = v3State.selectedPhotographyReferenceRole;
+  }
+  if (els.v3PhotographyReferenceRoleHint) {
+    els.v3PhotographyReferenceRoleHint.textContent = v3PhotographyReferenceRoleHint();
+  }
+}
+
+function setV3PhotographyScene(sceneId, { resetReferenceRole = false } = {}) {
+  const allowed = new Set(["portrait", "landscape", "still_life", "animal"]);
+  v3State.selectedPhotographyScene = allowed.has(sceneId) ? sceneId : "portrait";
+  const defaultRole = {
+    portrait: "face_reference",
+    landscape: "background_reference",
+    still_life: "subject_reference",
+    animal: "nonhuman_identity_reference",
+  }[v3State.selectedPhotographyScene];
+  if (resetReferenceRole || !v3State.selectedPhotographyReferenceRole) {
+    v3State.selectedPhotographyReferenceRole = defaultRole;
+  }
+  document.querySelectorAll("[data-v3-photography-scene]").forEach((button) => {
+    const active = button.dataset.v3PhotographyScene === v3State.selectedPhotographyScene;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  renderV3PhotographyReferenceRole();
 }
 
 function setV3Preset(presetId) {
@@ -2455,6 +2545,7 @@ async function loadV3Projects({ silent = false, force = false } = {}) {
     v3State.templateCatalogStatus = "failed";
     v3State.templateCatalogError = "项目类型暂时无法读取";
     v3State.projects = mergeV3ProjectItems(localItems, []);
+    v3State.templates = [];
     v3State.projectsLoaded = true;
     renderV3HomeTemplateChooser();
     renderV3Projects();
@@ -2576,6 +2667,7 @@ function saveV3ProjectSnapshot(project) {
 function v3ProjectSummaryFromProject(project) {
   if (!project?.project_id) return null;
   if (project.memory_summary?.project_id) return project.memory_summary;
+  const templateId = v3ProjectTemplateId(project);
   const activeReferences = v3ActiveProjectReferences(project);
   const selectedRefs = v3SelectedOutputRefs(project);
   const referenceThumbs = activeReferences
@@ -2586,15 +2678,15 @@ function v3ProjectSummaryFromProject(project) {
     project_id: project.project_id,
     title: v3ProjectDisplayTitle(project),
     goal: v3ProjectDisplayGoal(project),
-    primary_template_id: project.primary_template_id || "general_template",
-    scenario_id: v3ScenarioForTemplate(project.primary_template_id || "general_template"),
-    active_template_label: v3TemplatePlainLabel(project.primary_template_id || "general_template"),
+    primary_template_id: templateId || null,
+    scenario_id: templateId ? v3ScenarioForTemplate(templateId) : null,
+    active_template_label: v3ProjectTemplateLabel(project),
     latest_thumbnail_urls: referenceThumbs.length
       ? referenceThumbs
       : selectedRefs.map((ref) => ref.thumbnail_url || ref.preview_url).filter(Boolean).slice(0, 3),
     confirmed_style_chips: project.confirmed_style_summary
       ? [project.confirmed_style_summary]
-      : [v3TemplatePlainLabel(project.primary_template_id || "general_template")],
+      : [v3ProjectTemplateLabel(project)],
     selected_asset_count: activeReferences.length || selectedRefs.length,
     job_count: Array.isArray(project.job_ids) ? project.job_ids.length : 0,
     latest_job_status: project.latest_job_status
@@ -2615,7 +2707,7 @@ function v3ProjectEmptyImageLabel(project) {
 
 async function createV3Project() {
   const userGoal = (els.v3NewProjectGoalInput?.value || "").trim();
-  const templateId = v3State.selectedTemplate || "general_template";
+  const templateId = v3State.selectedTemplate;
   const scenarioId = v3ScenarioForTemplate(templateId);
   const requestedMode = v3State.professionalMode === "professional" ? "professional" : "standard";
   if (!userGoal) {
@@ -2719,7 +2811,7 @@ function renderV3Projects() {
         <p>${escapeHtml(projectGoal)}</p>
       </div>
       <div class="v3-history-meta">
-        <span>${escapeHtml(v3TemplatePlainLabel(v3ProjectTemplateId(item)))}</span>
+        <span>${escapeHtml(v3ProjectTemplateLabel(item))}</span>
         <span>${Number(item.job_count || 0)} 次生成 · ${Number(item.selected_asset_count || 0)} 个已选</span>
       </div>
       <div class="v3-project-card-actions">
@@ -3043,7 +3135,7 @@ function renderV3ProjectDetail() {
   if (els.v3ProjectStyleChips) {
     const chips = project?.memory_summary?.confirmed_style_chips || project?.latest_context?.confirmed_visual_tone || [];
     els.v3ProjectStyleChips.innerHTML = "";
-    (chips.length ? chips : project ? [v3TemplatePlainLabel(project.primary_template_id || "general_template")] : []).slice(0, 5).forEach((chip) => {
+    (chips.length ? chips : project ? [v3ProjectTemplateLabel(project)] : []).slice(0, 5).forEach((chip) => {
       const el = document.createElement("span");
       el.textContent = chip;
       els.v3ProjectStyleChips.appendChild(el);
@@ -3060,6 +3152,7 @@ function renderV3ProjectDetail() {
     els.v3ProjectDeleteBtn.hidden = true;
   }
   renderV3ProjectOutputBoard();
+  renderV3PhotographyRoleBoard(v3State.currentJob);
   renderV3UsefulReferences();
   renderV3ProjectSnapshot();
   renderV3ProjectWorkflow();
@@ -3071,6 +3164,66 @@ function renderV3ProjectDetail() {
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     renderV3ProjectSubpageScene(v3State.activeProjectStep || "compose");
   }
+}
+
+function v3PhotographyRoleLabel(roleKey) {
+  const labels = {
+    hero_photograph: "单张作品",
+    session_hero: "主作品",
+    environmental_context: "环境场景",
+    detail_or_moment: "细节 / 瞬间",
+  };
+  return labels[String(roleKey || "")] || "摄影作品";
+}
+
+function v3PhotographyRoleState(role, job) {
+  const status = String(role?.status || job?.status || "planned");
+  const review = String(role?.verification_state || role?.review_status || "");
+  if (role?.provider_failure || status === "failed" || status === "blocked") {
+    return { label: "暂时不能交付", note: v3ProviderFailureUserMessage(job), tone: "blocked" };
+  }
+  if (review === "manual_confirmation_required" || review === "manual_confirmation") {
+    return { label: "需要确认", note: "这张作品需要人工确认，暂不会自动交付。", tone: "attention" };
+  }
+  if (status === "generated" || status === "selected" || status === "ready") {
+    const certified = role?.real_pixel_certified === true || String(role?.verification_state || "") === "verified";
+    return certified
+      ? { label: "已完成", note: "已通过检查并作为当前交付保留。", tone: "ready" }
+      : { label: "检查中", note: "图片已生成，正在完成交付检查。", tone: "progress" };
+  }
+  if (status === "finalizing") return { label: "检查中", note: "正在完成交付检查。", tone: "progress" };
+  return { label: "生成中", note: "这张作品会独立生成和检查。", tone: "progress" };
+}
+
+function renderV3PhotographyRoleBoard(job = v3State.currentJob) {
+  if (!els.v3PhotographyRoleBoard) return;
+  const scenarioId = job?.scenario?.scenario_id || v3ScenarioForTemplate(v3ProjectTemplateId(v3State.currentProject));
+  const summary = job?.metadata?.specialized_execution_summary;
+  const roles = Array.isArray(summary?.roles) ? summary.roles : [];
+  const isPhotography = scenarioId === "photography";
+  els.v3PhotographyRoleBoard.hidden = !isPhotography || !roles.length;
+  if (!isPhotography || !roles.length) {
+    els.v3PhotographyRoleBoard.innerHTML = "";
+    return;
+  }
+  const isSet = roles.length === 3;
+  const held = Boolean(summary?.final_delivery_withheld || v3JobDeliveryWithheld(job));
+  const roleCards = roles.map((role) => {
+    const state = v3PhotographyRoleState(role, job);
+    return `
+      <article class="v3-photography-role-card ${escapeHtml(state.tone)}">
+        <div><strong>${escapeHtml(v3PhotographyRoleLabel(role?.role_key))}</strong><span>${escapeHtml(state.label)}</span></div>
+        <p>${escapeHtml(state.note)}</p>
+      </article>
+    `;
+  }).join("");
+  els.v3PhotographyRoleBoard.innerHTML = `
+    <div class="v3-photography-role-heading">
+      <div><span>${isSet ? "三张专业套图" : "单张摄影"}</span><strong>${isSet ? "每张作品独立完成，整套齐全后才会交付。" : "这张作品会独立生成、检查后交付。"}</strong></div>
+      <small>${held ? "本次暂不交付：请先处理未完成或需要确认的作品。" : `${roles.length} 张作品进度已显示`}</small>
+    </div>
+    <div class="v3-photography-role-grid">${roleCards}</div>
+  `;
 }
 
 function v3ProjectNextSuggestion(project = v3State.currentProject) {
@@ -3098,7 +3251,7 @@ function renderV3ProjectSnapshot() {
   const items = [
     {
       label: "项目类型已固定",
-      value: v3TemplatePlainLabel(project.primary_template_id || v3State.selectedTemplate || "general_template"),
+      value: v3ProjectTemplateLabel(project),
       note: "中途不换类型，避免风格和流程串线",
     },
     {
@@ -4060,6 +4213,7 @@ function renderV3StepCards() {
   const outputItems = v3CurrentJobImageItems();
   const selectedRefs = v3UsefulReferenceItems(project);
   const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
+  {
   const imageCount = outputItems.length;
   const isEcommerce = v3State.selectedScenario === "ecommerce";
   v3State.activeProjectStep = "compose";
@@ -4149,6 +4303,13 @@ function renderV3BriefScene() {
   const { project, refs, isEcommerce } = v3SceneStats();
   const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
   const modeText = isEcommerce ? "电商创意" : "通用创意";
+  }
+  const isPhotography = v3ScenarioForTemplate(v3ProjectTemplateId(project)) === "photography";
+  const modeText = isEcommerce
+    ? "电商套图"
+    : isPhotography
+      ? (v3State.selectedPreset === "professional_set" ? "三张专业套图" : "单张摄影")
+      : "通用套图";
   const referenceText = refs.length ? `沿用 ${refs.length} 个已确认参考` : "生成后再挑满意方向";
   const avoidText = avoidCount ? `避开 ${avoidCount} 条不喜欢方向` : "暂无避开方向";
   return `
@@ -4333,6 +4494,7 @@ function renderV3StyleConfirmActions() {
 }
 
 function renderV3ProjectNextActions() {
+  // const title = isEcommerce ? "缁х画鐢熸垚鐢靛晢鍥剧墖" : "缁х画鐢熸垚鍥剧墖";
   if (!els.v3ProjectNextActions) return;
   els.v3ProjectNextActions.innerHTML = "";
   const project = v3State.currentProject;
@@ -4341,6 +4503,30 @@ function renderV3ProjectNextActions() {
     return;
   }
   const job = v3State.currentJob;
+  const projectScenario = v3ScenarioForTemplate(v3ProjectTemplateId(project));
+  if (projectScenario === "photography") {
+    els.v3ProjectNextActions.hidden = false;
+    const isProfessionalSet = v3State.currentJob?.metadata?.specialized_execution_summary?.roles?.length === 3;
+    els.v3ProjectNextActions.innerHTML = `
+      <div class="v3-continuation-panel">
+        <div class="v3-continuation-main">
+          <span>继续这个摄影项目</span>
+          <strong>${isProfessionalSet ? "先查看每张作品的进度，再决定下一次拍摄。" : "可以继续拍摄新的作品。"}</strong>
+          <p>${isProfessionalSet ? "三张专业套图必须分别完成；尚未提供可验证的角色续作信息时，不显示可能失效的续作按钮。" : "继续拍摄会保留在摄影师模板中，不会改成通用创意。"}</p>
+          <div class="v3-continuation-buttons">
+            <button class="button primary compact" type="button" data-v3-project-action="continue_photography" ${project?.project_id ? "" : "disabled"}>继续拍摄</button>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  // General and E-Commerce share the mainline continuation/held-state
+  // renderer below.  Photography owns only the branch above and must never
+  // hide or replace those shared actions.
+  els.v3ProjectNextActions.hidden = false;
+  const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
+  const hasSelectableJob = Boolean(v3State.currentJob?.job_id && Array.isArray(v3State.currentJob.candidates) && v3State.currentJob.candidates.length);
   const ecommerceActive = v3State.selectedScenario === "ecommerce";
   const status = String(job?.status || project?.latest_job_status || "").toLowerCase();
   const withheld = Boolean(job && v3JobDeliveryWithheld(job));
@@ -4591,10 +4777,15 @@ function handleV3ProjectActionClick(event) {
     updateV3Notice("请补充已经确认的商品事实，或更换商品参考图后再尝试。", "info");
     return;
   }
-  if (v3State.selectedScenario !== "ecommerce") {
-    setV3Scenario("general_creative");
-  }
+  const projectScenario = v3ScenarioForTemplate(v3ProjectTemplateId(v3State.currentProject));
+  if (v3State.selectedScenario !== projectScenario) setV3Scenario(projectScenario);
   const goal = v3State.currentProject.user_goal || v3State.currentProject.short_summary || "";
+  if (action === "continue_photography") {
+    if (els.v3PromptInput && !els.v3PromptInput.value.trim()) els.v3PromptInput.value = goal;
+    els.v3PromptInput?.focus();
+    updateV3Notice("已回到摄影师工作区。确认本次需求后即可继续拍摄。", "info");
+    return;
+  }
   if (action === "continue_same_style") {
     if (els.v3PromptInput) {
       els.v3PromptInput.value = v3State.selectedScenario === "ecommerce"
@@ -5202,9 +5393,17 @@ async function openV3Project(projectId) {
       v3State.templates = payload.templates;
       v3State.templateCatalogStatus = "ready";
     }
+    if (Array.isArray(payload.templates)) {
+      v3State.templates = payload.templates;
+    }
     v3State.currentJob = null;
     v3State.selectedResult = null;
-    v3State.selectedTemplate = v3State.currentProject?.primary_template_id || "general_template";
+    const projectTemplateId = v3ProjectTemplateId(v3State.currentProject);
+    if (!projectTemplateId) {
+      updateV3Notice("项目类型暂时无法确认。为避免走错模板，请返回项目列表后刷新。", "warning");
+      return;
+    }
+    v3State.selectedTemplate = projectTemplateId;
     v3State.activeProjectStep = "compose";
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
@@ -5220,7 +5419,7 @@ async function openV3Project(projectId) {
     if (els.v3PromptInput) {
       els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || "";
     }
-    const scenarioId = v3ScenarioForTemplate(v3State.currentProject?.primary_template_id);
+    const scenarioId = v3ScenarioForTemplate(projectTemplateId);
     openV3ScenarioWorkspace(scenarioId, { fromHistory: true });
     if (els.v3PromptInput) {
       els.v3PromptInput.value = v3State.currentProject?.user_goal || v3State.currentProject?.short_summary || "";
@@ -5426,6 +5625,9 @@ function v3FileSizeText(size) {
 
 function v3UploadedAssetRoleForCurrentTask(file = null) {
   if (v3State.selectedScenario === "ecommerce") return "product_reference";
+  if (v3State.selectedScenario === "photography") {
+    return v3State.selectedPhotographyReferenceRole || "unknown_reference";
+  }
   const text = [
     els.v3PromptInput?.value,
     els.v3NewProjectGoalInput?.value,
@@ -5509,7 +5711,7 @@ async function uploadV3Files() {
         metadata: {
           frontend_surface: "commercial_v3_project_mode",
           frontend_fingerprint: fingerprint,
-          inferred_upload_role: v3UploadedAssetRoleForCurrentTask(file),
+          selected_upload_role: v3UploadedAssetRoleForCurrentTask(file),
         },
       },
     });
@@ -5818,8 +6020,15 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   if (!userInput) {
     throw new Error("请先输入简单需求。");
   }
-  const scenarioId = v3ScenarioForTemplate(v3State.currentProject.primary_template_id || v3State.selectedTemplate || "general_template");
+  const projectTemplateId = v3ProjectTemplateId(v3State.currentProject);
+  if (!projectTemplateId) {
+    throw new Error("这个项目的类型还没有确认，暂时不能生成。请返回项目列表后重新打开，或新建项目。 ");
+  }
+  const scenarioId = v3ScenarioForTemplate(projectTemplateId);
   const templateId = v3TemplateIdForScenario(scenarioId);
+  if (templateId !== projectTemplateId) {
+    throw new Error("项目类型与当前制作页面不一致。请重新打开该项目后再试。 ");
+  }
   v3State.selectedTemplate = templateId;
   v3State.selectedScenario = scenarioId;
   if (!v3ScenarioCanCreate(scenarioId)) {
@@ -5836,13 +6045,32 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   const ecommerceCopyLocale = scenarioId === "ecommerce" ? v3EcommerceCopyLocaleValue() : "";
   const ecommerceApprovedLiteralCopy = scenarioId === "ecommerce" ? (els.v3EcommerceApprovedCopyInput?.value || "").trim() : "";
   const photographerProfile = scenarioId === "photography"
-    ? (v3State.photographerProfiles || []).find((item) => item.profile_id === v3State.selectedPhotographerProfileId)
+    ? ((v3State.photographerProfiles || []).find((item) => item.profile_id === v3State.selectedPhotographerProfileId)
+      || (v3State.photographerProfilesLoaded && v3State.selectedPhotographerProfileId === "general_photography"
+        ? { profile_id: "general_photography", binding_mode: "general" }
+        : null))
     : null;
   const namedPhotographerProfileConfirmed = photographerProfile?.binding_mode === "named"
-    && v3State.confirmedPhotographerProfileId === photographerProfile.profile_id;
-  const selectedPhotographerProfileId = namedPhotographerProfileConfirmed
-    ? photographerProfile.profile_id
-    : (photographerProfile?.binding_mode === "named" ? "general_photography" : (photographerProfile?.profile_id || "general_photography"));
+    && v3State.confirmedPhotographerProfileId === photographerProfile.profile_id
+    && v3State.confirmedPhotographerProfileVersion === (photographerProfile.profile_version || "");
+  if (scenarioId === "photography" && v3State.photographerProfilesError) {
+    throw new Error("摄影师档案目录暂时无法读取。为避免误绑档案，请刷新后再试。 ");
+  }
+  if (scenarioId === "photography" && photographerProfile?.binding_mode === "named" && !namedPhotographerProfileConfirmed) {
+    throw new Error("请先确认要使用的摄影师档案及其版本，或改选通用摄影。 ");
+  }
+  if (scenarioId === "photography" && !photographerProfile) {
+    throw new Error("请等待摄影师档案加载完成后再生成。 ");
+  }
+  const selectedPhotographerProfileId = photographerProfile?.profile_id || "general_photography";
+  const hasReference = uploadedAssets.length > 0;
+  if (scenarioId === "photography" && v3State.selectedPreset === "reference_reshoot" && !hasReference) {
+    throw new Error("参考重拍需要先上传一张参考图。 ");
+  }
+  if (scenarioId === "photography" && v3State.selectedPhotographyScene === "animal" && hasReference
+    && v3State.selectedPhotographyReferenceRole !== "nonhuman_identity_reference") {
+    throw new Error("动物或宠物身份参考必须选择“动物/宠物身份参考”。 ");
+  }
   const payload = {
     user_input: userInput,
     template_id: templateId,
@@ -5868,6 +6096,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       requested_image_count: generationSettings.count,
       requested_image_size: generationSettings.size || undefined,
       requested_aspect_label: generationSettings.sizeLabel,
+      scene_domain: scenarioId === "photography" ? v3State.selectedPhotographyScene : undefined,
+      photography_reference_role: scenarioId === "photography" && hasReference ? v3State.selectedPhotographyReferenceRole : undefined,
       has_product_reference: scenarioId === "ecommerce" ? hasProductReference : undefined,
       ecommerce_text_to_image_fallback: scenarioId === "ecommerce" ? !hasProductReference : undefined,
       ecommerce_copy_locale: ecommerceCopyLocale || undefined,
@@ -5943,6 +6173,11 @@ async function createV3Job() {
       const ecommerceFailure = v3EcommerceFailureMessage(created);
       if (ecommerceFailure) {
         updateV3Notice(ecommerceFailure, "warning");
+        return;
+      }
+      const photographyFailure = payload.template_id === "photographer_template" ? v3ProviderFailureUserMessage(created) : "";
+      if (photographyFailure) {
+        updateV3Notice(photographyFailure, "warning");
         return;
       }
     }
@@ -6503,6 +6738,7 @@ function renderV3Job(job) {
   if (els.v3JobStatus) els.v3JobStatus.textContent = job ? v3StatusLabel(job.status) : "待创建";
   if (els.v3JobId) els.v3JobId.textContent = job?.job_id ? shortOutputId(job.job_id) : "-";
   renderV3ResultBoard(job);
+  renderV3PhotographyRoleBoard(job);
   renderV3ProjectOutputBoard();
   renderV3ProjectSnapshot();
   renderV3ProjectWorkflow();
@@ -6511,6 +6747,8 @@ function renderV3Job(job) {
   const scenarioId = job?.scenario?.scenario_id || v3State.selectedScenario || "general_creative";
   if (job?.ecommerce || scenarioId === "ecommerce") {
     renderV3EcommerceSummary(job?.ecommerce || null, job?.metadata, job);
+  } else if (scenarioId === "photography") {
+    renderV3GeneralSummary(null);
   } else {
     renderV3GeneralSummary(job?.general_creative || null);
   }
@@ -6874,10 +7112,20 @@ function renderV3ResultBoard(job) {
     const card = document.createElement("article");
     const isSelected = v3IsOutputItemSelected(item);
     card.className = `v3-result-card${isSelected ? " selected" : ""}`;
+    {
     const title = scenarioId === "ecommerce"
       ? `图片 ${index + 1}`
       : item.asset_id || item.candidate_id || `candidate_${index + 1}`;
     const fallbackPurpose = scenarioId === "ecommerce" ? "用于电商展示" : "用于商业视觉展示";
+    }
+    const metadata = item.metadata || {};
+    const photographyRole = metadata.photography_lineage_role || metadata.role_key || item.role_key || "";
+    const title = scenarioId === "ecommerce"
+      ? `鍥剧墖 ${index + 1}`
+      : scenarioId === "photography"
+        ? `${v3PhotographyRoleLabel(photographyRole)} ${index + 1}`
+        : `创意图片 ${index + 1}`;
+    const fallbackPurpose = scenarioId === "ecommerce" ? "用于电商展示" : scenarioId === "photography" ? "用于摄影交付" : "用于商业视觉展示";
     const purpose = v3OutputDisplayPurpose(item, "商业视觉资产");
     const cardPurpose = v3OutputDisplayPurpose(item, fallbackPurpose);
     const itemStatus = String(item.status || "");
@@ -7111,6 +7359,7 @@ function v3ScenarioLabel(scenarioId) {
   const labels = {
     general_creative: "通用创意",
     ecommerce: "电商特调",
+    photography: "摄影师模板",
     new_media: "新媒体投放",
     private_domain: "私域运营",
     brand_ip: "品牌 IP",

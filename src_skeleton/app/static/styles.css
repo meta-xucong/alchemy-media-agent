@@ -7999,6 +7999,59 @@ body.v3-page-loading-active {
   gap: 14px;
 }
 
+.v3-photography-role-board {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(66, 109, 134, 0.24);
+  border-radius: var(--radius);
+  background: linear-gradient(145deg, rgba(241, 248, 250, 0.92), rgba(255, 255, 255, 0.7));
+}
+
+.v3-photography-role-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v3-photography-role-heading div,
+.v3-photography-role-card {
+  display: grid;
+  gap: 5px;
+}
+
+.v3-photography-role-heading span,
+.v3-photography-role-heading small,
+.v3-photography-role-card p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.v3-photography-role-heading strong { color: #243a30; font-size: 15px; }
+
+.v3-photography-role-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.v3-photography-role-card {
+  padding: 12px;
+  border: 1px solid rgba(66, 109, 134, 0.17);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.v3-photography-role-card > div { display: flex; justify-content: space-between; gap: 8px; }
+.v3-photography-role-card strong { color: #263b45; font-size: 13px; }
+.v3-photography-role-card span { color: #427088; font-size: 12px; font-weight: 760; }
+.v3-photography-role-card.blocked { border-color: rgba(178, 82, 64, 0.35); }
+.v3-photography-role-card.blocked span { color: #a34330; }
+.v3-photography-role-card.attention { border-color: rgba(178, 136, 44, 0.35); }
+.v3-photography-role-card.attention span { color: #8a651c; }
+
 .v3-step-action-region {
   border-color: rgba(47, 90, 69, 0.2);
   background:
@@ -9758,6 +9811,9 @@ body.v3-page-loading-active {
   .v3-result-board {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .v3-photography-role-grid { grid-template-columns: minmax(0, 1fr); }
+  .v3-photography-role-heading { align-items: stretch; flex-direction: column; }
 
   .v3-history-list,
   .v3-project-history-grid {

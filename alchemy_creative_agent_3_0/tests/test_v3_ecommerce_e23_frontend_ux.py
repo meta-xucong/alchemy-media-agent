@@ -59,11 +59,10 @@ def test_e23_ecommerce_count_control_projects_the_exact_shared_contract() -> Non
 def test_e23_count_projection_does_not_depend_on_or_enrich_catalog_fallback_cards() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     projection = _section(script, "function v3DeclaredGenerationCounts", "function v3BoundedGenerationCount")
-    defaults = _section(script, "function v3DefaultTemplateCards", "function v3EcommerceProfilePatch")
-
     assert "v3LoadedTemplateById(templateId)" in projection
     assert "v3TemplateById(templateId)" not in projection
-    assert "generation_count_contract: [1, 2, 4, 7]" not in defaults
+    assert "function v3DefaultTemplateCards" not in script
+    assert "generation_count_contract: [1, 2, 4, 7]" not in script
 
 
 def test_e23_mobile_ecommerce_count_control_preserves_exact_n_without_general_clamping() -> None:
