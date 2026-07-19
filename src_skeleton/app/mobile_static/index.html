@@ -1150,6 +1150,7 @@
                 <span id="mobileV3OutputCount" class="micro-copy">0 张</span>
               </div>
               <div id="mobileV3OutputGrid" class="v3-mobile-output-grid empty-v2-list" aria-live="polite"></div>
+              <section id="mobileV3PhotographyRoleBoard" class="v3-mobile-photography-role-board" hidden aria-live="polite"></section>
 
               <div class="v3-mobile-output-head">
                 <strong>已确认参考</strong>
@@ -1182,6 +1183,39 @@
                 <div id="mobileV3ReferenceUploadList" class="v3-mobile-upload-list is-empty">还没有上传参考图</div>
               </div>
 
+              <section id="mobileV3PhotographyFields" class="v3-mobile-photography-fields" hidden aria-label="摄影设置">
+                <label class="field">
+                  <span>摄影师档案</span>
+                  <select id="mobileV3PhotographerProfileInput"><option value="">正在读取档案…</option></select>
+                  <small id="mobileV3PhotographerProfileHint">通用摄影不会自动套用具名摄影师。</small>
+                </label>
+                <button id="mobileV3ConfirmPhotographerProfileBtn" class="button secondary compact" type="button" hidden>确认使用这个具名档案</button>
+                <label class="field">
+                  <span>拍摄场景</span>
+                  <select id="mobileV3PhotographySceneInput">
+                    <option value="portrait">人像摄影</option>
+                    <option value="landscape">风景摄影</option>
+                    <option value="still_life">静物摄影</option>
+                    <option value="animal">动物摄影</option>
+                  </select>
+                  <small>先选你要拍什么；不需要填写专业术语。</small>
+                </label>
+                <div class="mobile-summary-grid v3-mobile-photo-mode-grid" aria-label="摄影作品数量">
+                  <button class="mobile-entry-card active" data-mobile-v3-photography-mode="single_hero" type="button"><span>单张作品</span><strong>完成 1 张摄影作品</strong></button>
+                  <button class="mobile-entry-card" data-mobile-v3-photography-mode="professional_set" type="button"><span>三张专业套图</span><strong>主作品、环境场景、细节/瞬间</strong></button>
+                </div>
+                <label class="field">
+                  <span>参考图用途</span>
+                  <select id="mobileV3PhotographyReferenceRoleInput">
+                    <option value="face_reference">人物：保留同一个人的长相</option>
+                    <option value="nonhuman_identity_reference">动物/宠物：保留同一只动物</option>
+                    <option value="background_reference">风景/场景：延续地点和环境</option>
+                    <option value="subject_reference">静物/物品：保持同一个物品</option>
+                  </select>
+                  <small id="mobileV3PhotographyReferenceHint">动物/宠物身份参考需要清晰原图；高保真参考不支持时会停止，不会改成纯文字。</small>
+                </label>
+              </section>
+
               <div class="mobile-summary-grid v3-mobile-mode-grid">
                 <button class="mobile-entry-card active" data-mobile-v3-mode="auto" type="button">
                   <span>智能选择</span>
@@ -1204,7 +1238,12 @@
               <div class="lab-control-row v3-mobile-generation-controls">
                 <label class="control-block">
                   <span>生成数量 <strong id="mobileV3CountValue">1</strong> 张</span>
-                  <input id="mobileV3CountInput" type="range" min="1" max="4" step="1" value="1" />
+                  <select id="mobileV3CountInput" aria-label="生成数量">
+                    <option value="1" selected>1</option>
+                    <option value="2">2</option>
+                    <option value="4">4</option>
+                    <option value="7">7</option>
+                  </select>
                 </label>
                 <div class="control-block">
                   <span>画幅比例</span>

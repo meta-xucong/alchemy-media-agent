@@ -120,6 +120,54 @@ def test_doc132_browser_contract_keeps_photography_selected_and_set_count_struct
     assert 'v3State.selectedPreset === "professional_set" ? 3 : 1' in source
 
 
+def test_p14_browser_contract_uses_trusted_catalog_and_visible_photo_role_state() -> None:
+    """Desktop/mobile UX must fail closed instead of silently becoming General."""
+
+    root = Path(__file__).resolve().parents[2] / "src_skeleton" / "app"
+    desktop = (root / "static" / "app.js").read_text(encoding="utf-8")
+    mobile = (root / "mobile_static" / "mobile.js").read_text(encoding="utf-8")
+    desktop_html = (root / "static" / "index.html").read_text(encoding="utf-8")
+    mobile_html = (root / "mobile_static" / "index.html").read_text(encoding="utf-8")
+
+    assert 'templateCatalogStatus: "idle"' in desktop
+    assert "templateCatalogStatus" in desktop
+    assert "v3State.selectedPhotographyReferenceRole" in desktop
+    assert "nonhuman_identity_reference" in desktop
+    assert "function renderV3PhotographyRoleBoard" in desktop
+    assert "final_delivery_withheld" in desktop
+    assert "continue_photography" in desktop
+    assert 'setV3Scenario("general_creative")' not in desktop[desktop.find("function handleV3ProjectActionClick"):desktop.find("function handleV3ProjectActionClick") + 1800]
+    assert 'id="v3PhotographyRoleBoard"' in desktop_html
+    assert 'data-v3-photography-scene="animal"' in desktop_html
+
+    assert "templatesLoaded: false" in mobile
+    assert "templatesError" in mobile
+    assert 'if (templateId === "photographer_template") return "photography";' in mobile
+    assert 'if (scenarioId === "photography") return "photographer_template";' in mobile
+    assert "selectedPhotographyReferenceRole" in mobile
+    assert "function renderMobileV3PhotographyRoleBoard" in mobile
+    assert 'id="mobileV3PhotographyRoleBoard"' in mobile_html
+    assert 'id="mobileV3PhotographerProfileInput"' in mobile_html
+
+
+def test_p14_photography_next_actions_do_not_hide_shared_template_actions() -> None:
+    """Photography owns only its branch; General/E-Commerce keep E23 actions."""
+
+    source = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("function renderV3ProjectNextActions()")
+    end = source.index("function renderV3BrandMemoryPanel()", start)
+    body = source[start:end]
+
+    assert 'if (projectScenario === "photography")' in body
+    assert 'data-v3-project-action="continue_photography"' in body
+    assert "Photography owns only the branch above" in body
+    assert 'els.v3ProjectNextActions.hidden = false;' in body
+    assert 'const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;' in body
+    assert 'els.v3ProjectNextActions.hidden = true;\n  return;\n  const hasSelectedRefs' not in body
+
+
 def test_doc132_metadata_only_professional_set_is_held_not_a_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-certifying review preserves all role truth but cannot become P10 success."""
 

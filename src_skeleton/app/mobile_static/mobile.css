@@ -5202,6 +5202,55 @@ body.v3-mobile-loading-active {
   content: none;
 }
 
+.v3-mobile-template-state,
+.v3-mobile-photography-fields,
+.v3-mobile-photography-role-board {
+  display: grid;
+  gap: 10px;
+}
+
+.v3-mobile-template-state {
+  grid-column: 1 / -1;
+  padding: 14px;
+  border: 1px dashed rgba(116, 130, 105, 0.32);
+  border-radius: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.v3-mobile-template-state.error {
+  border-color: rgba(166, 71, 53, 0.36);
+  color: #8b3d2e;
+}
+
+.v3-mobile-photography-fields,
+.v3-mobile-photography-role-board {
+  padding: 12px;
+  border: 1px solid rgba(66, 109, 134, 0.22);
+  border-radius: 15px;
+  background: rgba(242, 248, 250, 0.76);
+}
+
+.v3-mobile-photo-role-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.v3-mobile-photo-role-grid article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  padding: 10px;
+  border: 1px solid rgba(66, 109, 134, 0.16);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.v3-mobile-photo-role-grid article small { grid-column: 1 / -1; color: var(--muted); }
+.v3-mobile-photo-role-grid article span { color: #427088; font-size: 12px; font-weight: 760; }
+.v3-mobile-photo-role-grid article.blocked span { color: #a34330; }
+.v3-mobile-photo-role-grid article.attention span { color: #8a651c; }
+
 .v3-mobile-upload-row {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) auto;

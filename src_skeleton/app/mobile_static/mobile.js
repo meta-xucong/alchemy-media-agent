@@ -2668,14 +2668,27 @@ const mobileV3State = {
   uploadedAssets: [],
   uploadFingerprints: {},
   projects: [],
+  templates: [],
+  templatesLoaded: false,
+  templatesError: "",
   projectRenderLimit: mobileV3ProjectPageSize,
   outputs: [],
   selectedTemplate: "general_template",
   currentProject: null,
+  currentJob: null,
   currentTimeline: [],
   activeGalleryProjectId: "",
   outputsLoaded: false,
   promptEdited: false,
+  selectedPhotographyScene: "portrait",
+  selectedPhotographyReferenceRole: "face_reference",
+  selectedPhotographyMode: "single_hero",
+  photographerProfiles: [],
+  photographerProfilesLoaded: false,
+  photographerProfilesError: "",
+  selectedPhotographerProfileId: "general_photography",
+  confirmedPhotographerProfileId: "",
+  confirmedPhotographerProfileVersion: "",
 };
 
 function setupMobileV3Adapter() {
@@ -2716,8 +2729,29 @@ function setupMobileV3Adapter() {
   [tab, els.mobileViewLayer, els.mobileSheetLayer].filter(Boolean).forEach((root) => {
     root.addEventListener("click", handleMobileV3Click);
   });
-  document.querySelector("#mobileV3CountInput")?.addEventListener("input", handleMobileV3CountInput);
+  document.querySelector("#mobileV3CountInput")?.addEventListener("change", handleMobileV3CountInput);
   document.querySelector("#mobileV3ReferenceInput")?.addEventListener("change", handleMobileV3ReferenceFiles);
+  document.querySelector("#mobileV3PhotographySceneInput")?.addEventListener("change", (event) => {
+    setMobileV3PhotographyScene(event.target?.value || "portrait");
+  });
+  document.querySelector("#mobileV3PhotographyReferenceRoleInput")?.addEventListener("change", (event) => {
+    mobileV3State.selectedPhotographyReferenceRole = event.target?.value || "face_reference";
+    renderMobileV3PhotographyControls();
+  });
+  document.querySelector("#mobileV3PhotographerProfileInput")?.addEventListener("change", (event) => {
+    mobileV3State.selectedPhotographerProfileId = event.target?.value || "general_photography";
+    if (mobileV3State.confirmedPhotographerProfileId !== mobileV3State.selectedPhotographerProfileId) {
+      mobileV3State.confirmedPhotographerProfileId = "";
+      mobileV3State.confirmedPhotographerProfileVersion = "";
+    }
+    renderMobileV3PhotographerProfiles();
+  });
+  document.querySelector("#mobileV3ConfirmPhotographerProfileBtn")?.addEventListener("click", () => {
+    mobileV3State.confirmedPhotographerProfileId = mobileV3State.selectedPhotographerProfileId;
+    const selected = mobileV3State.photographerProfiles.find((item) => item.profile_id === mobileV3State.selectedPhotographerProfileId);
+    mobileV3State.confirmedPhotographerProfileVersion = selected?.profile_version || "";
+    renderMobileV3PhotographerProfiles();
+  });
   [
     "#mobileV3PreservePersonIdentityInput",
     "#mobileV3PreserveProductAppearanceInput",
@@ -2740,6 +2774,14 @@ function setupMobileV3Adapter() {
 function normalizeMobileV3HomeSurface() {
   const grid = document.querySelector(".v3-mobile-template-grid");
   if (grid) {
+    if (!mobileV3State.templatesLoaded && !mobileV3State.templatesError) {
+      grid.innerHTML = '<div class="v3-mobile-template-state">正在读取可用模板…</div>';
+      return;
+    }
+    if (mobileV3State.templatesError) {
+      grid.innerHTML = '<div class="v3-mobile-template-state error">模板目录暂时无法读取。为避免创建到错误类型，请刷新项目后再试。</div>';
+      return;
+    }
     grid.innerHTML = mobileV3TemplateCards().map((template) => {
       const canCreate = Boolean(template.project_can_create_jobs);
       const active = template.template_id === mobileV3State.selectedTemplate && canCreate;
@@ -2757,7 +2799,8 @@ function normalizeMobileV3HomeSurface() {
   setText(".v3-mobile-goal-field > span", "这个项目想做什么");
   setText(".v3-mobile-projects-panel h3", "最近项目");
   setText(".v3-mobile-projects-panel .section-subcopy", "按项目展示最近图片。点项目先看整组图片，再进入项目主页继续工作。");
-  setText("#mobileV3CreateProjectBtn", "创建通用创意项目");
+  const selected = mobileV3TemplateById(mobileV3State.selectedTemplate);
+  setText("#mobileV3CreateProjectBtn", selected?.template_id === "photographer_template" ? "创建摄影项目" : selected?.template_id === "ecommerce_template" ? "创建电商项目" : "创建通用创意项目");
   setText("#mobileV3RefreshBtn", "刷新项目");
   const goalInput = document.querySelector("#mobileV3GoalInput");
   if (goalInput) {
@@ -2767,15 +2810,9 @@ function normalizeMobileV3HomeSurface() {
 }
 
 function mobileV3TemplateCards() {
-  return [
-    { template_id: "general_template", display_name: "通用模板", short_title: "海报 / 社媒", short_description: "封面、活动图、主视觉", project_can_create_jobs: true },
-    { template_id: "ecommerce_template", display_name: "电商模板", short_title: "商品套图", short_description: "商品图、详情图、场景图", project_can_create_jobs: true },
-    { template_id: "photographer_template", display_name: "摄影师模板", short_title: "稍后开放", short_description: "写真、镜头、布光", project_can_create_jobs: false },
-    { template_id: "brand_ip_template", display_name: "品牌 IP", short_title: "稍后开放", short_description: "长期风格资产", project_can_create_jobs: false },
-    { template_id: "new_media_template", display_name: "新媒体模板", short_title: "稍后开放", short_description: "笔记、封面、栏目图", project_can_create_jobs: false },
-    { template_id: "private_domain_template", display_name: "私域模板", short_title: "稍后开放", short_description: "朋友圈、社群、海报", project_can_create_jobs: false },
-  ];
+  return Array.isArray(mobileV3State.templates) ? mobileV3State.templates : [];
 }
+
 
 function ensureMobileV3GallerySurface() {
   if (document.querySelector("#mobileV3ProjectGalleryPanel")) return;
@@ -2837,6 +2874,16 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
   updateMobileV3Status("同步中");
   try {
     const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectFetchLimit}`);
+    if (!Array.isArray(projectsPayload?.templates)) {
+      throw new Error("template_catalog_unavailable");
+    }
+    mobileV3State.templates = projectsPayload.templates;
+    mobileV3State.templatesLoaded = true;
+    mobileV3State.templatesError = "";
+    if (!mobileV3TemplateById(mobileV3State.selectedTemplate)) {
+      mobileV3State.selectedTemplate = "";
+    }
+    normalizeMobileV3HomeSurface();
     mobileV3State.projects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
     mobileV3State.outputsLoaded = false;
     mobileV3State.outputs = [];
@@ -2859,6 +2906,10 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
   } catch (error) {
     setMobileV3LoadingLayer(false);
     mobileV3State.loaded = true;
+    mobileV3State.templates = [];
+    mobileV3State.templatesLoaded = false;
+    mobileV3State.templatesError = "模板目录暂时无法读取";
+    normalizeMobileV3HomeSurface();
     mobileV3State.outputsLoaded = true;
     renderMobileV3ProjectCards();
     const fallbackCount = mobileV3VisibleProjects().length;
@@ -3002,7 +3053,7 @@ function mobileV3ProjectFromOutputGroup(projectId, latestItem) {
     title: latestItem?.project_title || goal || "V3 项目图片",
     user_goal: goal,
     short_summary: goal,
-    primary_template_id: latestItem?.template_id || latestItem?.metadata?.template_id || "general_template",
+    primary_template_id: latestItem?.template_id || latestItem?.metadata?.template_id || null,
     latest_thumbnail_urls: [mobileV3ThumbUrl(latestItem)].filter(Boolean),
     created_at: latestItem?.created_at || "",
     updated_at: latestItem?.created_at || latestItem?.updated_at || "",
@@ -3148,6 +3199,11 @@ function handleMobileV3Click(event) {
     setMobileV3Mode(modeButton.dataset.mobileV3Mode || "auto");
     return;
   }
+  const photographyModeButton = event.target.closest("[data-mobile-v3-photography-mode]");
+  if (photographyModeButton) {
+    setMobileV3PhotographyMode(photographyModeButton.dataset.mobileV3PhotographyMode || "single_hero");
+    return;
+  }
   const sizeButton = event.target.closest("[data-mobile-v3-size]");
   if (sizeButton) {
     setMobileV3Size(sizeButton.dataset.mobileV3Size || "");
@@ -3169,13 +3225,16 @@ function handleMobileV3Click(event) {
   const templateButton = event.target.closest("[data-mobile-v3-template]");
   if (templateButton) {
     if (templateButton.disabled) {
-      updateMobileV3Status("这个模板稍后开放，当前先用可用模板。");
+      updateMobileV3Status("这个模板当前不能创建项目。不会自动改用通用模板。");
       return;
     }
     document.querySelectorAll("[data-mobile-v3-template]").forEach((item) => item.classList.remove("active"));
     templateButton.classList.add("active");
     mobileV3State.selectedTemplate = templateButton.dataset.mobileV3Template || "general_template";
-    setText("#mobileV3CreateProjectBtn", mobileV3State.selectedTemplate === "ecommerce_template" ? "创建电商套图项目" : "创建通用创意项目");
+    setText("#mobileV3CreateProjectBtn", mobileV3State.selectedTemplate === "ecommerce_template" ? "创建电商图片项目" : "创建通用创意项目");
+    updateMobileV3ControlState();
+    mobileV3State.selectedTemplate = templateButton.dataset.mobileV3Template || "";
+    normalizeMobileV3HomeSurface();
     return;
   }
   const openProjectButton = event.target.closest("[data-mobile-v3-open-project]");
@@ -3219,24 +3278,168 @@ function setMobileV3Size(size) {
 }
 
 function handleMobileV3CountInput(event) {
-  const value = mobileV3BoundedCount(event.target?.value || 1);
-  mobileV3State.generationCount = value;
-  if (event.target) event.target.value = String(value);
-  setText("#mobileV3CountValue", String(value));
+  try {
+    const value = mobileV3BoundedCount(event.target?.value || 1);
+    mobileV3State.generationCount = value;
+    if (event.target) event.target.value = String(value);
+    setText("#mobileV3CountValue", String(value));
+  } catch (error) {
+    updateMobileV3Status(friendlyError(error));
+    syncMobileV3GenerationCountControl();
+  }
 }
 
-function mobileV3BoundedCount(value) {
+const mobileV3EcommerceExactCountContract = Object.freeze([1, 2, 4, 7]);
+
+function mobileV3ActiveTemplateId() {
+  return mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate || "general_template";
+}
+
+function mobileV3SupportedGenerationCounts(templateId = mobileV3ActiveTemplateId()) {
+  if (templateId === "ecommerce_template") return [...mobileV3EcommerceExactCountContract];
+  // The mobile photography entry remains unavailable today.  Keep its future
+  // professional-set contract independent of the E-Commerce count choices.
+  if (templateId === "photographer_template") {
+    return mobileV3State.selectedPreset === "professional_set" ? [3] : [1];
+  }
+  return [1, 2, 3, 4];
+}
+
+function mobileV3BoundedCount(value, templateId = mobileV3ActiveTemplateId()) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
-  return Math.max(1, Math.min(4, Number.isFinite(parsed) ? parsed : 1));
+  const supported = mobileV3SupportedGenerationCounts(templateId);
+  if (Number.isFinite(parsed) && supported.includes(parsed)) return parsed;
+  throw new Error(`当前模板支持 ${supported.join("、")} 张，请重新选择。`);
+}
+
+function syncMobileV3GenerationCountControl() {
+  const input = document.querySelector("#mobileV3CountInput");
+  const supported = mobileV3SupportedGenerationCounts();
+  const current = Number.parseInt(String(mobileV3State.generationCount ?? ""), 10);
+  const requiresNewSelection = Number.isFinite(current) && !supported.includes(current);
+  const selected = supported.includes(current) ? current : (supported.includes(2) ? 2 : supported[0]);
+  if (input) {
+    input.innerHTML = supported.map((count) => `<option value="${count}">${count}</option>`).join("");
+    input.value = String(selected);
+  }
+  mobileV3State.generationCount = selected;
+  setText("#mobileV3CountValue", String(selected));
+  if (requiresNewSelection) {
+    updateMobileV3Status(`当前模板支持 ${supported.join("、")} 张，已切换为 ${selected} 张；请确认数量后再提交。`);
+  }
+  return selected;
 }
 
 function updateMobileV3ControlState() {
   setMobileV3Mode(mobileV3State.selectedMode || "auto");
   setMobileV3Size(mobileV3State.selectedSize || "");
+  syncMobileV3GenerationCountControl();
   const countInput = document.querySelector("#mobileV3CountInput");
   if (countInput) countInput.value = String(mobileV3State.generationCount || 1);
   setText("#mobileV3CountValue", String(mobileV3State.generationCount || 1));
+  renderMobileV3PhotographyControls();
   updateMobileV3FullPromptButton();
+}
+
+function mobileV3PhotographySceneLabel(sceneId = mobileV3State.selectedPhotographyScene) {
+  return { portrait: "人像", landscape: "风景", still_life: "静物", animal: "动物" }[sceneId] || "摄影";
+}
+
+function setMobileV3PhotographyScene(sceneId) {
+  const allowed = new Set(["portrait", "landscape", "still_life", "animal"]);
+  mobileV3State.selectedPhotographyScene = allowed.has(sceneId) ? sceneId : "portrait";
+  mobileV3State.selectedPhotographyReferenceRole = {
+    portrait: "face_reference",
+    landscape: "background_reference",
+    still_life: "subject_reference",
+    animal: "nonhuman_identity_reference",
+  }[mobileV3State.selectedPhotographyScene];
+  renderMobileV3PhotographyControls();
+}
+
+function setMobileV3PhotographyMode(mode) {
+  mobileV3State.selectedPhotographyMode = mode === "professional_set" ? "professional_set" : "single_hero";
+  renderMobileV3PhotographyControls();
+}
+
+function renderMobileV3PhotographyControls() {
+  const scenarioId = mobileV3ScenarioForTemplate(mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate);
+  const visible = scenarioId === "photography";
+  const fields = document.querySelector("#mobileV3PhotographyFields");
+  if (fields) fields.hidden = !visible;
+  if (visible) loadMobileV3PhotographerProfiles();
+  const scene = document.querySelector("#mobileV3PhotographySceneInput");
+  if (scene) scene.value = mobileV3State.selectedPhotographyScene;
+  const role = document.querySelector("#mobileV3PhotographyReferenceRoleInput");
+  if (role) role.value = mobileV3State.selectedPhotographyReferenceRole;
+  document.querySelectorAll("[data-mobile-v3-photography-mode]").forEach((button) => {
+    const active = button.dataset.mobileV3PhotographyMode === mobileV3State.selectedPhotographyMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const hint = document.querySelector("#mobileV3PhotographyReferenceHint");
+  if (hint) hint.textContent = mobileV3State.selectedPhotographyReferenceRole === "nonhuman_identity_reference"
+    ? "要保留同一只动物/宠物，请上传清晰原图；高保真参考不支持时本次会停止，不会改成纯文字。"
+    : `当前是${mobileV3PhotographySceneLabel()}摄影；请用参考图用途说明需要保留什么。`;
+  const fixedCount = visible ? (mobileV3State.selectedPhotographyMode === "professional_set" ? 3 : 1) : null;
+  const countInput = document.querySelector("#mobileV3CountInput");
+  if (fixedCount !== null) {
+    mobileV3State.generationCount = fixedCount;
+    if (countInput) {
+      countInput.value = String(fixedCount);
+      countInput.disabled = true;
+    }
+    setText("#mobileV3CountValue", String(fixedCount));
+  } else if (countInput) {
+    countInput.disabled = false;
+  }
+}
+
+async function loadMobileV3PhotographerProfiles() {
+  if (mobileV3State.photographerProfilesLoaded || mobileV3State.photographerProfilesError) {
+    renderMobileV3PhotographerProfiles();
+    return;
+  }
+  try {
+    const payload = await mobileV3Request("/scenarios/photography/photographer-profiles");
+    mobileV3State.photographerProfiles = Array.isArray(payload?.profiles) ? payload.profiles : [];
+    mobileV3State.photographerProfilesLoaded = true;
+  } catch (_error) {
+    mobileV3State.photographerProfiles = [];
+    mobileV3State.photographerProfilesError = "摄影师档案暂时无法读取";
+  }
+  renderMobileV3PhotographerProfiles();
+}
+
+function renderMobileV3PhotographerProfiles() {
+  const input = document.querySelector("#mobileV3PhotographerProfileInput");
+  const hint = document.querySelector("#mobileV3PhotographerProfileHint");
+  const confirm = document.querySelector("#mobileV3ConfirmPhotographerProfileBtn");
+  if (!input) return;
+  if (mobileV3State.photographerProfilesError) {
+    input.innerHTML = '<option value="">档案暂时无法读取</option>';
+    input.disabled = true;
+    if (hint) hint.textContent = "为避免误绑档案，现在不能创建摄影任务。请刷新后重试。";
+    if (confirm) confirm.hidden = true;
+    return;
+  }
+  const profiles = mobileV3State.photographerProfiles.length
+    ? mobileV3State.photographerProfiles
+    : [{ profile_id: "general_photography", display_name: "通用摄影", binding_mode: "general" }];
+  if (!profiles.some((profile) => profile.profile_id === mobileV3State.selectedPhotographerProfileId)) {
+    mobileV3State.selectedPhotographerProfileId = "general_photography";
+  }
+  input.disabled = false;
+  input.innerHTML = profiles.map((profile) => `<option value="${escapeHtml(profile.profile_id)}">${escapeHtml(profile.display_name || profile.profile_id)}${profile.profile_version ? ` · 版本 ${escapeHtml(profile.profile_version)}` : ""}</option>`).join("");
+  input.value = mobileV3State.selectedPhotographerProfileId;
+  const profile = profiles.find((item) => item.profile_id === input.value);
+  const named = profile?.binding_mode === "named";
+  if (confirm) confirm.hidden = !named;
+  if (hint) hint.textContent = named
+    ? (mobileV3State.confirmedPhotographerProfileId === profile.profile_id && mobileV3State.confirmedPhotographerProfileVersion === (profile.profile_version || "")
+      ? `已确认版本 ${profile.profile_version || "待确认"}，将固定到本次任务。`
+      : `具名档案版本 ${profile.profile_version || "待确认"}；请先明确确认。`)
+    : "通用摄影不会自动套用或模仿具名摄影师。";
 }
 
 function mobileV3FullPrompt(project = mobileV3State.currentProject) {
@@ -3357,12 +3560,16 @@ async function createMobileV3ProjectFromHome() {
   }
   updateMobileV3Status("正在创建项目");
   try {
+    const template = mobileV3TemplateById(mobileV3State.selectedTemplate);
+    if (!mobileV3State.templatesLoaded || mobileV3State.templatesError || !template?.project_can_create_jobs) {
+      throw new Error("模板目录尚未确认，暂时不能创建项目。请刷新后重试。");
+    }
     const payload = await mobileV3Request("/projects", {
       method: "POST",
       body: {
         user_goal: goal,
         title: goal.slice(0, 32),
-        primary_template_id: mobileV3State.selectedTemplate || "general_template",
+        primary_template_id: template.template_id,
       },
     });
     const project = payload.project || payload;
@@ -3406,11 +3613,15 @@ async function deleteMobileV3Project(projectId) {
 }
 
 function mobileV3ScenarioForTemplate(templateId) {
-  return templateId === "ecommerce_template" ? "ecommerce" : "general_creative";
+  if (templateId === "ecommerce_template") return "ecommerce";
+  if (templateId === "photographer_template") return "photography";
+  return "general_creative";
 }
 
 function mobileV3TemplateIdForScenario(scenarioId) {
-  return scenarioId === "ecommerce" ? "ecommerce_template" : "general_template";
+  if (scenarioId === "ecommerce") return "ecommerce_template";
+  if (scenarioId === "photography") return "photographer_template";
+  return "general_template";
 }
 
 function mobileV3BackendVariationMode(mode, prompt = "") {
@@ -3449,6 +3660,7 @@ function mobileV3FileFingerprint(file) {
 function mobileV3UploadRole(file = null) {
   const scenarioId = mobileV3ScenarioForTemplate(mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate);
   if (scenarioId === "ecommerce") return "product_reference";
+  if (scenarioId === "photography") return mobileV3State.selectedPhotographyReferenceRole || "unknown_reference";
   const text = [document.querySelector("#mobileV3PromptInput")?.value, mobileV3ProjectGoal(mobileV3State.currentProject), file?.name].filter(Boolean).join(" ");
   if (/(portrait|person|woman|girl|man|model|face|beauty|headshot|人物|人像|真人|写真|模特|美女|女性|女生|男性|脸)/i.test(text)) return "face_reference";
   return "unknown_reference";
@@ -3512,7 +3724,7 @@ async function uploadMobileV3Files() {
         metadata: {
           frontend_surface: "mobile_v3_project_mode",
           frontend_fingerprint: fingerprint,
-          inferred_upload_role: role,
+          selected_upload_role: role,
         },
       },
     });
@@ -3538,9 +3750,20 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   const promptInput = document.querySelector("#mobileV3PromptInput");
   const userInput = (promptInput?.value || mobileV3ProjectGoal(project) || "").trim();
   if (!userInput) throw new Error("请先写一句这次想继续做什么");
-  const scenarioId = mobileV3ScenarioForTemplate(project.primary_template_id || mobileV3State.selectedTemplate || "general_template");
+  const projectTemplateId = String(project.primary_template_id || project.template_id || "").trim();
+  if (!projectTemplateId) throw new Error("项目类型还没有确认。请返回项目列表重新打开。 ");
+  const scenarioId = mobileV3ScenarioForTemplate(projectTemplateId);
   const templateId = mobileV3TemplateIdForScenario(scenarioId);
-  const count = mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
+  {
+  const count = mobileV3BoundedCount(
+    document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1,
+    project.primary_template_id || mobileV3State.selectedTemplate || "general_template",
+  );
+  if (templateId !== projectTemplateId) throw new Error("项目类型与当前页面不一致。请重新打开项目。 ");
+  }
+  const count = scenarioId === "photography"
+    ? (mobileV3State.selectedPhotographyMode === "professional_set" ? 3 : 1)
+    : mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
   const selectedMode = mobileV3State.selectedMode || "auto";
   const inferredMode = scenarioId === "general_creative" ? mobileV3InferVariationMode(userInput) : "";
   const effectiveMode = scenarioId === "general_creative" ? mobileV3BackendVariationMode(selectedMode, userInput) : "";
@@ -3548,9 +3771,29 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   const advancedReferenceControls = ["general_creative", "ecommerce"].includes(scenarioId)
     ? mobileV3AdvancedReferenceControlsPayload()
     : undefined;
+  const photographerProfile = scenarioId === "photography"
+    ? (mobileV3State.photographerProfiles.find((item) => item.profile_id === mobileV3State.selectedPhotographerProfileId)
+      || (mobileV3State.photographerProfilesLoaded && mobileV3State.selectedPhotographerProfileId === "general_photography"
+        ? { profile_id: "general_photography", binding_mode: "general" }
+        : null))
+    : null;
+  const namedProfileConfirmed = photographerProfile?.binding_mode === "named"
+    && mobileV3State.confirmedPhotographerProfileId === photographerProfile.profile_id
+    && mobileV3State.confirmedPhotographerProfileVersion === (photographerProfile.profile_version || "");
+  if (scenarioId === "photography" && mobileV3State.photographerProfilesError) {
+    throw new Error("摄影师档案暂时无法读取。为避免误绑档案，请刷新后重试。 ");
+  }
+  if (scenarioId === "photography" && photographerProfile?.binding_mode === "named" && !namedProfileConfirmed) {
+    throw new Error("请先确认要使用的摄影师档案及其版本，或改选通用摄影。 ");
+  }
+  if (scenarioId === "photography" && !photographerProfile) {
+    throw new Error("请等待摄影师档案加载完成后再生成。 ");
+  }
   return {
     user_input: userInput,
     template_id: templateId,
+    photographer_profile_id: scenarioId === "photography" ? photographerProfile.profile_id : undefined,
+    photographer_profile_selection_source: namedProfileConfirmed ? "user_explicit_ui" : undefined,
     uploaded_asset_ids: uploadedAssets.map((asset) => asset.asset_id).filter(Boolean),
     use_project_context: true,
     advanced_reference_controls: advancedReferenceControls,
@@ -3567,6 +3810,8 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
       requested_image_count: count,
       requested_image_size: size || undefined,
       requested_aspect_label: mobileV3SizeLabel(size),
+      scene_domain: scenarioId === "photography" ? mobileV3State.selectedPhotographyScene : undefined,
+      photography_reference_role: scenarioId === "photography" && uploadedAssets.length ? mobileV3State.selectedPhotographyReferenceRole : undefined,
       reference_files: uploadedAssets.map((asset) => ({
         asset_id: asset.asset_id,
         name: asset.filename,
@@ -3606,7 +3851,16 @@ async function generateMobileV3Job() {
     return;
   }
   const projectId = mobileV3State.currentProject.project_id;
-  const count = mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
+  {
+  const count = mobileV3BoundedCount(
+    document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1,
+    mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate || "general_template",
+  );
+  }
+  const scenarioId = mobileV3ScenarioForTemplate(mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate);
+  const count = scenarioId === "photography"
+    ? (mobileV3State.selectedPhotographyMode === "professional_set" ? 3 : 1)
+    : mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
   try {
     setMobileV3Busy(true);
     setMobileV3Progress("uploading", mobileV3State.files.length ? "正在上传参考图" : "正在准备项目上下文");
@@ -3614,11 +3868,13 @@ async function generateMobileV3Job() {
     setMobileV3Progress("planning", "V3 正在理解需求并整理画面方向");
     const payload = buildMobileV3JobPayload(uploadedAssets);
     const created = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}/jobs`, { method: "POST", body: payload });
+    mobileV3State.currentJob = created;
     const jobId = created.job_id || created.job?.job_id || created.id;
     mobileV3MergeProjectOutputs(projectId, created?.metadata?.project_outputs || []);
     renderMobileV3ProjectOutputs(mobileV3State.currentProject);
     setMobileV3Progress("generating", `已提交生成，正在等待 ${count} 张图片`);
     const finalJob = await recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount: count, initialJob: created });
+    mobileV3State.currentJob = finalJob;
     mobileV3MergeProjectOutputs(projectId, finalJob?.metadata?.project_outputs || []);
     await refreshMobileV3ProjectDetail(projectId);
     setMobileV3Progress("completed", "生成完成，已刷新项目图片");
@@ -3744,7 +4000,12 @@ function renderMobileV3ProjectGallery(project) {
 
 function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   mobileV3State.currentProject = project;
-  mobileV3State.selectedTemplate = project?.primary_template_id || mobileV3State.selectedTemplate || "general_template";
+  const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
+  if (!templateId) {
+    updateMobileV3Status("这个项目的类型还没有确认。为避免误用通用模板，暂时不能继续生成。");
+    return;
+  }
+  mobileV3State.selectedTemplate = templateId;
   mobileV3State.promptEdited = false;
   const advancedPanel = document.querySelector("#mobileV3AdvancedReferenceControls");
   if (advancedPanel) {
@@ -3767,6 +4028,7 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   renderMobileV3ProjectMeta(project);
   renderMobileV3ProjectSnapshot(project);
   renderMobileV3ProjectOutputs(project);
+  renderMobileV3PhotographyRoleBoard(mobileV3State.currentJob, project);
   renderMobileV3ReferenceBoard(project);
   renderMobileV3Timeline([]);
   updateMobileV3ReferencePriorityStatus();
@@ -3788,7 +4050,9 @@ async function refreshMobileV3ProjectDetail(projectId) {
   ]);
   const project = projectPayload.project || projectPayload;
   mobileV3State.currentProject = project;
-  mobileV3State.selectedTemplate = project?.primary_template_id || mobileV3State.selectedTemplate || "general_template";
+  const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
+  if (!templateId) throw new Error("项目类型还没有确认，无法安全继续生成");
+  mobileV3State.selectedTemplate = templateId;
   mobileV3State.currentTimeline = Array.isArray(timelinePayload.items) ? timelinePayload.items : Array.isArray(timelinePayload.timeline) ? timelinePayload.timeline : [];
   const scopedOutputs = Array.isArray(outputsPayload.items)
     ? outputsPayload.items
@@ -3802,9 +4066,21 @@ async function refreshMobileV3ProjectDetail(projectId) {
   renderMobileV3ProjectMeta(project);
   renderMobileV3ProjectSnapshot(project);
   renderMobileV3ProjectOutputs(project);
+  const latestJobId = Array.isArray(project?.job_ids) ? project.job_ids[project.job_ids.length - 1] : "";
+  if (latestJobId) {
+    try {
+      mobileV3State.currentJob = await mobileV3Request(`/jobs/${encodeURIComponent(latestJobId)}`);
+    } catch (_error) {
+      mobileV3State.currentJob = null;
+    }
+  } else {
+    mobileV3State.currentJob = null;
+  }
+  renderMobileV3PhotographyRoleBoard(mobileV3State.currentJob, project);
   renderMobileV3ReferenceBoard(project);
   renderMobileV3Timeline(mobileV3State.currentTimeline);
   updateMobileV3ReferencePriorityStatus();
+  updateMobileV3ControlState();
   syncMobileV3PromptFromProject(project);
 }
 
@@ -4089,7 +4365,44 @@ function mobileV3TemplateLabel(templateId) {
     new_media_template: "新媒体模板",
     private_domain_template: "私域模板",
   };
-  return map[templateId] || "通用模板";
+  return map[templateId] || "项目类型待确认";
+}
+
+function mobileV3PhotographyRoleLabel(roleKey) {
+  return {
+    hero_photograph: "单张作品",
+    session_hero: "主作品",
+    environmental_context: "环境场景",
+    detail_or_moment: "细节 / 瞬间",
+  }[String(roleKey || "")] || "摄影作品";
+}
+
+function renderMobileV3PhotographyRoleBoard(job, project = mobileV3State.currentProject) {
+  const board = document.querySelector("#mobileV3PhotographyRoleBoard");
+  if (!board) return;
+  const isPhotography = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "photography";
+  const summary = job?.metadata?.specialized_execution_summary;
+  const roles = Array.isArray(summary?.roles) ? summary.roles : [];
+  board.hidden = !isPhotography || !roles.length;
+  if (!isPhotography || !roles.length) {
+    board.innerHTML = "";
+    return;
+  }
+  const held = Boolean(summary?.final_delivery_withheld || job?.metadata?.review_certification?.final_delivery_withheld);
+  board.innerHTML = `
+    <strong>${roles.length === 3 ? "三张专业套图进度" : "单张摄影进度"}</strong>
+    <p>${held ? "本次暂不自动交付；请先查看未完成或需要确认的作品。" : "每张作品会独立生成和检查。"}</p>
+    <div class="v3-mobile-photo-role-grid">
+      ${roles.map((role) => {
+        const blocked = Boolean(role?.provider_failure) || ["blocked", "failed"].includes(String(role?.status || ""));
+        const manual = ["manual_confirmation", "manual_confirmation_required"].includes(String(role?.verification_state || role?.review_status || ""));
+        const ready = role?.real_pixel_certified === true || String(role?.verification_state || "") === "verified";
+        const state = blocked ? "暂时不能交付" : manual ? "需要确认" : ready ? "已完成" : ["generated", "selected", "ready"].includes(String(role?.status || "")) ? "检查中" : "生成中";
+        const note = blocked ? "本次未生成可交付图片，可稍后从项目继续尝试。" : manual ? "需要人工确认，暂不会自动交付。" : ready ? "已作为当前交付保留。" : "正在独立处理这张作品。";
+        return `<article class="${blocked ? "blocked" : manual ? "attention" : ""}"><strong>${escapeHtml(mobileV3PhotographyRoleLabel(role?.role_key))}</strong><span>${escapeHtml(state)}</span><small>${escapeHtml(note)}</small></article>`;
+      }).join("")}
+    </div>
+  `;
 }
 
 function mobileV3ShortText(value, limit = 36) {
