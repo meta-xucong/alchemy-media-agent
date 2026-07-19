@@ -12,6 +12,7 @@ from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_res
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import VisionOutputInspector
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import _reference_channel_ownership_intent
 
 
 class PhotographyRemoteBrainTestProvider:
@@ -52,6 +53,7 @@ class PhotographyRemoteBrainTestProvider:
         # Photography image, because it could inherit a local subject guess.
         payload["visual_task_profile"] = {
             **payload["visual_task_profile"],
+            "reference_channel_ownership_intent": _reference_channel_ownership_intent(request),
             "rendering_intent": {
                 "rendering_mode": "photoreal",
                 "stylization_scope": "none",

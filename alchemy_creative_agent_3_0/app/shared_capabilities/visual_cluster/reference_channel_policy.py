@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from ...creative_core.rules import stable_id
+from ..activation import REFERENCE_CHANNEL_IDS
 from .contracts import (
     PromptOwnershipDecision,
     ReferenceChannelPolicy,
@@ -16,21 +17,7 @@ from .contracts import (
 
 REFERENCE_CHANNEL_POLICY_MODULE_ID = "reference_channel_policy"
 
-REFERENCE_CHANNELS = (
-    "identity_geometry",
-    "body_identity",
-    "natural_complexion_direction",
-    "hair_direction",
-    "makeup_style",
-    "wardrobe_structure",
-    "accessory_system",
-    "product_identity",
-    "lighting_color",
-    "scene_background",
-    "camera_composition",
-    "mood_art_direction",
-    "style_finish",
-)
+REFERENCE_CHANNELS = REFERENCE_CHANNEL_IDS
 
 REFERENCE_CHANNEL_COMMON_ISSUE_CODES = {
     "source_lighting_overinherited",
@@ -348,9 +335,105 @@ _CHANGE_TERMS = (
 
 
 class PromptOwnershipResolver:
-    """Resolve explicit prompt channels without requiring a live LLM call."""
+    """Resolve prompt ownership from the frozen Brain decision or legacy data.
 
-    def resolve(self, user_input: str, metadata: dict[str, Any] | None = None) -> PromptOwnershipDecision:
+    New enforced jobs must never rediscover semantic ownership from local text.
+    The deterministic parser below remains only for reading legacy/non-
+    certifying records which predate Doc168.
+    """
+
+    def resolve(
+        self,
+        user_input: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        requires_reference_decision: bool = False,
+    ) -> PromptOwnershipDecision:
+        metadata = metadata or {}
+        if bool(metadata.get("brain_owned_forward_execution")) and bool(
+            metadata.get("require_real_images") or metadata.get("real_image_generation")
+        ):
+            return self._resolve_remote_brain_intent(
+                metadata,
+                requires_reference_decision=requires_reference_decision,
+            )
+        return self._resolve_legacy_text(user_input, metadata=metadata)
+
+    @staticmethod
+    def _resolve_remote_brain_intent(
+        metadata: dict[str, Any],
+        *,
+        requires_reference_decision: bool,
+    ) -> PromptOwnershipDecision:
+        profile = metadata.get("visual_task_profile")
+        profile = profile if isinstance(profile, dict) else {}
+        intent = profile.get("reference_channel_ownership_intent")
+        if not isinstance(intent, dict):
+            if requires_reference_decision:
+                raise BrainReferenceChannelOwnershipIntentError(
+                    "brain_reference_channel_ownership_intent_missing"
+                )
+            return PromptOwnershipDecision(
+                metadata={
+                    "doc": "168",
+                    "resolver": "remote_brain_semantic_intent_only",
+                    "applicability": "not_applicable",
+                }
+            )
+
+        owner = str(intent.get("decision_owner") or "")
+        applicability = str(intent.get("applicability") or "")
+        if owner != "remote_brain":
+            raise BrainReferenceChannelOwnershipIntentError(
+                "brain_reference_channel_ownership_intent_not_remote"
+            )
+        if requires_reference_decision and applicability != "applicable":
+            code = (
+                "brain_reference_channel_ownership_intent_ambiguous"
+                if applicability == "ambiguous"
+                else "brain_reference_channel_ownership_intent_not_applicable"
+            )
+            raise BrainReferenceChannelOwnershipIntentError(code)
+        if applicability not in {"applicable", "not_applicable", "ambiguous"}:
+            raise BrainReferenceChannelOwnershipIntentError(
+                "brain_reference_channel_ownership_intent_invalid"
+            )
+
+        reference_owned = _dedupe(_string_list(intent.get("reference_owned_channels")))
+        current_owned = _dedupe(_string_list(intent.get("current_request_owned_channels")))
+        invalid = [
+            channel
+            for channel in [*reference_owned, *current_owned]
+            if channel not in REFERENCE_CHANNELS
+        ]
+        if invalid or set(reference_owned) & set(current_owned):
+            raise BrainReferenceChannelOwnershipIntentError(
+                "brain_reference_channel_ownership_intent_invalid_channels"
+            )
+        try:
+            confidence_value = float(intent.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence_value = 0.0
+        confidence_value = max(0.0, min(1.0, confidence_value))
+        evidence_ids = _dedupe(_string_list(intent.get("evidence_ids")))
+        explicit = _dedupe([*reference_owned, *current_owned])
+        return PromptOwnershipDecision(
+            explicit_channels=explicit,
+            preserve_requests=reference_owned,
+            change_requests=current_owned,
+            confidence_by_channel={channel: confidence_value for channel in explicit},
+            evidence_by_channel={channel: evidence_ids for channel in explicit},
+            metadata={
+                "doc": "168",
+                "resolver": "remote_brain_semantic_intent_only",
+                "decision_owner": owner,
+                "applicability": applicability,
+                "local_text_semantics_used": False,
+            },
+        )
+
+    @staticmethod
+    def _resolve_legacy_text(user_input: str, metadata: dict[str, Any] | None = None) -> PromptOwnershipDecision:
         text = str(user_input or "").strip().lower()
         explicit: list[str] = []
         preserve: list[str] = []
@@ -392,10 +475,15 @@ class PromptOwnershipResolver:
             evidence_by_channel=evidence,
             metadata={
                 "doc": "93",
-                "resolver": "deterministic_with_optional_brain_overlay",
+                "resolver": "legacy_non_certifying_deterministic_with_optional_brain_overlay",
                 "has_brain_overlay": isinstance(brain, dict),
+                "forward_execution_allowed": False,
             },
         )
+
+
+class BrainReferenceChannelOwnershipIntentError(ValueError):
+    """Fresh enforced reference work lacks one valid Remote-Brain decision."""
 
 
 class ReferenceChannelPolicyModule:
@@ -419,8 +507,12 @@ class ReferenceChannelPolicyModule:
         advanced_reference_controls: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> ResolvedReferencePolicyPackage:
-        ownership = self.prompt_ownership_resolver.resolve(user_input, metadata=metadata)
         bindings = [_binding_dict(binding) for binding in strong_bindings]
+        ownership = self.prompt_ownership_resolver.resolve(
+            user_input,
+            metadata=metadata,
+            requires_reference_decision=bool(bindings),
+        )
         controls = dict(advanced_reference_controls or {})
         has_uploaded_identity = any(
             _is_uploaded(binding) and _canonical_role(binding) == "portrait_identity_reference"
@@ -527,10 +619,12 @@ class ReferenceChannelPolicyModule:
         if controls.get("preserve_person_identity") and role in {"portrait_identity_reference", "selected_generated_output"}:
             if role == "portrait_identity_reference" or "identity" in _binding_policy(binding):
                 profile["identity_geometry"] = "hard"
-                profile["body_identity"] = _stronger(str(profile.get("body_identity")), "medium")
-                profile["natural_complexion_direction"] = _stronger(
-                    str(profile.get("natural_complexion_direction")), "medium"
-                )
+                if "body_identity" not in ownership.change_requests:
+                    profile["body_identity"] = _stronger(str(profile.get("body_identity")), "medium")
+                if "natural_complexion_direction" not in ownership.change_requests:
+                    profile["natural_complexion_direction"] = _stronger(
+                        str(profile.get("natural_complexion_direction")), "medium"
+                    )
                 explicit_locks.append("identity_geometry")
         if controls.get("preserve_product_appearance") and role in {"product_identity_reference", "selected_generated_output"}:
             if role == "product_identity_reference" or "product" in _binding_policy(binding):

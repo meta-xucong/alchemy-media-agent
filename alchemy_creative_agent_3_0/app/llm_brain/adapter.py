@@ -33,7 +33,7 @@ from .providers import (
     V3LLMBrainProvider,
     pop_transport_receipt,
 )
-from ..shared_capabilities.activation import TemplateCapabilityPolicy, general_capability_policy
+from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapabilityPolicy, general_capability_policy
 
 
 GENERAL_SCENARIO_ID = "general_creative"
@@ -1229,6 +1229,7 @@ def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
         return False
     required_profile_fields = {
         "developmental_age_intent",
+        "reference_channel_ownership_intent",
         "subject_entities",
         "visual_intent_tags",
         "unknown_requirements",
@@ -1243,6 +1244,7 @@ def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
     unknowns = candidate.get("unknown_requirements")
     confidence = candidate.get("confidence")
     developmental_age_intent = candidate.get("developmental_age_intent")
+    reference_ownership = candidate.get("reference_channel_ownership_intent")
     if not all(isinstance(value, list) for value in (entities, evidence, tags, unknowns)):
         return False
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0.0 <= confidence <= 1.0:
@@ -1253,6 +1255,8 @@ def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
         "not_applicable",
         "ambiguous",
     }:
+        return False
+    if not _has_remote_reference_channel_ownership_intent(reference_ownership):
         return False
     entity_fields = {
         "entity_id",
@@ -1302,6 +1306,7 @@ def _merge_complete_remote_visual_task_profile(base: Any, remote: dict[str, Any]
     for key in (
         "rendering_intent",
         "developmental_age_intent",
+        "reference_channel_ownership_intent",
         "subject_entities",
         "visual_intent_tags",
         "unknown_requirements",
@@ -1310,6 +1315,38 @@ def _merge_complete_remote_visual_task_profile(base: Any, remote: dict[str, Any]
     ):
         merged[key] = remote[key]
     return merged
+
+
+def _has_remote_reference_channel_ownership_intent(candidate: Any) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    required = {
+        "applicability",
+        "decision_owner",
+        "reference_owned_channels",
+        "current_request_owned_channels",
+        "evidence_ids",
+        "confidence",
+    }
+    if not required.issubset(candidate):
+        return False
+    if candidate.get("decision_owner") != "remote_brain":
+        return False
+    if candidate.get("applicability") not in {"applicable", "not_applicable", "ambiguous"}:
+        return False
+    reference_owned = candidate.get("reference_owned_channels")
+    current_owned = candidate.get("current_request_owned_channels")
+    evidence_ids = candidate.get("evidence_ids")
+    confidence = candidate.get("confidence")
+    if not all(isinstance(value, list) for value in (reference_owned, current_owned, evidence_ids)):
+        return False
+    if not all(isinstance(item, str) and item.strip() for item in [*reference_owned, *current_owned, *evidence_ids]):
+        return False
+    if any(channel not in REFERENCE_CHANNEL_IDS for channel in [*reference_owned, *current_owned]):
+        return False
+    if set(reference_owned) & set(current_owned):
+        return False
+    return isinstance(confidence, (int, float)) and not isinstance(confidence, bool) and 0.0 <= confidence <= 1.0
 
 
 def _has_complete_remote_capability_activation_intent(candidate: Any) -> bool:

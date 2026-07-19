@@ -78,6 +78,7 @@ class EcommerceRemoteBrainTestProvider:
         payload["visual_task_profile"] = {
             **payload["visual_task_profile"],
             "developmental_age_intent": self.developmental_age_intent,
+            "reference_channel_ownership_intent": _reference_channel_ownership_intent(request),
             "rendering_intent": {
                 "rendering_mode": "photoreal",
                 "stylization_scope": "none",
@@ -273,6 +274,60 @@ class EcommerceRemoteBrainTestProvider:
             for index in range(1, count + 1)
         ]
         return payload
+
+
+def _reference_channel_ownership_intent(request) -> dict:  # noqa: ANN001
+    """Contract-shaped remote semantic decision for test-only Brain fixtures."""
+
+    assets = [
+        *list(getattr(request, "reference_assets", []) or []),
+        *list(getattr(request, "uploaded_assets", []) or []),
+    ]
+    if not assets:
+        return {
+            "applicability": "not_applicable",
+            "decision_owner": "remote_brain",
+            "reference_owned_channels": [],
+            "current_request_owned_channels": [],
+            "evidence_ids": [],
+            "confidence": 0.98,
+        }
+    roles = {
+        str((item if isinstance(item, dict) else {}).get("role") or "").strip().lower()
+        for item in assets
+    }
+    reference_owned: list[str] = []
+    if any("face" in role or "portrait" in role or "identity" in role for role in roles):
+        reference_owned.append("identity_geometry")
+    if any("product" in role for role in roles):
+        reference_owned.append("product_identity")
+    if any("appearance" in role or "garment" in role for role in roles):
+        reference_owned.append("wardrobe_structure")
+    current_owned = [
+        channel
+        for channel in (
+            "body_identity",
+            "natural_complexion_direction",
+            "hair_direction",
+            "makeup_style",
+            "wardrobe_structure",
+            "accessory_system",
+            "lighting_color",
+            "scene_background",
+            "camera_composition",
+            "mood_art_direction",
+            "style_finish",
+        )
+        if channel not in reference_owned
+    ]
+    return {
+        "applicability": "applicable",
+        "decision_owner": "remote_brain",
+        "reference_owned_channels": reference_owned,
+        "current_request_owned_channels": current_owned,
+        "evidence_ids": ["test_fixture_declared_reference"],
+        "confidence": 0.98,
+    }
 
 
 def _apparel_evidence_dimensions(request, count: int) -> list[dict]:

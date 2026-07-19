@@ -64,6 +64,63 @@ class RenderingIntent(V3BaseModel):
         return self.rendering_mode in {"stylized", "mixed"} and self.stylization_scope == "whole_image"
 
 
+REFERENCE_CHANNEL_IDS = (
+    "identity_geometry",
+    "body_identity",
+    "natural_complexion_direction",
+    "hair_direction",
+    "makeup_style",
+    "wardrobe_structure",
+    "accessory_system",
+    "product_identity",
+    "lighting_color",
+    "scene_background",
+    "camera_composition",
+    "mood_art_direction",
+    "style_finish",
+)
+
+
+ReferenceChannelId = Literal[
+    "identity_geometry",
+    "body_identity",
+    "natural_complexion_direction",
+    "hair_direction",
+    "makeup_style",
+    "wardrobe_structure",
+    "accessory_system",
+    "product_identity",
+    "lighting_color",
+    "scene_background",
+    "camera_composition",
+    "mood_art_direction",
+    "style_finish",
+]
+
+
+class ReferenceChannelOwnershipIntent(V3BaseModel):
+    """Remote semantic ownership for reference-conditioned visual channels.
+
+    This is deliberately a tiny typed ledger.  It carries no renderer prose
+    and gives the shared Doc93 policy enough semantic authority to avoid
+    rediscovering user meaning from words or regular expressions.
+    """
+
+    applicability: Literal["applicable", "not_applicable", "ambiguous"] = "ambiguous"
+    decision_owner: Literal["remote_brain", "evidence_fallback", "legacy"] = "evidence_fallback"
+    reference_owned_channels: list[ReferenceChannelId] = Field(default_factory=list)
+    current_request_owned_channels: list[ReferenceChannelId] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def disjoint_channel_owners(self) -> "ReferenceChannelOwnershipIntent":
+        overlap = set(self.reference_owned_channels) & set(self.current_request_owned_channels)
+        if overlap:
+            raise ValueError("reference channel ownership lists must be disjoint")
+        return self
+
+
 class VisualTaskProfile(V3BaseModel):
     profile_id: str
     project_id: str | None = None
@@ -82,6 +139,9 @@ class VisualTaskProfile(V3BaseModel):
         "not_applicable",
         "ambiguous",
     ] = "ambiguous"
+    reference_channel_ownership_intent: ReferenceChannelOwnershipIntent = Field(
+        default_factory=ReferenceChannelOwnershipIntent
+    )
     subject_entities: list[VisualSubjectEntity] = Field(default_factory=list)
     preservation_targets: list[PreservationTarget] = Field(default_factory=list)
     allowed_changes: list[str] = Field(default_factory=list)

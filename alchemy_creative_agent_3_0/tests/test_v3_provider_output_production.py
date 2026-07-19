@@ -1282,6 +1282,14 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                         "decision_owner": "remote_brain",
                     },
                     "developmental_age_intent": "preserve_reference_stage",
+                    "reference_channel_ownership_intent": {
+                        "applicability": "not_applicable",
+                        "decision_owner": "remote_brain",
+                        "reference_owned_channels": [],
+                        "current_request_owned_channels": [],
+                        "evidence_ids": [],
+                        "confidence": 0.95,
+                    },
                     "subject_entities": [
                         {
                             "entity_id": "remote_subject_1",
@@ -1465,6 +1473,14 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                         "decision_owner": "remote_brain",
                     },
                     "developmental_age_intent": "preserve_reference_stage",
+                    "reference_channel_ownership_intent": {
+                        "applicability": "not_applicable",
+                        "decision_owner": "remote_brain",
+                        "reference_owned_channels": [],
+                        "current_request_owned_channels": [],
+                        "evidence_ids": [],
+                        "confidence": 0.95,
+                    },
                     "subject_entities": [
                         {
                             "entity_id": "remote_subject_1",

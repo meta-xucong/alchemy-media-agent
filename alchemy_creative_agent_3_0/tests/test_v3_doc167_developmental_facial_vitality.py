@@ -404,7 +404,7 @@ def test_doc167_explicit_cross_stage_identity_uses_stage_flexible_feature_eviden
     assert result["status"] == "planned_for_codex_native_imagegen"
     output = result["outputs"][0]
     assert len(output["reference_image_paths"]) == 1
-    assert "portrait_identity_crop" in output["reference_image_paths"][0]
+    assert "portrait_identity_stage_flexible_feature_crop" in output["reference_image_paths"][0]
     assert "portrait_identity_geometry_crop" not in output["reference_image_paths"][0]
     assert output["reference_input_contract"]["admitted_reference_count"] == 1
     assert result["provenance"]["canonical_prompt_signing"]["stages"] == [

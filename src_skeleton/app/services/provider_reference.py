@@ -9,6 +9,14 @@ from app.config import settings
 
 SUPPORTED_PROVIDER_REFERENCE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
+_STAGE_FLEXIBLE_IDENTITY_DERIVATIVE = "portrait_identity_stage_flexible_feature_crop"
+_PORTRAIT_IDENTITY_DERIVATIVE_KINDS = {
+    "portrait_identity_crop",
+    _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE,
+    "portrait_identity_geometry_crop",
+    "portrait_identity_pose_geometry_crop",
+}
+
 
 def prepare_provider_reference_image(path) -> Path | object:
     """Return an upstream-friendly reference image without modifying the source file."""
@@ -100,11 +108,7 @@ def prepare_reference_truth_derivatives(
             return []
         derivatives: list[dict[str, Any]] = []
         if "portrait_identity_truth" in layers:
-            allowed_kinds = {
-                "portrait_identity_crop",
-                "portrait_identity_geometry_crop",
-                "portrait_identity_pose_geometry_crop",
-            }
+            allowed_kinds = _PORTRAIT_IDENTITY_DERIVATIVE_KINDS
             requested_kinds = (
                 tuple(portrait_identity_derivative_kinds)
                 if portrait_identity_derivative_kinds is not None
@@ -200,6 +204,7 @@ def _truth_derivative(
             fallback = True
     truth_layer = {
         "portrait_identity_crop": "portrait_identity_truth",
+        _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE: "portrait_identity_truth",
         "portrait_identity_geometry_crop": "portrait_identity_truth",
         "portrait_identity_pose_geometry_crop": "portrait_identity_truth",
         "product_truth_crop": "product_identity_truth",
@@ -212,14 +217,12 @@ def _truth_derivative(
         "path": str(target),
         "path_name": Path(str(target)).name,
         "fallback_to_original": bool(fallback),
-        "identity_color_neutralized": kind in {
-            "portrait_identity_crop",
-            "portrait_identity_geometry_crop",
-            "portrait_identity_pose_geometry_crop",
-        } and not fallback,
+        "identity_color_neutralized": kind in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS and not fallback,
         "identity_color_retention": (
             0.90
             if kind == "portrait_identity_crop"
+            else 0.40
+            if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE
             else 0.65
             if kind == "portrait_identity_geometry_crop"
             else 0.58
@@ -229,7 +232,9 @@ def _truth_derivative(
         "identity_outer_color_retention": isolation.get("outer_color_retention") if not fallback else None,
         "identity_channel_isolation_applied": bool(isolation.get("applies")) and not fallback,
         "identity_channel_isolation_profile": (
-            "face_localized_prompt_owned_channel_isolation_v3"
+            "stage_flexible_internal_feature_isolation_v1"
+            if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE and face_localized and not fallback
+            else "face_localized_prompt_owned_channel_isolation_v3"
             if face_localized and not fallback
             else isolation.get("profile_id")
             if not fallback
@@ -244,7 +249,9 @@ def _truth_derivative(
             else "not_applicable"
         ),
         "identity_nonidentity_pixel_suppression_profile": (
-            "face_localized_nonidentity_suppression_v1"
+            "stage_dependent_contour_and_context_suppression_v1"
+            if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE and not fallback
+            else "face_localized_nonidentity_suppression_v1"
             if face_localized and not fallback
             else "exterior_context_isolation_v2"
             if isolation.get("applies") and not fallback
@@ -254,25 +261,23 @@ def _truth_derivative(
         "identity_outer_context_softened": bool(isolation.get("soften_outer_context")) and not fallback,
         "identity_outer_context_neutralized": bool(isolation.get("neutralize_outer_context")) and not fallback,
         "identity_background_neutralized": False,
-        "identity_context_reduced_by_tight_crop": kind in {
-            "portrait_identity_crop",
-            "portrait_identity_geometry_crop",
-            "portrait_identity_pose_geometry_crop",
-        } and not fallback,
+        "identity_context_reduced_by_tight_crop": kind in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS and not fallback,
+        "identity_stage_dependent_contour_suppressed": (
+            kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE and not fallback
+        ),
+        "identity_source_complexion_authority_suppressed": (
+            kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE and not fallback
+        ),
         "identity_evidence_scope": (
             "feature_detail"
-            if kind == "portrait_identity_crop"
+            if kind in {"portrait_identity_crop", _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE}
             else "head_geometry"
             if kind == "portrait_identity_geometry_crop"
             else "pose_geometry"
             if kind == "portrait_identity_pose_geometry_crop"
             else None
         ),
-        "identity_gateway_min_edge_px": 512 if kind in {
-            "portrait_identity_crop",
-            "portrait_identity_geometry_crop",
-            "portrait_identity_pose_geometry_crop",
-        } and not fallback else None,
+        "identity_gateway_min_edge_px": 512 if kind in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS and not fallback else None,
         "provider_only": True,
     }
 
@@ -289,11 +294,7 @@ def _cropped_reference_path(
         return source
 
     max_bytes = max(128_000, int(settings.openai_image_reference_max_upload_bytes))
-    if kind in {
-        "portrait_identity_crop",
-        "portrait_identity_geometry_crop",
-        "portrait_identity_pose_geometry_crop",
-    }:
+    if kind in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS:
         max_bytes = min(max_bytes, 480_000)
     max_edge = max(512, int(settings.openai_image_reference_max_edge))
     quality = min(95, max(50, int(settings.openai_image_reference_jpeg_quality)))
@@ -303,7 +304,7 @@ def _cropped_reference_path(
     normalized_face_box = _coerce_normalized_face_box(isolation.get("normalized_face_box"))
     face_key = ",".join(f"{value:.6f}" for value in normalized_face_box) if normalized_face_box else "none"
     digest = hashlib.sha256(
-        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc163-face-localized-evidence-v3:{isolation_key}:{face_key}:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:{kind}:doc169-stage-flexible-evidence-v2:{isolation_key}:{face_key}:{max_bytes}:{max_edge}:{quality}".encode("utf-8")
     ).hexdigest()[:24]
     cache_dir = settings.media_storage_root / "provider_reference_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -316,16 +317,14 @@ def _cropped_reference_path(
         image = _to_rgb_on_white(image, Image)
         box = _truth_crop_box(image.size, kind, normalized_face_box=normalized_face_box)
         cropped = image.crop(box)
-        if kind in {
-            "portrait_identity_crop",
-            "portrait_identity_geometry_crop",
-            "portrait_identity_pose_geometry_crop",
-        }:
+        if kind in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS:
             from PIL import ImageEnhance
 
             color_retention = (
                 0.90
                 if kind == "portrait_identity_crop"
+                else 0.40
+                if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE
                 else 0.65
                 if kind == "portrait_identity_geometry_crop"
                 else 0.58
@@ -379,11 +378,7 @@ def _identity_channel_isolation_profile(
     kind: str,
 ) -> dict[str, Any]:
     policy = dict(reference_policy or {})
-    if kind not in {
-        "portrait_identity_crop",
-        "portrait_identity_geometry_crop",
-        "portrait_identity_pose_geometry_crop",
-    } or not policy:
+    if kind not in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS or not policy:
         return {"applies": False, "profile_id": "legacy_identity_evidence", "cache_key": "legacy"}
     prompt_owned = {
         str(item)
@@ -424,7 +419,9 @@ def _identity_channel_isolation_profile(
         and not hair_is_assigned
     )
     outer_retention = (
-        0.03
+        0.0
+        if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE
+        else 0.03
         if kind == "portrait_identity_crop"
         else 0.01
         if kind == "portrait_identity_pose_geometry_crop"
@@ -432,9 +429,20 @@ def _identity_channel_isolation_profile(
     )
     return {
         "applies": applies,
-        "profile_id": "prompt_owned_channel_isolation_v2" if applies else "assigned_channel_preservation_v1",
+        "profile_id": (
+            "stage_flexible_internal_feature_isolation_v1"
+            if applies and kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE
+            else "prompt_owned_channel_isolation_v2"
+            if applies
+            else "assigned_channel_preservation_v1"
+        ),
         "cache_key": (
-            "prompt-owned-v2:" + ",".join(isolation_channels)
+            (
+                "stage-flexible-v1:"
+                if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE
+                else "prompt-owned-v2:"
+            )
+            + ",".join(isolation_channels)
             if applies
             else "assigned-v1"
         ),
@@ -457,10 +465,26 @@ def _isolate_prompt_owned_identity_channels(
 
     face = ImageEnhance.Color(image).enhance(face_color_retention)
     outer = ImageEnhance.Color(image).enhance(outer_color_retention)
-    outer = ImageEnhance.Contrast(outer).enhance(0.20)
+    outer = ImageEnhance.Contrast(outer).enhance(
+        0.08 if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE else 0.20
+    )
     neutral = Image.new("RGB", image.size, color=(236, 236, 236))
-    outer = Image.blend(outer, neutral, 0.86)
-    blur_radius = max(1.0, min(image.size) * (0.015 if kind == "portrait_identity_crop" else 0.019))
+    outer = Image.blend(
+        outer,
+        neutral,
+        0.96 if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE else 0.86,
+    )
+    blur_radius = max(
+        1.0,
+        min(image.size)
+        * (
+            0.035
+            if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE
+            else 0.015
+            if kind == "portrait_identity_crop"
+            else 0.019
+        ),
+    )
     outer = outer.filter(ImageFilter.GaussianBlur(radius=blur_radius))
     mask = Image.new("L", image.size, color=0)
     draw = ImageDraw.Draw(mask)
@@ -468,17 +492,31 @@ def _isolate_prompt_owned_identity_channels(
     face_box = _coerce_normalized_face_box(normalized_face_box)
     if face_box:
         x, y, face_width, face_height = face_box
-        if kind == "portrait_identity_crop":
+        if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE:
+            # Keep only stable internal feature relationships during an
+            # explicitly Brain-owned developmental transition.  The ellipse
+            # intentionally fades the stage-dependent outer contour and lower
+            # soft-tissue silhouette without estimating age or measuring a
+            # facial recipe.
+            left = max(0.0, x + face_width * 0.10)
+            top = max(0.0, y + face_height * 0.05)
+            right = min(1.0, x + face_width * 0.90)
+            bottom = min(1.0, y + face_height * 0.76)
+            box = (width * left, height * top, width * right, height * bottom)
+        elif kind == "portrait_identity_crop":
             expansion = (0.12, 0.04, 0.12, 0.10)
         elif kind == "portrait_identity_pose_geometry_crop":
             expansion = (0.28, 0.08, 0.28, 0.16)
         else:
             expansion = (0.22, 0.06, 0.22, 0.12)
-        left = max(0.0, x - face_width * expansion[0])
-        top = max(0.0, y - face_height * expansion[1])
-        right = min(1.0, x + face_width * (1.0 + expansion[2]))
-        bottom = min(1.0, y + face_height * (1.0 + expansion[3]))
-        box = (width * left, height * top, width * right, height * bottom)
+        if kind != _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE:
+            left = max(0.0, x - face_width * expansion[0])
+            top = max(0.0, y - face_height * expansion[1])
+            right = min(1.0, x + face_width * (1.0 + expansion[2]))
+            bottom = min(1.0, y + face_height * (1.0 + expansion[3]))
+            box = (width * left, height * top, width * right, height * bottom)
+    elif kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE:
+        box = (width * 0.30, height * 0.17, width * 0.70, height * 0.60)
     elif kind == "portrait_identity_crop":
         box = (width * 0.24, height * 0.15, width * 0.76, height * 0.66)
     elif kind == "portrait_identity_pose_geometry_crop":
@@ -489,7 +527,10 @@ def _isolate_prompt_owned_identity_channels(
     else:
         box = (width * 0.18, height * 0.12, width * 0.82, height * 0.78)
     draw.ellipse(tuple(int(round(value)) for value in box), fill=255)
-    feather = max(4.0, min(image.size) * 0.045)
+    feather = max(
+        4.0,
+        min(image.size) * (0.045 if kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE else 0.045),
+    )
     mask = mask.filter(ImageFilter.GaussianBlur(radius=feather))
     return Image.composite(face, outer, mask)
 
@@ -504,13 +545,9 @@ def _truth_crop_box(
     if width <= 0 or height <= 0:
         return (0, 0, max(1, width), max(1, height))
     face_box = _coerce_normalized_face_box(normalized_face_box)
-    if face_box and kind in {
-        "portrait_identity_crop",
-        "portrait_identity_geometry_crop",
-        "portrait_identity_pose_geometry_crop",
-    }:
+    if face_box and kind in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS:
         x, y, face_width, face_height = face_box
-        if kind == "portrait_identity_crop":
+        if kind in {"portrait_identity_crop", _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE}:
             margins = (0.42, 0.35, 0.42, 0.28)
         elif kind == "portrait_identity_pose_geometry_crop":
             margins = (0.74, 0.52, 0.74, 0.48)
@@ -525,7 +562,7 @@ def _truth_crop_box(
             ),
             size,
         )
-    if kind == "portrait_identity_crop":
+    if kind in {"portrait_identity_crop", _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE}:
         if height > width * 1.15:
             crop_w = int(width * 0.76)
             crop_h = int(height * 0.48)

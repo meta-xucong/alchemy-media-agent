@@ -2379,13 +2379,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "source_asset_id": asset["asset_id"],
                         "role": self._truth_layer_provider_role(derivative.get("truth_layer"), asset.get("role")),
                         "priority": self._truth_layer_priority(derivative.get("truth_layer"), asset, index)
-                        + (8 if derivative.get("derivative_kind") == "portrait_identity_crop" else 0),
+                        + (
+                            8
+                            if derivative.get("derivative_kind")
+                            in {
+                                "portrait_identity_crop",
+                                "portrait_identity_stage_flexible_feature_crop",
+                            }
+                            else 0
+                        ),
                         "provider_input_mode": "reference_image",
                         "storage_path": derivative["path"],
                         "filename": derivative.get("path_name") or asset.get("filename"),
                         "mime_type": "image/jpeg",
                         "prompt_constraints": [
-                            self._truth_derivative_constraint(derivative, asset)
+                            constraint
+                            for constraint in [
+                                self._truth_derivative_constraint(derivative, asset)
+                            ]
+                            if constraint
                         ],
                         "negative_constraints": closure_negative_rules[:8],
                         "strength": asset.get("strength"),
@@ -2419,6 +2431,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         ),
                         "identity_outer_context_neutralized": bool(
                             derivative.get("identity_outer_context_neutralized")
+                        ),
+                        "identity_stage_dependent_contour_suppressed": bool(
+                            derivative.get("identity_stage_dependent_contour_suppressed")
+                        ),
+                        "identity_source_complexion_authority_suppressed": bool(
+                            derivative.get("identity_source_complexion_authority_suppressed")
                         ),
                         "identity_background_neutralized": bool(derivative.get("identity_background_neutralized")),
                         "identity_context_reduced_by_tight_crop": bool(
@@ -2631,7 +2649,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if set(truth_layers) != {"portrait_identity_truth"}:
             return True
         has_identity_crop = any(
-            item.get("derivative_kind") == "portrait_identity_crop"
+            item.get("derivative_kind")
+            in {
+                "portrait_identity_crop",
+                "portrait_identity_stage_flexible_feature_crop",
+            }
             for item in derivatives
         )
         if not has_identity_crop:
@@ -2968,7 +2990,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return None
         if self._human_realism_age_fidelity(request) != "follow_explicit_prompt":
             return None
-        return ("portrait_identity_crop",)
+        return ("portrait_identity_stage_flexible_feature_crop",)
 
     def _assert_professional_view_evidence_ready(
         self,
@@ -3210,6 +3232,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "philtrum, mouth width, and lip contour. Ignore its hair styling, clothing, background, light, and color grade. "
                 + base
             )
+        if kind == "portrait_identity_stage_flexible_feature_crop":
+            # Brain owns all Provider prose for fresh forward execution.  This
+            # derivative changes only which source pixels are authoritative.
+            return ""
         if kind == "portrait_identity_geometry_crop":
             return (
                 "Complementary crop 2 of the same single uploaded person, not a separate candidate: use this head-geometry "
@@ -3268,6 +3294,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "identity_outer_context_softened": bool(item.get("identity_outer_context_softened")),
                     "identity_outer_context_neutralized": bool(
                         item.get("identity_outer_context_neutralized")
+                    ),
+                    "identity_stage_dependent_contour_suppressed": bool(
+                        item.get("identity_stage_dependent_contour_suppressed")
+                    ),
+                    "identity_source_complexion_authority_suppressed": bool(
+                        item.get("identity_source_complexion_authority_suppressed")
                     ),
                     "identity_background_neutralized": bool(item.get("identity_background_neutralized")),
                     "identity_context_reduced_by_tight_crop": bool(
