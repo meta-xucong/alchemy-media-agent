@@ -63,6 +63,9 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3ProjectDeleteBtn"' in index.text
     assert 'id="v3ProjectSnapshot"' in index.text
     assert 'id="v3PersistentDisplayRegion"' in index.text
+    assert index.text.count('id="v3PersistentDisplayRegion"') == 1
+    assert "/static/styles.css?v=20260719-v3-frontend-ux" in index.text
+    assert "/static/app.js?v=20260719-v3-frontend-ux-fix2" in index.text
     assert 'id="v3ProjectOutputBoard"' in index.text
     assert 'id="v3UsefulReferenceBoard"' in index.text
     assert 'id="v3ProjectWorkflow"' in index.text
@@ -170,6 +173,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     client = TestClient(app)
 
     styles = client.get("/static/styles.css")
+    mobile_index = client.get("/h5")
     mobile_styles = client.get("/mobile-static/mobile.css")
     script = client.get("/static/app.js")
 
@@ -264,6 +268,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-optional-details" in styles.text
     assert "grid-template-columns: repeat(auto-fit, minmax(160px, 1fr))" in styles.text
     assert mobile_styles.status_code == 200
+    assert "/mobile-static/mobile.js?v=20260719-v3-frontend-ux-fix2" in mobile_index.text
     assert ".tab.v3-link-tab" in mobile_styles.text
     assert ".module-tabs .tab.v3-link-tab" in mobile_styles.text
     assert ".v3-mobile-upload-button::before" in mobile_styles.text
@@ -413,6 +418,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3SetBrandMemoryForNextProject" in script.text
     assert "selectedBrandMemory" in script.text
     assert "function renderV3StepCards" in script.text
+    render_step_body = script.text.split("function renderV3StepCards", 1)[1].split("function handleV3StepCardClick", 1)[0]
+    assert "\n  {\n" not in render_step_body
     assert "function renderV3ProductionEntry" in script.text
     assert "v3-production-entry" in script.text
     assert "function renderV3ProjectNextActions" in script.text
@@ -420,6 +427,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3ProjectSubpageCopy" in script.text
     assert "function renderV3ProjectSubpageScene" in script.text
     assert "function renderV3BriefScene" in script.text
+    brief_scene_body = script.text.split("function renderV3BriefScene", 1)[1].split("function renderV3ReviewScene", 1)[0]
+    assert brief_scene_body.count("const modeText =") == 1
     assert "function renderV3ReviewScene" in script.text
     assert "function renderV3SelectScene" in script.text
     assert "function renderV3ContinueScene" in script.text

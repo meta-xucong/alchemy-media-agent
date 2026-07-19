@@ -4213,7 +4213,6 @@ function renderV3StepCards() {
   const outputItems = v3CurrentJobImageItems();
   const selectedRefs = v3UsefulReferenceItems(project);
   const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
-  {
   const imageCount = outputItems.length;
   const isEcommerce = v3State.selectedScenario === "ecommerce";
   v3State.activeProjectStep = "compose";
@@ -4302,8 +4301,6 @@ function renderV3SceneRows(rows) {
 function renderV3BriefScene() {
   const { project, refs, isEcommerce } = v3SceneStats();
   const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
-  const modeText = isEcommerce ? "电商创意" : "通用创意";
-  }
   const isPhotography = v3ScenarioForTemplate(v3ProjectTemplateId(project)) === "photography";
   const modeText = isEcommerce
     ? "电商套图"
