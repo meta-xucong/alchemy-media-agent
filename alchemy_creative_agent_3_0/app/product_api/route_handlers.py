@@ -246,6 +246,8 @@ class V3ProductRouteHandlers:
         """Safe browser projection: no source IDs, prompt or review internals."""
 
         active_version = asset.active_version()
+        latest_version = asset.versions[-1] if asset.versions else None
+        latest_pack = getattr(latest_version, "anchor_pack", None) if latest_version is not None else None
         return {
             "visual_asset_id": asset.visual_asset_id,
             "display_name": asset.display_name,
@@ -255,10 +257,18 @@ class V3ProductRouteHandlers:
             "available_for_projects": bool(active_version and asset.lifecycle_status == "active"),
             "latest_preparation": (
                 {
-                    "status": active_version.lifecycle_status,
-                    "user_activation_confirmed": active_version.activation_confirmed,
+                    "status": latest_version.lifecycle_status,
+                    "version_id": latest_version.version_id,
+                    "user_activation_confirmed": latest_version.activation_confirmed,
+                    "anchor_views": [
+                        {
+                            "view_role": view.view_role,
+                            "active": bool(view.active),
+                        }
+                        for view in getattr(latest_pack, "anchor_views", [])
+                    ],
                 }
-                if active_version is not None
+                if latest_version is not None
                 else None
             ),
         }

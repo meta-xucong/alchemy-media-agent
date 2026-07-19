@@ -3824,44 +3824,6 @@ button.v2-live-preview:focus-visible {
   }
 }
 
-/* Professional Mode is an explicit opt-in surface. It shares the V3 shell
-   but keeps the People Asset lifecycle visually separate from Standard,
-   General, E-Commerce and Photography controls. */
-.v3-mode-chooser {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin: 18px 0;
-}
-
-.v3-mode-card {
-  display: grid;
-  gap: 4px;
-  padding: 15px;
-  border: 1px solid var(--line, #dfe3ea);
-  border-radius: 14px;
-  background: var(--surface, #fff);
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.v3-mode-card.active {
-  border-color: var(--accent, #4e67d8);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #4e67d8) 16%, transparent);
-}
-
-.v3-mode-card span { font-size: 12px; color: var(--muted, #64748b); }
-.v3-mode-card strong { font-size: 15px; }
-.v3-mode-card small { color: var(--muted, #64748b); line-height: 1.5; }
-.v3-professional-home-hint {
-  margin: 10px 0 16px;
-  padding: 11px 13px;
-  border-radius: 10px;
-  background: #f1f5ff;
-  color: #334a9b;
-  line-height: 1.55;
-}
 .v3-template-catalog-loading,
 .v3-template-catalog-error {
   display: inline-flex;
@@ -3873,80 +3835,179 @@ button.v2-live-preview:focus-visible {
 }
 .v3-template-catalog-error { color: #8a4c25; }
 
-.v3-professional-asset-panel {
+.v3-confirm-checkbox { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+.v3-confirm-checkbox input { margin-top: 4px; }
+
+/* Doc173: Visual Asset Library is independent from project templates. */
+.v3-visual-asset-library-view {
   display: grid;
-  gap: 16px;
-  margin: 16px 0;
-  padding: 18px;
-  border: 1px solid #cfd8ff;
-  border-radius: 16px;
-  background: linear-gradient(180deg, #f8f9ff, #fff);
+  gap: 18px;
 }
 
-.v3-professional-asset-heading,
-.v3-professional-asset-card-head,
-.v3-professional-asset-actions {
+.v3-library-panel,
+.v3-project-visual-asset-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.v3-visual-asset-status,
+.v3-project-visual-asset-summary {
+  display: grid;
+  gap: 5px;
+  padding: 13px 15px;
+  border: 1px solid rgba(88, 105, 177, 0.22);
+  border-radius: 14px;
+  background: rgba(246, 248, 255, 0.78);
+}
+
+.v3-visual-asset-status span,
+.v3-project-visual-asset-summary span,
+.v3-project-visual-asset-heading p,
+.v3-visual-asset-card p,
+.v3-visual-asset-view-summary,
+.v3-visual-asset-dialog-heading p {
+  color: var(--muted, #64748b);
+  line-height: 1.55;
+}
+
+.v3-visual-asset-list {
+  display: grid;
+  gap: 12px;
+}
+
+.v3-visual-asset-card {
+  display: grid;
+  gap: 10px;
+  padding: 15px;
+  border: 1px solid var(--line, #dfe3ea);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.v3-visual-asset-card.active {
+  border-color: #9fcdb2;
+  background: linear-gradient(180deg, #f6fff9, #fff);
+}
+
+.v3-visual-asset-card-head,
+.v3-visual-asset-actions,
+.v3-project-visual-asset-heading,
+.v3-visual-asset-dialog-heading,
+.v3-visual-asset-dialog-actions {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.v3-professional-asset-heading h4,
-.v3-professional-create-form h5 { margin: 2px 0 6px; }
-.v3-professional-asset-heading p { max-width: 760px; margin: 0; color: var(--muted, #64748b); line-height: 1.55; }
-.v3-professional-asset-status {
+.v3-visual-asset-card-head > div,
+.v3-project-visual-asset-heading > div,
+.v3-visual-asset-dialog-heading > div {
   display: grid;
   gap: 4px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: #fff;
-  border: 1px solid var(--line, #dfe3ea);
 }
-.v3-professional-asset-status span,
-.v3-professional-asset-card p,
-.v3-professional-view-summary,
-.v3-professional-review-panel p { color: var(--muted, #64748b); line-height: 1.5; }
-.v3-professional-asset-list { display: grid; gap: 10px; }
-.v3-professional-asset-card {
-  display: grid;
-  gap: 8px;
-  padding: 14px;
-  border: 1px solid var(--line, #dfe3ea);
-  border-radius: 12px;
-  background: #fff;
+
+.v3-visual-asset-card-head span,
+.v3-visual-asset-card-head small {
+  color: var(--muted, #64748b);
+  font-size: 13px;
 }
-.v3-professional-asset-card.selected { border-color: var(--accent, #4e67d8); }
-.v3-professional-asset-card.active { background: #f4fbf7; border-color: #9cd2ae; }
-.v3-professional-asset-card p { margin: 0; }
-.v3-professional-asset-card-head > div { display: grid; gap: 3px; }
-.v3-professional-asset-card-head span { color: var(--muted, #64748b); font-size: 13px; }
-.v3-professional-create-form {
+
+.v3-visual-asset-card p,
+.v3-project-visual-asset-heading p,
+.v3-visual-asset-dialog-heading p {
+  margin: 0;
+}
+
+.v3-visual-asset-create-form {
   display: grid;
   gap: 12px;
-  padding-top: 4px;
+  padding-top: 20px;
   border-top: 1px solid var(--line, #dfe3ea);
 }
-.v3-professional-create-form[hidden] { display: none; }
-.v3-confirm-checkbox { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
-.v3-confirm-checkbox input { margin-top: 4px; }
-.v3-professional-review-panel {
-  padding: 13px 15px;
-  border: 1px solid #e8d9a7;
-  border-radius: 10px;
-  background: #fffaf0;
+
+.v3-project-visual-asset-panel {
+  margin: 16px 0;
+  padding: 17px;
+  border: 1px solid rgba(88, 105, 177, 0.22);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(246, 248, 255, 0.88), rgba(255, 255, 255, 0.72));
 }
-.v3-professional-review-panel ul { margin: 8px 0 0; padding-left: 20px; }
-.v3-professional-empty { padding: 10px 0; color: var(--muted, #64748b); }
+
+.v3-project-visual-asset-heading h4 {
+  margin: 2px 0 5px;
+}
+
+.v3-project-visual-asset-summary {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.v3-project-visual-asset-chip {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid rgba(88, 105, 177, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.v3-project-visual-asset-chip small {
+  color: var(--muted, #64748b);
+  line-height: 1.45;
+}
+
+.v3-visual-asset-binding-dialog {
+  width: min(660px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  overflow: auto;
+  border: 0;
+  border-radius: 22px;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  box-shadow: 0 28px 110px rgba(23, 20, 17, 0.38);
+}
+
+.v3-visual-asset-binding-dialog::backdrop {
+  background: rgba(23, 20, 17, 0.54);
+  backdrop-filter: blur(8px);
+}
+
+.v3-visual-asset-dialog-card {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  background: var(--paper, #fffaf0);
+}
+
+.v3-visual-asset-dialog-heading h3 { margin: 2px 0 5px; }
+.v3-visual-asset-binding-choices { display: grid; gap: 10px; }
+.v3-visual-asset-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--line, #dfe3ea);
+  border-radius: 13px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.68);
+}
+.v3-visual-asset-choice input { margin-top: 4px; }
+.v3-visual-asset-choice span { display: grid; gap: 3px; }
+.v3-visual-asset-choice small { color: var(--muted, #64748b); }
+.v3-visual-asset-empty { padding: 12px 0; color: var(--muted, #64748b); line-height: 1.55; }
 
 @media (max-width: 720px) {
-  .v3-mode-chooser { grid-template-columns: minmax(0, 1fr); }
-  .v3-professional-asset-heading,
-  .v3-professional-asset-card-head,
-  .v3-professional-asset-actions { flex-direction: column; align-items: stretch; }
-  .v3-professional-asset-heading .button,
-  .v3-professional-asset-card-head .button,
-  .v3-professional-asset-actions .button { width: 100%; }
+  .v3-visual-asset-card-head,
+  .v3-visual-asset-actions,
+  .v3-project-visual-asset-heading,
+  .v3-visual-asset-dialog-heading,
+  .v3-visual-asset-dialog-actions { flex-direction: column; align-items: stretch; }
+  .v3-visual-asset-actions .button,
+  .v3-project-visual-asset-heading .button,
+  .v3-visual-asset-dialog-heading .button,
+  .v3-visual-asset-dialog-actions .button { width: 100%; }
+  .v3-visual-asset-dialog-card { padding: 17px; }
 }
 
 /* Bright ivory premium theme refresh: visual-only overrides, keeps existing DOM and interactions intact. */

@@ -270,6 +270,26 @@ def test_doc173_public_routes_expose_library_and_project_binding_surfaces() -> N
     assert routes["project_visual_asset_bindings"].endswith("/visual-asset-bindings")
 
 
+def test_doc173_public_library_projection_exposes_only_lifecycle_activation_facts() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _active_people_asset(catalog)
+    handlers = V3ProductRouteHandlers(visual_asset_library_catalog=catalog)
+
+    public = handlers._visual_asset_public_record(asset)
+
+    assert public["visual_asset_id"] == asset.visual_asset_id
+    assert public["available_for_projects"] is True
+    assert public["latest_preparation"] == {
+        "status": "active",
+        "version_id": "pack_people_a_v1",
+        "user_activation_confirmed": True,
+        "anchor_views": [],
+    }
+    assert "root_source_asset_id" not in public
+    assert "preparation_intent" not in public
+    assert "approved_evidence_ids" not in public
+
+
 def test_doc173_new_project_job_freezes_library_binding_and_strips_legacy_mode_from_brain(tmp_path) -> None:
     provider = EcommerceRemoteBrainTestProvider()
     output_store = V3GeneratedOutputStore(tmp_path / "outputs")
