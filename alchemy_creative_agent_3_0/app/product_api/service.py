@@ -5049,6 +5049,7 @@ class V3ProductApiService:
                     "remote_provider_available",
                     "remote_error_class",
                     "remote_http_status_code",
+                    "execution_budget",
                 )
                 if key in remote_outcome
             }

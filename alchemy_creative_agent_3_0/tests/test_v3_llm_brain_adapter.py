@@ -510,10 +510,12 @@ def test_real_image_request_allows_remote_brain_without_v3_specific_key(monkeypa
 
 def test_remote_brain_default_timeout_allows_slow_reasoning(monkeypatch) -> None:
     monkeypatch.delenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", raising=False)
 
     provider = V3LLMBrainProvider()
 
     assert provider.timeout >= 120
+    assert provider.execution_budget_seconds >= (provider.timeout * 2) + 20
 
 
 def test_remote_brain_default_output_budget_allows_complete_reasoning_contract(monkeypatch) -> None:

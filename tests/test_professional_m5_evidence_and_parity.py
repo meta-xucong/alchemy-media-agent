@@ -7,7 +7,9 @@ from services.alchemy_codex_local_adapter.professional_binding import (
     persistent_professional_binding_resolver,
 )
 from alchemy_creative_agent_3_0.app.visual_assets import PersistentVisualAssetCatalog
-from alchemy_creative_agent_3_0.tests.test_v3_professional_mode_mainline_integration import _catalog
+from alchemy_creative_agent_3_0.tests.professional_mode_test_support import (
+    catalog_with_active_face_identity_pack,
+)
 
 
 def test_renderer_parity_requires_exact_host_contract() -> None:
@@ -42,7 +44,7 @@ def test_renderer_parity_does_not_infer_missing_model_or_quality() -> None:
 
 
 def test_persistent_professional_resolver_uses_only_catalog_metadata(tmp_path: Path) -> None:
-    source = _catalog()
+    source = catalog_with_active_face_identity_pack()
     catalog = PersistentVisualAssetCatalog(tmp_path)
     asset = source.get("project_professional", "person_1")
     assert asset is not None

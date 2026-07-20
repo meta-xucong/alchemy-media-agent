@@ -26,7 +26,9 @@ from alchemy_creative_agent_3_0.app.visual_assets import (
     InMemoryVisualAssetCatalog,
     bind_professional_mode,
 )
-from alchemy_creative_agent_3_0.tests.test_v3_professional_mode_mainline_integration import _catalog
+from alchemy_creative_agent_3_0.tests.professional_mode_test_support import (
+    catalog_with_active_face_identity_pack,
+)
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 from services.alchemy_codex_local_adapter.contracts import (
     CodexNativeImageGenError,
@@ -117,7 +119,7 @@ def _provider_materializations(runtime_result) -> list[Any]:
 
 def test_professional_relay_requires_server_owned_binding_and_projects_existing_frozen_plan(tmp_path: Path) -> None:
     reference = _write_png(tmp_path / "root.png")
-    catalog = _catalog()
+    catalog = catalog_with_active_face_identity_pack()
     brain = EcommerceRemoteBrainTestProvider()
     capturing = _CapturingRuntime(ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)))
     planner = CodexNativeImageGenPlanner(
@@ -154,7 +156,7 @@ def test_professional_relay_requires_server_owned_binding_and_projects_existing_
 
 def test_professional_relay_does_not_downgrade_explicit_specialist_template(tmp_path: Path) -> None:
     reference = _write_png(tmp_path / "root.png")
-    catalog = _catalog()
+    catalog = catalog_with_active_face_identity_pack()
     brain = EcommerceRemoteBrainTestProvider()
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
@@ -240,7 +242,7 @@ def test_professional_serial_stage_reaches_canonical_materializer_with_bounded_r
     three_quarter = tmp_path / "three-quarter-winner.png"
     Image.new("RGB", (32, 32), color=(120, 92, 80)).save(front, format="PNG")
     Image.new("RGB", (32, 32), color=(121, 92, 80)).save(three_quarter, format="PNG")
-    catalog = _catalog()
+    catalog = catalog_with_active_face_identity_pack()
     brain = EcommerceRemoteBrainTestProvider()
     capturing = _CapturingRuntime(ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)))
     planner = CodexNativeImageGenPlanner(
@@ -285,7 +287,7 @@ def test_professional_serial_stage_reaches_canonical_materializer_with_bounded_r
 
 def test_professional_serial_relay_uses_the_formal_neutral_anchor_preparation_contract(tmp_path: Path) -> None:
     root = _write_png(tmp_path / "root.png")
-    catalog = _catalog()
+    catalog = catalog_with_active_face_identity_pack()
     brain = EcommerceRemoteBrainTestProvider()
     capturing = _CapturingRuntime(ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)))
     planner = CodexNativeImageGenPlanner(

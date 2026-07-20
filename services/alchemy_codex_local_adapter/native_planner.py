@@ -450,6 +450,7 @@ class CodexNativeImageGenPlanner:
             "execution_channel": NATIVE_EXECUTION_CHANNEL,
             "requested_output_count": request.requested_image_count,
             "outputs": outputs,
+            "planning_receipt": self._planning_receipt(llm_brain),
             "provenance": native_plan_provenance(
                 template_id=request.template_id,
                 scenario_id=scenario_id,
@@ -460,6 +461,46 @@ class CodexNativeImageGenPlanner:
                 canonical_prompt_signing=canonical_prompt_signing,
             ),
         }
+
+    @staticmethod
+    def _planning_receipt(llm_brain: dict[str, Any]) -> dict[str, Any]:
+        """Project a small, non-creative Brain execution receipt for Codex.
+
+        This makes a slow or exhausted remote plan diagnosable without exposing
+        prompts, references, endpoints, model credentials, or hidden Brain
+        reasoning.  It is a projection of normal V3 audit facts, not a Local
+        Mode lifecycle or a retry authority.
+        """
+
+        audit = llm_brain.get("audit") if isinstance(llm_brain.get("audit"), dict) else {}
+        transports = audit.get("remote_brain_transports")
+        transports = [item for item in transports if isinstance(item, dict)] if isinstance(transports, list) else []
+        stages = [
+            str(item.get("stage"))
+            for item in transports
+            if str(item.get("stage") or "").strip()
+        ]
+        elapsed_ms = sum(
+            max(0, int(item.get("elapsed_ms") or 0))
+            for item in transports
+            if isinstance(item.get("elapsed_ms"), (int, float))
+        )
+        receipt: dict[str, Any] = {
+            "state": "planned",
+            "remote_brain_call_count": max(0, int(audit.get("remote_brain_call_count") or len(transports))),
+            "stages": stages,
+            "total_elapsed_ms": elapsed_ms,
+        }
+        execution_budget = audit.get("remote_brain_execution_budget")
+        if isinstance(execution_budget, dict):
+            safe_budget = {
+                key: execution_budget.get(key)
+                for key in ("logical_budget_seconds", "remaining_ms", "state")
+                if key in execution_budget
+            }
+            if safe_budget:
+                receipt["execution_budget"] = safe_budget
+        return receipt
 
     @staticmethod
     def _canonical_prompt_signing_provenance(
@@ -667,6 +708,7 @@ class CodexNativeImageGenPlanner:
                 "remote_provider_available",
                 "remote_error_class",
                 "remote_http_status_code",
+                "execution_budget",
                 "remote_contract_rejected_sections",
                 "expected_image_count",
                 "actual_image_count",

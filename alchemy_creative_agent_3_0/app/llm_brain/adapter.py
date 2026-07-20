@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 import os
 import re
 import time
@@ -23,6 +24,7 @@ from .fallback import build_fallback_result, build_remote_required_result, build
 from .providers import (
     BrainDevelopmentalAgeDecisionMissing,
     BrainDevelopmentalPresenceDecisionMissing,
+    BrainExecutionBudgetExceeded,
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
     BrainProfessionalAnchorViewDecisionMissing,
@@ -45,6 +47,20 @@ class V3LLMBrainAdapter:
 
     def __init__(self, provider: V3LLMBrainProvider | None = None) -> None:
         self.provider = provider or V3LLMBrainProvider()
+
+    @contextmanager
+    def execution_scope(self):
+        """Scope all remote decisions for one runtime preparation together."""
+
+        scope = getattr(self.provider, "execution_scope", None)
+        with scope() if callable(scope) else nullcontext():
+            yield
+
+    def execution_budget_receipt(self) -> dict[str, Any] | None:
+        """Safe aggregate timing fact for runtime/MCP provenance."""
+
+        receipt = getattr(self.provider, "execution_budget_receipt", None)
+        return receipt() if callable(receipt) else None
 
     def run(self, request: BrainRunRequest) -> BrainRunResult:
         if not _enabled():
@@ -166,6 +182,11 @@ class V3LLMBrainAdapter:
                 ),
                 "remote_brain_elapsed_ms": _elapsed_ms(started),
                 "remote_brain_stage": request.stage,
+                **(
+                    {"remote_brain_execution_budget": self.execution_budget_receipt()}
+                    if self.execution_budget_receipt() is not None
+                    else {}
+                ),
                 "remote_semantic_contract_recovery_attempted": semantic_recovery_attempted,
                 "remote_semantic_contract_recovery_succeeded": False,
                 **(
@@ -803,6 +824,8 @@ def _remote_provider_error_class(exc: Exception) -> str:
     """Normalize a remote Brain failure for public-safe job provenance."""
 
     chain = _exception_chain(exc)
+    if any(isinstance(item, BrainExecutionBudgetExceeded) for item in chain):
+        return "execution_budget_exhausted"
     if any(isinstance(item, BrainOutputTruncated) for item in chain):
         return "truncated_response"
     if any(isinstance(item, JSONDecodeError) for item in chain):
