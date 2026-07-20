@@ -41,6 +41,20 @@ class RootSourceProvenance(_StrictVisualAssetModel):
     source_asset_id: str
     project_id: str
     consent_reference: str | None = None
+    # The root remains the immutable primary identity source.  One optional
+    # supplementary source may calibrate the first neutral capture only; it
+    # must never turn later serial stages into an unbounded reference bag.
+    supplementary_source_asset_ids: list[str] = Field(default_factory=list, max_length=1)
+
+    @model_validator(mode="after")
+    def validate_supplementary_sources(self) -> "RootSourceProvenance":
+        primary = self.source_asset_id.strip()
+        supplemental = [str(item or "").strip() for item in self.supplementary_source_asset_ids]
+        if not primary or any(not item for item in supplemental):
+            raise ValueError("root source provenance requires nonempty source IDs")
+        if primary in supplemental or len(supplemental) != len(set(supplemental)):
+            raise ValueError("supplementary source evidence must be unique and cannot repeat the root")
+        return self
 
 
 class IdentityScoreSummary(_StrictVisualAssetModel):

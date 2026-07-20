@@ -27,8 +27,9 @@ class AnchorGenerationRequest(V3BaseModel):
     """Typed evidence request; prompt content is deliberately not a field.
 
     The reference list is a serial identity chain, not an arbitrary bag of
-    images: front uses only the root, three-quarter uses root plus the winning
-    front, and profile uses root plus both prior winners.
+    images: front uses the root plus at most one declared supplementary source,
+    three-quarter uses the root plus the winning front, and profile uses the
+    root plus both prior winners.
     """
 
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
@@ -41,6 +42,7 @@ class AnchorGenerationRequest(V3BaseModel):
     preparation_intent: str
     root_source_asset_id: str
     reference_evidence_ids: list[str] = Field(default_factory=list)
+    initial_supplementary_source_asset_ids: list[str] = Field(default_factory=list, max_length=1)
     # The actual plan/hash do not exist until the Remote Brain and canonical
     # materializer finish this candidate.  They are therefore optional on the
     # pre-generation request and mandatory on ``AnchorCandidateResult``.
@@ -68,16 +70,23 @@ class AnchorGenerationRequest(V3BaseModel):
         if len(references) != len(set(references)):
             raise ValueError("anchor generation references must be unique")
 
-        expected_reference_count = {
-            "standard_front": 1,
-            "three_quarter": 2,
-            "profile": 3,
-        }[self.view_role]
+        supplemental = [str(item or "").strip() for item in self.initial_supplementary_source_asset_ids]
+        if any(not item for item in supplemental):
+            raise ValueError("supplementary identity source IDs must be nonempty")
+        if self.root_source_asset_id in supplemental or len(supplemental) != len(set(supplemental)):
+            raise ValueError("supplementary identity sources must be unique and cannot repeat the root")
+        expected_reference_count = (
+            1 + len(supplemental)
+            if self.view_role == "standard_front"
+            else {"three_quarter": 2, "profile": 3}[self.view_role]
+        )
         if len(references) != expected_reference_count:
             raise ValueError(
                 f"{self.view_role} requires the serial identity chain with "
                 f"{expected_reference_count} reference evidence IDs"
             )
+        if self.view_role == "standard_front" and references[1:] != supplemental:
+            raise ValueError("front supplementary evidence must match immutable source provenance")
         return self
 
 
@@ -236,7 +245,10 @@ class AnchorPackPreparationService:
                 pack_version_id=pack_version_id,
                 view_role="standard_front",
                 candidate_index=candidate_index,
-                reference_evidence_ids=[request.root_source_provenance.source_asset_id],
+                reference_evidence_ids=[
+                    request.root_source_provenance.source_asset_id,
+                    *request.root_source_provenance.supplementary_source_asset_ids,
+                ],
             )
             try:
                 candidate, review = self._generate_and_review(generation_request)
@@ -363,6 +375,9 @@ class AnchorPackPreparationService:
             preparation_intent=request.preparation_intent,
             root_source_asset_id=request.root_source_provenance.source_asset_id,
             reference_evidence_ids=reference_evidence_ids,
+            initial_supplementary_source_asset_ids=list(
+                request.root_source_provenance.supplementary_source_asset_ids
+            ),
             brain_plan_id=request.brain_plan_id,
             canonical_prompt_hash=request.canonical_prompt_hash,
             reference_strategy="serial_anchor_pack_root_reuse_v1",

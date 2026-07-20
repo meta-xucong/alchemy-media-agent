@@ -59,6 +59,7 @@ class LibraryRootSourceProvenance(_StrictLibraryModel):
     source_asset_id: str
     consent_reference: str
     source_type: Literal["uploaded_portrait", "generated_character"] = "uploaded_portrait"
+    supplementary_source_asset_ids: list[str] = Field(default_factory=list, max_length=1)
 
     @field_validator("source_asset_id", "consent_reference")
     @classmethod
@@ -67,6 +68,15 @@ class LibraryRootSourceProvenance(_StrictLibraryModel):
         if not value:
             raise ValueError("library root source provenance is required")
         return value
+
+    @model_validator(mode="after")
+    def validate_supplementary_sources(self) -> "LibraryRootSourceProvenance":
+        supplemental = [str(item or "").strip() for item in self.supplementary_source_asset_ids]
+        if any(not item for item in supplemental):
+            raise ValueError("supplementary source evidence is required when supplied")
+        if self.source_asset_id in supplemental or len(supplemental) != len(set(supplemental)):
+            raise ValueError("supplementary source evidence must be unique and cannot repeat the root")
+        return self
 
 
 class VisualAssetVersion(_StrictLibraryModel):
@@ -158,6 +168,7 @@ class LibraryVisualAssetCreateRequest(_StrictLibraryModel):
     root_source_asset_id: str
     consent_reference: str
     preparation_intent: str
+    supplementary_source_asset_ids: list[str] = Field(default_factory=list, max_length=1)
 
     @field_validator("display_name", "root_source_asset_id", "consent_reference", "preparation_intent")
     @classmethod
@@ -166,6 +177,15 @@ class LibraryVisualAssetCreateRequest(_StrictLibraryModel):
         if not value:
             raise ValueError("Visual Asset creation requires complete user-confirmed source and intent information")
         return value
+
+    @model_validator(mode="after")
+    def validate_supplementary_sources(self) -> "LibraryVisualAssetCreateRequest":
+        supplemental = [str(item or "").strip() for item in self.supplementary_source_asset_ids]
+        if any(not item for item in supplemental):
+            raise ValueError("supplementary source evidence is required when supplied")
+        if self.root_source_asset_id in supplemental or len(supplemental) != len(set(supplemental)):
+            raise ValueError("supplementary source evidence must be unique and cannot repeat the root")
+        return self
 
 
 class ProjectVisualAssetBinding(_StrictLibraryModel):
@@ -298,6 +318,7 @@ class VisualAssetLibraryCatalog:
             root_source_provenance=LibraryRootSourceProvenance(
                 source_asset_id=request.root_source_asset_id,
                 consent_reference=request.consent_reference,
+                supplementary_source_asset_ids=list(request.supplementary_source_asset_ids),
             ),
             preparation_intent=request.preparation_intent,
             created_at=now,
@@ -709,13 +730,21 @@ class VisualAssetLibraryLifecycleService:
         request: LibraryVisualAssetCreateRequest,
     ) -> VisualAsset:
         if self.root_source_resolver is not None:
-            source = self.root_source_resolver(request.root_source_asset_id)
-            if source is None or str(getattr(source, "status", "") or "").lower() != "ready":
-                raise ValueError("root_source_asset_not_ready")
-            role = getattr(source, "role", None)
-            resolved_role = str(getattr(role, "value", role) or "").strip().lower()
-            if request.asset_type == "people" and resolved_role != "face_reference":
-                raise ValueError("visual_asset_root_requires_face_reference")
+            source_ids = [request.root_source_asset_id, *request.supplementary_source_asset_ids]
+            for index, source_asset_id in enumerate(source_ids):
+                source = self.root_source_resolver(source_asset_id)
+                if source is None or str(getattr(source, "status", "") or "").lower() != "ready":
+                    raise ValueError(
+                        "root_source_asset_not_ready" if index == 0 else "supplementary_source_asset_not_ready"
+                    )
+                role = getattr(source, "role", None)
+                resolved_role = str(getattr(role, "value", role) or "").strip().lower()
+                if request.asset_type == "people" and resolved_role != "face_reference":
+                    raise ValueError(
+                        "visual_asset_root_requires_face_reference"
+                        if index == 0
+                        else "visual_asset_supplementary_requires_face_reference"
+                    )
         return self.catalog.create(owner_scope=owner_scope, request=request)
 
     def get(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset:
@@ -748,6 +777,7 @@ class VisualAssetLibraryLifecycleService:
                 source_asset_id=asset.root_source_provenance.source_asset_id,
                 project_id=staging_project_id,
                 consent_reference=asset.root_source_provenance.consent_reference,
+                supplementary_source_asset_ids=list(asset.root_source_provenance.supplementary_source_asset_ids),
             ),
             preparation_intent=asset.preparation_intent,
             status="draft",

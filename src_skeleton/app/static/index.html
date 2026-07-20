@@ -1428,11 +1428,17 @@
                     <span>资产名称</span>
                     <input id="v3VisualAssetNameInput" type="text" maxlength="80" required placeholder="例如：童模 A / 品牌代言人小雨" />
                   </label>
-                  <label class="field">
-                    <span>清晰源图</span>
-                    <input id="v3VisualAssetRootInput" type="file" accept="image/png,image/jpeg,image/webp" required />
-                    <small>建议正面、光线自然、人物清晰的图片。源图只用于建立该资产的身份参考。</small>
-                  </label>
+                  <div class="field v3-visual-asset-source-field">
+                    <span>人物源图</span>
+                    <label class="file-drop v3-file-drop v3-visual-asset-file-drop" for="v3VisualAssetRootInput">
+                      <input id="v3VisualAssetRootInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                      <span class="file-title">选择人物源图</span>
+                      <span id="v3VisualAssetSourceSummary" class="file-meta">可选 1–2 张：先选主原型，再按需添加补充参考。</span>
+                    </label>
+                    <div id="v3VisualAssetSourceList" class="v3-asset-list v3-visual-asset-source-list empty-v3-list" aria-live="polite">尚未选择人物源图</div>
+                    <p id="v3VisualAssetSourceFeedback" class="v3-visual-asset-source-feedback" role="status" hidden></p>
+                    <small>主原型用于建立身份主线；补充参考仅校准首个标准视角。上传不等于启用，三视角检查通过后仍需你确认启用。</small>
+                  </div>
                   <label class="field">
                     <span>建模说明</span>
                     <textarea id="v3VisualAssetIntentInput" rows="3" maxlength="1200" required placeholder="例如：建立这个人物自然、年龄合适、不同视角仍可辨认的标准化身份参考。"></textarea>

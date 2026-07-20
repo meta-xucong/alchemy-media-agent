@@ -85,11 +85,20 @@ class ProductApiAnchorPackPreparationHost:
         """Materialize one bounded candidate through the ordinary Product API."""
 
         stage_key = (request.pack_version_id, request.view_role)
+        # At the first stage both admitted source uploads are direct evidence.
+        # Once a reviewed winner exists, the serial chain deliberately returns
+        # to the primary root plus selected outputs; the supplementary image
+        # is not silently carried into later views.
+        uploaded_asset_ids = (
+            list(request.reference_evidence_ids)
+            if request.view_role == "standard_front"
+            else [request.root_source_asset_id]
+        )
         status = self.product_service.create_professional_anchor_preparation_job(
             {
                 "user_input": request.preparation_intent,
                 "scenario_selection": {"scenario_id": "general_creative"},
-                "uploaded_asset_ids": [request.root_source_asset_id],
+                "uploaded_asset_ids": uploaded_asset_ids,
                 "metadata": {
                     "project_id": request.project_id,
                     "requested_image_count": 1,

@@ -881,6 +881,14 @@ class V3ProductApiService:
                 ],
                 "professional_reference_stage": planning_metadata["professional_reference_stage"],
                 "professional_anchor_reference_assets": anchor_reference_assets,
+                # A two-source front is an admitted library contract, not a
+                # user-writable Provider flag.  It applies only to the first
+                # neutral capture; later serial stages reuse the root and
+                # reviewed winners under the existing 2/3/5 budget.
+                "professional_anchor_initial_multi_source": bool(
+                    professional_anchor_view_role == "standard_front"
+                    and len(professional_anchor_reference_evidence_ids or []) == 2
+                ),
             }
         else:
             self._bind_professional_mode(
@@ -1024,11 +1032,14 @@ class V3ProductApiService:
     ) -> list[dict[str, Any]]:
         """Resolve one server-owned root/winner chain for shared execution."""
 
-        expected_count = {"standard_front": 1, "three_quarter": 2, "profile": 3}[view_role]
+        expected_count = (
+            None if view_role == "standard_front" else {"three_quarter": 2, "profile": 3}[view_role]
+        )
         evidence_ids = [str(item or "").strip() for item in (reference_evidence_ids or [])]
         if not evidence_ids:
             evidence_ids = list(request.uploaded_asset_ids[:1])
-        if len(evidence_ids) != expected_count or len(evidence_ids) != len(set(evidence_ids)):
+        valid_count = len(evidence_ids) in {1, 2} if view_role == "standard_front" else len(evidence_ids) == expected_count
+        if not valid_count or len(evidence_ids) != len(set(evidence_ids)):
             raise ValueError("professional_anchor_reference_chain_invalid")
         root_asset_id = evidence_ids[0]
         if root_asset_id not in request.uploaded_asset_ids:
@@ -1039,6 +1050,25 @@ class V3ProductApiService:
             raise ValueError("professional_anchor_reference_root_not_ready")
 
         selected: list[dict[str, Any]] = []
+        if view_role == "standard_front":
+            # Direct supplementary evidence is resolved through the existing
+            # upload store.  The Provider receives it only in the first
+            # neutral capture, then the reviewed front winner replaces it.
+            for supplementary_asset_id in evidence_ids[1:]:
+                if supplementary_asset_id not in request.uploaded_asset_ids:
+                    raise ValueError("professional_anchor_supplementary_root_mismatch")
+                supplementary = self.asset_store.get_upload(supplementary_asset_id)
+                supplementary_status = str(
+                    supplementary.status.value if supplementary is not None and hasattr(supplementary.status, "value") else ""
+                )
+                supplementary_role = str(
+                    getattr(getattr(supplementary, "role", None), "value", getattr(supplementary, "role", None)) or ""
+                ).strip().lower()
+                if supplementary is None or supplementary_status != "ready":
+                    raise ValueError("professional_anchor_supplementary_not_ready")
+                if supplementary_role != "face_reference":
+                    raise ValueError("professional_anchor_supplementary_requires_face_reference")
+            return selected
         for output_id in evidence_ids[1:]:
             output = self.output_store.get_output(output_id)
             path = Path(output.file_path) if output is not None and output.file_path else None
@@ -7750,6 +7780,7 @@ class V3ProductApiService:
             "professional_identity_reference_strategy",
             "professional_reference_stage",
             "professional_anchor_reference_assets",
+            "professional_anchor_initial_multi_source",
             "professional_anchor_stage_plan_reuse",
             "frozen_visual_asset_binding_set",
             "visual_asset_library_reference_assets",

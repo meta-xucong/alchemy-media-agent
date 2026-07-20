@@ -49,7 +49,7 @@ def test_doc173_uses_library_and_binding_routes_not_legacy_project_asset_writes(
     assert "/visual-assets" in library
     create = _function(source, "createV3VisualAsset", "prepareV3VisualAsset")
     upload = _function(source, "v3UploadVisualAssetRoot", "createV3VisualAsset")
-    assert "root_source_asset_id: ready.asset_id" in create
+    assert "root_source_asset_id: primary.asset_id" in create
     assert 'asset_type: "people"' in create
     assert 'role: "face_reference"' in upload
     assert 'role: "subject_reference"' not in upload
@@ -60,6 +60,36 @@ def test_doc173_uses_library_and_binding_routes_not_legacy_project_asset_writes(
     assert "confirm_binding: true" in binding
     assert "selected_version_id: asset.active_version_id" in binding
     assert "v3ProjectVisualAssetBindingsPath" in binding
+
+
+def test_doc176_professional_source_selection_is_bounded_visible_and_never_first_file_only() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert 'id="v3VisualAssetRootInput"' in index
+    visual_input = index[index.index('id="v3VisualAssetRootInput"') - 180:index.index('id="v3VisualAssetRootInput"') + 240]
+    assert "multiple" in visual_input
+    assert 'id="v3VisualAssetSourceList"' in index
+    assert 'id="v3VisualAssetSourceSummary"' in index
+    assert 'id="v3VisualAssetSourceFeedback"' in index
+    assert "V3_VISUAL_ASSET_MAX_SOURCE_FILES = 2" in source
+    assert "handleV3VisualAssetSourceFiles" in source
+    assert "handleV3VisualAssetSourceListClick" in source
+    assert "visualAssetPrimarySourceIndex" in source
+    assert "visualAssetSourceFeedback" in source
+    assert "最多使用 2 张源图" in source
+    create = _function(source, "createV3VisualAsset", "prepareV3VisualAsset")
+    assert "visualAssetSourceFiles" in create
+    assert "supplementary_source_asset_ids" in create
+    assert "v3VisualAssetRootInput?.files?.[0]" not in create
+    for selector in (
+        ".v3-visual-asset-source-field",
+        ".v3-visual-asset-file-drop",
+        ".v3-visual-asset-source-actions",
+        ".v3-visual-asset-source-feedback",
+    ):
+        assert selector in css
 
 
 def test_doc173_asset_lifecycle_and_binding_copy_is_human_readable_and_non_secret() -> None:

@@ -202,6 +202,32 @@ def test_doc162_product_host_runs_three_by_three_by_three_through_shared_service
     assert "prompt" not in service.requests[0]["payload"]["metadata"]
 
 
+def test_doc176_two_source_front_uses_bounded_calibration_then_serial_winners() -> None:
+    service = _SharedProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    root = _root().model_copy(update={"supplementary_source_asset_ids": ["v3_asset_supplement"]})
+
+    result = host.prepare(
+        project_id="project_doc162",
+        people_asset=_asset(),
+        root_source_provenance=root,
+    )
+
+    assert result.status == "review"
+    assert all(
+        item["reference_evidence_ids"] == ["v3_asset_root", "v3_asset_supplement"]
+        and item["payload"]["uploaded_asset_ids"] == ["v3_asset_root", "v3_asset_supplement"]
+        for item in service.requests[:3]
+    )
+    front_winner = result.pack.anchor_views[0].output_id
+    assert all(
+        item["reference_evidence_ids"] == ["v3_asset_root", front_winner]
+        and item["payload"]["uploaded_asset_ids"] == ["v3_asset_root"]
+        for item in service.requests[3:6]
+    )
+    assert "v3_asset_supplement" not in str(service.requests[3:])
+
+
 def test_doc165_provider_failure_without_pixels_does_not_consume_stage_repair() -> None:
     service = _SharedProductService()
     original_generate = service.generate_job

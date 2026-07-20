@@ -3926,6 +3926,59 @@ button.v2-live-preview:focus-visible {
   border-top: 1px solid var(--line, #dfe3ea);
 }
 
+.v3-visual-asset-source-field {
+  display: grid;
+  gap: 9px;
+}
+
+.v3-visual-asset-file-drop {
+  min-height: 98px;
+  border-color: rgba(88, 105, 177, 0.34);
+  background: linear-gradient(135deg, rgba(246, 248, 255, 0.94), rgba(255, 252, 246, 0.82));
+}
+
+.v3-visual-asset-source-list {
+  min-height: 72px;
+  padding: 9px;
+}
+
+.v3-visual-asset-source-feedback {
+  margin: -2px 2px 0;
+  color: #9a4d17;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.v3-visual-asset-source-row {
+  border-radius: 12px;
+}
+
+.v3-visual-asset-source-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.v3-asset-row .v3-source-primary {
+  color: #325e43;
+  background: rgba(61, 125, 82, 0.10);
+}
+
+.v3-asset-row .v3-source-primary:hover,
+.v3-asset-row .v3-source-primary:focus-visible {
+  color: #214431;
+  background: rgba(61, 125, 82, 0.17);
+}
+
+.v3-asset-row .v3-source-primary:disabled {
+  cursor: default;
+  color: #325e43;
+  background: rgba(61, 125, 82, 0.16);
+  opacity: 1;
+}
+
 .v3-project-visual-asset-panel {
   margin: 16px 0;
   padding: 17px;
@@ -4008,6 +4061,8 @@ button.v2-live-preview:focus-visible {
   .v3-visual-asset-dialog-heading .button,
   .v3-visual-asset-dialog-actions .button { width: 100%; }
   .v3-visual-asset-dialog-card { padding: 17px; }
+  .v3-visual-asset-source-row { align-items: flex-start; border-radius: 13px; }
+  .v3-visual-asset-source-actions { justify-content: flex-start; }
 }
 
 /* Bright ivory premium theme refresh: visual-only overrides, keeps existing DOM and interactions intact. */

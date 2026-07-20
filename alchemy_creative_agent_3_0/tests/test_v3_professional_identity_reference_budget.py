@@ -183,6 +183,76 @@ def test_standard_mode_keeps_both_identity_derivatives(tmp_path: Path) -> None:
     ]
 
 
+def test_doc176_two_source_professional_front_keeps_the_two_reference_budget(tmp_path: Path) -> None:
+    root = _image(tmp_path / "root.png", (220, 180, 160))
+    supplement = _image(tmp_path / "supplement.png", (218, 182, 164))
+    request = _request(root, root, root)
+    metadata = dict(request.metadata)
+    metadata.update(
+        {
+            "professional_reference_stage": "standard_front",
+            "professional_anchor_initial_multi_source": True,
+            "uploaded_assets": [
+                {
+                    "asset_id": "root_asset",
+                    "file_path": str(root),
+                    "source_type": "uploaded",
+                    "role": "face_reference",
+                    "use_policy": "identity",
+                    "strength": "hard",
+                    "provider_input_required": True,
+                    "metadata": {
+                        "reference_sanitization": {
+                            "suppress_full_frame_provider_reference": True,
+                            "reason_codes": ["professional_identity_only"],
+                        }
+                    },
+                },
+                {
+                    "asset_id": "supplement_asset",
+                    "file_path": str(supplement),
+                    "source_type": "uploaded",
+                    "role": "face_reference",
+                    "use_policy": "identity",
+                    "strength": "hard",
+                    "provider_input_required": True,
+                    "metadata": {
+                        "reference_sanitization": {
+                            "suppress_full_frame_provider_reference": True,
+                            "reason_codes": ["professional_identity_only"],
+                        }
+                    },
+                },
+            ],
+            "visual_cluster": {
+                "resolved_reference_policy_package": {
+                    "applies": True,
+                    "policies": [
+                        {
+                            "source_asset_id": source_id,
+                            "source_role": "portrait_identity_reference",
+                            "identity_geometry": "hard",
+                            "prompt_owned_channels": ["hair_direction", "lighting_color", "scene_background"],
+                        }
+                        for source_id in ("root_asset", "supplement_asset")
+                    ],
+                }
+            },
+        }
+    )
+    request = request.model_copy(update={"metadata": metadata})
+    provider = ProductionImageGenerationProvider()
+    references = provider._reference_assets(request)  # noqa: SLF001
+    plan = provider._asset_plan(request, references)  # noqa: SLF001
+
+    assert plan["provider_input_plan"]["reference_image_count"] == 2
+    assert [item["source_asset_id"] for item in plan["assets"]] == ["root_asset", "supplement_asset"]
+    assert [item["derivative_kind"] for item in plan["assets"]] == [
+        "portrait_identity_stage_flexible_feature_crop",
+        "portrait_identity_stage_flexible_feature_crop",
+    ]
+
+
 def test_pose_geometry_derivative_preserves_a_view_conditioned_crop_scope(tmp_path: Path) -> None:
     source = _image(tmp_path / "portrait.png", (220, 180, 160))
     derivatives = prepare_reference_truth_derivatives(

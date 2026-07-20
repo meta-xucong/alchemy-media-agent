@@ -120,6 +120,27 @@ def _create_library_asset(handlers: V3ProductRouteHandlers, root_source_asset_id
     )["visual_asset"]
 
 
+def _ready_face_upload(service: V3ProductApiService, filename: str, *, role: str = "face_reference") -> str:
+    content = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    upload = service.create_uploaded_asset(
+        {
+            "filename": filename,
+            "mime_type": "image/png",
+            "size_bytes": len(content),
+            "role": role,
+        }
+    )
+    service.store_uploaded_asset_content(
+        upload.asset_id,
+        {"content_base64": base64.b64encode(content).decode("ascii"), "mime_type": "image/png"},
+    )
+    completed = service.complete_uploaded_asset(upload.asset_id)
+    assert completed is not None
+    return upload.asset_id
+
+
 def test_library_asset_formal_entry_persists_user_scoped_draft(tmp_path) -> None:
     handlers, catalog, _, root_source_asset_id = _handlers(tmp_path)
 
@@ -148,6 +169,57 @@ def test_library_asset_rejects_ready_nonidentity_root_source(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="visual_asset_root_requires_face_reference"):
         _create_library_asset(handlers, root_source_asset_id)
+
+
+def test_library_asset_accepts_one_ready_supplementary_identity_source(tmp_path) -> None:
+    handlers, catalog, _, root_source_asset_id = _handlers(tmp_path)
+    supplementary_source_asset_id = _ready_face_upload(handlers.service, "supplement.png")
+
+    created = handlers.post_visual_assets(
+        {
+            "display_name": "童模 A",
+            "asset_type": "people",
+            "root_source_asset_id": root_source_asset_id,
+            "supplementary_source_asset_ids": [supplementary_source_asset_id],
+            "consent_reference": "user-authorized-source-20260720",
+            "preparation_intent": PREPARATION_INTENT,
+        }
+    )["visual_asset"]
+    stored = catalog.get(owner_scope="local_default", visual_asset_id=str(created["visual_asset_id"]))
+
+    assert stored is not None
+    assert stored.root_source_provenance.source_asset_id == root_source_asset_id
+    assert stored.root_source_provenance.supplementary_source_asset_ids == [supplementary_source_asset_id]
+    assert "root_source_asset_id" not in created
+    assert "supplementary_source_asset_ids" not in created
+
+
+@pytest.mark.parametrize(
+    ("supplementary_source_asset_ids", "failure_code"),
+    [
+        (["v3_asset_missing"], "supplementary_source_asset_not_ready"),
+        (["v3_asset_same", "v3_asset_extra"], "List should have at most 1 item"),
+    ],
+)
+def test_library_asset_rejects_unready_or_over_budget_supplementary_sources(
+    tmp_path,
+    supplementary_source_asset_ids,
+    failure_code,
+) -> None:
+    handlers, _, _, root_source_asset_id = _handlers(tmp_path)
+    if supplementary_source_asset_ids[0] == "v3_asset_same":
+        supplementary_source_asset_ids = [root_source_asset_id, "v3_asset_extra"]
+    with pytest.raises(ValueError, match=failure_code):
+        handlers.post_visual_assets(
+            {
+                "display_name": "童模 A",
+                "asset_type": "people",
+                "root_source_asset_id": root_source_asset_id,
+                "supplementary_source_asset_ids": supplementary_source_asset_ids,
+                "consent_reference": "user-authorized-source-20260720",
+                "preparation_intent": PREPARATION_INTENT,
+            }
+        )
 
 
 def test_library_asset_requires_immutable_preparation_intent(tmp_path) -> None:

@@ -2948,6 +2948,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
             return None
         stage = str(metadata.get("professional_reference_stage") or "").strip()
+        if (
+            stage == "standard_front"
+            and metadata.get("professional_anchor_initial_multi_source") is True
+            and self._is_uploaded_truth_source(asset)
+            and not asset.get("output_id")
+        ):
+            # The declared primary and one supplementary source each receive
+            # one stage-flexible feature crop.  This is evidence routing only:
+            # it does not author prompt text, infer a face, or carry the
+            # supplementary image into later serial views.
+            return ("portrait_identity_stage_flexible_feature_crop",)
         if stage not in {"three_quarter", "profile"}:
             return None
         if self._is_uploaded_truth_source(asset) and not asset.get("output_id"):

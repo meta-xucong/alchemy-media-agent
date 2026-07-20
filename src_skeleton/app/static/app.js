@@ -311,6 +311,9 @@ const v3State = {
   visualAssetsLoading: false,
   visualAssetBusy: false,
   visualAssetsError: "",
+  visualAssetSourceFiles: [],
+  visualAssetPrimarySourceIndex: 0,
+  visualAssetSourceFeedback: "",
   projectVisualAssetBindings: [],
   projectVisualAssetBindingState: "empty",
   projectVisualAssetBindingsLoading: false,
@@ -551,6 +554,9 @@ const els = {
   v3VisualAssetCreateForm: document.querySelector("#v3VisualAssetCreateForm"),
   v3VisualAssetNameInput: document.querySelector("#v3VisualAssetNameInput"),
   v3VisualAssetRootInput: document.querySelector("#v3VisualAssetRootInput"),
+  v3VisualAssetSourceSummary: document.querySelector("#v3VisualAssetSourceSummary"),
+  v3VisualAssetSourceList: document.querySelector("#v3VisualAssetSourceList"),
+  v3VisualAssetSourceFeedback: document.querySelector("#v3VisualAssetSourceFeedback"),
   v3VisualAssetIntentInput: document.querySelector("#v3VisualAssetIntentInput"),
   v3VisualAssetConsentInput: document.querySelector("#v3VisualAssetConsentInput"),
   v3VisualAssetCreateBtn: document.querySelector("#v3VisualAssetCreateBtn"),
@@ -1189,6 +1195,8 @@ function bindControls() {
   if (els.v3TemplateChooser) els.v3TemplateChooser.addEventListener("click", handleV3HomeTemplateChoice);
   if (els.v3RefreshVisualAssetsBtn) els.v3RefreshVisualAssetsBtn.addEventListener("click", () => loadV3VisualAssets({ silent: false, force: true }));
   if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.addEventListener("click", handleV3VisualAssetAction);
+  if (els.v3VisualAssetRootInput) els.v3VisualAssetRootInput.addEventListener("change", handleV3VisualAssetSourceFiles);
+  if (els.v3VisualAssetSourceList) els.v3VisualAssetSourceList.addEventListener("click", handleV3VisualAssetSourceListClick);
   if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.addEventListener("submit", createV3VisualAsset);
   if (els.v3SelectedBrandMemoryBar) els.v3SelectedBrandMemoryBar.addEventListener("click", handleV3SelectedBrandMemoryBarClick);
   if (els.v3NewProjectBtn) els.v3NewProjectBtn.addEventListener("click", createV3Project);
@@ -5239,6 +5247,124 @@ async function loadV3VisualAssets({ silent = true, force = false } = {}) {
   return v3State.visualAssets;
 }
 
+const V3_VISUAL_ASSET_MAX_SOURCE_FILES = 2;
+
+function clearV3VisualAssetSourceFiles() {
+  v3State.visualAssetSourceFiles = [];
+  v3State.visualAssetPrimarySourceIndex = 0;
+  v3State.visualAssetSourceFeedback = "";
+  if (els.v3VisualAssetRootInput) els.v3VisualAssetRootInput.value = "";
+  renderV3VisualAssetSourceFiles();
+}
+
+function handleV3VisualAssetSourceFiles(event) {
+  const selected = Array.from(event?.target?.files || []).filter((file) => /^image\//.test(file.type || ""));
+  if (event?.target) event.target.value = "";
+  if (!selected.length) {
+    const message = "请选择 PNG、JPG 或 WebP 人物图片。";
+    v3State.visualAssetSourceFeedback = message;
+    renderV3VisualAssetSourceFiles();
+    showGlobalToast(message, "warning");
+    return;
+  }
+  const current = Array.isArray(v3State.visualAssetSourceFiles) ? v3State.visualAssetSourceFiles : [];
+  const combined = [...current, ...selected];
+  const fingerprints = combined.map((file) => `${file.name || "source"}:${file.size || 0}:${file.lastModified || 0}`);
+  if (new Set(fingerprints).size !== fingerprints.length) {
+    const message = "同一张人物源图无需重复添加。";
+    v3State.visualAssetSourceFeedback = message;
+    renderV3VisualAssetSourceFiles();
+    showGlobalToast(message, "warning");
+    return;
+  }
+  if (combined.length > V3_VISUAL_ASSET_MAX_SOURCE_FILES) {
+    const message = "一个人物资产最多使用 2 张源图：主原型和一张补充参考。请先移除不需要的图片。";
+    v3State.visualAssetSourceFeedback = message;
+    renderV3VisualAssetSourceFiles();
+    showGlobalToast(message, "warning");
+    return;
+  }
+  v3State.visualAssetSourceFiles = combined;
+  v3State.visualAssetSourceFeedback = "";
+  if (v3State.visualAssetPrimarySourceIndex >= combined.length) v3State.visualAssetPrimarySourceIndex = 0;
+  renderV3VisualAssetSourceFiles();
+  updateV3Notice(
+    combined.length === 1
+      ? "已选择主原型。你也可以再添加一张补充参考，帮助校准首个标准视角。"
+      : "已选择主原型和补充参考。后续三视角会使用固定、可验证的证据预算。",
+    "info",
+  );
+}
+
+function handleV3VisualAssetSourceListClick(event) {
+  const button = event.target.closest("[data-v3-visual-asset-source-action]");
+  if (!button || button.disabled) return;
+  const index = Number(button.dataset.v3VisualAssetSourceIndex);
+  if (!Number.isInteger(index) || index < 0 || index >= v3State.visualAssetSourceFiles.length) return;
+  if (button.dataset.v3VisualAssetSourceAction === "primary") {
+    v3State.visualAssetPrimarySourceIndex = index;
+    v3State.visualAssetSourceFeedback = "";
+    renderV3VisualAssetSourceFiles();
+    updateV3Notice("已更新主原型。补充参考只用于校准首个标准视角。", "info");
+    return;
+  }
+  if (button.dataset.v3VisualAssetSourceAction === "remove") {
+    v3State.visualAssetSourceFiles = v3State.visualAssetSourceFiles.filter((_, itemIndex) => itemIndex !== index);
+    if (index === v3State.visualAssetPrimarySourceIndex) {
+      v3State.visualAssetPrimarySourceIndex = 0;
+    } else if (index < v3State.visualAssetPrimarySourceIndex) {
+      v3State.visualAssetPrimarySourceIndex -= 1;
+    }
+    v3State.visualAssetSourceFeedback = "";
+    renderV3VisualAssetSourceFiles();
+    updateV3Notice(
+      v3State.visualAssetSourceFiles.length ? "已移除这张源图。" : "已清空人物源图。",
+      "info",
+    );
+  }
+}
+
+function renderV3VisualAssetSourceFiles() {
+  const files = Array.isArray(v3State.visualAssetSourceFiles) ? v3State.visualAssetSourceFiles : [];
+  const primaryIndex = Math.max(0, Math.min(Number(v3State.visualAssetPrimarySourceIndex) || 0, Math.max(files.length - 1, 0)));
+  v3State.visualAssetPrimarySourceIndex = primaryIndex;
+  if (els.v3VisualAssetSourceSummary) {
+    els.v3VisualAssetSourceSummary.textContent = files.length === 0
+      ? "可选 1–2 张：先选主原型，再按需添加补充参考。"
+      : files.length === 1
+        ? "已选 1 张主原型；可再添加 1 张补充参考。"
+        : "已选主原型和补充参考；可切换主原型或移除其中一张。";
+  }
+  if (els.v3VisualAssetSourceFeedback) {
+    const feedback = String(v3State.visualAssetSourceFeedback || "").trim();
+    els.v3VisualAssetSourceFeedback.hidden = !feedback;
+    els.v3VisualAssetSourceFeedback.textContent = feedback;
+  }
+  if (!els.v3VisualAssetSourceList) return;
+  els.v3VisualAssetSourceList.innerHTML = "";
+  els.v3VisualAssetSourceList.classList.toggle("empty-v3-list", files.length === 0);
+  if (!files.length) {
+    els.v3VisualAssetSourceList.textContent = "尚未选择人物源图";
+    return;
+  }
+  files.forEach((file, index) => {
+    const isPrimary = index === primaryIndex;
+    const row = document.createElement("div");
+    row.className = "v3-asset-row v3-visual-asset-source-row";
+    row.innerHTML = `
+      <span class="v3-asset-file-copy">
+        <strong>${escapeHtml(file.name || `人物源图 ${index + 1}`)}</strong>
+        <small>${escapeHtml(v3FileSizeText(file.size))} · ${isPrimary ? "主原型" : "补充参考"}</small>
+      </span>
+      <span class="v3-visual-asset-source-actions">
+        <button type="button" class="v3-source-primary" data-v3-visual-asset-source-action="primary" data-v3-visual-asset-source-index="${index}" ${isPrimary ? "disabled" : ""}>${isPrimary ? "主原型" : "设为主原型"}</button>
+        <button type="button" data-v3-visual-asset-source-action="remove" data-v3-visual-asset-source-index="${index}" aria-label="移除这张人物源图">移除</button>
+      </span>
+    `;
+    els.v3VisualAssetSourceList.appendChild(row);
+  });
+}
+
 async function v3UploadVisualAssetRoot(file) {
   if (!file) throw new Error("visual_asset_root_image_missing");
   const created = await request(`${v3ApiBase}/uploads`, {
@@ -5267,10 +5393,10 @@ async function createV3VisualAsset(event) {
   event?.preventDefault?.();
   if (v3State.visualAssetBusy) return;
   const displayName = (els.v3VisualAssetNameInput?.value || "").trim();
-  const file = els.v3VisualAssetRootInput?.files?.[0];
+  const files = Array.isArray(v3State.visualAssetSourceFiles) ? v3State.visualAssetSourceFiles : [];
   const preparationIntent = (els.v3VisualAssetIntentInput?.value || "").trim();
   const consentConfirmed = Boolean(els.v3VisualAssetConsentInput?.checked);
-  if (!displayName || !file || !preparationIntent || !consentConfirmed) {
+  if (!displayName || !files.length || !preparationIntent || !consentConfirmed) {
     showGlobalToast("请填写名称、选择源图、写下建模说明，并确认你有权使用这张图片。", "warning");
     return;
   }
@@ -5279,19 +5405,28 @@ async function createV3VisualAsset(event) {
   renderV3VisualAssetLibrary();
   try {
     updateV3Notice("正在保存源图并建立人物资产。", "info");
-    const ready = await v3UploadVisualAssetRoot(file);
-    if (!ready?.asset_id) throw new Error("visual_asset_root_upload_incomplete");
+    const readySources = [];
+    for (const file of files) {
+      const ready = await v3UploadVisualAssetRoot(file);
+      if (!ready?.asset_id) throw new Error("visual_asset_root_upload_incomplete");
+      readySources.push(ready);
+    }
+    const primaryIndex = Math.max(0, Math.min(Number(v3State.visualAssetPrimarySourceIndex) || 0, readySources.length - 1));
+    const primary = readySources[primaryIndex];
+    const supplementary = readySources.filter((_, index) => index !== primaryIndex);
     await request(v3VisualAssetsPath(), {
       method: "POST",
       body: {
         display_name: displayName,
         asset_type: "people",
-        root_source_asset_id: ready.asset_id,
+        root_source_asset_id: primary.asset_id,
+        supplementary_source_asset_ids: supplementary.map((item) => item.asset_id),
         consent_reference: "user_confirmed_visual_asset_use",
         preparation_intent: preparationIntent,
       },
     });
     if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.reset();
+    clearV3VisualAssetSourceFiles();
     await loadV3VisualAssets({ silent: true, force: true });
     updateV3Notice("人物资产已保存。接下来选择“开始标准建模”，完成检查后再由你确认启用。", "success");
   } catch (error) {
