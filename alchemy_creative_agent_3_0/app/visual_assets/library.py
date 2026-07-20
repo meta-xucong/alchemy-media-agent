@@ -2,10 +2,10 @@
 
 This module is intentionally small and framework-neutral.  It separates
 reusable asset ownership from project usage without creating a second image,
-Brain, Provider, review, retry, or byte-storage system.  The first released
-asset type is a reviewed People Asset / Face Identity version; future asset
-types are represented only as rejected request values until their own modules
-and evidence contracts exist.
+Brain, Provider, review, retry, or byte-storage system.  The initial release
+owned People Asset / Face Identity; Doc178 supersedes that scope by adding the
+Character Card's nested Face, Expression, and Body modules without changing
+the Visual Asset category or Standard Mode.
 """
 
 from __future__ import annotations
@@ -22,7 +22,9 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from ..schemas.models import V3BaseModel
 from .anchor_pack import AnchorPackPreparationResult
 from .character_card import (
+    BodySilhouettePublicRequest,
     CharacterCardPreparationService,
+    CharacterCardRuntimeUnavailable,
     CharacterCardStageHost,
     CharacterCardState,
     apply_face_identity_pack_to_card,
@@ -86,7 +88,7 @@ class LibraryRootSourceProvenance(_StrictLibraryModel):
 
 
 class VisualAssetVersion(_StrictLibraryModel):
-    """One reviewed module version; only Face Identity exists in release one."""
+    """One reviewed Face Identity version; Character Card modules remain nested state."""
 
     version_id: str
     visual_asset_id: str
@@ -123,7 +125,7 @@ class VisualAssetVersion(_StrictLibraryModel):
     @model_validator(mode="after")
     def enforce_face_identity_first_release(self) -> "VisualAssetVersion":
         if self.module_type != "face_identity" or set(self.owned_channels) != set(_PEOPLE_OWNED_CHANNELS):
-            raise ValueError("only the Face Identity module is available in the first Visual Asset release")
+            raise ValueError("Visual Asset versions own the Face Identity base; Doc178 Character Card modules are nested")
         if self.lifecycle_status == "active":
             if not self.activation_confirmed or not self.approved_evidence_ids:
                 raise ValueError("an active Visual Asset version requires reviewed evidence and user activation")
@@ -912,11 +914,14 @@ class VisualAssetLibraryLifecycleService:
         owner_scope: str,
         visual_asset_id: str,
         stage: Literal["expression_set", "body_silhouette"],
+        body_request: BodySilhouettePublicRequest | None = None,
     ) -> VisualAsset:
         """Resume one Character Card stage through a shared-runtime host."""
 
         if self.character_card_stage_host is None:
-            raise RuntimeError("character_card_stage_prepare_unavailable")
+            raise CharacterCardRuntimeUnavailable("character_card_stage_prepare_unavailable")
+        if getattr(self.character_card_stage_host, "production_shared_runtime", False) is not True:
+            raise CharacterCardRuntimeUnavailable("character_card_stage_host_shared_runtime_required")
         asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
         card = asset.character_card
         if stage == "expression_set" and card.face_identity_status != "active":
@@ -926,24 +931,54 @@ class VisualAssetLibraryLifecycleService:
                 raise ValueError("character_card_body_requires_face_identity")
             if card.expression_set_status != "active":
                 raise ValueError("character_card_body_requires_expression_set")
+            if body_request is None:
+                raise ValueError("character_card_body_source_required")
+            if body_request.source_class == "observed":
+                self._require_authorized_body_reference(body_request)
         method = getattr(self.character_card_stage_host, f"prepare_{stage}", None)
         if not callable(method):
-            raise RuntimeError("character_card_stage_prepare_unavailable")
-        result = method(asset=asset, card=card)
+            raise CharacterCardRuntimeUnavailable("character_card_stage_prepare_unavailable")
+        if stage == "body_silhouette":
+            result = method(asset=asset, card=card, request=body_request)
+        else:
+            # Expression intent must come from the shared host/Brain.  There is
+            # intentionally no browser-side expression dictionary or local
+            # default wording to pass here.
+            result = method(asset=asset, card=card)
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")
+        if getattr(result, "shared_runtime_receipt", None) is None:
+            raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_required")
         return self.catalog.save(
             asset.model_copy(update={"character_card": result.card, "updated_at": _utc_now()})
         )
+
+    def _require_authorized_body_reference(self, request: BodySilhouettePublicRequest) -> Any:
+        """Resolve an observed body source without accepting paths or claims."""
+
+        if self.root_source_resolver is None:
+            raise CharacterCardRuntimeUnavailable("character_card_body_reference_unavailable")
+        source = self.root_source_resolver(str(request.body_reference_asset_id))
+        status = str(getattr(getattr(source, "status", None), "value", getattr(source, "status", "")) or "").lower()
+        role = str(getattr(getattr(source, "role", None), "value", getattr(source, "role", "")) or "").strip().lower()
+        if source is None or status != "ready":
+            raise ValueError("character_card_body_reference_not_ready")
+        if role not in {"full_body_reference", "body_reference", "body_full_reference"}:
+            raise ValueError("character_card_body_reference_role_invalid")
+        metadata = getattr(source, "metadata", {}) or {}
+        consent = metadata.get("consent_reference") or metadata.get("rights_reference")
+        if not str(consent or "").strip():
+            raise ValueError("character_card_body_reference_consent_required")
+        return source
 
     def prepare_character_card_face(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset:
         """Prepare all five Face Identity slots through the existing host."""
 
         if self.anchor_pack_host is None:
-            raise RuntimeError("character_card_face_prepare_unavailable")
+            raise CharacterCardRuntimeUnavailable("character_card_face_prepare_unavailable")
         method = getattr(self.anchor_pack_host, "prepare_character_card", None)
         if not callable(method):
-            raise RuntimeError("character_card_face_prepare_unavailable")
+            raise CharacterCardRuntimeUnavailable("character_card_face_prepare_unavailable")
         asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
         staging_project_id = _library_staging_scope(owner_scope)
         people_asset = PeopleAsset(

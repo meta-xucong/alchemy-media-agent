@@ -16,6 +16,7 @@ from ..visual_assets import (
     VisualAssetLibraryLifecycleService,
 )
 from ..visual_assets.character_card import CharacterCardStageHost
+from ..visual_assets.character_card import BodySilhouettePublicRequest
 from .service import V3ProductApiService
 
 
@@ -197,13 +198,26 @@ class V3ProductRouteHandlers:
     ) -> dict[str, Any]:
         """Prepare one explicit Character Card stage; details stay server-owned."""
 
-        if set(payload) != {"stage"} or payload.get("stage") not in {
+        stage = payload.get("stage")
+        if stage not in {
             "face_identity",
             "expression_set",
             "body_silhouette",
         }:
             raise ValueError("character_card_stage_required")
-        if payload["stage"] == "face_identity":
+        body_request = None
+        if stage == "body_silhouette":
+            allowed = {"stage", "source_class", "body_reference_asset_id", "body_facts"}
+            if not set(payload).issubset(allowed):
+                raise ValueError("character_card_body_payload_invalid")
+            body_request = BodySilhouettePublicRequest.model_validate(
+                {key: value for key, value in payload.items() if key != "stage"}
+            )
+        elif set(payload) != {"stage"}:
+            # Expression intent remains Brain/host-owned.  A browser may not
+            # inject a local expression dictionary or prompt fragment.
+            raise ValueError("character_card_stage_payload_invalid")
+        if stage == "face_identity":
             asset = self.visual_asset_library_service.prepare_character_card_face(
                 owner_scope=self._visual_asset_owner_scope(owner_scope),
                 visual_asset_id=visual_asset_id,
@@ -212,7 +226,8 @@ class V3ProductRouteHandlers:
             asset = self.visual_asset_library_service.prepare_character_card_stage(
                 owner_scope=self._visual_asset_owner_scope(owner_scope),
                 visual_asset_id=visual_asset_id,
-                stage=payload["stage"],
+                stage=stage,
+                body_request=body_request,
             )
         return {"visual_asset": self._visual_asset_public_record(asset)}
 

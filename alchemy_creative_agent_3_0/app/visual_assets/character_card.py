@@ -76,6 +76,57 @@ class _CharacterCardModel(V3BaseModel):
     model_config = ConfigDict(validate_assignment=True, validate_default=True, extra="forbid")
 
 
+class CharacterCardRuntimeUnavailable(RuntimeError):
+    """A safe, non-provider error for an unconfigured shared stage host."""
+
+    code = "character_card_shared_runtime_unavailable"
+
+
+class BodySilhouettePublicRequest(_CharacterCardModel):
+    """The only body facts a browser may submit for a Character Card stage.
+
+    Asset IDs are resolved server-side.  Natural-language facts remain user
+    authored; callers cannot submit paths, prompt fragments, or a structured
+    body recipe.
+    """
+
+    source_class: BodySourceClass
+    body_reference_asset_id: str | None = None
+    body_facts: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("body_reference_asset_id")
+    @classmethod
+    def validate_reference_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned or "/" in cleaned or "\\" in cleaned or ":" in cleaned:
+            raise ValueError("body reference must be an asset identifier")
+        return cleaned
+
+    @field_validator("body_facts")
+    @classmethod
+    def validate_user_facts(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("body facts must be natural-language text")
+        return cleaned
+
+    @model_validator(mode="after")
+    def enforce_source_truth(self) -> "BodySilhouettePublicRequest":
+        if self.source_class == "observed":
+            if not self.body_reference_asset_id or self.body_facts is not None:
+                raise ValueError("observed Body Silhouette requires one authorized full-body asset")
+        elif self.source_class == "user_described":
+            if self.body_reference_asset_id is not None or not self.body_facts:
+                raise ValueError("user_described Body Silhouette requires natural-language facts")
+        elif self.body_reference_asset_id is not None or self.body_facts is not None:
+            raise ValueError("brain_inferred Body Silhouette accepts no observed body facts")
+        return self
+
+
 class CharacterCardSlot(_CharacterCardModel):
     """One independent slot and its reviewed-materialization state."""
 
@@ -354,6 +405,28 @@ class CharacterCardStageResult(_CharacterCardModel):
     attempts: list[CharacterCardCandidateAttempt] = Field(default_factory=list)
     winner_output_ids: dict[str, str] = Field(default_factory=dict)
     failure_codes: list[str] = Field(default_factory=list)
+    # Production hosts must return a receipt proving that the existing shared
+    # review/retry/final-winner path handled this stage.  The offline contract
+    # service below intentionally leaves it empty and is never a route host.
+    shared_runtime_receipt: "CharacterCardSharedRuntimeReceipt | None" = None
+
+
+class CharacterCardSharedRuntimeReceipt(_CharacterCardModel):
+    """Opaque proof that a stage used the shared V3 execution chain."""
+
+    review_owner: Literal["v3_shared_vision"] = "v3_shared_vision"
+    retry_owner: Literal["v3_shared_visual_retry"] = "v3_shared_visual_retry"
+    candidate_count: Literal[3] = 3
+    max_bounded_repair_count: Literal[1] = 1
+    retry_count: int = Field(default=0, ge=0, le=1)
+    final_winner_selection_verified: bool = False
+    prompt_reference_parity_verified: bool = False
+
+    @model_validator(mode="after")
+    def require_shared_acceptance(self) -> "CharacterCardSharedRuntimeReceipt":
+        if not self.final_winner_selection_verified or not self.prompt_reference_parity_verified:
+            raise ValueError("shared Character Card runtime receipt is incomplete")
+        return self
 
 
 class ExpressionPreparationRequest(_CharacterCardModel):
@@ -427,7 +500,9 @@ class CharacterCardCandidateReviewer(Protocol):
 
 
 class CharacterCardStageHost(Protocol):
-    """Optional host that delegates stages to the existing shared runtime."""
+    """Host contract for the existing shared runtime, never a local fallback."""
+
+    production_shared_runtime: bool
 
     def prepare_expression_set(
         self, *, asset: Any, card: CharacterCardState
@@ -435,13 +510,23 @@ class CharacterCardStageHost(Protocol):
         ...
 
     def prepare_body_silhouette(
-        self, *, asset: Any, card: CharacterCardState
+        self, *, asset: Any, card: CharacterCardState,
+        request: BodySilhouettePublicRequest | None = None,
     ) -> CharacterCardStageResult:
         ...
 
 
 class CharacterCardPreparationService:
-    """Orchestrate slots through injected shared generator/reviewer seams."""
+    """Offline contract helper; never a production stage host.
+
+    Its injected generator/reviewer seams are useful for deterministic contract
+    tests only.  Production HTTP routes require a host advertising
+    ``production_shared_runtime`` and a shared-runtime receipt, so this class
+    cannot become a second provider/review/retry path.
+    """
+
+    production_shared_runtime = False
+    execution_mode = "offline_contract"
 
     CANDIDATE_COUNT = 3
     MAX_BOUNDED_REPAIR_COUNT = 1

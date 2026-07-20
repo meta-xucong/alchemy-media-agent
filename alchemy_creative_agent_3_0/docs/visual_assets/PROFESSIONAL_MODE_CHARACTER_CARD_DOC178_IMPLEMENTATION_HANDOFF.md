@@ -32,9 +32,18 @@ reviewer, retry engine, or image store.
   `winner_selected`; activation is a separate confirmed action. A Face update
   marks dependent Expression/Body slots stale while retaining append-only
   metadata history.
-- Library lifecycle/read projections expose only module and slot state. New
-  Character Card routes accept only the stage/module user action; prompt,
-  candidate, provider, path, hash, and lineage details remain server-owned.
+- Library lifecycle/read projections expose only module and slot state. The
+  registered Character Card HTTP routes accept only the stage/module action
+  plus the typed body source declaration (`observed`, `user_described`, or
+  `brain_inferred`). Asset IDs are resolved server-side; prompt, candidate,
+  provider, path, hash, and lineage details remain server-owned.
+- Production stage routes are fail-closed unless an injected host explicitly
+  advertises the existing shared V3 runtime and returns a verified shared
+  review/retry/final-winner receipt. `CharacterCardPreparationService` remains
+  an offline contract helper and cannot be used as a local production fallback.
+- The historical first-release Face Identity wording in Doc173 remains a
+  historical boundary; Doc178 is authoritative for the nested Character Card
+  modules and does not change Standard Mode or the Visual Asset category.
 
 ## Verification
 

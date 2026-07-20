@@ -47,7 +47,9 @@ M6  asset-channel authority, reference admission, and Provider/Reviewer
     adapter; frontend intentionally deferred
 ```
 
-The first release remains Face Identity only. The module contributes typed
+Historically, the first release was Face Identity only. Doc178 now supersedes
+that scope for the nested Character Card lifecycle; the base Visual Asset
+version still owns Face Identity evidence. The module contributes typed
 identity evidence and provenance; it does not own prompt prose, provider
 transport, review, retry, storage, or final delivery. Standard Mode has no
 People Asset lookup or Professional Mode metadata. No Web route, Provider
