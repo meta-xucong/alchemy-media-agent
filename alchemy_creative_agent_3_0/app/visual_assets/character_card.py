@@ -770,6 +770,9 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
         "reverse_three_quarter": "face.reverse_three_quarter",
         "rear_head": "face.rear_head",
     }
+    slot_state: Literal["winner_selected", "active"] = (
+        "active" if str(getattr(pack, "status", "")) == "active" else "winner_selected"
+    )
     face_slots = dict(card.face_slots)
     for view in getattr(pack, "anchor_views", []):
         slot_key = role_to_slot.get(str(getattr(view, "view_role", "")))
@@ -778,7 +781,7 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
         face_slots[slot_key] = CharacterCardSlot(
             slot_key=slot_key,
             module="face_identity",
-            state="active",
+            state=slot_state,
             output_id=str(view.output_id),
             source_candidate_ids=list(view.source_candidate_ids),
             lineage_id=f"lineage_{view.view_id}",
@@ -788,7 +791,7 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
         )
     return card.model_copy(
         update={
-            "face_identity_status": "active",
+            "face_identity_status": "active" if slot_state == "active" else "reviewing",
             "face_identity_version_id": pack_version_id,
             "face_slots": face_slots,
             "card_version_id": f"card_{pack_version_id}",

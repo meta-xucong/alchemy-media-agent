@@ -197,13 +197,23 @@ class V3ProductRouteHandlers:
     ) -> dict[str, Any]:
         """Prepare one explicit Character Card stage; details stay server-owned."""
 
-        if set(payload) != {"stage"} or payload.get("stage") not in {"expression_set", "body_silhouette"}:
+        if set(payload) != {"stage"} or payload.get("stage") not in {
+            "face_identity",
+            "expression_set",
+            "body_silhouette",
+        }:
             raise ValueError("character_card_stage_required")
-        asset = self.visual_asset_library_service.prepare_character_card_stage(
-            owner_scope=self._visual_asset_owner_scope(owner_scope),
-            visual_asset_id=visual_asset_id,
-            stage=payload["stage"],
-        )
+        if payload["stage"] == "face_identity":
+            asset = self.visual_asset_library_service.prepare_character_card_face(
+                owner_scope=self._visual_asset_owner_scope(owner_scope),
+                visual_asset_id=visual_asset_id,
+            )
+        else:
+            asset = self.visual_asset_library_service.prepare_character_card_stage(
+                owner_scope=self._visual_asset_owner_scope(owner_scope),
+                visual_asset_id=visual_asset_id,
+                stage=payload["stage"],
+            )
         return {"visual_asset": self._visual_asset_public_record(asset)}
 
     def post_visual_asset_character_card_activate(

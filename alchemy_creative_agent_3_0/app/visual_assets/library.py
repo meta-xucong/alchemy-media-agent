@@ -717,6 +717,15 @@ class LibraryAssetPreparationHost(Protocol):
     def activate(self, pack: IdentityAnchorPackVersion, *, confirmed: bool) -> IdentityAnchorPackVersion:
         """Activate an already reviewed pack after user confirmation."""
 
+    def prepare_character_card(
+        self,
+        *,
+        project_id: str,
+        people_asset: PeopleAsset,
+        root_source_provenance: RootSourceProvenance,
+    ) -> AnchorPackPreparationResult:
+        """Prepare the additive reverse/rear Face Identity slots."""
+
 
 class VisualAssetLibraryLifecycleService:
     """Library lifecycle that adapts the existing shared Face Identity host.
@@ -926,6 +935,67 @@ class VisualAssetLibraryLifecycleService:
         return self.catalog.save(
             asset.model_copy(update={"character_card": result.card, "updated_at": _utc_now()})
         )
+
+    def prepare_character_card_face(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset:
+        """Prepare all five Face Identity slots through the existing host."""
+
+        if self.anchor_pack_host is None:
+            raise RuntimeError("character_card_face_prepare_unavailable")
+        method = getattr(self.anchor_pack_host, "prepare_character_card", None)
+        if not callable(method):
+            raise RuntimeError("character_card_face_prepare_unavailable")
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        staging_project_id = _library_staging_scope(owner_scope)
+        people_asset = PeopleAsset(
+            people_asset_id=asset.visual_asset_id,
+            project_id=staging_project_id,
+            subject_kind="human_person",
+            face_identity_module=FaceIdentityModule(
+                module_id=f"face_{asset.visual_asset_id}",
+                people_asset_id=asset.visual_asset_id,
+                status="draft",
+            ),
+            root_source_provenance=RootSourceProvenance(
+                source_type="uploaded_portrait",
+                source_asset_id=asset.root_source_provenance.source_asset_id,
+                project_id=staging_project_id,
+                consent_reference=asset.root_source_provenance.consent_reference,
+                supplementary_source_asset_ids=list(asset.root_source_provenance.supplementary_source_asset_ids),
+            ),
+            preparation_intent=asset.preparation_intent,
+            status="draft",
+        )
+        result = method(
+            project_id=staging_project_id,
+            people_asset=people_asset,
+            root_source_provenance=people_asset.root_source_provenance,
+        )
+        pack = result.pack
+        if pack.people_asset_id != asset.visual_asset_id or pack.root_source_provenance.source_asset_id != asset.root_source_provenance.source_asset_id:
+            raise ValueError("character_card_face_prepare_binding_mismatch")
+        version = VisualAssetVersion(
+            version_id=pack.pack_version_id,
+            visual_asset_id=asset.visual_asset_id,
+            lifecycle_status="review" if pack.status == "review" else "failed",
+            approved_evidence_ids=[item.output_id for item in pack.anchor_views if item.active],
+            activation_confirmed=False,
+            immutable_source_provenance=asset.root_source_provenance,
+            anchor_pack=pack,
+        )
+        existing_versions = [item for item in asset.versions if item.version_id != version.version_id]
+        card = asset.character_card
+        if pack.status == "review":
+            card = apply_face_identity_pack_to_card(card, pack)
+            card = card.model_copy(update={"face_identity_status": "reviewing"})
+        updated = asset.model_copy(
+            update={
+                "versions": [*existing_versions, version],
+                "lifecycle_status": "review" if version.lifecycle_status == "review" else "blocked",
+                "character_card": card,
+                "updated_at": _utc_now(),
+            }
+        )
+        return self.catalog.save(updated)
 
     def activate_character_card_module(
         self,
