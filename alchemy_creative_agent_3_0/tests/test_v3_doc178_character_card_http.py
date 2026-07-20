@@ -17,6 +17,8 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardState,
     CharacterCardSlot,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorPackPreparationResult
+from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityAnchorPackVersion, RootSourceProvenance
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryRootSourceProvenance,
     LibraryVisualAssetCreateRequest,
@@ -225,3 +227,33 @@ def test_doc180_public_character_card_projection_exposes_only_server_owned_media
     assert "output_id" not in slot
     assert "prompt" not in slot
     assert "provider" not in slot
+
+
+def test_doc180_face_prepare_persists_safe_failure_for_the_browser_card() -> None:
+    class _UnavailableFaceHost:
+        def prepare_character_card(self, *, project_id, people_asset, root_source_provenance):
+            pack = IdentityAnchorPackVersion(
+                pack_version_id="pack_failed",
+                people_asset_id=people_asset.people_asset_id,
+                status="failed",
+                root_source_provenance=RootSourceProvenance(
+                    source_type="uploaded_portrait",
+                    source_asset_id=root_source_provenance.source_asset_id,
+                    project_id=project_id,
+                    consent_reference=root_source_provenance.consent_reference,
+                ),
+            )
+            return AnchorPackPreparationResult(
+                status="blocked",
+                pack=pack,
+                failure_codes=["remote_brain_unavailable"],
+            )
+
+    catalog = VisualAssetLibraryCatalog()
+    asset = _catalog_asset(catalog)
+    lifecycle = VisualAssetLibraryLifecycleService(catalog, anchor_pack_host=_UnavailableFaceHost())
+    updated = lifecycle.prepare_character_card_face(owner_scope="local_default", visual_asset_id=asset.visual_asset_id)
+    assert updated.lifecycle_status == "blocked"
+    assert updated.versions[-1].failure_code == "remote_brain_unavailable"
+    public = V3ProductRouteHandlers._visual_asset_public_record(updated)
+    assert public["latest_preparation"]["failure_code"] == "remote_brain_unavailable"

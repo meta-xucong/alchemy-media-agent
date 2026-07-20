@@ -5333,6 +5333,10 @@ function v3CharacterCardStatusLabel(status) {
   }[status] || "等待处理";
 }
 
+function v3CharacterCardAssetFailureMessage(asset) {
+  return v3VisualAssetPreparationFailureMessage(asset?.latest_preparation?.failure_code);
+}
+
 function v3CharacterCardSlot(card, slotKey) {
   const slot = card?.slots?.[slotKey];
   if (slot) return slot;
@@ -5408,6 +5412,7 @@ function renderV3CharacterCardWorkspace() {
   }
   const moduleStatuses = v3CharacterCardModuleOrder.map((module) => v3CharacterCardModuleStatus(card, module));
   const activeCount = moduleStatuses.filter((status) => status === "active").length;
+  const lifecycleBlocked = asset.lifecycle_status === "blocked";
   const preparingModule = v3CharacterCardModuleOrder.find((module) => v3CharacterCardModuleStatus(card, module) === "preparing") || v3State.characterCardBusyModule;
   const waitingModule = v3CharacterCardModuleOrder.find((module) => v3CharacterCardModuleStatus(card, module) === "reviewing");
   const progress = activeCount === 3 ? 100 : Math.min(96, activeCount * 33 + (preparingModule ? 16 : waitingModule ? 28 : 0));
@@ -5415,16 +5420,22 @@ function renderV3CharacterCardWorkspace() {
   const nextMeta = v3CharacterCardModuleMeta[nextModule];
   if (els.v3CharacterCardTitle) els.v3CharacterCardTitle.textContent = `${asset.display_name} · 标准人物角色卡`;
   if (els.v3CharacterCardDetail) {
-    els.v3CharacterCardDetail.textContent = activeCount === 3
+    els.v3CharacterCardDetail.textContent = lifecycleBlocked
+      ? v3CharacterCardAssetFailureMessage(asset)
+      : activeCount === 3
       ? "三部分都已完成。以后在专业项目中选择这个人物资产即可保持人物一致。"
       : "每个固定位置都会保留。生成完成后，图片会回到对应位置；你可以分次完成，也可以一键按顺序准备。";
   }
   if (els.v3CharacterCardStatus) {
-    els.v3CharacterCardStatus.textContent = waitingModule ? `等待确认：${v3CharacterCardModuleMeta[waitingModule].title}` : activeCount === 3 ? "角色卡已完成" : `${activeCount}/3 部分已完成`;
+    els.v3CharacterCardStatus.textContent = lifecycleBlocked
+      ? "本次未完成"
+      : waitingModule ? `等待确认：${v3CharacterCardModuleMeta[waitingModule].title}` : activeCount === 3 ? "角色卡已完成" : `${activeCount}/3 部分已完成`;
   }
   if (els.v3CharacterCardProgressFill) els.v3CharacterCardProgressFill.style.width = `${progress}%`;
   if (els.v3CharacterCardProgressText) {
-    els.v3CharacterCardProgressText.textContent = activeCount === 3
+    els.v3CharacterCardProgressText.textContent = lifecycleBlocked
+      ? "这次没有形成可用的标准参考，原图已保留，可重新开始"
+      : activeCount === 3
       ? "人物角色卡已完成"
       : waitingModule
         ? `请确认启用：${v3CharacterCardModuleMeta[waitingModule].title}`
@@ -5503,7 +5514,13 @@ async function runV3CharacterCardStage(module, { runAll = false } = {}) {
     const prepared = v3State.visualAssets.find((item) => item.visual_asset_id === assetId);
     advanceAfterStage = Boolean(v3State.characterCardRunAll)
       && v3CharacterCardModuleStatus(v3CharacterCardForAsset(prepared), module) === "active";
-    updateV3Notice(`${v3CharacterCardModuleMeta[module].title}已返回共享流程结果，请查看角色卡下一步。`, "success");
+    const failed = prepared?.lifecycle_status === "blocked"
+      || v3CharacterCardModuleStatus(v3CharacterCardForAsset(prepared), module) === "blocked";
+    if (failed) {
+      updateV3Notice(v3CharacterCardAssetFailureMessage(prepared), "warning");
+    } else {
+      updateV3Notice(`${v3CharacterCardModuleMeta[module].title}已返回共享流程结果，请查看角色卡下一步。`, "success");
+    }
   } catch (error) {
     updateV3Notice(v3VisualAssetErrorMessage(error), "warning");
   } finally {

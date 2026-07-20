@@ -1016,6 +1016,21 @@ class VisualAssetLibraryLifecycleService:
             activation_confirmed=False,
             immutable_source_provenance=asset.root_source_provenance,
             anchor_pack=pack,
+            failure_code=(
+                next(
+                    (
+                        str(item.failure_code).strip()
+                        for item in result.generation_failures
+                        if str(item.failure_code or "").strip()
+                    ),
+                    None,
+                )
+                or (
+                    str(result.failure_codes[0]).strip()
+                    if pack.status != "review" and result.failure_codes
+                    else None
+                )
+            ),
         )
         existing_versions = [item for item in asset.versions if item.version_id != version.version_id]
         card = asset.character_card
