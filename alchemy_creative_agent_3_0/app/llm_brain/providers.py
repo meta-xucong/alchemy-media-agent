@@ -354,8 +354,14 @@ class V3LLMBrainProvider:
             # its own configured credential/base URL.  Do not silently route
             # Central Brain calls through the unrelated image gateway simply
             # because OPENAI_API_KEY is also present in the process.
-            api_key = _env("V3_LLM_BRAIN_API_KEY") or _settings_value("deepseek_llm_api_key")
-            base_url = _env("V3_LLM_BRAIN_BASE_URL") or _settings_value("deepseek_llm_base_url")
+            api_key = (
+                _env("V3_LLM_BRAIN_API_KEY")
+                or _settings_value("deepseek_llm_api_key")
+            )
+            base_url = (
+                _env("V3_LLM_BRAIN_BASE_URL")
+                or _settings_value("deepseek_llm_base_url")
+            )
         else:
             api_key = _env("V3_LLM_BRAIN_API_KEY") or _settings_value("openai_api_key") or _settings_value("lab_openai_api_key")
             base_url = _env("V3_LLM_BRAIN_BASE_URL") or _settings_value("openai_base_url") or _settings_value("lab_openai_base_url")
@@ -413,7 +419,14 @@ def _remote_enabled(*, force: bool = False) -> bool:
         return raw.strip().lower() in {"1", "true", "yes", "on"}
     if force:
         return True
-    return bool(_env("V3_LLM_BRAIN_API_KEY"))
+    if _env("V3_LLM_BRAIN_API_KEY"):
+        return True
+    provider = (_env("V3_LLM_BRAIN_PROVIDER") or _preferred_provider()).strip().lower()
+    if provider == "deepseek":
+        return bool(_settings_value("deepseek_llm_api_key"))
+    if provider in {"anthropic", "kimi", "claude"}:
+        return bool(_settings_value("anthropic_auth_token") or _settings_value("anthropic_api_key"))
+    return bool(_settings_value("openai_api_key") or _settings_value("lab_openai_api_key"))
 
 
 def _float_env(name: str, default: float) -> float:

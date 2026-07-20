@@ -238,3 +238,13 @@ def test_doc177_people_asset_creation_is_linear_and_shows_modeling_progress() ->
     assert ".v3-visual-asset-workflow-panel" in css
     assert ".v3-visual-asset-workflow-progress.is-running" in css
     assert ".v3-visual-asset-workflow-actions .button" in css
+
+
+def test_doc177_linear_failure_projection_distinguishes_brain_unavailable_from_quality_failure() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    handlers = HANDLERS.read_text(encoding="utf-8")
+
+    assert "function v3VisualAssetPreparationFailureMessage" in source
+    assert "remote_brain_unavailable" in source
+    assert "preparedAsset?.lifecycle_status === \"blocked\"" in source
+    assert '"failure_code"' in handlers

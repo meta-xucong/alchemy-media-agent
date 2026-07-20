@@ -113,6 +113,13 @@ class ProductApiAnchorPackPreparationHost:
             stage_plan_source_job_id=self._stage_plan_source_job_ids.get(stage_key),
         )
         if status.status != ProductJobStatusValue.PLANNED:
+            record = self.product_service.get_job_record(status.job_id)
+            request_metadata = dict(record.request.metadata) if record is not None else {}
+            remote_outcome = request_metadata.get("remote_creative_brain_outcome")
+            if isinstance(remote_outcome, dict):
+                reason_code = str(remote_outcome.get("reason_code") or "").strip()
+                if reason_code in {"remote_brain_unavailable", "remote_brain_unauthorized"}:
+                    raise AnchorCandidateUnavailable(reason_code)
             raise AnchorCandidateUnavailable("professional_anchor_candidate_planning_blocked")
         self._stage_plan_source_job_ids.setdefault(stage_key, status.job_id)
         # The stage owns one shared bounded repair. A Provider failure with no

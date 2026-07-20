@@ -728,8 +728,13 @@ class ScenarioRuntime:
             return
         if not brain_result.llm_used or brain_result.fallback_used:
             raise self._remote_creative_brain_block(
-                "remote_brain_unavailable" if real_image_job and not policy.requires_remote_creative_brain
-                else "remote_creative_brain_required_for_template",
+                "remote_brain_unauthorized"
+                if brain_result.audit.get("remote_provider_http_status_code") in {401, 403}
+                else (
+                    "remote_brain_unavailable"
+                    if real_image_job and not policy.requires_remote_creative_brain
+                    else "remote_creative_brain_required_for_template"
+                ),
                 brain_result,
             )
         rejected_sections = brain_result.audit.get("remote_contract_rejected_sections")

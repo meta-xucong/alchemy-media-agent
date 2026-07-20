@@ -245,6 +245,24 @@ class V3ProductRouteHandlers:
         active_version = asset.active_version()
         latest_version = asset.versions[-1] if asset.versions else None
         latest_pack = getattr(latest_version, "anchor_pack", None) if latest_version is not None else None
+        latest_preparation = (
+            {
+                "status": latest_version.lifecycle_status,
+                "version_id": latest_version.version_id,
+                "user_activation_confirmed": latest_version.activation_confirmed,
+                "anchor_views": [
+                    {
+                        "view_role": view.view_role,
+                        "active": bool(view.active),
+                    }
+                    for view in getattr(latest_pack, "anchor_views", [])
+                ],
+            }
+            if latest_version is not None
+            else None
+        )
+        if latest_preparation is not None and latest_version.failure_code:
+            latest_preparation["failure_code"] = latest_version.failure_code
         return {
             "visual_asset_id": asset.visual_asset_id,
             "display_name": asset.display_name,
@@ -252,22 +270,7 @@ class V3ProductRouteHandlers:
             "lifecycle_status": asset.lifecycle_status,
             "active_version_id": asset.active_version_id,
             "available_for_projects": bool(active_version and asset.lifecycle_status == "active"),
-            "latest_preparation": (
-                {
-                    "status": latest_version.lifecycle_status,
-                    "version_id": latest_version.version_id,
-                    "user_activation_confirmed": latest_version.activation_confirmed,
-                    "anchor_views": [
-                        {
-                            "view_role": view.view_role,
-                            "active": bool(view.active),
-                        }
-                        for view in getattr(latest_pack, "anchor_views", [])
-                    ],
-                }
-                if latest_version is not None
-                else None
-            ),
+            "latest_preparation": latest_preparation,
         }
 
     @staticmethod

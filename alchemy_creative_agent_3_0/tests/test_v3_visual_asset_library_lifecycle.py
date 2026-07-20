@@ -7,6 +7,7 @@ import pytest
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore
+from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorCandidateFailure
 from alchemy_creative_agent_3_0.app.visual_assets import (
     AnchorPackPreparationResult,
     AnchorView,
@@ -283,6 +284,40 @@ def test_library_prepare_activate_and_project_binding_reuse_shared_host(tmp_path
     )
     assert binding["state"] == "valid"
     assert binding["bindings"][0]["visual_asset_id"] == visual_asset_id
+
+
+def test_library_prepare_projects_safe_brain_failure_class_for_browser_recovery(tmp_path) -> None:
+    handlers, _, _, root_source_asset_id = _handlers(tmp_path)
+
+    class _BlockedHost(_PreparationHost):
+        def prepare(self, *, project_id, people_asset, root_source_provenance):
+            return AnchorPackPreparationResult(
+                status="blocked",
+                pack=_pack(people_asset.people_asset_id, project_id, root_source_asset_id).model_copy(
+                    update={"status": "failed", "anchor_views": []}
+                ),
+                generation_failures=[
+                    AnchorCandidateFailure(
+                        stage="front",
+                        view_role="standard_front",
+                        candidate_index=1,
+                        failure_code="remote_brain_unavailable",
+                    )
+                ],
+                failure_codes=["no_passing_front_candidate"],
+            )
+
+    blocked_handlers = V3ProductRouteHandlers(
+        service=handlers.service,
+        project_store=handlers.project_service.project_store,
+        anchor_pack_preparation_host=_BlockedHost(root_source_asset_id),
+        visual_asset_library_catalog=handlers.visual_asset_library_catalog,
+    )
+    created = _create_library_asset(blocked_handlers, root_source_asset_id)
+    prepared = blocked_handlers.post_visual_asset_prepare(str(created["visual_asset_id"]), {})["visual_asset"]
+
+    assert prepared["lifecycle_status"] == "blocked"
+    assert prepared["latest_preparation"]["failure_code"] == "remote_brain_unavailable"
 
 
 def test_library_activation_requires_explicit_confirmation_and_known_review_version(tmp_path) -> None:

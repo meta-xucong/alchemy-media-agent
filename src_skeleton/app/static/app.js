@@ -5224,6 +5224,29 @@ function v3VisualAssetErrorMessage(error) {
   return "这一步暂时没有完成。已保存的信息不会丢失，请刷新后重试。";
 }
 
+function v3VisualAssetPreparationFailureMessage(code) {
+  const normalized = String(code || "").trim().toLowerCase();
+  if (normalized === "remote_brain_unavailable") {
+    return "共享创意大脑暂时不可用，标准建模尚未开始。原图已保存，请稍后重新开始。";
+  }
+  if (normalized === "remote_brain_unauthorized") {
+    return "共享创意大脑的连接配置未通过认证，标准建模尚未开始。请先检查运行配置，再重新开始。";
+  }
+  if (normalized.includes("planning_blocked")) {
+    return "共享创意规划没有完成，标准建模尚未开始。原图已保存，请稍后重新开始。";
+  }
+  if (normalized.includes("generation_failed")) {
+    return "标准视角生成没有完成。原图已保存，可以稍后重新处理。";
+  }
+  if (normalized.includes("no_passing_front_candidate")) {
+    return "正面标准参考没有通过共享检查。可以保留原图，调整源图后重新处理。";
+  }
+  if (normalized.includes("supplementary_view_failed")) {
+    return "侧前方或侧面标准参考没有完成共享检查。可以稍后重新处理。";
+  }
+  return "这次没有形成可启用的标准参考。原图已保存，可以重新处理。";
+}
+
 function v3VisualAssetViewLabel(role) {
   return {
     standard_front: "正面",
@@ -5242,7 +5265,10 @@ function v3VisualAssetLifecycleLabel(asset) {
     return { title: "等待你确认启用", detail: "三个视角已完成共享检查。确认后，才会出现在项目选择列表中。" };
   }
   if (status === "blocked") {
-    return { title: "需要重新处理", detail: "这次没有形成可启用的标准参考。可以重新准备，或换一张更清晰的源图。" };
+    return {
+      title: "需要重新处理",
+      detail: v3VisualAssetPreparationFailureMessage(preparation?.failure_code),
+    };
   }
   if (status === "preparing") {
     return { title: "正在建立标准建模", detail: "正在通过共享流程准备并检查三个视角，请不要重复提交。" };
@@ -5715,8 +5741,19 @@ async function prepareV3VisualAsset(visualAssetId, { fromWorkflow = false } = {}
     updateV3Notice("正在建立人物的标准参考并完成三个视角检查。", "info");
     await request(`${v3VisualAssetPath(visualAssetId)}/prepare`, { method: "POST", body: {} });
     await loadV3VisualAssets({ silent: true, force: true });
-    v3State.visualAssetWorkflowStage = "review";
-    updateV3Notice("标准建模已完成。请查看状态后确认是否启用这个版本。", "success");
+    const preparedAsset = v3State.visualAssets.find((item) => item.visual_asset_id === visualAssetId);
+    if (preparedAsset?.lifecycle_status === "review" && preparedAsset?.latest_preparation?.version_id) {
+      v3State.visualAssetWorkflowStage = "review";
+      updateV3Notice("标准建模已完成。请查看状态后确认是否启用这个版本。", "success");
+    } else if (preparedAsset?.lifecycle_status === "blocked") {
+      v3State.visualAssetWorkflowStage = "blocked";
+      const message = v3VisualAssetPreparationFailureMessage(preparedAsset.latest_preparation?.failure_code);
+      v3State.visualAssetsError = message;
+      updateV3Notice(message, "warning");
+    } else {
+      v3State.visualAssetWorkflowStage = "preparing";
+      updateV3Notice("标准建模仍在共享流程中，请稍候。", "info");
+    }
   } catch (error) {
     v3State.visualAssetWorkflowStage = "blocked";
     v3State.visualAssetsError = v3VisualAssetErrorMessage(error);

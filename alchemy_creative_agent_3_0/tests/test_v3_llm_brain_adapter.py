@@ -11,6 +11,7 @@ from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+    BrainProviderUnavailable,
     BrainInvalidJsonResponse,
     BrainOutputTruncated,
     V3LLMBrainProvider,
@@ -553,6 +554,28 @@ def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monk
     api_key, base_url = provider._credentials()  # noqa: SLF001 - configuration boundary assertion
     assert api_key == "deepseek-test-key"
     assert base_url == "https://brain.example.test/v1"
+
+
+def test_remote_brain_does_not_reuse_unrelated_anthropic_credential_for_deepseek(monkeypatch) -> None:
+    """A Claude/local-gateway credential is not an Aiself DeepSeek credential."""
+
+    from app.config import settings
+
+    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_REMOTE_ENABLED", raising=False)
+    monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
+    monkeypatch.setattr(settings, "deepseek_llm_api_key", None)
+    monkeypatch.setattr(settings, "deepseek_llm_base_url", None)
+    monkeypatch.setattr(settings, "anthropic_auth_token", "local-gateway-token")
+    monkeypatch.setattr(settings, "anthropic_base_url", "http://127.0.0.1:15721")
+
+    provider = V3LLMBrainProvider()
+
+    assert provider.available() is False
+    with pytest.raises(BrainProviderUnavailable):
+        provider._credentials()
 
 
 def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypatch) -> None:

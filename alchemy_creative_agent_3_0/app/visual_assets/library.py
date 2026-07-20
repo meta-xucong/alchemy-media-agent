@@ -94,6 +94,9 @@ class VisualAssetVersion(_StrictLibraryModel):
     # not an alternate pixel store.  It lets the generic library lifecycle
     # reuse the shared three-view preparation and explicit activation host.
     anchor_pack: IdentityAnchorPackVersion | None = None
+    # Safe operator-facing classification for a failed preparation.  This is
+    # deliberately not a provider error body, prompt, endpoint, or job ID.
+    failure_code: str | None = None
 
     @field_validator("version_id", "visual_asset_id")
     @classmethod
@@ -801,6 +804,21 @@ class VisualAssetLibraryLifecycleService:
             activation_confirmed=False,
             immutable_source_provenance=asset.root_source_provenance,
             anchor_pack=pack,
+            failure_code=(
+                next(
+                    (
+                        str(item.failure_code).strip()
+                        for item in result.generation_failures
+                        if str(item.failure_code or "").strip()
+                    ),
+                    None,
+                )
+                or (
+                    str(result.failure_codes[0]).strip()
+                    if pack.status != "review" and result.failure_codes
+                    else None
+                )
+            ),
         )
         existing_versions = [item for item in asset.versions if item.version_id != version.version_id]
         updated = asset.model_copy(
