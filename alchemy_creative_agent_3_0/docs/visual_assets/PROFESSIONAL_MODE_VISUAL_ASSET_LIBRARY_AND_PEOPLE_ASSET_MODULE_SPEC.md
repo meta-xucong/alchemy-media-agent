@@ -19,6 +19,13 @@
 > records remain readable and auditable; this note does not rewrite historical
 > M5 evidence.
 
+> **Doc178 module-scope note (2026-07-20):** The Face-Identity-only first-release
+> wording in this historical specification is superseded for new Character Card
+> work by `178_V3_PROFESSIONAL_PEOPLE_ASSET_CHARACTER_CARD_MODULES_SPEC.md`.
+> Doc178 adds sibling Expression Set and Body Silhouette modules and the
+> Face → Expression → Body order; all library, consent, Brain-first, reference
+> admission, shared review/retry, and activation invariants here remain valid.
+
 ## 0. Status And Authority
 
 Status:
@@ -202,7 +209,7 @@ The first-release module boundary is:
 ```text
 People Asset
   -> Face Identity Module        [implemented first]
-  -> Body / silhouette Module    [future; not implemented here]
+  -> Body / silhouette Module    [historical first-release scope; Doc178 extension]
   -> Hair / styling Module       [future; not implemented here]
   -> Other identity dimensions  [future; not implemented here]
 ```
@@ -512,7 +519,7 @@ current contracts:
 | Doc137/139 Human Realism Brain gates | When Human Realism is active, semantic preflight and independent natural-presence re-signing must pass before Provider/MCP execution. |
 | Doc138 natural human presence | Human-presence quality remains a Brain-owned semantic deliverable, not a Face Identity prompt recipe. |
 | Doc140 task-profile completeness | A new enforced real-image job requires a complete remote semantic task profile and capability activation intent; local fallback cannot fill semantic gaps. |
-| Module boundary | The first release activates only Face Identity; future body/style modules require their own contracts and explicit activation. |
+| Module boundary | The historical first release activated only Face Identity; Doc178 now defines separately contracted Expression Set and Body Silhouette modules with explicit activation. |
 | Doc91/92 Human Realism | Improve human rendering without acquiring reference-channel ownership. |
 | shared GPT Image 2 provider | Render anchor candidates and later Professional Mode images through the existing provider contract. |
 | shared vision review/retry/history | Review every candidate, keep append-only attempts, and activate only the reviewed winner/pack. |
@@ -880,8 +887,9 @@ The Professional Mode foundation is not ready to integrate until:
    uploaded references.
 9. A project can hold multiple People Assets, but each job binds one explicit
    selected asset and pack version.
-10. The first-release pack activates only Face Identity; non-face dimensions
-    remain unclaimed until a future module is explicitly approved.
+10. The historical first-release pack activated only Face Identity. Under Doc178,
+    Expression Set and Body Silhouette are separately approved sibling modules;
+    every non-face dimension still requires explicit activation and its own evidence.
 11. The active capability plan is frozen before Professional Mode contributions
     enter generation, review, or retry.
 12. Standard, E-Commerce, Photography, and future Video consumers can select

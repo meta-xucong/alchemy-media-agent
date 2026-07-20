@@ -16,6 +16,12 @@ tests are complete.
 > reintroduce a project-scoped catalog or use this document to add a second
 > asset runtime.
 
+> **Doc178 scope note (2026-07-20):** The first-module-only wording remains
+> valid as historical Face Identity scope. Doc178 now defines the additional
+> Expression Set and Body Silhouette sibling claims; this document's channel
+> ownership, safe admission, Brain-first, and evidence-parity rules continue to
+> govern those modules.
+
 The purpose is to make Professional Mode largely invisible during normal use:
 the user explicitly chooses Professional Mode and a visual asset, while the
 backend automatically decides which parts of every other reference are
