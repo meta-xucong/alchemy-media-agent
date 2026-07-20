@@ -541,7 +541,13 @@ class ScenarioRuntime:
                 if isinstance(planning_metadata, dict)
                 else None
             )
-            if stage not in {"standard_front", "three_quarter", "profile"}:
+            if stage not in {
+                "standard_front",
+                "three_quarter",
+                "profile",
+                "reverse_three_quarter",
+                "rear_head",
+            }:
                 raise CapabilityActivationError("professional_anchor_pack_preparation_stage_invalid")
             expected_metadata = self.professional_mode_runtime_bridge.anchor_pack_preparation_metadata(
                 view_role=stage
@@ -1329,7 +1335,13 @@ class ScenarioRuntime:
                     if isinstance(planning_metadata, dict)
                     else ""
                 ).strip()
-                if target_view_role not in {"standard_front", "three_quarter", "profile"}:
+                if target_view_role not in {
+                    "standard_front",
+                    "three_quarter",
+                    "profile",
+                    "reverse_three_quarter",
+                    "rear_head",
+                }:
                     raise CapabilityActivationError("professional_anchor_view_contract_missing")
                 context["professional_anchor_view_decision"] = {
                     "required": True,
@@ -3478,7 +3490,13 @@ class ScenarioRuntime:
         if (
             plan_metadata.get("professional_anchor_pack_preparation") is True
             and professional_strategy == "serial_anchor_pack_root_reuse_v1"
-            and professional_stage in {"standard_front", "three_quarter", "profile"}
+            and professional_stage in {
+                "standard_front",
+                "three_quarter",
+                "profile",
+                "reverse_three_quarter",
+                "rear_head",
+            }
         ):
             return {
                 "professional_identity_reference_strategy": professional_strategy,

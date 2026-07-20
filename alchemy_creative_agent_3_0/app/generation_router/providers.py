@@ -2959,7 +2959,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             # it does not author prompt text, infer a face, or carry the
             # supplementary image into later serial views.
             return ("portrait_identity_stage_flexible_feature_crop",)
-        if stage not in {"three_quarter", "profile"}:
+        if stage not in {"three_quarter", "profile", "reverse_three_quarter", "rear_head"}:
             return None
         if self._is_uploaded_truth_source(asset) and not asset.get("output_id"):
             return ("portrait_identity_pose_geometry_crop",)
@@ -3044,7 +3044,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
             return None
         stage = str(metadata.get("professional_reference_stage") or "").strip()
-        if stage not in {"standard_front", "three_quarter", "profile"}:
+        if stage not in {
+            "standard_front",
+            "three_quarter",
+            "profile",
+            "reverse_three_quarter",
+            "rear_head",
+        }:
             return None
         # The front stage keeps the long-standing complementary pair and is
         # admitted by the existing identity truth policy. The new readiness
@@ -3077,7 +3083,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 ["feature_detail", "pose_geometry"]
                 if generated
                 else ["pose_geometry"]
-                if stage in {"three_quarter", "profile"}
+                if stage in {"three_quarter", "profile", "reverse_three_quarter", "rear_head"}
                 else ["feature_detail", "head_geometry"]
             )
         missing: list[dict[str, Any]] = []
@@ -3090,7 +3096,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "schema_version": "professional_view_conditioned_evidence_v1",
             "strategy": "serial_anchor_pack_root_reuse_v1",
             "stage": stage,
-            "reference_budget": {"standard_front": 2, "three_quarter": 3, "profile": 5}[stage],
+            "reference_budget": {
+                "standard_front": 2,
+                "three_quarter": 3,
+                "profile": 5,
+                "reverse_three_quarter": 5,
+                "rear_head": 5,
+            }[stage],
             "required_source_scopes": expected,
             "admitted_sources": sources,
             "ready": not missing and bool(expected),

@@ -899,7 +899,13 @@ def _inspection_reference_limit(metadata: dict[str, Any]) -> int:
     if (
         projection["applies"]
         and strategy == "serial_anchor_pack_root_reuse_v1"
-        and stage in {"standard_front", "three_quarter", "profile"}
+        and stage in {
+            "standard_front",
+            "three_quarter",
+            "profile",
+            "reverse_three_quarter",
+            "rear_head",
+        }
     ):
         return 3
     return 2

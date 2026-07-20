@@ -24,6 +24,22 @@ from .anchor_pack import (
     AnchorPackPreparationService,
     AnchorReviewDecision,
 )
+from .character_card import (
+    BODY_SOURCE_CLASSES,
+    BODY_SLOT_KEYS,
+    EXPRESSION_SLOT_KEYS,
+    FACE_SLOT_KEYS,
+    BodyPreparationRequest,
+    CharacterCardCandidateAttempt,
+    CharacterCardCandidateRequest,
+    CharacterCardCandidateResult,
+    CharacterCardPreparationService,
+    CharacterCardStageHost,
+    CharacterCardSlot,
+    CharacterCardStageResult,
+    CharacterCardState,
+    ExpressionPreparationRequest,
+)
 from .catalog import InMemoryVisualAssetCatalog, PersistentVisualAssetCatalog, PeopleAssetRevision
 from .runtime_bridge import CanonicalProviderPromptReceipt, ProfessionalModeRuntimeBridge
 from .lifecycle import (
@@ -79,6 +95,20 @@ __all__ = [
     "AnchorPackPreparationResult",
     "AnchorPackPreparationService",
     "AnchorReviewDecision",
+    "BODY_SOURCE_CLASSES",
+    "BODY_SLOT_KEYS",
+    "EXPRESSION_SLOT_KEYS",
+    "FACE_SLOT_KEYS",
+    "BodyPreparationRequest",
+    "CharacterCardCandidateAttempt",
+    "CharacterCardCandidateRequest",
+    "CharacterCardCandidateResult",
+    "CharacterCardPreparationService",
+    "CharacterCardStageHost",
+    "CharacterCardSlot",
+    "CharacterCardStageResult",
+    "CharacterCardState",
+    "ExpressionPreparationRequest",
     "AssetChannelClaim",
     "FaceIdentityModule",
     "IdentityAnchorPackVersion",

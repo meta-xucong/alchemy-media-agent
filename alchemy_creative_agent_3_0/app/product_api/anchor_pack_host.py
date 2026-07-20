@@ -36,6 +36,8 @@ class ProductApiAnchorPackPreparationHost:
         "standard_front": 2,
         "three_quarter": 3,
         "profile": 5,
+        "reverse_three_quarter": 5,
+        "rear_head": 5,
     }
     _REQUIRED_SCORE_DIMENSIONS = {
         "same_person_readability",

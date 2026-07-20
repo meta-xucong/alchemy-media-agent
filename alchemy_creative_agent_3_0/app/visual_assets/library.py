@@ -21,6 +21,12 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from .anchor_pack import AnchorPackPreparationResult
+from .character_card import (
+    CharacterCardPreparationService,
+    CharacterCardStageHost,
+    CharacterCardState,
+    apply_face_identity_pack_to_card,
+)
 from .contracts import (
     FACE_IDENTITY_CHANNELS,
     FaceIdentityModule,
@@ -139,6 +145,12 @@ class VisualAsset(_StrictLibraryModel):
     created_at: str
     updated_at: str
     provenance: dict[str, str] = Field(default_factory=dict)
+    # Doc178 adds a resumable Character Card template inside the same People
+    # Asset.  It is not a new asset category and stays empty until the shared
+    # Face/Expression/Body stages produce reviewed evidence.
+    character_card: CharacterCardState = Field(
+        default_factory=lambda: CharacterCardState.initial(card_version_id="card_pending")
+    )
 
     @field_validator("visual_asset_id", "display_name", "owner_scope", "preparation_intent")
     @classmethod
@@ -721,10 +733,12 @@ class VisualAssetLibraryLifecycleService:
         *,
         root_source_resolver: Callable[[str], Any | None] | None = None,
         anchor_pack_host: LibraryAssetPreparationHost | None = None,
+        character_card_stage_host: CharacterCardStageHost | None = None,
     ) -> None:
         self.catalog = catalog
         self.root_source_resolver = root_source_resolver
         self.anchor_pack_host = anchor_pack_host
+        self.character_card_stage_host = character_card_stage_host
 
     def create_draft(
         self,
@@ -871,6 +885,7 @@ class VisualAssetLibraryLifecycleService:
                     "versions": versions,
                     "active_version_id": version_id,
                     "lifecycle_status": "active",
+                    "character_card": apply_face_identity_pack_to_card(asset.character_card, active_pack),
                     "updated_at": _utc_now(),
                 }
             )
@@ -881,6 +896,54 @@ class VisualAssetLibraryLifecycleService:
         return self.catalog.save(
             asset.model_copy(update={"lifecycle_status": "archived", "updated_at": _utc_now()})
         )
+
+    def prepare_character_card_stage(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        stage: Literal["expression_set", "body_silhouette"],
+    ) -> VisualAsset:
+        """Resume one Character Card stage through a shared-runtime host."""
+
+        if self.character_card_stage_host is None:
+            raise RuntimeError("character_card_stage_prepare_unavailable")
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        card = asset.character_card
+        if stage == "expression_set" and card.face_identity_status != "active":
+            raise ValueError("character_card_expression_requires_face_identity")
+        if stage == "body_silhouette":
+            if card.face_identity_status != "active":
+                raise ValueError("character_card_body_requires_face_identity")
+            if card.expression_set_status != "active":
+                raise ValueError("character_card_body_requires_expression_set")
+        method = getattr(self.character_card_stage_host, f"prepare_{stage}", None)
+        if not callable(method):
+            raise RuntimeError("character_card_stage_prepare_unavailable")
+        result = method(asset=asset, card=card)
+        if getattr(result, "card", None) is None:
+            raise ValueError("character_card_stage_result_missing")
+        return self.catalog.save(
+            asset.model_copy(update={"character_card": result.card, "updated_at": _utc_now()})
+        )
+
+    def activate_character_card_module(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        module: Literal["expression_set", "body_silhouette"],
+        confirm_activation: bool,
+    ) -> VisualAsset:
+        if not confirm_activation:
+            raise ValueError("character_card_module_activation_confirmation_required")
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        card = CharacterCardPreparationService.activate_module(
+            asset.character_card,
+            module=module,
+            confirmed=True,
+        )
+        return self.catalog.save(asset.model_copy(update={"character_card": card, "updated_at": _utc_now()}))
 
 
 def _utc_now() -> str:

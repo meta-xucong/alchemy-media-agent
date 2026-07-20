@@ -746,7 +746,13 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         }
         and anchor_view_requirement.get("owner") == "remote_v3_llm_brain"
         and isinstance(anchor_view_requirement.get("frozen_binding"), dict)
-        and anchor_view_target in {"standard_front", "three_quarter", "profile"}
+        and anchor_view_target in {
+            "standard_front",
+            "three_quarter",
+            "profile",
+            "reverse_three_quarter",
+            "rear_head",
+        }
         and (
             anchor_capture_presentation == "neutral_identity_evidence_capture"
             and anchor_capture_continuity
