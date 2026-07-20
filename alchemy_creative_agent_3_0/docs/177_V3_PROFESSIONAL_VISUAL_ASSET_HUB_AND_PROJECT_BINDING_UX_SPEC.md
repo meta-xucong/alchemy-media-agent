@@ -42,6 +42,36 @@ thumbnail previews, preparation intent, consent, prepare/review/activate
 status, and recovery actions. Uploading source material remains visibly
 different from activating an asset.
 
+### Linear People Asset creation flow
+
+The People Asset form is a single linear task, not a sequence of unrelated
+pages:
+
+```text
+选择一至两张源图并确认信息
+  → 保存源图
+  → 当前页面自动开始标准建模
+  → 生成三个标准视角并完成共享检查
+  → 用户确认启用
+```
+
+After the source upload succeeds, the browser starts the existing
+project-scoped preparation route immediately. It must not ask the user to
+leave the form, find the asset card, and discover a second prepare action.
+While the request is running, the same panel shows the current phase, a
+coarse phase progress indicator, and a clear instruction not to submit again.
+The indicator is intentionally stage-level rather than a fabricated provider
+percentage: the server currently returns one bounded preparation result, so
+the UI may show phase progress but must not claim byte-level or exact model
+completion.
+
+Only a reviewed asset version exposes `确认启用这个人物资产`. A blocked
+preparation keeps the source asset and exposes `重新开始标准建模` in the same
+panel. Starting a new draft clears the previous asset's progress card so one
+form never appears to operate on two assets at once. Activation remains an
+explicit user action and is the only transition that makes the version
+available to project binding.
+
 ## Project binding UX
 
 Every Professional project exposes one compact, prominent **视觉资产** card in

@@ -209,3 +209,32 @@ def test_doc177_people_asset_submission_explains_missing_fields_inline() -> None
     assert "showGlobalToast" not in create
     assert ".v3-visual-asset-create-feedback" in css
     assert '[data-tone="warning"]' in css
+
+
+def test_doc177_people_asset_creation_is_linear_and_shows_modeling_progress() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert 'id="v3VisualAssetWorkflowPanel"' in index
+    assert 'role="progressbar"' in index
+    assert 'id="v3VisualAssetWorkflowSteps"' in index
+    assert 'id="v3VisualAssetWorkflowActivateBtn"' in index
+    assert "保存源图并开始标准建模" in index
+    assert "visualAssetWorkflowAssetId = createdVisualAssetId" in source
+    assert "prepareV3VisualAsset(createdVisualAssetId, { fromWorkflow: true })" in source
+    assert "visualAssetWorkflowStage = \"blocked\"" in source
+    assert 'asset.lifecycle_status === "preparing"' in source
+    assert 'aria-valuetext' in source
+    assert 'serverPreparingAsset' in source
+    assert "重新开始标准建模" in index
+    assert "确认启用这个人物资产" in index
+    assert "v3VisualAssetWorkflowActivateBtn.disabled" in source
+    assert "resetV3VisualAssetWorkflowForNewDraft" in source
+    assert "const activateAction = canActivate" in source
+    assert "const prepareAction = canPrepare" in source
+    assert 'data-v3-visual-asset-action="activate"' in source
+    assert 'const activateAction = canActivate' in source and ': "";' in source
+    assert ".v3-visual-asset-workflow-panel" in css
+    assert ".v3-visual-asset-workflow-progress.is-running" in css
+    assert ".v3-visual-asset-workflow-actions .button" in css

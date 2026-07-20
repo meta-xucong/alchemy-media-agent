@@ -3979,6 +3979,104 @@ button.v2-live-preview:focus-visible {
   background: rgba(255, 248, 238, 0.92);
 }
 
+.v3-visual-asset-workflow-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 4px;
+  padding: 16px;
+  border: 1px solid rgba(88, 105, 177, 0.24);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(247, 249, 255, 0.96), rgba(255, 255, 255, 0.82));
+}
+
+.v3-visual-asset-workflow-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.v3-visual-asset-workflow-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.v3-visual-asset-workflow-heading h4,
+.v3-visual-asset-workflow-heading p { margin: 0; }
+
+.v3-visual-asset-workflow-badge {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #4f5f9c;
+  background: rgba(229, 234, 255, 0.9);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.v3-visual-asset-workflow-progress {
+  position: relative;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e7eaf4;
+}
+
+.v3-visual-asset-workflow-progress span {
+  display: block;
+  width: var(--v3-asset-progress, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6f82d5, #9da9ec);
+  transition: width 0.45s ease;
+}
+
+.v3-visual-asset-workflow-progress.is-running span {
+  background: linear-gradient(90deg, #6f82d5 0%, #d0d8ff 48%, #6f82d5 100%);
+  background-size: 220% 100%;
+  animation: v3-asset-progress-shimmer 1.35s linear infinite;
+}
+
+@keyframes v3-asset-progress-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -120% 0; }
+}
+
+.v3-visual-asset-workflow-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.v3-visual-asset-workflow-step {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted, #64748b);
+  font-size: 13px;
+}
+
+.v3-visual-asset-workflow-step > span {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border: 2px solid #bcc4d6;
+  border-radius: 50%;
+}
+
+.v3-visual-asset-workflow-step[data-state="done"] { color: #2f6642; }
+.v3-visual-asset-workflow-step[data-state="done"] > span { border-color: #5aa16e; background: #5aa16e; }
+.v3-visual-asset-workflow-step[data-state="active"] { color: #4f5f9c; font-weight: 700; }
+.v3-visual-asset-workflow-step[data-state="active"] > span { border-color: #6f82d5; box-shadow: 0 0 0 4px rgba(111, 130, 213, 0.16); }
+.v3-visual-asset-workflow-step[data-state="blocked"] { color: #8a4c25; }
+.v3-visual-asset-workflow-step[data-state="blocked"] > span { border-color: #c87f4d; background: #f2c19a; }
+
+.v3-visual-asset-workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
 .v3-visual-asset-source-row {
   border-radius: 12px;
 }
@@ -4115,12 +4213,14 @@ button.v2-live-preview:focus-visible {
   .v3-project-visual-asset-heading,
   .v3-visual-asset-dialog-heading,
   .v3-visual-asset-dialog-top-actions,
-  .v3-visual-asset-dialog-actions { flex-direction: column; align-items: stretch; }
+  .v3-visual-asset-dialog-actions,
+  .v3-visual-asset-workflow-heading { flex-direction: column; align-items: stretch; }
   .v3-visual-asset-actions .button,
   .v3-project-visual-asset-heading .button,
   .v3-visual-asset-dialog-heading .button,
   .v3-visual-asset-dialog-top-actions .button,
-  .v3-visual-asset-dialog-actions .button { width: 100%; }
+  .v3-visual-asset-dialog-actions .button,
+  .v3-visual-asset-workflow-actions .button { width: 100%; }
   .v3-visual-asset-dialog-card { padding: 17px; }
   .v3-visual-asset-source-row { align-items: flex-start; border-radius: 13px; }
   .v3-visual-asset-source-actions { justify-content: flex-start; }

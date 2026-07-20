@@ -317,6 +317,10 @@ const v3State = {
   visualAssetSourceFeedback: "",
   visualAssetCreateFeedback: "",
   visualAssetCreateAttempted: false,
+  visualAssetWorkflowAssetId: "",
+  visualAssetWorkflowStage: "idle",
+  visualAssetWorkflowStartedAt: null,
+  visualAssetWorkflowTimer: null,
   projectVisualAssetBindings: [],
   projectVisualAssetBindingState: "empty",
   projectVisualAssetBindingsLoading: false,
@@ -569,6 +573,13 @@ const els = {
   v3VisualAssetIntentInput: document.querySelector("#v3VisualAssetIntentInput"),
   v3VisualAssetConsentInput: document.querySelector("#v3VisualAssetConsentInput"),
   v3VisualAssetCreateBtn: document.querySelector("#v3VisualAssetCreateBtn"),
+  v3VisualAssetWorkflowPanel: document.querySelector("#v3VisualAssetWorkflowPanel"),
+  v3VisualAssetWorkflowTitle: document.querySelector("#v3VisualAssetWorkflowTitle"),
+  v3VisualAssetWorkflowDetail: document.querySelector("#v3VisualAssetWorkflowDetail"),
+  v3VisualAssetWorkflowProgress: document.querySelector("#v3VisualAssetWorkflowProgress"),
+  v3VisualAssetWorkflowSteps: document.querySelector("#v3VisualAssetWorkflowSteps"),
+  v3VisualAssetWorkflowActivateBtn: document.querySelector("#v3VisualAssetWorkflowActivateBtn"),
+  v3VisualAssetWorkflowRetryBtn: document.querySelector("#v3VisualAssetWorkflowRetryBtn"),
   v3TemplateCreatePanel: document.querySelector("#v3TemplateCreatePanel"),
   v3SelectedTemplateTitle: document.querySelector("#v3SelectedTemplateTitle"),
   v3SelectedTemplateIntro: document.querySelector("#v3SelectedTemplateIntro"),
@@ -1214,6 +1225,12 @@ function bindControls() {
   if (els.v3VisualAssetIntentInput) els.v3VisualAssetIntentInput.addEventListener("input", clearV3VisualAssetCreateFeedback);
   if (els.v3VisualAssetConsentInput) els.v3VisualAssetConsentInput.addEventListener("change", clearV3VisualAssetCreateFeedback);
   if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.addEventListener("submit", createV3VisualAsset);
+  if (els.v3VisualAssetWorkflowActivateBtn) els.v3VisualAssetWorkflowActivateBtn.addEventListener("click", () => {
+    void activateV3VisualAsset(v3State.visualAssetWorkflowAssetId);
+  });
+  if (els.v3VisualAssetWorkflowRetryBtn) els.v3VisualAssetWorkflowRetryBtn.addEventListener("click", () => {
+    void prepareV3VisualAsset(v3State.visualAssetWorkflowAssetId, { fromWorkflow: true });
+  });
   if (els.v3SelectedBrandMemoryBar) els.v3SelectedBrandMemoryBar.addEventListener("click", handleV3SelectedBrandMemoryBarClick);
   if (els.v3NewProjectBtn) els.v3NewProjectBtn.addEventListener("click", createV3Project);
   if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.addEventListener("click", () => loadV3Projects({ silent: false, force: true }));
@@ -5253,8 +5270,10 @@ function renderV3VisualAssetCreateReadiness() {
   const missing = v3VisualAssetCreateMissingRequirements();
   const attempted = Boolean(v3State.visualAssetCreateAttempted);
   const busy = Boolean(v3State.visualAssetBusy);
+  const workflowActive = Boolean(v3State.visualAssetWorkflowAssetId);
   const feedback = String(v3State.visualAssetCreateFeedback || "").trim();
   if (els.v3VisualAssetCreateFeedback) {
+    els.v3VisualAssetCreateFeedback.hidden = workflowActive && !feedback;
     if (busy) {
       els.v3VisualAssetCreateFeedback.dataset.tone = "info";
       els.v3VisualAssetCreateFeedback.textContent = "正在保存源图并建立人物资产，请不要重复提交。";
@@ -5271,7 +5290,7 @@ function renderV3VisualAssetCreateReadiness() {
   }
   if (els.v3VisualAssetCreateBtn) {
     els.v3VisualAssetCreateBtn.disabled = busy;
-    els.v3VisualAssetCreateBtn.textContent = busy ? "正在保存人物资产…" : "保存源图并建立人物资产";
+    els.v3VisualAssetCreateBtn.textContent = busy ? "正在建立标准人物资产…" : "保存源图并开始标准建模";
   }
   const invalid = (element, isMissing) => {
     if (!element) return;
@@ -5284,10 +5303,116 @@ function renderV3VisualAssetCreateReadiness() {
   invalid(els.v3VisualAssetConsentInput, missing.includes("使用授权确认"));
 }
 
+function clearV3VisualAssetWorkflowTimer() {
+  if (v3State.visualAssetWorkflowTimer) {
+    window.clearInterval(v3State.visualAssetWorkflowTimer);
+    v3State.visualAssetWorkflowTimer = null;
+  }
+}
+
+function startV3VisualAssetWorkflowTimer() {
+  clearV3VisualAssetWorkflowTimer();
+  v3State.visualAssetWorkflowStartedAt = Date.now();
+  v3State.visualAssetWorkflowTimer = window.setInterval(() => {
+    renderV3VisualAssetWorkflow();
+    const asset = v3State.visualAssets.find((item) => item.visual_asset_id === v3State.visualAssetWorkflowAssetId);
+    if (asset?.lifecycle_status === "preparing" && !v3State.visualAssetsLoading) {
+      void loadV3VisualAssets({ silent: true, force: true });
+    }
+  }, 700);
+}
+
+function v3VisualAssetWorkflowProgressPercent() {
+  const elapsed = Math.max(0, Date.now() - Number(v3State.visualAssetWorkflowStartedAt || Date.now()));
+  if (elapsed < 5000) return 18;
+  if (elapsed < 20000) return 42;
+  if (elapsed < 60000) return 68;
+  return 84;
+}
+
+function renderV3VisualAssetWorkflow() {
+  const panel = els.v3VisualAssetWorkflowPanel;
+  const assetId = String(v3State.visualAssetWorkflowAssetId || "").trim();
+  const asset = v3State.visualAssets.find((item) => item.visual_asset_id === assetId);
+  if (!panel || !asset) {
+    if (panel) panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const status = String(asset.lifecycle_status || "draft");
+  const preparing = status === "preparing" || Boolean(v3State.visualAssetBusy && v3State.visualAssetWorkflowStage === "preparing");
+  if (preparing && !v3State.visualAssetWorkflowTimer) startV3VisualAssetWorkflowTimer();
+  if (!preparing && !v3State.visualAssetBusy && v3State.visualAssetWorkflowTimer) clearV3VisualAssetWorkflowTimer();
+  const preparation = asset.latest_preparation || {};
+  const views = Array.isArray(preparation.anchor_views) ? preparation.anchor_views : [];
+  const reviewed = status === "review" || status === "active";
+  const active = status === "active" && Boolean(asset.active_version_id);
+  const blocked = status === "blocked";
+  if (els.v3VisualAssetWorkflowTitle) {
+    els.v3VisualAssetWorkflowTitle.textContent = preparing
+      ? `正在建立「${asset.display_name}」的标准人物资产`
+      : active
+        ? `「${asset.display_name}」已经启用`
+        : reviewed
+          ? `「${asset.display_name}」已经完成标准建模`
+          : blocked
+            ? `「${asset.display_name}」这次没有完成`
+            : `已保存「${asset.display_name}」，准备开始标准建模`;
+  }
+  if (els.v3VisualAssetWorkflowDetail) {
+    els.v3VisualAssetWorkflowDetail.textContent = preparing
+      ? "共享流程正在生成并检查三个标准视角。请留在这里，不需要重复点击。"
+      : active
+        ? "这个人物资产现在可以在专业项目中选择使用。"
+        : reviewed
+          ? "三个标准视角已经完成共享检查。确认启用后，它才会出现在项目选择中。"
+          : blocked
+            ? "这次没有形成可启用的标准参考。可以在这里重新开始，原始源图不会丢失。"
+            : "源图已保存。点击下面的按钮即可开始生成和检查三个标准视角。";
+  }
+  if (els.v3VisualAssetWorkflowProgress) {
+    const percent = preparing ? v3VisualAssetWorkflowProgressPercent() : (active || reviewed ? 100 : blocked ? 100 : 8);
+    els.v3VisualAssetWorkflowProgress.style.setProperty("--v3-asset-progress", `${percent}%`);
+    els.v3VisualAssetWorkflowProgress.setAttribute("aria-valuenow", String(percent));
+    els.v3VisualAssetWorkflowProgress.setAttribute("aria-valuetext", preparing ? "正在建立标准人物资产" : active ? "人物资产已启用" : reviewed ? "标准建模完成，等待确认启用" : blocked ? "标准建模未完成，可重新处理" : "准备开始标准建模");
+    els.v3VisualAssetWorkflowProgress.classList.toggle("is-running", preparing);
+  }
+  if (els.v3VisualAssetWorkflowSteps) {
+    const viewStatus = views.length
+      ? views.map((view) => `${v3VisualAssetViewLabel(view.view_role)}：${view.active ? "已完成" : "未完成"}`).join(" · ")
+      : "等待共享流程返回三个视角的检查结果";
+    const steps = [
+      { title: "源图已保存", state: "done" },
+      { title: preparing ? "正在生成三个标准视角" : "生成三个标准视角", state: preparing ? "active" : (reviewed || active || blocked ? "done" : "next") },
+      { title: preparing ? "正在进行共享检查" : `三视角检查：${viewStatus}`, state: preparing ? "active" : (reviewed || active ? "done" : blocked ? "blocked" : "next") },
+      { title: active ? "已确认启用" : "最后一步：确认启用", state: active ? "done" : reviewed ? "next" : "next" },
+    ];
+    els.v3VisualAssetWorkflowSteps.innerHTML = steps.map((step) => `<div class="v3-visual-asset-workflow-step" data-state="${step.state}"><span aria-hidden="true"></span><strong>${escapeHtml(step.title)}</strong></div>`).join("");
+  }
+  if (els.v3VisualAssetWorkflowActivateBtn) {
+    els.v3VisualAssetWorkflowActivateBtn.hidden = active || !reviewed;
+    els.v3VisualAssetWorkflowActivateBtn.disabled = preparing || !reviewed || v3State.visualAssetBusy;
+  }
+  if (els.v3VisualAssetWorkflowRetryBtn) {
+    els.v3VisualAssetWorkflowRetryBtn.hidden = preparing || active || reviewed;
+    els.v3VisualAssetWorkflowRetryBtn.disabled = v3State.visualAssetBusy;
+  }
+}
+
 function clearV3VisualAssetCreateFeedback() {
+  resetV3VisualAssetWorkflowForNewDraft();
   v3State.visualAssetCreateFeedback = "";
   v3State.visualAssetCreateAttempted = false;
   renderV3VisualAssetCreateReadiness();
+}
+
+function resetV3VisualAssetWorkflowForNewDraft() {
+  if (v3State.visualAssetBusy) return;
+  clearV3VisualAssetWorkflowTimer();
+  v3State.visualAssetWorkflowAssetId = "";
+  v3State.visualAssetWorkflowStage = "idle";
+  v3State.visualAssetWorkflowStartedAt = null;
+  renderV3VisualAssetWorkflow();
 }
 
 function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
@@ -5322,6 +5447,11 @@ async function loadV3VisualAssets({ silent = true, force = false } = {}) {
     const payload = await request(v3VisualAssetsPath());
     v3State.visualAssets = Array.isArray(payload?.visual_assets) ? payload.visual_assets : [];
     v3State.visualAssetsLoaded = true;
+    const serverPreparingAsset = v3State.visualAssets.find((asset) => asset.lifecycle_status === "preparing");
+    if (serverPreparingAsset && !v3State.visualAssetWorkflowAssetId) {
+      v3State.visualAssetWorkflowAssetId = serverPreparingAsset.visual_asset_id;
+      v3State.visualAssetWorkflowStage = "preparing";
+    }
     if (!v3State.selectedVisualAssetId || !v3State.visualAssets.some((asset) => asset.visual_asset_id === v3State.selectedVisualAssetId)) {
       v3State.selectedVisualAssetId = v3State.visualAssets.find((asset) => v3VisualAssetIsActive(asset))?.visual_asset_id || "";
     }
@@ -5389,6 +5519,7 @@ function handleV3VisualAssetSourceFiles(event) {
     showGlobalToast(message, "warning");
     return;
   }
+  resetV3VisualAssetWorkflowForNewDraft();
   v3State.visualAssetSourceFiles = combined;
   const currentPreviewUrls = Array.isArray(v3State.visualAssetSourcePreviewUrls) ? v3State.visualAssetSourcePreviewUrls : [];
   v3State.visualAssetSourcePreviewUrls = [...currentPreviewUrls, ...selected.map((file) => URL.createObjectURL(file))];
@@ -5418,6 +5549,7 @@ function handleV3VisualAssetSourceListClick(event) {
     return;
   }
   if (button.dataset.v3VisualAssetSourceAction === "remove") {
+    resetV3VisualAssetWorkflowForNewDraft();
     const previewUrls = Array.isArray(v3State.visualAssetSourcePreviewUrls) ? v3State.visualAssetSourcePreviewUrls : [];
     const [removedPreviewUrl] = previewUrls.splice(index, 1);
     if (removedPreviewUrl) URL.revokeObjectURL(removedPreviewUrl);
@@ -5542,7 +5674,7 @@ async function createV3VisualAsset(event) {
     const primaryIndex = Math.max(0, Math.min(Number(v3State.visualAssetPrimarySourceIndex) || 0, readySources.length - 1));
     const primary = readySources[primaryIndex];
     const supplementary = readySources.filter((_, index) => index !== primaryIndex);
-    await request(v3VisualAssetsPath(), {
+    const createdAssetPayload = await request(v3VisualAssetsPath(), {
       method: "POST",
       body: {
         display_name: displayName,
@@ -5553,10 +5685,14 @@ async function createV3VisualAsset(event) {
         preparation_intent: preparationIntent,
       },
     });
+    const createdVisualAssetId = String(createdAssetPayload?.visual_asset?.visual_asset_id || "").trim();
+    if (!createdVisualAssetId) throw new Error("visual_asset_create_incomplete");
+    v3State.visualAssetWorkflowAssetId = createdVisualAssetId;
+    v3State.visualAssetWorkflowStage = "preparing";
     if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.reset();
     clearV3VisualAssetSourceFiles();
     await loadV3VisualAssets({ silent: true, force: true });
-    updateV3Notice("人物资产已保存。接下来选择“开始标准建模”，完成检查后再由你确认启用。", "success");
+    await prepareV3VisualAsset(createdVisualAssetId, { fromWorkflow: true });
   } catch (error) {
     v3State.visualAssetsError = v3VisualAssetErrorMessage(error);
     v3State.visualAssetCreateFeedback = v3State.visualAssetsError;
@@ -5568,19 +5704,25 @@ async function createV3VisualAsset(event) {
   }
 }
 
-async function prepareV3VisualAsset(visualAssetId) {
-  if (!visualAssetId || v3State.visualAssetBusy) return;
+async function prepareV3VisualAsset(visualAssetId, { fromWorkflow = false } = {}) {
+  if (!visualAssetId || (v3State.visualAssetBusy && !fromWorkflow)) return;
+  v3State.visualAssetWorkflowAssetId = visualAssetId;
+  v3State.visualAssetWorkflowStage = "preparing";
   v3State.visualAssetBusy = true;
+  startV3VisualAssetWorkflowTimer();
   renderV3VisualAssetLibrary();
   try {
     updateV3Notice("正在建立人物的标准参考并完成三个视角检查。", "info");
     await request(`${v3VisualAssetPath(visualAssetId)}/prepare`, { method: "POST", body: {} });
     await loadV3VisualAssets({ silent: true, force: true });
+    v3State.visualAssetWorkflowStage = "review";
     updateV3Notice("标准建模已完成。请查看状态后确认是否启用这个版本。", "success");
   } catch (error) {
+    v3State.visualAssetWorkflowStage = "blocked";
     v3State.visualAssetsError = v3VisualAssetErrorMessage(error);
     updateV3Notice(v3State.visualAssetsError, "warning");
   } finally {
+    clearV3VisualAssetWorkflowTimer();
     v3State.visualAssetBusy = false;
     renderV3VisualAssetLibrary();
   }
@@ -5592,6 +5734,8 @@ async function activateV3VisualAsset(visualAssetId) {
   if (!asset || !versionId || v3State.visualAssetBusy) return;
   if (!window.confirm("确认启用这个人物资产版本吗？之后只有在项目中明确选择它，新的任务才会使用它。")) return;
   v3State.visualAssetBusy = true;
+  v3State.visualAssetWorkflowAssetId = visualAssetId;
+  v3State.visualAssetWorkflowStage = "activating";
   renderV3VisualAssetLibrary();
   try {
     await request(`${v3VisualAssetPath(visualAssetId)}/activate`, {
@@ -5599,6 +5743,7 @@ async function activateV3VisualAsset(visualAssetId) {
       body: { version_id: versionId, confirm_activation: true },
     });
     await loadV3VisualAssets({ silent: true, force: true });
+    v3State.visualAssetWorkflowStage = "active";
     updateV3Notice("人物资产已启用。现在可以在任意 V3 项目中主动选择它。", "success");
   } catch (error) {
     v3State.visualAssetsError = v3VisualAssetErrorMessage(error);
@@ -5664,6 +5809,7 @@ function renderV3VisualAssetLibrary() {
     }
   }
   renderV3VisualAssetCreateReadiness();
+  renderV3VisualAssetWorkflow();
   if (!els.v3VisualAssetLibraryList) return;
   els.v3VisualAssetLibraryList.innerHTML = assets.length ? assets.map((asset) => {
     const lifecycle = v3VisualAssetLifecycleLabel(asset);
@@ -5675,13 +5821,19 @@ function renderV3VisualAssetLibrary() {
     const canPrepare = ["draft", "blocked"].includes(asset.lifecycle_status);
     const canActivate = asset.lifecycle_status === "review" && Boolean(preparation.version_id);
     const canArchive = asset.lifecycle_status !== "archived";
+    const prepareAction = canPrepare
+      ? `<button class="button compact secondary" type="button" data-v3-visual-asset-action="prepare" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${!v3State.visualAssetBusy ? "" : "disabled"}>${asset.lifecycle_status === "blocked" ? "重新处理" : "开始标准建模"}</button>`
+      : "";
+    const activateAction = canActivate
+      ? `<button class="button compact primary" type="button" data-v3-visual-asset-action="activate" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${!v3State.visualAssetBusy ? "" : "disabled"}>确认启用</button>`
+      : "";
     return `<article class="v3-visual-asset-card${v3VisualAssetIsActive(asset) ? " active" : ""}">
       <div class="v3-visual-asset-card-head"><div><span>人物资产</span><strong>${escapeHtml(asset.display_name)}</strong></div><small>${escapeHtml(lifecycle.title)}</small></div>
       <p>${escapeHtml(lifecycle.detail)}</p>
       <small class="v3-visual-asset-view-summary">${escapeHtml(viewText)}</small>
       <div class="v3-visual-asset-actions">
-        <button class="button compact secondary" type="button" data-v3-visual-asset-action="prepare" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${canPrepare && !v3State.visualAssetBusy ? "" : "disabled"}>${asset.lifecycle_status === "blocked" ? "重新处理" : "开始标准建模"}</button>
-        <button class="button compact primary" type="button" data-v3-visual-asset-action="activate" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${canActivate && !v3State.visualAssetBusy ? "" : "disabled"}>确认启用</button>
+        ${prepareAction}
+        ${activateAction}
         <button class="button compact ghost" type="button" data-v3-visual-asset-action="archive" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${canArchive && !v3State.visualAssetBusy ? "" : "disabled"}>归档</button>
       </div>
     </article>`;

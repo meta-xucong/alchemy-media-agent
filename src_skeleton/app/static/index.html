@@ -1908,7 +1908,23 @@
                     <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>
                   </label>
                   <p id="v3VisualAssetCreateFeedback" class="v3-visual-asset-create-feedback" role="status" aria-live="polite"></p>
-                  <button id="v3VisualAssetCreateBtn" class="button primary" type="submit" aria-describedby="v3VisualAssetCreateFeedback">保存源图并建立人物资产</button>
+                  <button id="v3VisualAssetCreateBtn" class="button primary" type="submit" aria-describedby="v3VisualAssetCreateFeedback">保存源图并开始标准建模</button>
+                  <section id="v3VisualAssetWorkflowPanel" class="v3-visual-asset-workflow-panel" hidden aria-live="polite" aria-label="人物资产建立进度">
+                    <div class="v3-visual-asset-workflow-heading">
+                      <div>
+                        <p class="eyebrow">当前进度</p>
+                        <h4 id="v3VisualAssetWorkflowTitle">正在准备人物资产</h4>
+                        <p id="v3VisualAssetWorkflowDetail" class="section-subcopy"></p>
+                      </div>
+                      <span class="v3-visual-asset-workflow-badge">共享建模流程</span>
+                    </div>
+                    <div id="v3VisualAssetWorkflowProgress" class="v3-visual-asset-workflow-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+                    <div id="v3VisualAssetWorkflowSteps" class="v3-visual-asset-workflow-steps"></div>
+                    <div class="v3-visual-asset-workflow-actions">
+                      <button id="v3VisualAssetWorkflowRetryBtn" class="button compact secondary" type="button" hidden>重新开始标准建模</button>
+                      <button id="v3VisualAssetWorkflowActivateBtn" class="button primary" type="button" hidden>确认启用这个人物资产</button>
+                    </div>
+                  </section>
                 </form>
               </div>
             </dialog>
@@ -2138,6 +2154,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260719-v3-frontend-ux-fix2" defer></script>
+    <script src="/static/app.js?v=20260720-v3-linear-visual-asset-workflow3" defer></script>
   </body>
 </html>
