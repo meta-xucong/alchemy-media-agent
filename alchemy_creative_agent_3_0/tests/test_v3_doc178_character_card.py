@@ -116,6 +116,12 @@ def test_doc178_body_source_is_a_typed_truth_class() -> None:
     )
     assert inferred.source_class == "brain_inferred"
     assert inferred.observed_truth is False
+    with pytest.raises(ValidationError, match="consent"):
+        BodyPreparationRequest(
+            source_class="observed",
+            face_reference_output_ids=["front", "profile", "rear"],
+            body_evidence_ids=["full_body_upload"],
+        )
 
 
 def test_doc178_expression_requests_all_use_front_and_never_previous_expression() -> None:

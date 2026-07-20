@@ -27,6 +27,12 @@ FACE_SLOT_KEYS = (
 EXPRESSION_SLOT_KEYS = ("expression.neutral", "expression.smile", "expression.anger", "expression.sad")
 BODY_SLOT_KEYS = ("body.front_full", "body.side_full", "body.rear_full")
 BODY_SOURCE_CLASSES = ("observed", "user_described", "brain_inferred")
+EXPRESSION_LABELS = {
+    "expression.neutral": "中性",
+    "expression.smile": "微笑",
+    "expression.anger": "愤怒",
+    "expression.sad": "悲伤",
+}
 
 CharacterCardSlotKey = Literal[
     "face.front",
@@ -79,6 +85,7 @@ class CharacterCardSlot(_CharacterCardModel):
     output_id: str | None = None
     source_candidate_ids: list[str] = Field(default_factory=list)
     source_class: BodySourceClass | None = None
+    consent_provenance_id: str | None = None
     lineage_id: str | None = None
     dependency_version_ids: list[str] = Field(default_factory=list)
     review_verified: bool = False
@@ -135,8 +142,13 @@ class CharacterCardSlot(_CharacterCardModel):
             raise ValueError("expression.neutral must alias face.front")
         if self.module == "body_silhouette" and self.state != "empty" and self.source_class is None:
             raise ValueError("body Character Card slots require an explicit source class")
+        if self.module == "body_silhouette" and self.state != "empty" and self.source_class == "observed":
+            if not str(self.consent_provenance_id or "").strip():
+                raise ValueError("observed Body Silhouette winners require consent provenance")
         if self.module != "body_silhouette" and self.source_class is not None:
             raise ValueError("body source class is only valid for Body Silhouette slots")
+        if self.module != "body_silhouette" and self.consent_provenance_id is not None:
+            raise ValueError("body consent provenance is only valid for Body Silhouette slots")
         if self.bounded_repair_count > self.candidate_attempt_count:
             raise ValueError("bounded repair cannot exceed candidate attempts")
         return self
@@ -271,6 +283,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     reference_output_ids: list[str] = Field(min_length=1)
     user_intent: str
     source_class: BodySourceClass | None = None
+    consent_provenance_id: str | None = None
     candidate_count: Literal[3] = 3
 
     @field_validator("project_id", "people_asset_id", "card_version_id", "user_intent")
@@ -305,6 +318,8 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("Body Silhouette requests require three face continuity references")
             if self.source_class is None:
                 raise ValueError("Body Silhouette request requires a source class")
+            if self.source_class == "observed" and not str(self.consent_provenance_id or "").strip():
+                raise ValueError("observed Body Silhouette request requires consent provenance")
         return self
 
 
@@ -369,6 +384,7 @@ class BodyPreparationRequest(_CharacterCardModel):
     source_class: BodySourceClass
     face_reference_output_ids: list[str] = Field(default_factory=list)
     body_evidence_ids: list[str] = Field(default_factory=list)
+    consent_provenance_id: str | None = None
     candidate_count: Literal[3] = 3
     wardrobe_lock: Literal[False] = False
 
@@ -384,8 +400,11 @@ class BodyPreparationRequest(_CharacterCardModel):
     def require_face_continuity_references(self) -> "BodyPreparationRequest":
         if len(self.face_reference_output_ids) != 3:
             raise ValueError("Body Silhouette requires Face Identity front, profile, and rear references")
-        if self.source_class == "observed" and not self.body_evidence_ids:
-            raise ValueError("observed Body Silhouette requires an authorized full-body reference")
+        if self.source_class == "observed":
+            if not self.body_evidence_ids:
+                raise ValueError("observed Body Silhouette requires an authorized full-body reference")
+            if not str(self.consent_provenance_id or "").strip():
+                raise ValueError("observed Body Silhouette requires consent provenance")
         return self
 
     @property
@@ -536,6 +555,7 @@ class CharacterCardPreparationService:
         project_id: str = "project",
         people_asset_id: str = "people_asset",
         body_evidence_ids: list[str] | None = None,
+        consent_provenance_id: str | None = None,
         user_intent: str | None = None,
     ) -> CharacterCardStageResult:
         if card.face_identity_status != "active":
@@ -546,6 +566,7 @@ class CharacterCardPreparationService:
             source_class=source_class,
             face_reference_output_ids=face_reference_output_ids,
             body_evidence_ids=list(body_evidence_ids or []),
+            consent_provenance_id=consent_provenance_id,
         )
         if self.generator is None or self.reviewer is None:
             raise RuntimeError("shared Character Card candidate/review seam is unavailable")
@@ -564,6 +585,7 @@ class CharacterCardPreparationService:
                 reference_output_ids=request.reference_output_ids,
                 user_intent=user_intent,
                 source_class=source_class,
+                consent_provenance_id=consent_provenance_id,
                 attempts=attempts,
             )
             attempts.extend(slot_attempts)
@@ -578,7 +600,11 @@ class CharacterCardPreparationService:
                     failure_codes=[f"{slot_key}_no_reviewed_winner"],
                 )
             slots[slot_key] = self._winner_slot(
-                module="body_silhouette", slot_key=slot_key, winner=winner, source_class=source_class
+                module="body_silhouette",
+                slot_key=slot_key,
+                winner=winner,
+                source_class=source_class,
+                consent_provenance_id=consent_provenance_id,
             )
             winners[slot_key] = winner.output_id
         updated = card.model_copy(
@@ -603,6 +629,7 @@ class CharacterCardPreparationService:
         reference_output_ids: list[str],
         user_intent: str,
         source_class: BodySourceClass | None,
+        consent_provenance_id: str | None = None,
         attempts: list[CharacterCardCandidateAttempt],
     ) -> tuple[CharacterCardCandidateResult | None, list[CharacterCardCandidateAttempt]]:
         slot_attempts: list[CharacterCardCandidateAttempt] = []
@@ -618,6 +645,7 @@ class CharacterCardPreparationService:
                 reference_output_ids=list(reference_output_ids),
                 user_intent=user_intent,
                 source_class=source_class,
+                consent_provenance_id=consent_provenance_id,
             )
             candidate = self.generator.generate(request)
             review = self.reviewer.review(candidate)
@@ -639,7 +667,12 @@ class CharacterCardPreparationService:
 
     @staticmethod
     def _winner_slot(
-        *, module: CharacterCardModule, slot_key: str, winner: CharacterCardCandidateResult, source_class: BodySourceClass | None = None
+        *,
+        module: CharacterCardModule,
+        slot_key: str,
+        winner: CharacterCardCandidateResult,
+        source_class: BodySourceClass | None = None,
+        consent_provenance_id: str | None = None,
     ) -> CharacterCardSlot:
         review_verified = True
         return CharacterCardSlot(
@@ -649,6 +682,7 @@ class CharacterCardPreparationService:
             output_id=winner.output_id,
             source_candidate_ids=list(winner.source_candidate_ids),
             source_class=source_class,
+            consent_provenance_id=consent_provenance_id,
             lineage_id=f"lineage_{winner.candidate_id}",
             review_verified=review_verified,
             prompt_reference_parity_verified=winner.prompt_reference_parity_verified,
@@ -769,6 +803,7 @@ __all__ = [
     "BODY_SOURCE_CLASSES",
     "BODY_SLOT_KEYS",
     "EXPRESSION_SLOT_KEYS",
+    "EXPRESSION_LABELS",
     "FACE_SLOT_KEYS",
     "BodyPreparationRequest",
     "CharacterCardCandidateAttempt",
