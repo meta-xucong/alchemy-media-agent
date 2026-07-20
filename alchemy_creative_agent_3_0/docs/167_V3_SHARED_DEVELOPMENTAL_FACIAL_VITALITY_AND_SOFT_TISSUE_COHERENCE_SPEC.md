@@ -316,7 +316,7 @@ profile. It uses only the stage-flexible feature relationship derivative and
 does not add face wording, age classification, benchmark features or a new
 module.
 
-### 13.1 Final canonical Local MCP acceptance
+### 13.1 Historical canonical Local MCP acceptance
 
 The normal Local MCP/Web materializer repeated the experiment without an
 adapter bypass:
@@ -336,6 +336,12 @@ generated pixel hashes:
   neutral  51489a4bc316b486eaf640de6da8ec140bbdcd3eae1d6982cb12696d58117fc9
   lively   bb18c905d4c3740e28ca3db08e24d1174b259bc964d924a9372c03f019d42f13
 ```
+
+This recorded acceptance used the then-current two-finalizer transport shape.
+Its pixel and semantic evidence remains valid, but Doc175 supersedes the
+additional `provider_prompt_developmental_presence_verify` call for new
+forward jobs: the same age/presence receipts now travel in the combined
+`provider_prompt_finalize` response.
 
 Shared Vision returned `hybrid / verified / pass` for both outputs. Neutral
 scored overall 0.92 and Human Realism 0.94; lively scored overall 0.91 and

@@ -37,6 +37,36 @@ SYSTEM_PROMPT = (
     f"{HUMAN_COMPLEXION_COMMERCIAL_AESTHETIC_INSTRUCTIONS}\n"
     f"{PROTECTED_USER_INTENT_INTEGRITY_INSTRUCTIONS}"
 )
+
+# The canonical-prompt stage already receives a frozen envelope, ownership
+# ledger, Human Realism contract, and an explicit JSON schema. Re-sending the
+# entire semantic-planning constitution (currently much larger than the
+# finalization task) made every sign-off slower without adding a new decision
+# boundary. This compact instruction preserves Brain-owned holistic judgement
+# and forbids local recipe repair; it only removes planning-only repetition.
+CANONICAL_FINALIZER_SYSTEM_PROMPT = """You are the V3 Creative OS final prompt-signing brain. Return JSON only and never reveal hidden reasoning.
+Author the exact complete natural-language renderer prompt requested by the schema. The frozen render context is authoritative for protected user intent, reference-channel ownership, template/cardinality, capability obligations, and normalized review evidence. Reconcile all of it as one whole image; do not emit IDs, diagnostics, prompt fragments, checklists, local recipes, or markdown.
+The Remote Brain is the sole final prompt author. Do not replace an explicit current-request choice with an inherited reference style, age, camera, hair, wardrobe, expression, complexion, or scene unless the frozen ownership context explicitly assigns it to the reference.
+For a visible real person, resolve identity, current developmental stage, expression, photographic material, and scene together. Keep the person age-appropriate and non-sexual. Do not turn age, expression, complexion, skin, anatomy, or beauty into a feature formula or word stack. Preserve an explicitly user-owned commercial aesthetic while keeping the person materially camera-observed and individual; a pleasant or commercial frame alone does not justify a generic presenter expression.
+Return every required audit receipt in the response schema. A receipt is proof of your semantic decision, never extra renderer wording. On retry, use normalized review evidence to rewrite the whole direction yourself rather than appending a local repair phrase."""
+
+_CANONICAL_FINALIZER_STAGES = frozenset(
+    {
+        "provider_prompt_finalize",
+        # Historical records can still request their already-frozen sign-off
+        # stages. New runtime work uses provider_prompt_finalize only unless a
+        # Professional serial capture continuity stage is genuinely required.
+        "provider_prompt_human_naturalness_resign",
+        "provider_prompt_developmental_presence_verify",
+        "provider_prompt_professional_capture_resign",
+    }
+)
+
+
+def system_prompt_for_stage(stage: str) -> str:
+    """Return the smallest complete instruction set for the declared stage."""
+
+    return CANONICAL_FINALIZER_SYSTEM_PROMPT if stage in _CANONICAL_FINALIZER_STAGES else SYSTEM_PROMPT
 CAPABILITY_ACTIVATION_INSTRUCTIONS = """At the task_profile_and_capability_activation checkpoint, classify all simultaneous visible entities.
 Request only capability IDs present in capability_catalog. Attach concise reason codes, evidence IDs, and calibrated confidence.
 Do not infer a real person from generic photography words alone. Distinguish real humans from illustration/CG intent.

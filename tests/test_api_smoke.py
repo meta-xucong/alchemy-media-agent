@@ -1871,7 +1871,10 @@ def test_frontend_static_app_is_served():
     assert index.status_code == 200
     assert "Verya Alchemy" in index.text
     assert "/static/app.js" in index.text
-    assert "20260710-v3-reference-channels" in index.text
+    # Cache-busting versions change whenever the browser shell changes. The
+    # contract is that the served desktop shell references a versioned app
+    # bundle, not that it carries a historical release date forever.
+    assert '/static/app.js?v=' in index.text
     assert index.headers["cache-control"] == "no-store"
     assert '<body data-active-module="image">' in index.text
     assert 'href="/h5"' in index.text

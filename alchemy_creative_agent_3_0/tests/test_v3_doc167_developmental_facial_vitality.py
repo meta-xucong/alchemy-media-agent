@@ -137,7 +137,7 @@ def test_doc167_brain_owns_explicit_stage_assignment_without_source_age_estimati
     assert "keyword matching" in SYSTEM_PROMPT
 
 
-def test_doc167_age_transition_uses_one_bounded_prompt_level_semantic_verifier() -> None:
+def test_doc167_historical_age_transition_verifier_payload_remains_readable() -> None:
     request = _age_owned_request().model_copy(
         update={
             "stage": "provider_prompt_developmental_presence_verify",
@@ -407,14 +407,10 @@ def test_doc167_explicit_cross_stage_identity_uses_stage_flexible_feature_eviden
     assert "portrait_identity_stage_flexible_feature_crop" in output["reference_image_paths"][0]
     assert "portrait_identity_geometry_crop" not in output["reference_image_paths"][0]
     assert output["reference_input_contract"]["admitted_reference_count"] == 1
-    assert result["provenance"]["canonical_prompt_signing"]["stages"] == [
-        "provider_prompt_finalize",
-        "provider_prompt_developmental_presence_verify",
-    ]
+    assert result["provenance"]["canonical_prompt_signing"]["stages"] == ["provider_prompt_finalize"]
     assert [item["stage"] for item in brain.requests] == [
         "plan",
         "provider_prompt_finalize",
-        "provider_prompt_developmental_presence_verify",
     ]
 
 

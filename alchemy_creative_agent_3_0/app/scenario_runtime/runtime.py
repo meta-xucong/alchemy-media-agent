@@ -13,6 +13,7 @@ from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
 from ..llm_brain.providers import (
     BrainDevelopmentalPresenceDecisionMissing,
+    BrainExecutionBudgetExceeded,
     BrainHumanNaturalnessDecisionMissing,
     BrainProfessionalAnchorViewDecisionMissing,
     BrainReferenceChannelOwnershipDecisionMissing,
@@ -269,6 +270,30 @@ class ScenarioRuntime:
         )
 
     def _prepare_capability_execution(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        *,
+        stage: str,
+        quality_mode: str | None = None,
+    ) -> CapabilityPreparationResult:
+        """Prepare one job under a single bounded remote-Brain execution scope.
+
+        A semantic plan and canonical prompt sign-off are two decisions in one
+        logical preparation.  Keeping their deadline in one ephemeral scope
+        prevents a later stage from starting with a stale full transport
+        timeout and makes terminal timing provenance truthful.
+        """
+
+        with self.llm_brain_adapter.execution_scope():
+            return self._prepare_capability_execution_within_brain_budget(
+                request,
+                resolution,
+                stage=stage,
+                quality_mode=quality_mode,
+            )
+
+    def _prepare_capability_execution_within_brain_budget(
         self,
         request: ScenarioRuntimeRequest,
         resolution,
@@ -778,9 +803,9 @@ class ScenarioRuntime:
         the frozen envelope and resolved constraint ledger. Human Realism's
         semantic preflight and natural-presence decision are part of the same
         Brain-owned finalization path. A current-request-owned developmental
-        stage receives one additional bounded remote re-sign: the second pass
-        judges the first complete prompt, never reconstructs it locally, and
-        becomes the only renderer-facing result. Professional serial stages
+        stage is adjudicated by the same final sign-off: its typed age and
+        presence receipts remain mandatory, but create no third remote call.
+        Professional serial stages
         receive one separate bounded capture-continuity re-sign after age
         coherence, because the prior winner—not the identity root—owns the
         in-pack capture presentation.
@@ -906,6 +931,21 @@ class ScenarioRuntime:
             if failure is not None:
                 # Do not expose an upstream body or turn it into local text.
                 # The activation boundary records the public-safe reason only.
+                blocked_brain_result = brain_result
+                if isinstance(failure, BrainExecutionBudgetExceeded):
+                    blocked_brain_result = brain_result.model_copy(
+                        update={
+                            "audit": {
+                                **dict(brain_result.audit or {}),
+                                "remote_provider_error_class": "execution_budget_exhausted",
+                                "remote_brain_execution_budget": (
+                                    self.llm_brain_adapter.execution_budget_receipt() or {
+                                        "state": "exhausted"
+                                    }
+                                ),
+                            }
+                        }
+                    )
                 raise self._remote_creative_brain_block(
                     (
                         "human_realism_semantic_preflight_missing"
@@ -920,59 +960,32 @@ class ScenarioRuntime:
                         if isinstance(failure, BrainProfessionalAnchorViewDecisionMissing)
                         else "remote_creative_brain_prompt_signoff_unavailable"
                     ),
-                    brain_result,
+                    blocked_brain_result,
                 ) from failure
         final_stage = "provider_prompt_finalize"
         finalizer_stages = [final_stage]
         finalizer_transport_history: list[dict[str, Any]] = []
         if isinstance(audit.get("remote_brain_transport"), dict):
             finalizer_transport_history.append(dict(audit["remote_brain_transport"]))
-        age_resign_required = bool(
+        developmental_contract_present = bool(
             canonical_prompt_context.get("human_developmental_age_decision")
+            or canonical_prompt_context.get("human_developmental_presence_decision")
         )
-        if age_resign_required:
-            resign_context = self._human_naturalness_resigning_context(canonical_prompt_context)
-            resign_request = signing_request.model_copy(
-                update={
-                    "stage": "provider_prompt_developmental_presence_verify",
-                    "metadata": {
-                        "canonical_prompt_context": resign_context,
-                        "candidate_canonical_provider_prompts": [
-                            item.model_dump(mode="json") for item in prompts
-                        ],
-                    },
-                },
-                deep=True,
-            )
-            try:
-                prompts, resign_audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(
-                    resign_request
-                )
-            except Exception as exc:
-                raise self._remote_creative_brain_block(
-                    (
-                        "human_developmental_age_resign_unavailable"
-                    ),
-                    brain_result,
-                ) from exc
-            if isinstance(resign_audit.get("remote_brain_transport"), dict):
-                finalizer_transport_history.append(dict(resign_audit["remote_brain_transport"]))
+        if developmental_contract_present:
+            # The initial finalizer already receives and validates the frozen
+            # age/presence contracts, and its typed receipts are required by
+            # ``finalize_canonical_provider_prompts`` above.  Asking it to
+            # re-sign the prompt again serialized a third full remote call for
+            # child, teen, and explicit age-transition work without adding
+            # another authority boundary.  Keep historical re-sign records
+            # readable, but new jobs use this one complete Brain sign-off.
             audit = {
                 **audit,
-                **resign_audit,
-                "human_developmental_age_resign_required": age_resign_required,
-                "human_developmental_age_resign_completed": age_resign_required,
-                "human_developmental_age_resign_mode": (
-                    "bounded_remote_complete_prompt_recheck"
-                    if age_resign_required
-                    else None
-                ),
-                "human_developmental_presence_resign_required": True,
-                "human_developmental_presence_resign_completed": True,
-                "human_developmental_presence_resign_mode": "shared_with_age_transition_recheck",
+                "human_developmental_age_signoff_mode": "combined_finalizer",
+                "human_developmental_presence_signoff_mode": "combined_finalizer",
+                "human_developmental_presence_resign_required": False,
+                "human_developmental_presence_resign_completed": False,
             }
-            final_stage = "provider_prompt_developmental_presence_verify"
-            finalizer_stages.append(final_stage)
         anchor_decision = canonical_prompt_context.get("professional_anchor_view_decision")
         serial_capture_resign_required = bool(
             isinstance(anchor_decision, dict)
@@ -1057,6 +1070,9 @@ class ScenarioRuntime:
         transport_history.extend(finalizer_transport_history)
         audit["remote_brain_transports"] = transport_history
         audit["remote_brain_call_count"] = len(transport_history)
+        execution_budget = self.llm_brain_adapter.execution_budget_receipt()
+        if execution_budget is not None:
+            audit["remote_brain_execution_budget"] = execution_budget
         return brain_result.model_copy(
             update={
                 "canonical_provider_prompts": prompts,
@@ -1630,6 +1646,11 @@ class ScenarioRuntime:
                 {"remote_http_status_code": int(audit["remote_provider_http_status_code"])}
                 if isinstance(audit.get("remote_provider_http_status_code"), int)
                 and 100 <= int(audit["remote_provider_http_status_code"]) <= 599
+                else {}
+            ),
+            **(
+                {"execution_budget": dict(audit["remote_brain_execution_budget"])}
+                if isinstance(audit.get("remote_brain_execution_budget"), dict)
                 else {}
             ),
             **{

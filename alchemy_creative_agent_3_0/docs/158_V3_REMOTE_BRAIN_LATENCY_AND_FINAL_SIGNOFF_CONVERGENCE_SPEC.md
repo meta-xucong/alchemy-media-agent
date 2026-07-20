@@ -52,15 +52,14 @@ Historical records containing
 record `canonical_provider_prompt_stages=["provider_prompt_finalize"]` and
 `human_realism_natural_presence_signoff_mode="combined_finalizer"`.
 
-One narrow exception is an explicit current-request-owned developmental-stage
-transition. It retains the same two-call ceiling that already existed for that
-case, but the second call is now
-`provider_prompt_developmental_presence_verify`: it independently verifies the
-complete candidate against the frozen age/presence and reference-ownership
-contracts. The candidate wording is non-authoritative, and the Remote Brain
-must reconstruct the whole prompt when necessary. This exception is not used
-for ordinary same-stage people, product-only work, or non-human images, and it
-adds no local prompt inspection or renderer fragment.
+**Superseded forward-stage note (Doc175).** Earlier revisions retained a
+`provider_prompt_developmental_presence_verify` exception for an explicit
+current-request-owned developmental-stage transition. New forward jobs no
+longer make that additional remote call: the same frozen age/presence and
+reference-ownership contracts are mandatory in `provider_prompt_finalize` and
+the Remote Brain returns their typed receipts there. Historical records with
+the former stage remain readable. This preserves developmental fidelity while
+avoiding a third serialized request before prompt materialization.
 
 ## 3. Ownership and anti-overfitting boundary
 

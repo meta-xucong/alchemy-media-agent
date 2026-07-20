@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 import json
 import os
+import time
 from typing import Any
 
 from .contracts import BrainRunRequest
-from .prompts import SYSTEM_PROMPT, build_remote_payload
+from .prompts import build_remote_payload, system_prompt_for_stage
 
 
 class BrainProviderUnavailable(RuntimeError):
@@ -16,6 +20,10 @@ class BrainProviderUnavailable(RuntimeError):
 
 class BrainProviderError(RuntimeError):
     """Raised when a configured remote brain provider fails."""
+
+
+class BrainExecutionBudgetExceeded(BrainProviderError):
+    """The shared logical Brain budget ended before another remote call."""
 
 
 class BrainInvalidJsonResponse(BrainProviderError):
@@ -50,6 +58,32 @@ class BrainProfessionalAnchorViewDecisionMissing(BrainProviderError):
     """The final Brain sign-off omitted or changed the frozen anchor view."""
 
 
+@dataclass(frozen=True)
+class _BrainExecutionBudget:
+    """Ephemeral deadline shared by all remote calls in one V3 preparation.
+
+    It is intentionally held in a context variable rather than request metadata:
+    a deadline is transport control, never creative evidence, Brain input, or
+    persisted job provenance.
+    """
+
+    total_seconds: float
+    started_at: float
+
+    @property
+    def deadline(self) -> float:
+        return self.started_at + self.total_seconds
+
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.deadline - time.perf_counter())
+
+
+_ACTIVE_EXECUTION_BUDGET: ContextVar[_BrainExecutionBudget | None] = ContextVar(
+    "v3_active_remote_brain_execution_budget",
+    default=None,
+)
+
+
 class V3LLMBrainProvider:
     """Small provider adapter that keeps V3 brain calls optional."""
 
@@ -58,6 +92,16 @@ class V3LLMBrainProvider:
         self.provider = self.provider.strip().lower()
         self.model = _env("V3_LLM_BRAIN_MODEL") or _default_model(self.provider)
         self.timeout = _float_env("V3_LLM_BRAIN_TIMEOUT_SECONDS", 120.0)
+        # A V3 preparation has more than one legitimate Brain decision: a
+        # semantic plan and the final signed renderer direction.  Bound the
+        # *logical* preparation as one unit so a later valid sign-off does not
+        # inherit a stale per-call deadline or leave a caller waiting without a
+        # terminal reason.  This is deliberately transport-only and never
+        # changes creative ownership or permits a local prompt fallback.
+        self.execution_budget_seconds = _float_env(
+            "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS",
+            max(240.0, (self.timeout * 2.0) + 20.0),
+        )
         # A compact V3 plan can still need substantial output allowance when a
         # reasoning-capable remote model accounts for its private deliberation
         # before returning the complete JSON contract.  The old 4200-token
@@ -65,6 +109,33 @@ class V3LLMBrainProvider:
         # This is an output-capacity setting only: it neither changes frozen
         # evidence nor permits local JSON/prompt reconstruction.
         self.max_tokens = _int_env("V3_LLM_BRAIN_MAX_TOKENS", 8000)
+
+    @contextmanager
+    def execution_scope(self):
+        """Share one finite, provider-neutral budget across a V3 preparation."""
+
+        budget = _BrainExecutionBudget(
+            total_seconds=max(1.0, float(self.execution_budget_seconds)),
+            started_at=time.perf_counter(),
+        )
+        token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+        try:
+            yield budget
+        finally:
+            _ACTIVE_EXECUTION_BUDGET.reset(token)
+
+    def execution_budget_receipt(self) -> dict[str, Any] | None:
+        """Return safe, aggregate timing facts without endpoint/error bodies."""
+
+        budget = _ACTIVE_EXECUTION_BUDGET.get()
+        if budget is None:
+            return None
+        remaining = budget.remaining_seconds()
+        return {
+            "logical_budget_seconds": round(budget.total_seconds, 3),
+            "remaining_ms": max(0, int(round(remaining * 1000))),
+            "state": "within_budget" if remaining > 0.0 else "exhausted",
+        }
 
     def available(self, *, force: bool = False) -> bool:
         if not _remote_enabled(force=force):
@@ -84,6 +155,7 @@ class V3LLMBrainProvider:
         prompt, changes a reference, or starts an image operation.
         """
 
+        self._ensure_budget_available()
         if self.provider in {"anthropic", "kimi", "claude"}:
             runner = self._run_anthropic_compatible
         else:
@@ -93,6 +165,7 @@ class V3LLMBrainProvider:
                 runner(request),
                 attempts=1,
                 json_recovery_attempted=False,
+                execution_budget=self.execution_budget_receipt(),
             )
         except BrainInvalidJsonResponse:
             try:
@@ -100,6 +173,7 @@ class V3LLMBrainProvider:
                     runner(request, json_recovery=True),
                     attempts=2,
                     json_recovery_attempted=True,
+                    execution_budget=self.execution_budget_receipt(),
                 )
             except BrainInvalidJsonResponse as recovery_error:
                 if isinstance(recovery_error, BrainOutputTruncated):
@@ -109,6 +183,28 @@ class V3LLMBrainProvider:
                 raise BrainInvalidJsonResponse(
                     "remote brain returned malformed JSON after one bounded serialization recovery"
                 ) from recovery_error
+
+    def _ensure_budget_available(self) -> None:
+        budget = _ACTIVE_EXECUTION_BUDGET.get()
+        if budget is not None and budget.remaining_seconds() <= 0.0:
+            raise BrainExecutionBudgetExceeded(
+                "remote Brain logical execution budget exhausted before a complete prompt could be signed"
+            )
+
+    def _effective_timeout_seconds(self) -> float:
+        """Use the remaining shared deadline, never a stale full call timeout."""
+
+        budget = _ACTIVE_EXECUTION_BUDGET.get()
+        if budget is None:
+            return self.timeout
+        remaining = budget.remaining_seconds()
+        if remaining <= 0.0:
+            raise BrainExecutionBudgetExceeded(
+                "remote Brain logical execution budget exhausted before another remote decision"
+            )
+        # A non-zero timeout is required by all supported transports.  The
+        # value is still bounded by the remaining logical preparation budget.
+        return max(0.1, min(self.timeout, remaining))
 
     def _run_openai_compatible(
         self,
@@ -140,11 +236,14 @@ class V3LLMBrainProvider:
             response = client.responses.create(
                 model=self.model,
                 input=[
-                    {"role": "system", "content": _system_prompt(json_recovery=json_recovery)},
+                    {
+                        "role": "system",
+                        "content": _system_prompt(request.stage, json_recovery=json_recovery),
+                    },
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
                 text={"format": {"type": "json_object"}},
-                timeout=self.timeout,
+                timeout=self._effective_timeout_seconds(),
                 max_output_tokens=self.max_tokens,
             )
             text = getattr(response, "output_text", None) or ""
@@ -184,12 +283,15 @@ class V3LLMBrainProvider:
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": _system_prompt(json_recovery=json_recovery)},
+                {
+                    "role": "system",
+                    "content": _system_prompt(request.stage, json_recovery=json_recovery),
+                },
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
                 response_format={"type": "json_object"},
                 temperature=0,
-                timeout=self.timeout,
+                timeout=self._effective_timeout_seconds(),
                 max_tokens=self.max_tokens,
             )
             choices = getattr(response, "choices", None) or []
@@ -223,10 +325,10 @@ class V3LLMBrainProvider:
                 "model": self.model,
                 "max_tokens": self.max_tokens,
                 "temperature": 0.2,
-                "system": _system_prompt(json_recovery=json_recovery),
+                "system": _system_prompt(request.stage, json_recovery=json_recovery),
                 "messages": [{"role": "user", "content": build_remote_payload(request)}],
             }
-            with httpx.Client(timeout=self.timeout) as client:
+            with httpx.Client(timeout=self._effective_timeout_seconds()) as client:
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
             response_json = response.json()
@@ -395,13 +497,13 @@ reuse or quote malformed output; author the full contract again yourself.
 """.strip()
 
 
-def _system_prompt(*, json_recovery: bool) -> str:
+def _system_prompt(stage: str, *, json_recovery: bool) -> str:
     """Keep a recovery transport instruction outside creative prompt ownership."""
 
     return (
-        f"{SYSTEM_PROMPT}\n\n{_JSON_SERIALIZATION_RECOVERY_SUFFIX}"
+        f"{system_prompt_for_stage(stage)}\n\n{_JSON_SERIALIZATION_RECOVERY_SUFFIX}"
         if json_recovery
-        else SYSTEM_PROMPT
+        else system_prompt_for_stage(stage)
     )
 
 
@@ -410,6 +512,7 @@ def _with_transport_receipt(
     *,
     attempts: int,
     json_recovery_attempted: bool,
+    execution_budget: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attach only safe transport provenance for adapter/job audit projection."""
 
@@ -418,6 +521,7 @@ def _with_transport_receipt(
         "attempts": attempts,
         "json_serialization_recovery_attempted": json_recovery_attempted,
         "json_serialization_recovery_succeeded": json_recovery_attempted,
+        **({"execution_budget": dict(execution_budget)} if execution_budget else {}),
     }
     return result
 
@@ -435,11 +539,29 @@ def pop_transport_receipt(payload: dict[str, Any]) -> dict[str, Any]:
         return {}
     if succeeded and not attempted:
         return {}
-    return {
+    receipt = {
         "attempts": attempts,
         "json_serialization_recovery_attempted": attempted,
         "json_serialization_recovery_succeeded": succeeded,
     }
+    execution_budget = raw.get("execution_budget")
+    if isinstance(execution_budget, dict):
+        logical_budget_seconds = execution_budget.get("logical_budget_seconds")
+        remaining_ms = execution_budget.get("remaining_ms")
+        state = execution_budget.get("state")
+        if (
+            isinstance(logical_budget_seconds, (int, float))
+            and float(logical_budget_seconds) > 0.0
+            and isinstance(remaining_ms, int)
+            and remaining_ms >= 0
+            and state in {"within_budget", "exhausted"}
+        ):
+            receipt["execution_budget"] = {
+                "logical_budget_seconds": float(logical_budget_seconds),
+                "remaining_ms": remaining_ms,
+                "state": state,
+            }
+    return receipt
 
 
 def _response_text_from_openai(response: Any) -> str:

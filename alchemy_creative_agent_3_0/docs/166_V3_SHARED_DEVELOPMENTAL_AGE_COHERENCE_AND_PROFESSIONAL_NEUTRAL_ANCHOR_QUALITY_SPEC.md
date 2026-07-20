@@ -527,7 +527,7 @@ milestones:
 ```text
 85e1a25  freeze the Brain-owned developmental-age decision
 f54b645  require observable whole-person age coherence at Brain sign-off
-e3a1af8  add one bounded complete-prompt age-coherence re-sign
+e3a1af8  historical bounded complete-prompt age-coherence re-sign
 8642747  preserve typed Professional serial capture continuity
 632824e  independently re-sign Professional capture continuity
 ```
@@ -538,8 +538,10 @@ The effective execution contract is:
    frozen request and source-age ownership decision.
 2. Human Realism consumes that frozen decision as a shared obligation; it does
    not infer age through text scanning.
-3. The Remote Brain signs a complete canonical prompt and may perform one
-   bounded complete-prompt re-sign when age coherence is not observable.
+3. The Remote Brain signs the complete canonical prompt together with the
+   required developmental-age and developmental-presence receipts. Under
+   Doc175, new forward jobs do not perform the former additional age re-sign;
+   historical records remain readable.
 4. Professional serial preparation carries a typed capture-continuity decision
    independently of age. A later view must preserve the approved neutral
    capture rather than silently changing wardrobe or photographic treatment.
