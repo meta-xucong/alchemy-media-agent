@@ -47,14 +47,15 @@ reviewer, retry engine, or image store.
 
 ## Verification
 
-- Doc178 focused contract and orchestration tests: 14 passed.
-- Professional Face Identity/catalog/library/Doc173/Product API subset: 65
-  passed.
-- Character Card library/route/host subset: 51 passed.
+- Doc178 contract/orchestration plus HTTP/host regressions: 36 passed.
+- Professional/Doc162/Doc165/Doc166/Doc173/Doc174/Doc178 and M0-M5
+  compatibility subset: 146 passed.
 - `compileall` and `git diff --check`: passed.
-- Full V3: 1053 passed, 1 failed. The failure reproduces in isolation in the
-  existing `PersistentProjectStore` timeline temporary-file write test and is
-  outside the changed files; it is not a Character Card failure.
+- A bounded full-V3 invocation was started but produced no progress for several
+  minutes on this Windows worker and was stopped; it is not reported as a
+  pass. The previously known `PersistentProjectStore` timeline temporary-file
+  race remains outside the changed files and still requires mainline's normal
+  full-suite environment to classify.
 
 No real Provider/Vision run, M5 acceptance, Gate C/D, or production gate is
 claimed by this branch.
