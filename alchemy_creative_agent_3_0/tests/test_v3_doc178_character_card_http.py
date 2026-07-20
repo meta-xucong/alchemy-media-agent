@@ -15,6 +15,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardSharedRuntimeReceipt,
     CharacterCardStageResult,
     CharacterCardState,
+    CharacterCardSlot,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryRootSourceProvenance,
@@ -194,3 +195,33 @@ def test_doc178_route_handler_rejects_expression_payload_and_no_host_is_safe() -
         )
     with pytest.raises(CharacterCardRuntimeUnavailable, match="unavailable"):
         handlers.post_visual_asset_character_card_prepare("asset_1", {"stage": "face_identity"})
+
+
+def test_doc180_public_character_card_projection_exposes_only_server_owned_media_urls() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _catalog_asset(catalog)
+    card = asset.character_card
+    face_slots = dict(card.face_slots)
+    face_slots["face.front"] = CharacterCardSlot(
+        slot_key="face.front",
+        module="face_identity",
+        state="winner_selected",
+        output_id="output_front_1",
+        review_verified=True,
+        prompt_reference_parity_verified=True,
+    )
+    updated = asset.model_copy(
+        update={
+            "character_card": card.model_copy(
+                update={"face_slots": face_slots, "face_identity_status": "reviewing"}
+            )
+        }
+    )
+    public = V3ProductRouteHandlers._visual_asset_public_record(updated)
+    slot = public["character_card"]["slots"]["face.front"]
+    assert slot["available"] is True
+    assert slot["preview_url"].endswith("/outputs/output_front_1/preview")
+    assert slot["download_url"].endswith("/outputs/output_front_1/download")
+    assert "output_id" not in slot
+    assert "prompt" not in slot
+    assert "provider" not in slot

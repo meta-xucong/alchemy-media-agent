@@ -3844,6 +3844,217 @@ button.v2-live-preview:focus-visible {
   gap: 18px;
 }
 
+/* Doc180: the Professional character card is a fixed, beginner-facing
+   workspace.  Empty slots are intentional placeholders, not missing UI. */
+.v3-character-card-workspace {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 22px;
+  background: var(--surface, #fff);
+  box-shadow: 0 16px 40px rgba(17, 24, 39, .07);
+}
+
+.v3-character-card-heading,
+.v3-character-card-module-head,
+.v3-character-card-module-footer,
+.v3-character-card-actions,
+.v3-character-card-source-options {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.v3-character-card-heading,
+.v3-character-card-module-footer,
+.v3-character-card-actions {
+  justify-content: space-between;
+}
+
+.v3-character-card-heading h4,
+.v3-character-card-module-head h5 {
+  margin: 0;
+}
+
+.v3-character-card-heading p,
+.v3-character-card-module-head p {
+  margin: 5px 0 0;
+  color: var(--muted, #6b7280);
+}
+
+.v3-character-card-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.v3-character-card-overall-progress {
+  display: grid;
+  gap: 7px;
+}
+
+.v3-character-card-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef1f5;
+}
+
+.v3-character-card-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6f7bf7, #55b9a5);
+  transition: width .25s ease;
+}
+
+.v3-character-card-modules {
+  display: grid;
+  gap: 14px;
+}
+
+.v3-character-card-module {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e7eaf0;
+  border-radius: 16px;
+  background: #fbfcfe;
+}
+
+.v3-character-card-module[data-state="active"] {
+  border-color: #b8dfd2;
+  background: #f5fcf9;
+}
+
+.v3-character-card-module[data-state="reviewing"] {
+  border-color: #f0d49a;
+  background: #fffaf0;
+}
+
+.v3-character-card-module-index {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  flex: 0 0 30px;
+  border-radius: 50%;
+  background: #1f2937;
+  color: #fff;
+  font-weight: 700;
+}
+
+.v3-character-card-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.v3-character-card-slot {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #e4e8ef;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.v3-character-card-slot-media,
+.v3-character-card-slot-placeholder {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: #f1f3f7;
+}
+
+.v3-character-card-slot-media {
+  cursor: zoom-in;
+}
+
+.v3-character-card-slot-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.v3-character-card-slot-placeholder {
+  color: #8a93a3;
+  font-size: 12px;
+}
+
+.v3-character-card-slot-label {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+}
+
+.v3-character-card-slot-label small {
+  color: #7b8492;
+}
+
+.v3-character-card-module-footer {
+  align-items: flex-end;
+}
+
+.v3-character-card-module-footer > small {
+  max-width: 65ch;
+  color: #687385;
+}
+
+.v3-character-card-body-controls {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #f5f7fb;
+}
+
+.v3-character-card-source-options {
+  flex-wrap: wrap;
+}
+
+.v3-character-card-body-controls textarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+}
+
+.v3-character-card-empty {
+  padding: 24px;
+  border: 1px dashed #d4d9e2;
+  border-radius: 14px;
+  color: #707987;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .v3-character-card-workspace {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .v3-character-card-heading,
+  .v3-character-card-module-footer,
+  .v3-character-card-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .v3-character-card-heading-actions {
+    justify-content: space-between;
+  }
+
+  .v3-character-card-module-head {
+    align-items: flex-start;
+  }
+}
+
 .v3-library-panel,
 .v3-project-visual-asset-panel {
   display: grid;

@@ -321,6 +321,9 @@ const v3State = {
   visualAssetWorkflowStage: "idle",
   visualAssetWorkflowStartedAt: null,
   visualAssetWorkflowTimer: null,
+  characterCardRunAll: false,
+  characterCardBusyModule: "",
+  characterCardBodySource: "brain_inferred",
   projectVisualAssetBindings: [],
   projectVisualAssetBindingState: "empty",
   projectVisualAssetBindingsLoading: false,
@@ -580,6 +583,17 @@ const els = {
   v3VisualAssetWorkflowSteps: document.querySelector("#v3VisualAssetWorkflowSteps"),
   v3VisualAssetWorkflowActivateBtn: document.querySelector("#v3VisualAssetWorkflowActivateBtn"),
   v3VisualAssetWorkflowRetryBtn: document.querySelector("#v3VisualAssetWorkflowRetryBtn"),
+  v3CharacterCardWorkspace: document.querySelector("#v3CharacterCardWorkspace"),
+  v3CharacterCardTitle: document.querySelector("#v3CharacterCardTitle"),
+  v3CharacterCardDetail: document.querySelector("#v3CharacterCardDetail"),
+  v3CharacterCardStatus: document.querySelector("#v3CharacterCardStatus"),
+  v3CharacterCardProgressFill: document.querySelector("#v3CharacterCardProgressFill"),
+  v3CharacterCardProgressText: document.querySelector("#v3CharacterCardProgressText"),
+  v3CharacterCardModules: document.querySelector("#v3CharacterCardModules"),
+  v3CharacterCardBodyControls: document.querySelector("#v3CharacterCardBodyControls"),
+  v3CharacterCardBodyFacts: document.querySelector("#v3CharacterCardBodyFacts"),
+  v3CharacterCardRunAllBtn: document.querySelector("#v3CharacterCardRunAllBtn"),
+  v3CloseCharacterCardBtn: document.querySelector("#v3CloseCharacterCardBtn"),
   v3TemplateCreatePanel: document.querySelector("#v3TemplateCreatePanel"),
   v3SelectedTemplateTitle: document.querySelector("#v3SelectedTemplateTitle"),
   v3SelectedTemplateIntro: document.querySelector("#v3SelectedTemplateIntro"),
@@ -1219,6 +1233,16 @@ function bindControls() {
   if (els.v3CloseVisualAssetLibraryDialogBtn) els.v3CloseVisualAssetLibraryDialogBtn.addEventListener("click", closeV3VisualAssetLibraryDialog);
   if (els.v3RefreshVisualAssetsBtn) els.v3RefreshVisualAssetsBtn.addEventListener("click", () => loadV3VisualAssets({ silent: false, force: true }));
   if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.addEventListener("click", handleV3VisualAssetAction);
+  if (els.v3CharacterCardModules) els.v3CharacterCardModules.addEventListener("click", handleV3CharacterCardAction);
+  if (els.v3CharacterCardRunAllBtn) els.v3CharacterCardRunAllBtn.addEventListener("click", startV3CharacterCardRunAll);
+  if (els.v3CloseCharacterCardBtn) els.v3CloseCharacterCardBtn.addEventListener("click", closeV3CharacterCard);
+  document.querySelectorAll("input[name=\"v3CharacterCardBodySource\"]").forEach((input) => {
+    input.addEventListener("change", () => {
+      v3State.characterCardBodySource = input.value || "brain_inferred";
+      if (els.v3CharacterCardBodyFacts) els.v3CharacterCardBodyFacts.hidden = v3State.characterCardBodySource !== "user_described";
+      renderV3CharacterCardWorkspace();
+    });
+  });
   if (els.v3VisualAssetRootInput) els.v3VisualAssetRootInput.addEventListener("change", handleV3VisualAssetSourceFiles);
   if (els.v3VisualAssetSourceList) els.v3VisualAssetSourceList.addEventListener("click", handleV3VisualAssetSourceListClick);
   if (els.v3VisualAssetNameInput) els.v3VisualAssetNameInput.addEventListener("input", clearV3VisualAssetCreateFeedback);
@@ -5255,6 +5279,325 @@ function v3VisualAssetViewLabel(role) {
   }[role] || "视角";
 }
 
+const v3CharacterCardModuleOrder = ["face_identity", "expression_set", "body_silhouette"];
+const v3CharacterCardModuleMeta = {
+  face_identity: {
+    title: "人物脸部基础",
+    detail: "建立同一个人物在不同角度下仍然稳定的脸部与头部参考。",
+    slots: [
+      ["face.front", "正面"],
+      ["face.front_three_quarter", "侧前方"],
+      ["face.profile", "侧面"],
+      ["face.reverse_three_quarter", "反侧前方"],
+      ["face.rear_head", "后脑 / 背面"],
+    ],
+  },
+  expression_set: {
+    title: "表情组",
+    detail: "在同一个人物基础上准备中性、微笑、愤怒和悲伤等常用表情。",
+    slots: [
+      ["expression.neutral", "中性"],
+      ["expression.smile", "微笑"],
+      ["expression.anger", "愤怒"],
+      ["expression.sad", "悲伤"],
+    ],
+  },
+  body_silhouette: {
+    title: "身形与全身关系",
+    detail: "建立正面、侧面和背面的全身关系，供服装和场景项目保持人物一致。",
+    slots: [
+      ["body.front_full", "正面全身"],
+      ["body.side_full", "侧面全身"],
+      ["body.rear_full", "背面全身"],
+    ],
+  },
+};
+
+function v3CharacterCardForAsset(asset) {
+  return asset?.character_card && typeof asset.character_card === "object" ? asset.character_card : null;
+}
+
+function v3CharacterCardModuleStatus(card, module) {
+  return String(card?.[`${module}_status`] || "empty");
+}
+
+function v3CharacterCardStatusLabel(status) {
+  return {
+    empty: "尚未建立",
+    preparing: "正在生成",
+    reviewing: "等待确认",
+    partial: "部分完成",
+    active: "已完成",
+    stale: "需要更新",
+    blocked: "需要重新处理",
+  }[status] || "等待处理";
+}
+
+function v3CharacterCardSlot(card, slotKey) {
+  const slot = card?.slots?.[slotKey];
+  if (slot) return slot;
+  return { state: "empty", available: false };
+}
+
+function v3CharacterCardSlotPreview(card, slotKey) {
+  const slot = v3CharacterCardSlot(card, slotKey);
+  if (slot.preview_url || slot.download_url) return slot.preview_url || slot.download_url;
+  if (slotKey === "expression.neutral") {
+    const front = v3CharacterCardSlot(card, "face.front");
+    return front.preview_url || front.download_url || "";
+  }
+  return "";
+}
+
+function v3CharacterCardStagePrerequisite(card, module) {
+  const status = v3CharacterCardModuleStatus(card, module);
+  if (module === "face_identity") return { allowed: true, status };
+  const faceActive = v3CharacterCardModuleStatus(card, "face_identity") === "active";
+  if (module === "expression_set") {
+    return { allowed: faceActive, status, reason: "请先完成并确认启用人物脸部基础。" };
+  }
+  const expressionActive = v3CharacterCardModuleStatus(card, "expression_set") === "active";
+  return {
+    allowed: faceActive && expressionActive,
+    status,
+    reason: "请先完成并确认启用前面的两部分。",
+  };
+}
+
+function v3CharacterCardModuleAction(module, card) {
+  const status = v3CharacterCardModuleStatus(card, module);
+  const prerequisite = v3CharacterCardStagePrerequisite(card, module);
+  const busy = Boolean(v3State.visualAssetBusy);
+  if (status === "preparing" || v3State.characterCardBusyModule === module) {
+    return `<button class="button compact secondary" type="button" disabled>正在处理本部分…</button>`;
+  }
+  if (status === "reviewing") {
+    const action = module === "face_identity" ? "activate-face" : "activate-module";
+    const label = module === "face_identity" ? "确认启用脸部基础" : `确认启用${v3CharacterCardModuleMeta[module].title}`;
+    return `<button class="button compact primary" type="button" data-v3-character-card-action="${action}" data-v3-character-card-module="${module}" ${busy ? "disabled" : ""}>${label}</button>`;
+  }
+  if (status === "active") {
+    return `<span class="v3-character-card-complete">✓ 这一部分已完成</span>`;
+  }
+  const label = status === "blocked" || status === "stale" ? "重新生成本部分" : `开始${v3CharacterCardModuleMeta[module].title}`;
+  return `<button class="button compact secondary" type="button" data-v3-character-card-action="prepare" data-v3-character-card-module="${module}" ${!prerequisite.allowed || busy ? "disabled" : ""}>${label}</button>`;
+}
+
+function renderV3CharacterCardWorkspace() {
+  const panel = els.v3CharacterCardWorkspace;
+  const assetId = String(v3State.visualAssetWorkflowAssetId || "").trim();
+  const asset = v3State.visualAssets.find((item) => item.visual_asset_id === assetId);
+  if (!panel || !asset) {
+    if (panel) panel.hidden = true;
+    return;
+  }
+  const card = v3CharacterCardForAsset(asset);
+  if (!card) {
+    panel.hidden = false;
+    if (els.v3CharacterCardTitle) els.v3CharacterCardTitle.textContent = "标准人物角色卡暂不可用";
+    if (els.v3CharacterCardDetail) els.v3CharacterCardDetail.textContent = "这个旧资产还没有角色卡状态，刷新资产后再试。";
+    if (els.v3CharacterCardModules) els.v3CharacterCardModules.innerHTML = "<div class=\"v3-character-card-empty\">当前资产没有可读取的角色卡。</div>";
+    return;
+  }
+  panel.hidden = false;
+  document.querySelectorAll("input[name=\"v3CharacterCardBodySource\"]").forEach((input) => {
+    input.checked = input.value === (v3State.characterCardBodySource || "brain_inferred");
+  });
+  if (els.v3CharacterCardBodyFacts) {
+    els.v3CharacterCardBodyFacts.hidden = (v3State.characterCardBodySource || "brain_inferred") !== "user_described";
+  }
+  const moduleStatuses = v3CharacterCardModuleOrder.map((module) => v3CharacterCardModuleStatus(card, module));
+  const activeCount = moduleStatuses.filter((status) => status === "active").length;
+  const preparingModule = v3CharacterCardModuleOrder.find((module) => v3CharacterCardModuleStatus(card, module) === "preparing") || v3State.characterCardBusyModule;
+  const waitingModule = v3CharacterCardModuleOrder.find((module) => v3CharacterCardModuleStatus(card, module) === "reviewing");
+  const progress = activeCount === 3 ? 100 : Math.min(96, activeCount * 33 + (preparingModule ? 16 : waitingModule ? 28 : 0));
+  const nextModule = v3CharacterCardModuleOrder.find((module) => v3CharacterCardModuleStatus(card, module) !== "active") || "body_silhouette";
+  const nextMeta = v3CharacterCardModuleMeta[nextModule];
+  if (els.v3CharacterCardTitle) els.v3CharacterCardTitle.textContent = `${asset.display_name} · 标准人物角色卡`;
+  if (els.v3CharacterCardDetail) {
+    els.v3CharacterCardDetail.textContent = activeCount === 3
+      ? "三部分都已完成。以后在专业项目中选择这个人物资产即可保持人物一致。"
+      : "每个固定位置都会保留。生成完成后，图片会回到对应位置；你可以分次完成，也可以一键按顺序准备。";
+  }
+  if (els.v3CharacterCardStatus) {
+    els.v3CharacterCardStatus.textContent = waitingModule ? `等待确认：${v3CharacterCardModuleMeta[waitingModule].title}` : activeCount === 3 ? "角色卡已完成" : `${activeCount}/3 部分已完成`;
+  }
+  if (els.v3CharacterCardProgressFill) els.v3CharacterCardProgressFill.style.width = `${progress}%`;
+  if (els.v3CharacterCardProgressText) {
+    els.v3CharacterCardProgressText.textContent = activeCount === 3
+      ? "人物角色卡已完成"
+      : waitingModule
+        ? `请确认启用：${v3CharacterCardModuleMeta[waitingModule].title}`
+        : `下一步：${nextMeta.title}`;
+  }
+  if (els.v3CharacterCardModules) {
+    els.v3CharacterCardModules.innerHTML = v3CharacterCardModuleOrder.map((module, index) => {
+      const meta = v3CharacterCardModuleMeta[module];
+      const status = v3CharacterCardModuleStatus(card, module);
+      const prerequisite = v3CharacterCardStagePrerequisite(card, module);
+      const slots = meta.slots.map(([slotKey, label]) => {
+        const slot = v3CharacterCardSlot(card, slotKey);
+        const preview = v3CharacterCardSlotPreview(card, slotKey);
+        const state = String(slot.state || "empty");
+        const media = preview
+          ? `<button class="v3-character-card-slot-media" type="button" data-v3-character-card-action="preview" data-v3-character-card-slot="${slotKey}" aria-label="查看${label}"><img src="${escapeHtml(v3MediaUrl(preview))}" alt="${escapeHtml(label)}" loading="lazy" /></button>`
+          : `<div class="v3-character-card-slot-placeholder"><span>${state === "preparing" ? "正在生成" : state === "blocked" ? "需要重做" : "空位"}</span></div>`;
+        return `<article class="v3-character-card-slot" data-state="${escapeHtml(state)}">
+          ${media}
+          <div class="v3-character-card-slot-label"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(v3CharacterCardStatusLabel(state))}</small></div>
+        </article>`;
+      }).join("");
+      return `<section class="v3-character-card-module" data-v3-character-card-module="${module}" data-state="${escapeHtml(status)}">
+        <div class="v3-character-card-module-head">
+          <div class="v3-character-card-module-index">${index + 1}</div>
+          <div><h5>${escapeHtml(meta.title)}</h5><p>${escapeHtml(meta.detail)}</p></div>
+          <span class="state-pill">${escapeHtml(v3CharacterCardStatusLabel(status))}</span>
+        </div>
+        <div class="v3-character-card-slots">${slots}</div>
+        <div class="v3-character-card-module-footer">
+          <small>${status === "active" ? "已完成，可用于后续专业项目。" : !prerequisite.allowed ? prerequisite.reason : "这一部分会交给共享中枢和共享检查流程完成。"}</small>
+          <div class="v3-character-card-module-actions">${v3CharacterCardModuleAction(module, card)}</div>
+        </div>
+      </section>`;
+    }).join("");
+  }
+  const bodyReady = v3CharacterCardStagePrerequisite(card, "body_silhouette").allowed;
+  if (els.v3CharacterCardBodyControls) els.v3CharacterCardBodyControls.hidden = !bodyReady || activeCount === 3;
+  if (els.v3CharacterCardRunAllBtn) {
+    els.v3CharacterCardRunAllBtn.disabled = Boolean(v3State.visualAssetBusy) || activeCount === 3;
+    els.v3CharacterCardRunAllBtn.textContent = activeCount === 3 ? "角色卡已完成" : v3State.characterCardRunAll ? "继续按顺序准备" : "一键按顺序准备";
+  }
+}
+
+function v3CharacterCardBodyPayload() {
+  const sourceClass = v3State.characterCardBodySource || "brain_inferred";
+  const payload = { stage: "body_silhouette", source_class: sourceClass };
+  if (sourceClass === "user_described") payload.body_facts = String(els.v3CharacterCardBodyFacts?.value || "").trim();
+  return payload;
+}
+
+async function runV3CharacterCardStage(module, { runAll = false } = {}) {
+  const assetId = String(v3State.visualAssetWorkflowAssetId || "").trim();
+  const asset = v3State.visualAssets.find((item) => item.visual_asset_id === assetId);
+  const card = v3CharacterCardForAsset(asset);
+  const prerequisite = v3CharacterCardStagePrerequisite(card, module);
+  if (!assetId || !asset || !prerequisite.allowed || v3State.visualAssetBusy) {
+    if (!prerequisite.allowed && prerequisite.reason) updateV3Notice(prerequisite.reason, "warning");
+    return;
+  }
+  if (module === "body_silhouette" && v3State.characterCardBodySource === "user_described" && !String(els.v3CharacterCardBodyFacts?.value || "").trim()) {
+    updateV3Notice("请先补充身形说明，或选择“根据现有资料判断”。", "warning");
+    return;
+  }
+  v3State.visualAssetBusy = true;
+  v3State.characterCardBusyModule = module;
+  v3State.characterCardRunAll = Boolean(runAll || v3State.characterCardRunAll);
+  v3State.visualAssetWorkflowStage = `character_card_${module}`;
+  startV3VisualAssetWorkflowTimer();
+  renderV3VisualAssetLibrary();
+  let advanceAfterStage = false;
+  try {
+    const payload = module === "body_silhouette" ? v3CharacterCardBodyPayload() : { stage: module };
+    await request(`${v3VisualAssetPath(assetId)}/character-card/prepare`, { method: "POST", body: payload });
+    await loadV3VisualAssets({ silent: true, force: true });
+    const prepared = v3State.visualAssets.find((item) => item.visual_asset_id === assetId);
+    advanceAfterStage = Boolean(v3State.characterCardRunAll)
+      && v3CharacterCardModuleStatus(v3CharacterCardForAsset(prepared), module) === "active";
+    updateV3Notice(`${v3CharacterCardModuleMeta[module].title}已返回共享流程结果，请查看角色卡下一步。`, "success");
+  } catch (error) {
+    updateV3Notice(v3VisualAssetErrorMessage(error), "warning");
+  } finally {
+    v3State.visualAssetBusy = false;
+    v3State.characterCardBusyModule = "";
+    renderV3VisualAssetLibrary();
+    if (advanceAfterStage) runNextV3CharacterCardModule();
+  }
+}
+
+async function activateV3CharacterCardModule(module) {
+  const assetId = String(v3State.visualAssetWorkflowAssetId || "").trim();
+  if (!assetId || v3State.visualAssetBusy) return;
+  if (module === "face_identity") {
+    await activateV3VisualAsset(assetId);
+    return;
+  }
+  v3State.visualAssetBusy = true;
+  v3State.characterCardBusyModule = module;
+  renderV3VisualAssetLibrary();
+  let advanceAfterActivation = false;
+  try {
+    await request(`${v3VisualAssetPath(assetId)}/character-card/activate`, {
+      method: "POST",
+      body: { module, confirm_activation: true },
+    });
+    await loadV3VisualAssets({ silent: true, force: true });
+    advanceAfterActivation = v3State.characterCardRunAll;
+    updateV3Notice(`${v3CharacterCardModuleMeta[module].title}已启用。`, "success");
+  } catch (error) {
+    updateV3Notice(v3VisualAssetErrorMessage(error), "warning");
+  } finally {
+    v3State.visualAssetBusy = false;
+    v3State.characterCardBusyModule = "";
+    renderV3VisualAssetLibrary();
+    if (advanceAfterActivation) runNextV3CharacterCardModule();
+  }
+}
+
+function runNextV3CharacterCardModule() {
+  const asset = v3State.visualAssets.find((item) => item.visual_asset_id === v3State.visualAssetWorkflowAssetId);
+  const card = v3CharacterCardForAsset(asset);
+  if (!card || v3State.visualAssetBusy) return;
+  const next = v3CharacterCardModuleOrder.find((module) => v3CharacterCardModuleStatus(card, module) !== "active");
+  if (!next) {
+    v3State.characterCardRunAll = false;
+    renderV3VisualAssetLibrary();
+    return;
+  }
+  if (v3CharacterCardModuleStatus(card, next) === "reviewing") return;
+  void runV3CharacterCardStage(next, { runAll: true });
+}
+
+function startV3CharacterCardRunAll() {
+  v3State.characterCardRunAll = true;
+  runNextV3CharacterCardModule();
+}
+
+function handleV3CharacterCardAction(event) {
+  const actionTarget = event.target.closest("[data-v3-character-card-action]");
+  if (!actionTarget || actionTarget.disabled) return;
+  const action = actionTarget.dataset.v3CharacterCardAction || "";
+  const module = actionTarget.dataset.v3CharacterCardModule || "";
+  if (action === "prepare" && module) void runV3CharacterCardStage(module);
+  if (action === "activate-face" && module) void activateV3CharacterCardModule(module);
+  if (action === "activate-module" && module) void activateV3CharacterCardModule(module);
+  if (action === "preview") {
+    const asset = v3State.visualAssets.find((item) => item.visual_asset_id === v3State.visualAssetWorkflowAssetId);
+    const card = v3CharacterCardForAsset(asset);
+    const slotKey = actionTarget.dataset.v3CharacterCardSlot || "";
+    const preview = v3CharacterCardSlotPreview(card, slotKey);
+    if (preview) openImageLightbox({ id: `character-card-${slotKey}`, title: v3CharacterCardModuleMeta[slotKey.split(".")[0]]?.title || "人物角色卡", url: v3MediaUrl(preview), downloadUrl: v3MediaUrl(card?.slots?.[slotKey]?.download_url || preview), previewUrl: v3MediaUrl(preview), thumbnailUrl: v3MediaUrl(preview), format: "png" });
+  }
+}
+
+function openV3CharacterCard(visualAssetId) {
+  const asset = v3State.visualAssets.find((item) => item.visual_asset_id === visualAssetId);
+  if (!asset) return;
+  v3State.visualAssetWorkflowAssetId = visualAssetId;
+  v3State.visualAssetWorkflowStage = "character_card";
+  v3State.characterCardRunAll = false;
+  if (els.v3CharacterCardBodyFacts) els.v3CharacterCardBodyFacts.value = "";
+  renderV3VisualAssetLibrary();
+}
+
+function closeV3CharacterCard() {
+  if (v3State.visualAssetBusy) return;
+  clearV3VisualAssetWorkflowTimer();
+  v3State.visualAssetWorkflowAssetId = "";
+  v3State.visualAssetWorkflowStage = "idle";
+  v3State.characterCardRunAll = false;
+  renderV3VisualAssetLibrary();
+}
+
 function v3VisualAssetLifecycleLabel(asset) {
   const status = String(asset?.lifecycle_status || "draft");
   const preparation = asset?.latest_preparation || null;
@@ -5316,7 +5659,7 @@ function renderV3VisualAssetCreateReadiness() {
   }
   if (els.v3VisualAssetCreateBtn) {
     els.v3VisualAssetCreateBtn.disabled = busy;
-    els.v3VisualAssetCreateBtn.textContent = busy ? "正在建立标准人物资产…" : "保存源图并开始标准建模";
+    els.v3VisualAssetCreateBtn.textContent = busy ? "正在保存并打开人物角色卡…" : "保存源图并打开人物角色卡";
   }
   const invalid = (element, isMissing) => {
     if (!element) return;
@@ -5342,7 +5685,11 @@ function startV3VisualAssetWorkflowTimer() {
   v3State.visualAssetWorkflowTimer = window.setInterval(() => {
     renderV3VisualAssetWorkflow();
     const asset = v3State.visualAssets.find((item) => item.visual_asset_id === v3State.visualAssetWorkflowAssetId);
-    if (asset?.lifecycle_status === "preparing" && !v3State.visualAssetsLoading) {
+    const card = v3CharacterCardForAsset(asset);
+    const characterCardPreparing = v3CharacterCardModuleOrder.some(
+      (module) => v3CharacterCardModuleStatus(card, module) === "preparing"
+    );
+    if ((asset?.lifecycle_status === "preparing" || characterCardPreparing) && !v3State.visualAssetsLoading) {
       void loadV3VisualAssets({ silent: true, force: true });
     }
   }, 700);
@@ -5357,6 +5704,13 @@ function v3VisualAssetWorkflowProgressPercent() {
 }
 
 function renderV3VisualAssetWorkflow() {
+  // The Character Card is now the authoritative Professional preparation
+  // surface. Keep the legacy nodes for old links/tests, but never render a
+  // second, competing three-view workflow beside the fixed slot card.
+  if (els.v3VisualAssetWorkflowPanel) els.v3VisualAssetWorkflowPanel.hidden = true;
+  renderV3CharacterCardWorkspace();
+  return;
+
   const panel = els.v3VisualAssetWorkflowPanel;
   const assetId = String(v3State.visualAssetWorkflowAssetId || "").trim();
   const asset = v3State.visualAssets.find((item) => item.visual_asset_id === assetId);
@@ -5738,8 +6092,12 @@ async function prepareV3VisualAsset(visualAssetId, { fromWorkflow = false } = {}
   startV3VisualAssetWorkflowTimer();
   renderV3VisualAssetLibrary();
   try {
-    updateV3Notice("正在建立人物的标准参考并完成三个视角检查。", "info");
-    await request(`${v3VisualAssetPath(visualAssetId)}/prepare`, { method: "POST", body: {} });
+    updateV3Notice("正在打开人物角色卡，先建立第一部分：人物脸部基础。", "info");
+    v3State.characterCardRunAll = false;
+    await request(`${v3VisualAssetPath(visualAssetId)}/character-card/prepare`, {
+      method: "POST",
+      body: { stage: "face_identity" },
+    });
     await loadV3VisualAssets({ silent: true, force: true });
     const preparedAsset = v3State.visualAssets.find((item) => item.visual_asset_id === visualAssetId);
     if (preparedAsset?.lifecycle_status === "review" && preparedAsset?.latest_preparation?.version_id) {
@@ -5774,6 +6132,7 @@ async function activateV3VisualAsset(visualAssetId) {
   v3State.visualAssetWorkflowAssetId = visualAssetId;
   v3State.visualAssetWorkflowStage = "activating";
   renderV3VisualAssetLibrary();
+  let advanceAfterActivation = false;
   try {
     await request(`${v3VisualAssetPath(visualAssetId)}/activate`, {
       method: "POST",
@@ -5781,6 +6140,7 @@ async function activateV3VisualAsset(visualAssetId) {
     });
     await loadV3VisualAssets({ silent: true, force: true });
     v3State.visualAssetWorkflowStage = "active";
+    advanceAfterActivation = v3State.characterCardRunAll;
     updateV3Notice("人物资产已启用。现在可以在任意 V3 项目中主动选择它。", "success");
   } catch (error) {
     v3State.visualAssetsError = v3VisualAssetErrorMessage(error);
@@ -5788,6 +6148,7 @@ async function activateV3VisualAsset(visualAssetId) {
   } finally {
     v3State.visualAssetBusy = false;
     renderV3VisualAssetLibrary();
+    if (advanceAfterActivation) runNextV3CharacterCardModule();
   }
 }
 
@@ -5814,6 +6175,7 @@ function handleV3VisualAssetAction(event) {
   const button = event.target.closest("[data-v3-visual-asset-action]");
   if (!button || button.disabled) return;
   const id = button.dataset.v3VisualAssetId || "";
+  if (button.dataset.v3VisualAssetAction === "open-card") openV3CharacterCard(id);
   if (button.dataset.v3VisualAssetAction === "prepare") void prepareV3VisualAsset(id);
   if (button.dataset.v3VisualAssetAction === "activate") void activateV3VisualAsset(id);
   if (button.dataset.v3VisualAssetAction === "archive") void archiveV3VisualAsset(id);
@@ -5847,6 +6209,9 @@ function renderV3VisualAssetLibrary() {
   }
   renderV3VisualAssetCreateReadiness();
   renderV3VisualAssetWorkflow();
+  const cardOpen = Boolean(v3State.visualAssetWorkflowAssetId);
+  if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.hidden = cardOpen;
+  if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.hidden = cardOpen;
   if (!els.v3VisualAssetLibraryList) return;
   els.v3VisualAssetLibraryList.innerHTML = assets.length ? assets.map((asset) => {
     const lifecycle = v3VisualAssetLifecycleLabel(asset);
@@ -5869,6 +6234,7 @@ function renderV3VisualAssetLibrary() {
       <p>${escapeHtml(lifecycle.detail)}</p>
       <small class="v3-visual-asset-view-summary">${escapeHtml(viewText)}</small>
       <div class="v3-visual-asset-actions">
+        <button class="button compact primary" type="button" data-v3-visual-asset-action="open-card" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}">打开人物角色卡</button>
         ${prepareAction}
         ${activateAction}
         <button class="button compact ghost" type="button" data-v3-visual-asset-action="archive" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${canArchive && !v3State.visualAssetBusy ? "" : "disabled"}>归档</button>

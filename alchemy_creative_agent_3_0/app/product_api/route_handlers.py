@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from ..app_shell import get_scenario_hub_contract
 from ..project_mode import InMemoryProjectStore, ProjectTemplateRegistry, V3ProjectModeService
@@ -305,6 +306,26 @@ class V3ProductRouteHandlers:
     def _visual_asset_public_record(asset: Any) -> dict[str, Any]:
         """Safe browser projection: no source IDs, prompt or review internals."""
 
+        def _character_card_slot_public(slot: Any) -> dict[str, Any]:
+            state = str(getattr(slot, "state", "empty") or "empty")
+            output_id = str(getattr(slot, "output_id", "") or "").strip()
+            public = {
+                "state": state,
+                "available": state in {"winner_selected", "active"},
+            }
+            # Media URLs are safe, server-owned projections.  They expose no
+            # prompt, provider, source path, candidate history or review body.
+            # Empty/preparing/blocked/stale slots deliberately remain empty.
+            if output_id and public["available"]:
+                encoded = quote(output_id, safe="")
+                public.update(
+                    {
+                        "preview_url": f"/api/v3/creative-agent/outputs/{encoded}/preview",
+                        "download_url": f"/api/v3/creative-agent/outputs/{encoded}/download",
+                    }
+                )
+            return public
+
         active_version = asset.active_version()
         latest_version = asset.versions[-1] if asset.versions else None
         latest_pack = getattr(latest_version, "anchor_pack", None) if latest_version is not None else None
@@ -337,15 +358,15 @@ class V3ProductRouteHandlers:
                 "face_identity_complete": card.face_identity_complete,
                 "slots": {
                     **{
-                        key: {"state": slot.state, "available": slot.state == "active"}
+                        key: _character_card_slot_public(slot)
                         for key, slot in card.face_slots.items()
                     },
                     **{
-                        key: {"state": slot.state, "available": slot.state == "active"}
+                        key: _character_card_slot_public(slot)
                         for key, slot in card.expression_slots.items()
                     },
                     **{
-                        key: {"state": slot.state, "available": slot.state == "active"}
+                        key: _character_card_slot_public(slot)
                         for key, slot in card.body_slots.items()
                     },
                 },

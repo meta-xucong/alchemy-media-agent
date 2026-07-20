@@ -220,7 +220,7 @@ def test_doc177_people_asset_creation_is_linear_and_shows_modeling_progress() ->
     assert 'role="progressbar"' in index
     assert 'id="v3VisualAssetWorkflowSteps"' in index
     assert 'id="v3VisualAssetWorkflowActivateBtn"' in index
-    assert "保存源图并开始标准建模" in index
+    assert "保存源图并打开人物角色卡" in index
     assert "visualAssetWorkflowAssetId = createdVisualAssetId" in source
     assert "prepareV3VisualAsset(createdVisualAssetId, { fromWorkflow: true })" in source
     assert "visualAssetWorkflowStage = \"blocked\"" in source
@@ -238,6 +238,55 @@ def test_doc177_people_asset_creation_is_linear_and_shows_modeling_progress() ->
     assert ".v3-visual-asset-workflow-panel" in css
     assert ".v3-visual-asset-workflow-progress.is-running" in css
     assert ".v3-visual-asset-workflow-actions .button" in css
+
+
+def test_doc180_character_card_is_the_single_professional_preparation_surface() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert 'id="v3CharacterCardWorkspace"' in index
+    assert 'id="v3CharacterCardModules"' in index
+    assert 'id="v3CharacterCardRunAllBtn"' in index
+    assert 'id="v3CharacterCardBodyControls"' in index
+    assert "const v3CharacterCardModuleOrder = [\"face_identity\", \"expression_set\", \"body_silhouette\"]" in source
+    for module in ("face_identity", "expression_set", "body_silhouette"):
+        assert f'"{module}"' in source
+    for slot in (
+        "face.front",
+        "face.front_three_quarter",
+        "face.profile",
+        "face.reverse_three_quarter",
+        "face.rear_head",
+        "expression.neutral",
+        "expression.smile",
+        "expression.anger",
+        "expression.sad",
+        "body.front_full",
+        "body.side_full",
+        "body.rear_full",
+    ):
+        assert slot in source
+    assert 'body: { stage: "body_silhouette"' not in source
+    assert 'character-card/prepare' in source
+    assert 'character-card/activate' in source
+    assert "function startV3CharacterCardRunAll" in source
+    assert "function openV3CharacterCard" in source
+    assert "function closeV3CharacterCard" in source
+    assert ".v3-character-card-workspace" in css
+    assert ".v3-character-card-slot-placeholder" in css
+    assert "v3State.characterCardRunAll" in source
+
+
+def test_doc180_character_card_media_projection_is_server_owned_and_non_secret() -> None:
+    handlers = HANDLERS.read_text(encoding="utf-8")
+    assert '"preview_url"' in handlers
+    assert '"download_url"' in handlers
+    helper_start = handlers.index("def _visual_asset_public_record")
+    helper_end = handlers.index("    @staticmethod\n    def _project_visual_asset_binding_public_record", helper_start)
+    helper = handlers[helper_start:helper_end]
+    for forbidden in ('"prompt"', '"provider"', '"source_path"', '"candidate"', '"review_body"'):
+        assert forbidden not in helper.lower()
 
 
 def test_doc177_linear_failure_projection_distinguishes_brain_unavailable_from_quality_failure() -> None:
