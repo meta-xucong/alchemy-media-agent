@@ -152,7 +152,9 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
         "v3_professional_anchor_view_decision_v2",
         "v3_professional_anchor_view_decision_v3",
     ]
-    target_view_role: Literal["standard_front", "three_quarter", "profile"]
+    target_view_role: Literal[
+        "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+    ]
     # Required and exact for v2/v3 by the adapter. Optional here keeps
     # historical v1 receipts readable without weakening new preparation.
     capture_presentation: Literal["neutral_identity_evidence_capture"] | None = None

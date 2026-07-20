@@ -28,6 +28,7 @@ from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductR
 from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.visual_assets import (
+    CharacterCardRuntimeUnavailable,
     PersistentProjectVisualAssetBindingService,
     PersistentVisualAssetCatalog,
     PersistentVisualAssetLibraryCatalog,
@@ -303,6 +304,15 @@ def _run_v3_handler(handler, *args, **kwargs):
         raise HTTPException(
             status_code=404,
             detail={"code": "v3_resource_not_found", "message": str(exc).strip("'")},
+        )
+    except CharacterCardRuntimeUnavailable as exc:
+        # A Character Card route is intentionally unavailable until the
+        # existing shared Brain/Provider/Vision host is injected.  Keep this
+        # a stable, non-sensitive 503 instead of leaking implementation
+        # details or turning the request into a local fallback.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": getattr(exc, "code", "character_card_shared_runtime_unavailable"), "message": "Professional character assets are temporarily unavailable."},
         )
 
 
@@ -703,6 +713,42 @@ async def v3_activate_visual_asset_endpoint(
     payload = await _v3_json_payload(request)
     return _run_v3_handler(
         v3_route_handlers.post_visual_asset_activate,
+        visual_asset_id,
+        payload,
+        _v3_visual_asset_owner_scope(user_id),
+    )
+
+
+@app.post("/api/v3/creative-agent/visual-assets/{visual_asset_id}/character-card/prepare")
+async def v3_prepare_visual_asset_character_card_endpoint(
+    visual_asset_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    """Prepare one explicit Character Card stage through the shared host."""
+
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_visual_asset_character_card_prepare,
+        visual_asset_id,
+        payload,
+        _v3_visual_asset_owner_scope(user_id),
+    )
+
+
+@app.post("/api/v3/creative-agent/visual-assets/{visual_asset_id}/character-card/activate")
+async def v3_activate_visual_asset_character_card_endpoint(
+    visual_asset_id: str,
+    request: Request,
+    authorization: str = Header(default=""),
+):
+    """Activate a reviewed Character Card module after explicit confirmation."""
+
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(
+        v3_route_handlers.post_visual_asset_character_card_activate,
         visual_asset_id,
         payload,
         _v3_visual_asset_owner_scope(user_id),

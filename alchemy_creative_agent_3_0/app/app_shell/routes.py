@@ -24,6 +24,8 @@ ROUTE_CONTRACTS = {
     "visual_asset": f"{API_NAMESPACE}/visual-assets/{{visual_asset_id}}",
     "prepare_visual_asset": f"{API_NAMESPACE}/visual-assets/{{visual_asset_id}}/prepare",
     "activate_visual_asset": f"{API_NAMESPACE}/visual-assets/{{visual_asset_id}}/activate",
+    "prepare_visual_asset_character_card": f"{API_NAMESPACE}/visual-assets/{{visual_asset_id}}/character-card/prepare",
+    "activate_visual_asset_character_card": f"{API_NAMESPACE}/visual-assets/{{visual_asset_id}}/character-card/activate",
     "archive_visual_asset": f"{API_NAMESPACE}/visual-assets/{{visual_asset_id}}/archive",
     "project_visual_asset_bindings": f"{API_NAMESPACE}/projects/{{project_id}}/visual-asset-bindings",
     "project_visual_asset_binding": (

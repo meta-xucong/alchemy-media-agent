@@ -1190,7 +1190,13 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
         }
         and decision.get("owner") == "remote_v3_llm_brain"
         and isinstance(decision.get("frozen_binding"), dict)
-        and target in {"standard_front", "three_quarter", "profile"}
+        and target in {
+            "standard_front",
+            "three_quarter",
+            "profile",
+            "reverse_three_quarter",
+            "rear_head",
+        }
     ):
         raise BrainProfessionalAnchorViewDecisionMissing(
             "The frozen Professional anchor-view requirement is malformed."

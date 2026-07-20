@@ -36,6 +36,8 @@ class ProductApiAnchorPackPreparationHost:
         "standard_front": 2,
         "three_quarter": 3,
         "profile": 5,
+        "reverse_three_quarter": 5,
+        "rear_head": 5,
     }
     _REQUIRED_SCORE_DIMENSIONS = {
         "same_person_readability",
@@ -70,6 +72,25 @@ class ProductApiAnchorPackPreparationHost:
                 asset=people_asset,
                 root_source_provenance=root_source_provenance,
                 preparation_intent=people_asset.preparation_intent,
+            )
+        )
+
+    def prepare_character_card(
+        self,
+        *,
+        project_id: str,
+        people_asset: PeopleAsset,
+        root_source_provenance: RootSourceProvenance,
+    ) -> AnchorPackPreparationResult:
+        """Reuse the same host for the two additive Doc178 Face slots."""
+
+        return self._orchestrator.prepare(
+            AnchorPackPreparationRequest(
+                project_id=project_id,
+                asset=people_asset,
+                root_source_provenance=root_source_provenance,
+                preparation_intent=people_asset.preparation_intent,
+                face_view_scope="character_card",
             )
         )
 

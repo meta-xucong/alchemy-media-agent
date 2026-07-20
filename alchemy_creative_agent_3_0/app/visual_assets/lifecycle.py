@@ -16,6 +16,7 @@ from pydantic import ConfigDict, field_validator
 
 from ..schemas.models import V3BaseModel
 from .anchor_pack import AnchorPackPreparationResult
+from .character_card import apply_face_identity_pack_to_card
 from .catalog import InMemoryVisualAssetCatalog
 from .contracts import FaceIdentityModule, IdentityAnchorPackVersion, PeopleAsset, RootSourceProvenance
 
@@ -213,10 +214,12 @@ class PeopleAssetLifecycleService:
                 "face_identity_module": asset.face_identity_module.model_copy(
                     update={"active_version_id": pack.pack_version_id, "status": "active"}
                 ),
+                "character_card": apply_face_identity_pack_to_card(asset.character_card, pack),
             }
         )
         self.catalog.save(active, project_id=project_id, event_type="activate")
         return active
+
 
     @staticmethod
     def _new_asset_id() -> str:

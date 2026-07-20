@@ -15,6 +15,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from ..schemas.models import V3BaseModel
 from .contracts import (
     AnchorView,
+    FaceViewRole,
     FaceIdentityModule,
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
@@ -37,7 +38,7 @@ class AnchorGenerationRequest(V3BaseModel):
     project_id: str
     people_asset_id: str
     pack_version_id: str
-    view_role: Literal["standard_front", "three_quarter", "profile"]
+    view_role: FaceViewRole
     candidate_index: int = Field(ge=1, le=3)
     preparation_intent: str
     root_source_asset_id: str
@@ -78,7 +79,12 @@ class AnchorGenerationRequest(V3BaseModel):
         expected_reference_count = (
             1 + len(supplemental)
             if self.view_role == "standard_front"
-            else {"three_quarter": 2, "profile": 3}[self.view_role]
+            else {
+                "three_quarter": 2,
+                "profile": 3,
+                "reverse_three_quarter": 4,
+                "rear_head": 5,
+            }[self.view_role]
         )
         if len(references) != expected_reference_count:
             raise ValueError(
@@ -101,6 +107,7 @@ class AnchorPackPreparationRequest(V3BaseModel):
     preparation_intent: str
     brain_plan_id: str | None = None
     canonical_prompt_hash: str | None = None
+    face_view_scope: Literal["base", "character_card"] = "base"
 
     @field_validator("brain_plan_id", "canonical_prompt_hash", "preparation_intent")
     @classmethod
@@ -126,7 +133,7 @@ class AnchorCandidateResult(V3BaseModel):
     candidate_id: str
     view_id: str
     output_id: str
-    view_role: Literal["standard_front", "three_quarter", "profile"]
+    view_role: FaceViewRole
     candidate_index: int = Field(ge=1, le=3)
     source_candidate_ids: list[str] = Field(min_length=1)
     source_asset_ids: list[str] = Field(min_length=1)
@@ -170,7 +177,7 @@ class AnchorCandidateFailure(V3BaseModel):
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
     stage: Literal["front", "supplementary"]
-    view_role: Literal["standard_front", "three_quarter", "profile"]
+    view_role: FaceViewRole
     candidate_index: int = Field(ge=1, le=3)
     failure_code: str
 
@@ -221,6 +228,12 @@ class AnchorPackPreparationService:
     FRONT_CANDIDATE_COUNT = 3
     SUPPLEMENTARY_CANDIDATE_COUNT = 3
     SUPPLEMENTARY_ROLES = ("three_quarter", "profile")
+    CHARACTER_CARD_SUPPLEMENTARY_ROLES = (
+        "three_quarter",
+        "profile",
+        "reverse_three_quarter",
+        "rear_head",
+    )
 
     def __init__(
         self,
@@ -282,7 +295,12 @@ class AnchorPackPreparationService:
         winner, winner_review = self._select_winner(passing_fronts)
         views = [self._view(winner, winner_review)]
         selected_evidence_ids = [request.root_source_provenance.source_asset_id, winner.output_id]
-        for role in self.SUPPLEMENTARY_ROLES:
+        supplementary_roles = (
+            self.CHARACTER_CARD_SUPPLEMENTARY_ROLES
+            if request.face_view_scope == "character_card"
+            else self.SUPPLEMENTARY_ROLES
+        )
+        for role in supplementary_roles:
             passing_supplementary: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
             for candidate_index in range(1, self.SUPPLEMENTARY_CANDIDATE_COUNT + 1):
                 generation_request = self._generation_request(
@@ -362,7 +380,7 @@ class AnchorPackPreparationService:
         *,
         request: AnchorPackPreparationRequest,
         pack_version_id: str,
-        view_role: Literal["standard_front", "three_quarter", "profile"],
+        view_role: FaceViewRole,
         candidate_index: int,
         reference_evidence_ids: list[str],
     ) -> AnchorGenerationRequest:

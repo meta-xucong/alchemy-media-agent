@@ -12,9 +12,16 @@ from typing import Literal
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
+from .character_card import CharacterCardState
 
 
-FaceViewRole = Literal["standard_front", "three_quarter", "profile"]
+FaceViewRole = Literal[
+    "standard_front",
+    "three_quarter",
+    "profile",
+    "reverse_three_quarter",
+    "rear_head",
+]
 PackStatus = Literal["preparing", "review", "active", "failed", "superseded"]
 AssetStatus = Literal["draft", "active", "superseded", "blocked"]
 ModuleStatus = Literal["draft", "active", "blocked", "superseded"]
@@ -24,6 +31,9 @@ FACE_IDENTITY_CHANNELS = (
     "face_feature_relationships",
 )
 REQUIRED_FACE_VIEW_ROLES = frozenset({"standard_front", "three_quarter", "profile"})
+CHARACTER_CARD_FACE_VIEW_ROLES = frozenset(
+    {"standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"}
+)
 
 
 class _StrictVisualAssetModel(V3BaseModel):
@@ -184,6 +194,10 @@ class PeopleAsset(_StrictVisualAssetModel):
     preparation_intent: str | None = None
     active_pack_version_id: str | None = None
     status: AssetStatus = "draft"
+    # Additive Doc178 state.  Historical records without this field are
+    # hydrated with a visible empty template; the original Face Identity pack
+    # lifecycle remains independently valid.
+    character_card: CharacterCardState = Field(default_factory=lambda: CharacterCardState.initial(card_version_id="card_pending"))
 
     @field_validator("preparation_intent")
     @classmethod

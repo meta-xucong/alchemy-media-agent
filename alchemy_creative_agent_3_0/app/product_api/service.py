@@ -837,7 +837,9 @@ class V3ProductApiService:
         trusted_photography_continuation: bool = False,
         trusted_capability_plan_reuse: bool = False,
         trusted_professional_anchor_preparation: bool = False,
-        professional_anchor_view_role: Literal["standard_front", "three_quarter", "profile"] | None = None,
+        professional_anchor_view_role: Literal[
+            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+        ] | None = None,
         professional_anchor_reference_evidence_ids: list[str] | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
     ) -> ProductJobStatus:
@@ -978,7 +980,9 @@ class V3ProductApiService:
         self,
         request: CreateCreativeJobRequest | dict[str, Any],
         *,
-        view_role: Literal["standard_front", "three_quarter", "profile"],
+        view_role: Literal[
+            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+        ],
         reference_evidence_ids: list[str] | None = None,
         stage_plan_source_job_id: str | None = None,
     ) -> ProductJobStatus:
@@ -1027,13 +1031,22 @@ class V3ProductApiService:
         self,
         request: CreateCreativeJobRequest,
         *,
-        view_role: Literal["standard_front", "three_quarter", "profile"],
+        view_role: Literal[
+            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+        ],
         reference_evidence_ids: list[str] | None,
     ) -> list[dict[str, Any]]:
         """Resolve one server-owned root/winner chain for shared execution."""
 
         expected_count = (
-            None if view_role == "standard_front" else {"three_quarter": 2, "profile": 3}[view_role]
+            None
+            if view_role == "standard_front"
+            else {
+                "three_quarter": 2,
+                "profile": 3,
+                "reverse_three_quarter": 4,
+                "rear_head": 5,
+            }[view_role]
         )
         evidence_ids = [str(item or "").strip() for item in (reference_evidence_ids or [])]
         if not evidence_ids:

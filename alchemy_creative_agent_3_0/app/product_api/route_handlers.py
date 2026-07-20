@@ -15,6 +15,8 @@ from ..visual_assets import (
     VisualAssetLibraryCatalog,
     VisualAssetLibraryLifecycleService,
 )
+from ..visual_assets.character_card import CharacterCardStageHost
+from ..visual_assets.character_card import BodySilhouettePublicRequest
 from .service import V3ProductApiService
 
 
@@ -27,6 +29,7 @@ class V3ProductRouteHandlers:
         project_store: InMemoryProjectStore | None = None,
         template_registry: ProjectTemplateRegistry | None = None,
         anchor_pack_preparation_host: AnchorPackPreparationHost | None = None,
+        character_card_stage_host: CharacterCardStageHost | None = None,
         visual_asset_library_catalog: VisualAssetLibraryCatalog | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
         visual_asset_owner_scope: str = "local_default",
@@ -53,6 +56,7 @@ class V3ProductRouteHandlers:
             self.visual_asset_library_catalog,
             root_source_resolver=self.service.asset_store.get_upload,
             anchor_pack_host=anchor_pack_preparation_host,
+            character_card_stage_host=character_card_stage_host,
         )
 
     def post_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -186,6 +190,65 @@ class V3ProductRouteHandlers:
         )
         return {"visual_asset": self._visual_asset_public_record(asset)}
 
+    def post_visual_asset_character_card_prepare(
+        self,
+        visual_asset_id: str,
+        payload: dict[str, Any],
+        owner_scope: str | None = None,
+    ) -> dict[str, Any]:
+        """Prepare one explicit Character Card stage; details stay server-owned."""
+
+        stage = payload.get("stage")
+        if stage not in {
+            "face_identity",
+            "expression_set",
+            "body_silhouette",
+        }:
+            raise ValueError("character_card_stage_required")
+        body_request = None
+        if stage == "body_silhouette":
+            allowed = {"stage", "source_class", "body_reference_asset_id", "body_facts"}
+            if not set(payload).issubset(allowed):
+                raise ValueError("character_card_body_payload_invalid")
+            body_request = BodySilhouettePublicRequest.model_validate(
+                {key: value for key, value in payload.items() if key != "stage"}
+            )
+        elif set(payload) != {"stage"}:
+            # Expression intent remains Brain/host-owned.  A browser may not
+            # inject a local expression dictionary or prompt fragment.
+            raise ValueError("character_card_stage_payload_invalid")
+        if stage == "face_identity":
+            asset = self.visual_asset_library_service.prepare_character_card_face(
+                owner_scope=self._visual_asset_owner_scope(owner_scope),
+                visual_asset_id=visual_asset_id,
+            )
+        else:
+            asset = self.visual_asset_library_service.prepare_character_card_stage(
+                owner_scope=self._visual_asset_owner_scope(owner_scope),
+                visual_asset_id=visual_asset_id,
+                stage=stage,
+                body_request=body_request,
+            )
+        return {"visual_asset": self._visual_asset_public_record(asset)}
+
+    def post_visual_asset_character_card_activate(
+        self,
+        visual_asset_id: str,
+        payload: dict[str, Any],
+        owner_scope: str | None = None,
+    ) -> dict[str, Any]:
+        if set(payload) != {"module", "confirm_activation"}:
+            raise ValueError("character_card_module_activation_payload_invalid")
+        if payload.get("module") not in {"expression_set", "body_silhouette"}:
+            raise ValueError("character_card_module_required")
+        asset = self.visual_asset_library_service.activate_character_card_module(
+            owner_scope=self._visual_asset_owner_scope(owner_scope),
+            visual_asset_id=visual_asset_id,
+            module=payload["module"],
+            confirm_activation=payload.get("confirm_activation") is True,
+        )
+        return {"visual_asset": self._visual_asset_public_record(asset)}
+
     def post_visual_asset_archive(
         self,
         visual_asset_id: str,
@@ -263,6 +326,30 @@ class V3ProductRouteHandlers:
         )
         if latest_preparation is not None and latest_version.failure_code:
             latest_preparation["failure_code"] = latest_version.failure_code
+        card = getattr(asset, "character_card", None)
+        card_public = None
+        if card is not None:
+            card_public = {
+                "face_identity_status": card.face_identity_status,
+                "expression_set_status": card.expression_set_status,
+                "body_silhouette_status": card.body_silhouette_status,
+                "face_identity_base_active": card.face_identity_base_active,
+                "face_identity_complete": card.face_identity_complete,
+                "slots": {
+                    **{
+                        key: {"state": slot.state, "available": slot.state == "active"}
+                        for key, slot in card.face_slots.items()
+                    },
+                    **{
+                        key: {"state": slot.state, "available": slot.state == "active"}
+                        for key, slot in card.expression_slots.items()
+                    },
+                    **{
+                        key: {"state": slot.state, "available": slot.state == "active"}
+                        for key, slot in card.body_slots.items()
+                    },
+                },
+        }
         return {
             "visual_asset_id": asset.visual_asset_id,
             "display_name": asset.display_name,
@@ -271,6 +358,7 @@ class V3ProductRouteHandlers:
             "active_version_id": asset.active_version_id,
             "available_for_projects": bool(active_version and asset.lifecycle_status == "active"),
             "latest_preparation": latest_preparation,
+            "character_card": card_public,
         }
 
     @staticmethod
@@ -333,6 +421,21 @@ class V3ProductRouteHandlers:
             latest = None
         if latest is not None:
             record["latest_preparation"] = latest
+        card = getattr(asset, "character_card", None)
+        if card is not None:
+            record["character_card"] = {
+                "face_identity_status": card.face_identity_status,
+                "expression_set_status": card.expression_set_status,
+                "body_silhouette_status": card.body_silhouette_status,
+                "slots": {
+                    key: {"state": slot.state, "available": slot.state == "active"}
+                    for key, slot in {
+                        **card.face_slots,
+                        **card.expression_slots,
+                        **card.body_slots,
+                    }.items()
+                },
+            }
         return record
 
     def post_project_people_asset_prepare(
