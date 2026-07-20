@@ -4,6 +4,7 @@
 
 ```text
 DOC173_LIBRARY_FIRST_RECONSTRUCTION_AUTHORITATIVE
+DOC178_CHARACTER_CARD_MODULE_EXTENSION_AUTHORITATIVE
 LEGACY_PROJECT_SCOPED_COMPATIBILITY_RETAINED_READ_ONLY
 FRONTEND_RECONSTRUCTION_REQUIRED
 NO_STANDARD_MODE_CHANGE
@@ -22,10 +23,11 @@ second image-generation product. “Professional Mode” is retained as a
 historical name for the Face Identity/Anchor Pack capability, not a required
 new-project toggle.
 
-The first release intentionally implements only Face Identity. Future body,
-hair, styling, or other identity dimensions must enter as independently
-versioned modules with their own channel ownership, evidence, review, and
-activation contracts.
+The first release implementation history intentionally started with Face
+Identity. The current Character Card extension is defined by Doc178: Face
+Identity, Expression Set, and Body Silhouette are sibling modules with ordered
+creation gates and independent evidence contracts. Future hair, styling, or
+other identity dimensions still require their own versioned modules.
 
 ## Document Inventory
 
@@ -47,6 +49,25 @@ future multi-asset composition without a product/scene implementation today
 
 All new implementation must use Doc173. It does not invalidate historical M5
 or Provider evidence, and it does not open a production gate.
+
+### Character Card Extension Authority — Doc178
+
+`../178_V3_PROFESSIONAL_PEOPLE_ASSET_CHARACTER_CARD_MODULES_SPEC.md`
+
+Doc178 is authoritative for the People Asset Character Card slot template and
+the ordered module lifecycle:
+
+```text
+Face Identity → Expression Set → Body Silhouette
+```
+
+It changes only the former Face-Identity-only module scope and generation
+sequencing. It keeps Doc173 library ownership and binding, Doc176 source
+admission and 2/3/5 Face Identity evidence, Doc177 workspace composition, and
+all shared Brain/Provider/Vision/retry/final-delivery contracts. The new
+user-facing expression label is “悲伤”; it replaces “哭泣” in the Character
+Card contract. Empty slots remain visible and unfilled until explicitly
+prepared and reviewed.
 
 ### Primary Product Contract
 

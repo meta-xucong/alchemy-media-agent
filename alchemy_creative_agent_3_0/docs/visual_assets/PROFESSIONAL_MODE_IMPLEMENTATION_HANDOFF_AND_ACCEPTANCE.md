@@ -11,8 +11,11 @@ NO_PRODUCTION_ACTIVATION
 
 This handoff turns the primary Professional Mode contract into bounded
 implementation milestones. It does not create a second runtime architecture.
-The first implementation milestone is deliberately Face Identity only; future
-body, hair, styling, and other dimensions are separate optional modules.
+The first implementation milestone was deliberately Face Identity only. For
+new Character Card implementation, the former future-module limitation is
+superseded by Doc178, which defines sibling Face Identity, Expression Set, and
+Body Silhouette modules and their ordered lifecycle. The historical Face
+Identity handoff and all shared-runtime boundaries remain valid.
 The primary authority is:
 
 `PROFESSIONAL_MODE_VISUAL_ASSET_LIBRARY_AND_PEOPLE_ASSET_MODULE_SPEC.md`
@@ -139,8 +142,9 @@ locally.
 
 Only a user-confirmed `active` Face Identity pack version can enter
 Professional Mode Provider inputs. Warning, failed, superseded, or unconfirmed
-candidates remain append-only history. Body, hair, styling, and other future
-modules are not inferred or activated in this milestone.
+candidates remain append-only history. The historical milestone did not infer or
+activate body, hair, styling, or other future modules; new Character Card work
+must follow Doc178's explicit Expression Set and Body Silhouette contracts.
 
 ### M3 — Frozen-Plan Runtime Bridge
 

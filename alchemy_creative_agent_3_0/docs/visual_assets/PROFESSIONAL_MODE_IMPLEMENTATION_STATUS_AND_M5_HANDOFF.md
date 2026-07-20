@@ -17,6 +17,12 @@ Professional Mode document set. It does not alter the existing numbered V3
 contracts or authorize production activation. The backend integration status
 and merge result are determined by the mainline commit and verification record.
 
+> **Doc178 scope note (2026-07-20):** The Face-Identity-only status recorded
+> here describes the historical M0–M6 implementation and M5 evidence. New
+> Character Card work follows Doc178's sibling modules and ordered gates; this
+> record remains authoritative only for the historical Face Identity status and
+> does not block the new Expression Set or Body Silhouette design.
+
 > **Historical status scope.** References below to `professional_mode`, a
 > project-scoped People Asset catalog or a project-scoped resolver accurately
 > describe the implementation/evidence at the time. They are no longer a
