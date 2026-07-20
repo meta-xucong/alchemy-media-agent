@@ -1,9 +1,9 @@
-"""Static contracts for the Doc173 library-first V3 browser surface.
+"""Static contracts for the Professional Visual Asset browser surface.
 
 The production browser verification is deliberately separate.  These checks
 lock the non-negotiable runtime ownership: a Visual Asset Library is not a
 project template or an opt-in generation mode, and projects only use an asset
-after an explicit binding confirmation.  Doc174 now owns the V3 page layout.
+after an explicit binding confirmation. Doc177 owns the compact V3 page layout.
 """
 
 from pathlib import Path
@@ -76,6 +76,10 @@ def test_doc176_professional_source_selection_is_bounded_visible_and_never_first
     assert "V3_VISUAL_ASSET_MAX_SOURCE_FILES = 2" in source
     assert "handleV3VisualAssetSourceFiles" in source
     assert "handleV3VisualAssetSourceListClick" in source
+    assert "isV3VisualAssetImageFile" in source
+    assert "visualAssetSourcePreviewUrls" in source
+    assert "URL.createObjectURL" in source
+    assert "URL.revokeObjectURL" in source
     assert "visualAssetPrimarySourceIndex" in source
     assert "visualAssetSourceFeedback" in source
     assert "最多使用 2 张源图" in source
@@ -88,6 +92,7 @@ def test_doc176_professional_source_selection_is_bounded_visible_and_never_first
         ".v3-visual-asset-file-drop",
         ".v3-visual-asset-source-actions",
         ".v3-visual-asset-source-feedback",
+        ".v3-visual-asset-source-preview",
     ):
         assert selector in css
 
@@ -139,3 +144,45 @@ def test_doc173_new_surface_is_responsive_and_does_not_reintroduce_template_fall
         assert selector in css
     assert "@media (max-width: 720px)" in css
     assert ".v3-visual-asset-actions .button" in css
+
+
+def test_doc177_professional_home_is_a_compact_hub_and_detail_work_is_on_demand() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    home_start = index.index('id="v3ProfessionalHomeSurface"')
+    home_end = index.index('id="v3WorkspaceView"', home_start)
+    home = index[home_start:home_end]
+    dialog_start = index.index('id="v3VisualAssetLibraryDialog"')
+    binding_dialog_start = index.index('id="v3VisualAssetBindingDialog"', dialog_start)
+    library_dialog = index[dialog_start:binding_dialog_start]
+
+    assert 'id="v3OpenVisualAssetLibraryBtn"' in home
+    assert 'id="v3CreateVisualAssetShortcutBtn"' in home
+    assert 'id="v3VisualAssetLibrarySummary"' in home
+    assert 'id="v3VisualAssetCreateForm"' not in home
+    assert 'id="v3VisualAssetLibraryList"' not in home
+    assert 'id="v3VisualAssetCreateForm"' in library_dialog
+    assert 'id="v3VisualAssetLibraryList"' in library_dialog
+    assert 'id="v3CloseVisualAssetLibraryDialogBtn"' in library_dialog
+
+    assert "function openV3VisualAssetLibraryDialog" in source
+    assert "function closeV3VisualAssetLibraryDialog" in source
+    assert "function openV3VisualAssetLibraryFromBindingDialog" in source
+    assert "openV3VisualAssetLibraryDialog({ focusBuilder: true })" in source
+    assert 'id="v3ManageVisualAssetsFromBindingBtn"' in index
+    assert ".v3-visual-asset-hub-card" in css
+    assert ".v3-visual-asset-library-dialog" in css
+
+
+def test_doc177_project_asset_card_preserves_explicit_binding_and_management_route() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+
+    panel = _function(source, "renderV3ProjectVisualAssetPanel", "openV3VisualAssetBindingDialog")
+    assert 'textContent = bindings.length ? "管理视觉资产" : "选择视觉资产"' in panel
+    assert "openV3VisualAssetLibraryFromBindingDialog" in source
+    assert "v3VisualAssetBindingDialog?.open" in source
+    assert "v3VisualAssetLibraryDialog?.open" in source
+    assert "不使用视觉资产" in index

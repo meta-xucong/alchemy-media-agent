@@ -6,6 +6,10 @@ Implemented as a bounded Professional Mode correction. This document does not
 change Standard Mode, ordinary project reference uploads, the Remote Brain,
 the shared Provider, shared review, retry, or final-delivery contracts.
 
+Doc177 supersedes this document only for the Professional home-page
+composition. The two-source admission, evidence-budget, ownership, and
+selected-file UX contracts in this document remain authoritative.
+
 ## Problem
 
 The Professional visual-asset creation surface exposed a browser-native
@@ -71,8 +75,9 @@ must never imply that an ignored third image influenced the asset.
 ## Unified UX rules
 
 1. All V3 image selection surfaces use the shared file-drop visual language:
-   visible action label, allowed format hint, selected-file list, and explicit
-   remove controls.
+   visible action label, allowed format hint, selected-file list with local
+   thumbnails, and explicit remove controls. A missing browser MIME value may
+   not hide a selected `.png`, `.jpg`, `.jpeg`, or `.webp` file.
 2. The Professional surface labels the first source `主原型` and the optional
    second source `补充参考`; only one source may be primary.
 3. Uploading source images only creates a draft asset. Building the three

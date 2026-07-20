@@ -312,6 +312,7 @@ const v3State = {
   visualAssetBusy: false,
   visualAssetsError: "",
   visualAssetSourceFiles: [],
+  visualAssetSourcePreviewUrls: [],
   visualAssetPrimarySourceIndex: 0,
   visualAssetSourceFeedback: "",
   projectVisualAssetBindings: [],
@@ -547,6 +548,11 @@ const els = {
   v3WorkspaceView: document.querySelector("#v3WorkspaceView"),
   v3ScenarioGrid: document.querySelector("#v3ScenarioGrid"),
   v3TemplateChooser: document.querySelector("#v3TemplateChooser"),
+  v3OpenVisualAssetLibraryBtn: document.querySelector("#v3OpenVisualAssetLibraryBtn"),
+  v3CreateVisualAssetShortcutBtn: document.querySelector("#v3CreateVisualAssetShortcutBtn"),
+  v3VisualAssetLibrarySummary: document.querySelector("#v3VisualAssetLibrarySummary"),
+  v3VisualAssetLibraryDialog: document.querySelector("#v3VisualAssetLibraryDialog"),
+  v3CloseVisualAssetLibraryDialogBtn: document.querySelector("#v3CloseVisualAssetLibraryDialogBtn"),
   v3RefreshVisualAssetsBtn: document.querySelector("#v3RefreshVisualAssetsBtn"),
   v3VisualAssetLibraryStatus: document.querySelector("#v3VisualAssetLibraryStatus"),
   v3VisualAssetLibraryList: document.querySelector("#v3VisualAssetLibraryList"),
@@ -578,6 +584,7 @@ const els = {
   v3ProjectSnapshot: document.querySelector("#v3ProjectSnapshot"),
   v3ProjectVisualAssetPanel: document.querySelector("#v3ProjectVisualAssetPanel"),
   v3ProjectVisualAssetSummary: document.querySelector("#v3ProjectVisualAssetSummary"),
+  v3ManageVisualAssetsFromBindingBtn: document.querySelector("#v3ManageVisualAssetsFromBindingBtn"),
   v3OpenProjectVisualAssetDialogBtn: document.querySelector("#v3OpenProjectVisualAssetDialogBtn"),
   v3VisualAssetBindingDialog: document.querySelector("#v3VisualAssetBindingDialog"),
   v3CloseVisualAssetBindingDialogBtn: document.querySelector("#v3CloseVisualAssetBindingDialogBtn"),
@@ -1193,6 +1200,9 @@ function bindControls() {
     button.addEventListener("click", () => setV3VariationMode(button.dataset.v3VariationMode || "auto"));
   });
   if (els.v3TemplateChooser) els.v3TemplateChooser.addEventListener("click", handleV3HomeTemplateChoice);
+  if (els.v3OpenVisualAssetLibraryBtn) els.v3OpenVisualAssetLibraryBtn.addEventListener("click", () => openV3VisualAssetLibraryDialog());
+  if (els.v3CreateVisualAssetShortcutBtn) els.v3CreateVisualAssetShortcutBtn.addEventListener("click", () => openV3VisualAssetLibraryDialog({ focusBuilder: true }));
+  if (els.v3CloseVisualAssetLibraryDialogBtn) els.v3CloseVisualAssetLibraryDialogBtn.addEventListener("click", closeV3VisualAssetLibraryDialog);
   if (els.v3RefreshVisualAssetsBtn) els.v3RefreshVisualAssetsBtn.addEventListener("click", () => loadV3VisualAssets({ silent: false, force: true }));
   if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.addEventListener("click", handleV3VisualAssetAction);
   if (els.v3VisualAssetRootInput) els.v3VisualAssetRootInput.addEventListener("change", handleV3VisualAssetSourceFiles);
@@ -1210,6 +1220,7 @@ function bindControls() {
   if (els.v3ProjectArchiveBtn) els.v3ProjectArchiveBtn.addEventListener("click", () => archiveV3Project(v3State.currentProject?.project_id));
   if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.addEventListener("click", () => deleteV3Project(v3State.currentProject?.project_id));
   if (els.v3OpenProjectVisualAssetDialogBtn) els.v3OpenProjectVisualAssetDialogBtn.addEventListener("click", openV3VisualAssetBindingDialog);
+  if (els.v3ManageVisualAssetsFromBindingBtn) els.v3ManageVisualAssetsFromBindingBtn.addEventListener("click", openV3VisualAssetLibraryFromBindingDialog);
   if (els.v3ConfirmVisualAssetBindingBtn) els.v3ConfirmVisualAssetBindingBtn.addEventListener("click", confirmV3VisualAssetBinding);
   if (els.v3ClearProjectVisualAssetBindingBtn) els.v3ClearProjectVisualAssetBindingBtn.addEventListener("click", clearV3ProjectVisualAssetBinding);
   if (els.v3BrandMemoryPanel) els.v3BrandMemoryPanel.addEventListener("click", handleV3BrandMemoryPanelClick);
@@ -5223,6 +5234,28 @@ function v3VisualAssetIsActive(asset) {
   return Boolean(asset?.available_for_projects && asset?.lifecycle_status === "active" && asset?.active_version_id);
 }
 
+function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
+  const dialog = els.v3VisualAssetLibraryDialog;
+  if (!dialog) return;
+  renderV3VisualAssetLibrary();
+  if (!dialog.open) dialog.showModal();
+  void loadV3VisualAssets({ silent: true, force: true });
+  if (!focusBuilder) return;
+  window.setTimeout(() => {
+    els.v3VisualAssetCreateForm?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    els.v3VisualAssetNameInput?.focus?.({ preventScroll: true });
+  }, 0);
+}
+
+function closeV3VisualAssetLibraryDialog() {
+  if (els.v3VisualAssetLibraryDialog?.open) els.v3VisualAssetLibraryDialog.close();
+}
+
+function openV3VisualAssetLibraryFromBindingDialog() {
+  if (els.v3VisualAssetBindingDialog?.open) els.v3VisualAssetBindingDialog.close();
+  openV3VisualAssetLibraryDialog({ focusBuilder: true });
+}
+
 async function loadV3VisualAssets({ silent = true, force = false } = {}) {
   if (v3State.visualAssetsLoading || (v3State.visualAssetsLoaded && !force)) return v3State.visualAssets;
   v3State.visualAssetsLoading = true;
@@ -5249,7 +5282,21 @@ async function loadV3VisualAssets({ silent = true, force = false } = {}) {
 
 const V3_VISUAL_ASSET_MAX_SOURCE_FILES = 2;
 
+function isV3VisualAssetImageFile(file) {
+  const mediaType = String(file?.type || "").toLowerCase();
+  const filename = String(file?.name || "").toLowerCase();
+  return /^(image\/(png|jpeg|webp))$/.test(mediaType) || /\.(png|jpe?g|webp)$/.test(filename);
+}
+
+function clearV3VisualAssetSourcePreviews() {
+  (Array.isArray(v3State.visualAssetSourcePreviewUrls) ? v3State.visualAssetSourcePreviewUrls : []).forEach((url) => {
+    if (url) URL.revokeObjectURL(url);
+  });
+  v3State.visualAssetSourcePreviewUrls = [];
+}
+
 function clearV3VisualAssetSourceFiles() {
+  clearV3VisualAssetSourcePreviews();
   v3State.visualAssetSourceFiles = [];
   v3State.visualAssetPrimarySourceIndex = 0;
   v3State.visualAssetSourceFeedback = "";
@@ -5258,7 +5305,7 @@ function clearV3VisualAssetSourceFiles() {
 }
 
 function handleV3VisualAssetSourceFiles(event) {
-  const selected = Array.from(event?.target?.files || []).filter((file) => /^image\//.test(file.type || ""));
+  const selected = Array.from(event?.target?.files || []).filter(isV3VisualAssetImageFile);
   if (event?.target) event.target.value = "";
   if (!selected.length) {
     const message = "请选择 PNG、JPG 或 WebP 人物图片。";
@@ -5285,6 +5332,8 @@ function handleV3VisualAssetSourceFiles(event) {
     return;
   }
   v3State.visualAssetSourceFiles = combined;
+  const currentPreviewUrls = Array.isArray(v3State.visualAssetSourcePreviewUrls) ? v3State.visualAssetSourcePreviewUrls : [];
+  v3State.visualAssetSourcePreviewUrls = [...currentPreviewUrls, ...selected.map((file) => URL.createObjectURL(file))];
   v3State.visualAssetSourceFeedback = "";
   if (v3State.visualAssetPrimarySourceIndex >= combined.length) v3State.visualAssetPrimarySourceIndex = 0;
   renderV3VisualAssetSourceFiles();
@@ -5309,6 +5358,10 @@ function handleV3VisualAssetSourceListClick(event) {
     return;
   }
   if (button.dataset.v3VisualAssetSourceAction === "remove") {
+    const previewUrls = Array.isArray(v3State.visualAssetSourcePreviewUrls) ? v3State.visualAssetSourcePreviewUrls : [];
+    const [removedPreviewUrl] = previewUrls.splice(index, 1);
+    if (removedPreviewUrl) URL.revokeObjectURL(removedPreviewUrl);
+    v3State.visualAssetSourcePreviewUrls = previewUrls;
     v3State.visualAssetSourceFiles = v3State.visualAssetSourceFiles.filter((_, itemIndex) => itemIndex !== index);
     if (index === v3State.visualAssetPrimarySourceIndex) {
       v3State.visualAssetPrimarySourceIndex = 0;
@@ -5349,9 +5402,13 @@ function renderV3VisualAssetSourceFiles() {
   }
   files.forEach((file, index) => {
     const isPrimary = index === primaryIndex;
+    const previewUrl = Array.isArray(v3State.visualAssetSourcePreviewUrls) ? v3State.visualAssetSourcePreviewUrls[index] : "";
     const row = document.createElement("div");
     row.className = "v3-asset-row v3-visual-asset-source-row";
     row.innerHTML = `
+      ${previewUrl
+        ? `<img class="v3-visual-asset-source-preview" src="${escapeHtml(previewUrl)}" alt="人物源图预览" />`
+        : `<span class="v3-visual-asset-source-preview v3-visual-asset-source-preview-placeholder" aria-hidden="true">图</span>`}
       <span class="v3-asset-file-copy">
         <strong>${escapeHtml(file.name || `人物源图 ${index + 1}`)}</strong>
         <small>${escapeHtml(v3FileSizeText(file.size))} · ${isPrimary ? "主原型" : "补充参考"}</small>
@@ -5511,6 +5568,18 @@ function handleV3VisualAssetAction(event) {
 function renderV3VisualAssetLibrary() {
   if (!els.v3ProfessionalHomeSurface) return;
   const assets = Array.isArray(v3State.visualAssets) ? v3State.visualAssets : [];
+  const activeCount = assets.filter((asset) => v3VisualAssetIsActive(asset)).length;
+  if (els.v3VisualAssetLibrarySummary) {
+    if (v3State.visualAssetsLoading) {
+      els.v3VisualAssetLibrarySummary.innerHTML = "<strong>正在读取你的视觉资产</strong><span>读取完成后，可建立新人物资产或管理已有资产。</span>";
+    } else if (v3State.visualAssetsError) {
+      els.v3VisualAssetLibrarySummary.innerHTML = "<strong>视觉资产库暂时不可用</strong><span>已有项目不会受影响。请打开资产库刷新后再继续。</span>";
+    } else if (!assets.length) {
+      els.v3VisualAssetLibrarySummary.innerHTML = "<strong>还没有视觉资产</strong><span>先建立人物资产；通过标准建模并由你确认启用后，它才能被项目选择。</span>";
+    } else {
+      els.v3VisualAssetLibrarySummary.innerHTML = `<strong>已保存 ${assets.length} 个视觉资产，其中 ${activeCount} 个可用于项目</strong><span>打开资产库可继续建模、确认启用或管理已有资产。</span>`;
+    }
+  }
   if (els.v3VisualAssetLibraryStatus) {
     if (v3State.visualAssetsLoading) {
       els.v3VisualAssetLibraryStatus.innerHTML = "<strong>正在读取视觉资产库</strong><span>请稍候，读取完成后可继续操作。</span>";
@@ -5519,7 +5588,6 @@ function renderV3VisualAssetLibrary() {
     } else if (!assets.length) {
       els.v3VisualAssetLibraryStatus.innerHTML = "<strong>还没有视觉资产</strong><span>第一阶段可以先建立人物资产。未来产品、场景和品牌资产会在对应模块准备好后出现。</span>";
     } else {
-      const activeCount = assets.filter((asset) => v3VisualAssetIsActive(asset)).length;
       els.v3VisualAssetLibraryStatus.innerHTML = `<strong>${activeCount ? `已有 ${activeCount} 个已启用资产` : "还没有已启用资产"}</strong><span>只有你明确启用的版本才会出现在项目选择列表中。</span>`;
     }
   }
@@ -5587,6 +5655,7 @@ function renderV3ProjectVisualAssetPanel() {
   const bindings = Array.isArray(v3State.projectVisualAssetBindings) ? v3State.projectVisualAssetBindings : [];
   if (els.v3OpenProjectVisualAssetDialogBtn) {
     els.v3OpenProjectVisualAssetDialogBtn.disabled = v3State.projectVisualAssetBindingsLoading;
+    els.v3OpenProjectVisualAssetDialogBtn.textContent = bindings.length ? "管理视觉资产" : "选择视觉资产";
   }
   if (!els.v3ProjectVisualAssetSummary) return;
   if (v3State.projectVisualAssetBindingsLoading) {

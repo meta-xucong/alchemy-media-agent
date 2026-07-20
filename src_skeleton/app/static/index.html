@@ -1405,50 +1405,19 @@
               </div>
 
               <div id="v3ProfessionalHomeSurface" class="v3-workspace-surface v3-professional-home-surface" hidden>
-              <section id="v3VisualAssetLibraryPanel" class="panel flow-section v3-hero-panel v3-library-panel">
+              <section id="v3VisualAssetLibraryPanel" class="panel flow-section v3-hero-panel v3-library-panel v3-visual-asset-hub-card">
                 <div class="panel-head section-title">
                   <div>
                     <p class="eyebrow">Professional Mode · Visual Asset Library</p>
-                    <h3>专业版：视觉资产库</h3>
-                    <p class="section-subcopy">先建立并启用可复用的标准化视觉资产；再在下方专业项目中明确选择使用。项目需求仍决定服装、场景、光线和风格。</p>
+                    <h3>视觉资产库</h3>
+                    <p class="section-subcopy">先建立并启用可复用的标准化人物资产；需要连续人物时，再在项目中主动选择它。服装、场景、光线和风格仍由每个项目的需求决定。</p>
                   </div>
                   <div class="v3-hero-actions">
-                    <button id="v3RefreshVisualAssetsBtn" class="button compact ghost" type="button">刷新</button>
+                    <button id="v3OpenVisualAssetLibraryBtn" class="button compact secondary" type="button">管理视觉资产</button>
+                    <button id="v3CreateVisualAssetShortcutBtn" class="button compact primary" type="button">建立人物资产</button>
                   </div>
                 </div>
-
-                <div id="v3VisualAssetLibraryStatus" class="v3-visual-asset-status" aria-live="polite"></div>
-                <div id="v3VisualAssetLibraryList" class="v3-visual-asset-list" aria-live="polite"></div>
-
-                <form id="v3VisualAssetCreateForm" class="v3-visual-asset-create-form" novalidate>
-                  <p class="eyebrow">New visual asset</p>
-                  <h4>新建人物资产</h4>
-                  <p class="section-subcopy">第一阶段只支持人物身份资产。上传源图不等于启用；系统会使用共享流程建立并检查正面、侧前方和侧面参考，全部合格后由你确认启用。</p>
-                  <label class="field">
-                    <span>资产名称</span>
-                    <input id="v3VisualAssetNameInput" type="text" maxlength="80" required placeholder="例如：童模 A / 品牌代言人小雨" />
-                  </label>
-                  <div class="field v3-visual-asset-source-field">
-                    <span>人物源图</span>
-                    <label class="file-drop v3-file-drop v3-visual-asset-file-drop" for="v3VisualAssetRootInput">
-                      <input id="v3VisualAssetRootInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-                      <span class="file-title">选择人物源图</span>
-                      <span id="v3VisualAssetSourceSummary" class="file-meta">可选 1–2 张：先选主原型，再按需添加补充参考。</span>
-                    </label>
-                    <div id="v3VisualAssetSourceList" class="v3-asset-list v3-visual-asset-source-list empty-v3-list" aria-live="polite">尚未选择人物源图</div>
-                    <p id="v3VisualAssetSourceFeedback" class="v3-visual-asset-source-feedback" role="status" hidden></p>
-                    <small>主原型用于建立身份主线；补充参考仅校准首个标准视角。上传不等于启用，三视角检查通过后仍需你确认启用。</small>
-                  </div>
-                  <label class="field">
-                    <span>建模说明</span>
-                    <textarea id="v3VisualAssetIntentInput" rows="3" maxlength="1200" required placeholder="例如：建立这个人物自然、年龄合适、不同视角仍可辨认的标准化身份参考。"></textarea>
-                  </label>
-                  <label class="v3-confirm-checkbox">
-                    <input id="v3VisualAssetConsentInput" type="checkbox" required />
-                    <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>
-                  </label>
-                  <button id="v3VisualAssetCreateBtn" class="button primary" type="submit">保存源图并建立人物资产</button>
-                </form>
+                <div id="v3VisualAssetLibrarySummary" class="v3-visual-asset-hub-summary" aria-live="polite"></div>
               </section>
               <div id="v3ProfessionalProjectHubSlot" class="v3-professional-project-hub-slot"></div>
               </div>
@@ -1895,6 +1864,54 @@
               </section>
             </div>
 
+            <dialog id="v3VisualAssetLibraryDialog" class="v3-visual-asset-binding-dialog v3-visual-asset-library-dialog" aria-labelledby="v3VisualAssetLibraryDialogTitle">
+              <div class="v3-visual-asset-dialog-card">
+                <div class="v3-visual-asset-dialog-heading">
+                  <div>
+                    <p class="eyebrow">Visual Asset Library</p>
+                    <h3 id="v3VisualAssetLibraryDialogTitle">建立和管理视觉资产</h3>
+                    <p>人物资产在这里建立、检查和启用。上传源图不等于启用；只有你确认启用的版本才能被项目选择。</p>
+                  </div>
+                  <div class="v3-visual-asset-dialog-top-actions">
+                    <button id="v3RefreshVisualAssetsBtn" class="button compact ghost" type="button">刷新</button>
+                    <button id="v3CloseVisualAssetLibraryDialogBtn" class="button compact ghost" type="button">关闭</button>
+                  </div>
+                </div>
+                <div id="v3VisualAssetLibraryStatus" class="v3-visual-asset-status" aria-live="polite"></div>
+                <div id="v3VisualAssetLibraryList" class="v3-visual-asset-list" aria-live="polite"></div>
+
+                <form id="v3VisualAssetCreateForm" class="v3-visual-asset-create-form" novalidate>
+                  <p class="eyebrow">New visual asset</p>
+                  <h4>新建人物资产</h4>
+                  <p class="section-subcopy">第一阶段只支持人物身份资产。上传源图不等于启用；系统会使用共享流程建立并检查正面、侧前方和侧面参考，全部合格后由你确认启用。</p>
+                  <label class="field">
+                    <span>资产名称</span>
+                    <input id="v3VisualAssetNameInput" type="text" maxlength="80" required placeholder="例如：童模 A / 品牌代言人小雨" />
+                  </label>
+                  <div class="field v3-visual-asset-source-field">
+                    <span>人物源图</span>
+                    <label class="file-drop v3-file-drop v3-visual-asset-file-drop" for="v3VisualAssetRootInput">
+                      <input id="v3VisualAssetRootInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                      <span class="file-title">选择人物源图</span>
+                      <span id="v3VisualAssetSourceSummary" class="file-meta">可选 1–2 张：先选主原型，再按需添加补充参考。</span>
+                    </label>
+                    <div id="v3VisualAssetSourceList" class="v3-asset-list v3-visual-asset-source-list empty-v3-list" aria-live="polite">尚未选择人物源图</div>
+                    <p id="v3VisualAssetSourceFeedback" class="v3-visual-asset-source-feedback" role="status" hidden></p>
+                    <small>主原型用于建立身份主线；补充参考仅校准首个标准视角。上传不等于启用，三视角检查通过后仍需你确认启用。</small>
+                  </div>
+                  <label class="field">
+                    <span>建模说明</span>
+                    <textarea id="v3VisualAssetIntentInput" rows="3" maxlength="1200" required placeholder="例如：建立这个人物自然、年龄合适、不同视角仍可辨认的标准化身份参考。"></textarea>
+                  </label>
+                  <label class="v3-confirm-checkbox">
+                    <input id="v3VisualAssetConsentInput" type="checkbox" required />
+                    <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>
+                  </label>
+                  <button id="v3VisualAssetCreateBtn" class="button primary" type="submit">保存源图并建立人物资产</button>
+                </form>
+              </div>
+            </dialog>
+
             <dialog id="v3VisualAssetBindingDialog" class="v3-visual-asset-binding-dialog" aria-labelledby="v3VisualAssetBindingDialogTitle">
               <form method="dialog" class="v3-visual-asset-dialog-card">
                 <div class="v3-visual-asset-dialog-heading">
@@ -1908,6 +1925,7 @@
                 <div id="v3VisualAssetBindingChoices" class="v3-visual-asset-binding-choices" aria-live="polite"></div>
                 <p id="v3VisualAssetBindingDialogHint" class="v3-field-hint"></p>
                 <div class="v3-visual-asset-dialog-actions">
+                  <button id="v3ManageVisualAssetsFromBindingBtn" class="button compact ghost" type="button">建立或管理人物资产</button>
                   <button id="v3ClearProjectVisualAssetBindingBtn" class="button compact ghost" type="button">不使用视觉资产</button>
                   <button id="v3ConfirmVisualAssetBindingBtn" class="button primary" type="button">确认使用</button>
                 </div>

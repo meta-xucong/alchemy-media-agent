@@ -3850,7 +3850,12 @@ button.v2-live-preview:focus-visible {
   gap: 16px;
 }
 
+.v3-visual-asset-hub-card {
+  align-content: start;
+}
+
 .v3-visual-asset-status,
+.v3-visual-asset-hub-summary,
 .v3-project-visual-asset-summary {
   display: grid;
   gap: 5px;
@@ -3861,6 +3866,7 @@ button.v2-live-preview:focus-visible {
 }
 
 .v3-visual-asset-status span,
+.v3-visual-asset-hub-summary span,
 .v3-project-visual-asset-summary span,
 .v3-project-visual-asset-heading p,
 .v3-visual-asset-card p,
@@ -3893,6 +3899,7 @@ button.v2-live-preview:focus-visible {
 .v3-visual-asset-actions,
 .v3-project-visual-asset-heading,
 .v3-visual-asset-dialog-heading,
+.v3-visual-asset-dialog-top-actions,
 .v3-visual-asset-dialog-actions {
   display: flex;
   align-items: flex-start;
@@ -3951,6 +3958,24 @@ button.v2-live-preview:focus-visible {
 
 .v3-visual-asset-source-row {
   border-radius: 12px;
+}
+
+.v3-visual-asset-source-preview {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border: 1px solid rgba(88, 105, 177, 0.18);
+  border-radius: 10px;
+  object-fit: cover;
+  background: #f4f6fb;
+}
+
+.v3-visual-asset-source-preview-placeholder {
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted, #64748b);
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .v3-visual-asset-source-actions {
@@ -4021,6 +4046,17 @@ button.v2-live-preview:focus-visible {
   box-shadow: 0 28px 110px rgba(23, 20, 17, 0.38);
 }
 
+.v3-visual-asset-library-dialog {
+  width: min(880px, calc(100vw - 32px));
+}
+
+.v3-visual-asset-dialog-top-actions {
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .v3-visual-asset-binding-dialog::backdrop {
   background: rgba(23, 20, 17, 0.54);
   backdrop-filter: blur(8px);
@@ -4055,10 +4091,12 @@ button.v2-live-preview:focus-visible {
   .v3-visual-asset-actions,
   .v3-project-visual-asset-heading,
   .v3-visual-asset-dialog-heading,
+  .v3-visual-asset-dialog-top-actions,
   .v3-visual-asset-dialog-actions { flex-direction: column; align-items: stretch; }
   .v3-visual-asset-actions .button,
   .v3-project-visual-asset-heading .button,
   .v3-visual-asset-dialog-heading .button,
+  .v3-visual-asset-dialog-top-actions .button,
   .v3-visual-asset-dialog-actions .button { width: 100%; }
   .v3-visual-asset-dialog-card { padding: 17px; }
   .v3-visual-asset-source-row { align-items: flex-start; border-radius: 13px; }
