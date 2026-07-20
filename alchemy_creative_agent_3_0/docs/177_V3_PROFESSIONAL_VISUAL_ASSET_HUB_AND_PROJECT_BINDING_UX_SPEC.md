@@ -71,6 +71,12 @@ being converted into ordinary reference uploads or Standard Mode.
 - File cards show selected filename, local thumbnail, primary/supplementary
   role, remove action, and a persistent explanation for malformed, duplicate,
   or over-budget selection.
+- The People Asset form continuously states which of its four prerequisites
+  remain incomplete: asset name, one or two source images, preparation intent,
+  and usage confirmation. A submit with missing information must show the same
+  explanation inline beside the action, not only as a remote toast or a silent
+  non-action. A transport failure is likewise projected inline in plain
+  language; no asset, upload, provider, or job internals are exposed.
 - Desktop and 390/430-pixel mobile layouts have no horizontal overflow.
 
 ## Non-goals and safety boundaries
@@ -97,3 +103,6 @@ being converted into ordinary reference uploads or Standard Mode.
 5. General, E-Commerce, and Photography do not show Professional asset controls
    unless the user explicitly enters Professional Mode and creates a
    Professional project.
+6. Incomplete People Asset information produces a visible local explanation;
+   complete information produces a clear ready-to-save state before any upload
+   request is made.

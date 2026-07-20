@@ -1907,7 +1907,8 @@
                     <input id="v3VisualAssetConsentInput" type="checkbox" required />
                     <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>
                   </label>
-                  <button id="v3VisualAssetCreateBtn" class="button primary" type="submit">保存源图并建立人物资产</button>
+                  <p id="v3VisualAssetCreateFeedback" class="v3-visual-asset-create-feedback" role="status" aria-live="polite"></p>
+                  <button id="v3VisualAssetCreateBtn" class="button primary" type="submit" aria-describedby="v3VisualAssetCreateFeedback">保存源图并建立人物资产</button>
                 </form>
               </div>
             </dialog>

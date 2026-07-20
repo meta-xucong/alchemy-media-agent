@@ -186,3 +186,26 @@ def test_doc177_project_asset_card_preserves_explicit_binding_and_management_rou
     assert "v3VisualAssetBindingDialog?.open" in source
     assert "v3VisualAssetLibraryDialog?.open" in source
     assert "不使用视觉资产" in index
+
+
+def test_doc177_people_asset_submission_explains_missing_fields_inline() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    readiness = _function(source, "v3VisualAssetCreateMissingRequirements", "renderV3VisualAssetCreateReadiness")
+    renderer = _function(source, "renderV3VisualAssetCreateReadiness", "clearV3VisualAssetCreateFeedback")
+    create = _function(source, "createV3VisualAsset", "prepareV3VisualAsset")
+
+    assert 'id="v3VisualAssetCreateFeedback"' in index
+    assert 'aria-describedby="v3VisualAssetCreateFeedback"' in index
+    for requirement in ("资产名称", "人物源图", "建模说明", "使用授权确认"):
+        assert requirement in readiness
+    assert "还需完成：" in renderer
+    assert "资料已完整" in renderer
+    assert "aria-invalid" in renderer
+    assert "v3VisualAssetCreateMissingRequirements" in create
+    assert "还差 ${missing.join" in create
+    assert "showGlobalToast" not in create
+    assert ".v3-visual-asset-create-feedback" in css
+    assert '[data-tone="warning"]' in css

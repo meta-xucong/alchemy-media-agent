@@ -315,6 +315,8 @@ const v3State = {
   visualAssetSourcePreviewUrls: [],
   visualAssetPrimarySourceIndex: 0,
   visualAssetSourceFeedback: "",
+  visualAssetCreateFeedback: "",
+  visualAssetCreateAttempted: false,
   projectVisualAssetBindings: [],
   projectVisualAssetBindingState: "empty",
   projectVisualAssetBindingsLoading: false,
@@ -563,6 +565,7 @@ const els = {
   v3VisualAssetSourceSummary: document.querySelector("#v3VisualAssetSourceSummary"),
   v3VisualAssetSourceList: document.querySelector("#v3VisualAssetSourceList"),
   v3VisualAssetSourceFeedback: document.querySelector("#v3VisualAssetSourceFeedback"),
+  v3VisualAssetCreateFeedback: document.querySelector("#v3VisualAssetCreateFeedback"),
   v3VisualAssetIntentInput: document.querySelector("#v3VisualAssetIntentInput"),
   v3VisualAssetConsentInput: document.querySelector("#v3VisualAssetConsentInput"),
   v3VisualAssetCreateBtn: document.querySelector("#v3VisualAssetCreateBtn"),
@@ -1207,6 +1210,9 @@ function bindControls() {
   if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.addEventListener("click", handleV3VisualAssetAction);
   if (els.v3VisualAssetRootInput) els.v3VisualAssetRootInput.addEventListener("change", handleV3VisualAssetSourceFiles);
   if (els.v3VisualAssetSourceList) els.v3VisualAssetSourceList.addEventListener("click", handleV3VisualAssetSourceListClick);
+  if (els.v3VisualAssetNameInput) els.v3VisualAssetNameInput.addEventListener("input", clearV3VisualAssetCreateFeedback);
+  if (els.v3VisualAssetIntentInput) els.v3VisualAssetIntentInput.addEventListener("input", clearV3VisualAssetCreateFeedback);
+  if (els.v3VisualAssetConsentInput) els.v3VisualAssetConsentInput.addEventListener("change", clearV3VisualAssetCreateFeedback);
   if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.addEventListener("submit", createV3VisualAsset);
   if (els.v3SelectedBrandMemoryBar) els.v3SelectedBrandMemoryBar.addEventListener("click", handleV3SelectedBrandMemoryBarClick);
   if (els.v3NewProjectBtn) els.v3NewProjectBtn.addEventListener("click", createV3Project);
@@ -5234,6 +5240,56 @@ function v3VisualAssetIsActive(asset) {
   return Boolean(asset?.available_for_projects && asset?.lifecycle_status === "active" && asset?.active_version_id);
 }
 
+function v3VisualAssetCreateMissingRequirements() {
+  const missing = [];
+  if (!(els.v3VisualAssetNameInput?.value || "").trim()) missing.push("资产名称");
+  if (!Array.isArray(v3State.visualAssetSourceFiles) || !v3State.visualAssetSourceFiles.length) missing.push("人物源图");
+  if (!(els.v3VisualAssetIntentInput?.value || "").trim()) missing.push("建模说明");
+  if (!els.v3VisualAssetConsentInput?.checked) missing.push("使用授权确认");
+  return missing;
+}
+
+function renderV3VisualAssetCreateReadiness() {
+  const missing = v3VisualAssetCreateMissingRequirements();
+  const attempted = Boolean(v3State.visualAssetCreateAttempted);
+  const busy = Boolean(v3State.visualAssetBusy);
+  const feedback = String(v3State.visualAssetCreateFeedback || "").trim();
+  if (els.v3VisualAssetCreateFeedback) {
+    if (busy) {
+      els.v3VisualAssetCreateFeedback.dataset.tone = "info";
+      els.v3VisualAssetCreateFeedback.textContent = "正在保存源图并建立人物资产，请不要重复提交。";
+    } else if (feedback) {
+      els.v3VisualAssetCreateFeedback.dataset.tone = attempted ? "warning" : "info";
+      els.v3VisualAssetCreateFeedback.textContent = feedback;
+    } else if (missing.length) {
+      els.v3VisualAssetCreateFeedback.dataset.tone = "muted";
+      els.v3VisualAssetCreateFeedback.textContent = `还需完成：${missing.join("、")}。完成后即可保存人物资产。`;
+    } else {
+      els.v3VisualAssetCreateFeedback.dataset.tone = "ready";
+      els.v3VisualAssetCreateFeedback.textContent = "资料已完整。保存后会进入标准建模与三视角检查，检查通过后仍需你确认启用。";
+    }
+  }
+  if (els.v3VisualAssetCreateBtn) {
+    els.v3VisualAssetCreateBtn.disabled = busy;
+    els.v3VisualAssetCreateBtn.textContent = busy ? "正在保存人物资产…" : "保存源图并建立人物资产";
+  }
+  const invalid = (element, isMissing) => {
+    if (!element) return;
+    if (attempted && isMissing) element.setAttribute("aria-invalid", "true");
+    else element.removeAttribute("aria-invalid");
+  };
+  invalid(els.v3VisualAssetNameInput, missing.includes("资产名称"));
+  invalid(els.v3VisualAssetRootInput, missing.includes("人物源图"));
+  invalid(els.v3VisualAssetIntentInput, missing.includes("建模说明"));
+  invalid(els.v3VisualAssetConsentInput, missing.includes("使用授权确认"));
+}
+
+function clearV3VisualAssetCreateFeedback() {
+  v3State.visualAssetCreateFeedback = "";
+  v3State.visualAssetCreateAttempted = false;
+  renderV3VisualAssetCreateReadiness();
+}
+
 function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
   const dialog = els.v3VisualAssetLibraryDialog;
   if (!dialog) return;
@@ -5300,6 +5356,8 @@ function clearV3VisualAssetSourceFiles() {
   v3State.visualAssetSourceFiles = [];
   v3State.visualAssetPrimarySourceIndex = 0;
   v3State.visualAssetSourceFeedback = "";
+  v3State.visualAssetCreateFeedback = "";
+  v3State.visualAssetCreateAttempted = false;
   if (els.v3VisualAssetRootInput) els.v3VisualAssetRootInput.value = "";
   renderV3VisualAssetSourceFiles();
 }
@@ -5335,6 +5393,8 @@ function handleV3VisualAssetSourceFiles(event) {
   const currentPreviewUrls = Array.isArray(v3State.visualAssetSourcePreviewUrls) ? v3State.visualAssetSourcePreviewUrls : [];
   v3State.visualAssetSourcePreviewUrls = [...currentPreviewUrls, ...selected.map((file) => URL.createObjectURL(file))];
   v3State.visualAssetSourceFeedback = "";
+  v3State.visualAssetCreateFeedback = "";
+  v3State.visualAssetCreateAttempted = false;
   if (v3State.visualAssetPrimarySourceIndex >= combined.length) v3State.visualAssetPrimarySourceIndex = 0;
   renderV3VisualAssetSourceFiles();
   updateV3Notice(
@@ -5369,6 +5429,8 @@ function handleV3VisualAssetSourceListClick(event) {
       v3State.visualAssetPrimarySourceIndex -= 1;
     }
     v3State.visualAssetSourceFeedback = "";
+    v3State.visualAssetCreateFeedback = "";
+    v3State.visualAssetCreateAttempted = false;
     renderV3VisualAssetSourceFiles();
     updateV3Notice(
       v3State.visualAssetSourceFiles.length ? "已移除这张源图。" : "已清空人物源图。",
@@ -5393,11 +5455,15 @@ function renderV3VisualAssetSourceFiles() {
     els.v3VisualAssetSourceFeedback.hidden = !feedback;
     els.v3VisualAssetSourceFeedback.textContent = feedback;
   }
-  if (!els.v3VisualAssetSourceList) return;
+  if (!els.v3VisualAssetSourceList) {
+    renderV3VisualAssetCreateReadiness();
+    return;
+  }
   els.v3VisualAssetSourceList.innerHTML = "";
   els.v3VisualAssetSourceList.classList.toggle("empty-v3-list", files.length === 0);
   if (!files.length) {
     els.v3VisualAssetSourceList.textContent = "尚未选择人物源图";
+    renderV3VisualAssetCreateReadiness();
     return;
   }
   files.forEach((file, index) => {
@@ -5420,6 +5486,7 @@ function renderV3VisualAssetSourceFiles() {
     `;
     els.v3VisualAssetSourceList.appendChild(row);
   });
+  renderV3VisualAssetCreateReadiness();
 }
 
 async function v3UploadVisualAssetRoot(file) {
@@ -5453,12 +5520,16 @@ async function createV3VisualAsset(event) {
   const files = Array.isArray(v3State.visualAssetSourceFiles) ? v3State.visualAssetSourceFiles : [];
   const preparationIntent = (els.v3VisualAssetIntentInput?.value || "").trim();
   const consentConfirmed = Boolean(els.v3VisualAssetConsentInput?.checked);
-  if (!displayName || !files.length || !preparationIntent || !consentConfirmed) {
-    showGlobalToast("请填写名称、选择源图、写下建模说明，并确认你有权使用这张图片。", "warning");
+  const missing = v3VisualAssetCreateMissingRequirements();
+  if (missing.length) {
+    v3State.visualAssetCreateAttempted = true;
+    v3State.visualAssetCreateFeedback = `还差 ${missing.join("、")}。请补全后再保存人物资产。`;
+    renderV3VisualAssetCreateReadiness();
     return;
   }
   v3State.visualAssetBusy = true;
-  if (els.v3VisualAssetCreateBtn) els.v3VisualAssetCreateBtn.disabled = true;
+  v3State.visualAssetCreateFeedback = "";
+  v3State.visualAssetCreateAttempted = false;
   renderV3VisualAssetLibrary();
   try {
     updateV3Notice("正在保存源图并建立人物资产。", "info");
@@ -5488,10 +5559,11 @@ async function createV3VisualAsset(event) {
     updateV3Notice("人物资产已保存。接下来选择“开始标准建模”，完成检查后再由你确认启用。", "success");
   } catch (error) {
     v3State.visualAssetsError = v3VisualAssetErrorMessage(error);
+    v3State.visualAssetCreateFeedback = v3State.visualAssetsError;
+    v3State.visualAssetCreateAttempted = true;
     updateV3Notice(v3State.visualAssetsError, "warning");
   } finally {
     v3State.visualAssetBusy = false;
-    if (els.v3VisualAssetCreateBtn) els.v3VisualAssetCreateBtn.disabled = false;
     renderV3VisualAssetLibrary();
   }
 }
@@ -5591,6 +5663,7 @@ function renderV3VisualAssetLibrary() {
       els.v3VisualAssetLibraryStatus.innerHTML = `<strong>${activeCount ? `已有 ${activeCount} 个已启用资产` : "还没有已启用资产"}</strong><span>只有你明确启用的版本才会出现在项目选择列表中。</span>`;
     }
   }
+  renderV3VisualAssetCreateReadiness();
   if (!els.v3VisualAssetLibraryList) return;
   els.v3VisualAssetLibraryList.innerHTML = assets.length ? assets.map((asset) => {
     const lifecycle = v3VisualAssetLifecycleLabel(asset);
