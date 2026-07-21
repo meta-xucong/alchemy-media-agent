@@ -127,6 +127,12 @@ class CentralCreativeBrain:
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "scenario_id": context.metadata.get("scenario_id"),
+                # Renderer choice is transport provenance, not creative
+                # direction. Preserve it in the frozen plan so the shared
+                # output record cannot mislabel a Codex/MCP materialization
+                # as an ordinary Provider result.
+                "generation_channel": context.metadata.get("generation_channel", "provider"),
+                "mcp_operation_id": context.metadata.get("mcp_operation_id"),
                 # These values were already validated against the immutable
                 # activation-plan metadata by ScenarioRuntime.  Preserve them
                 # when CentralCreativeBrain creates the per-output plan;
@@ -311,6 +317,12 @@ class CentralCreativeBrain:
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "scenario_id": context.metadata.get("scenario_id"),
+                # Keep the explicit renderer channel attached to every
+                # materialization plan. The shared Provider/MCP adapter reads
+                # this field; it must never infer the channel from the image
+                # bytes or from a post-generation fallback.
+                "generation_channel": context.metadata.get("generation_channel", "provider"),
+                "mcp_operation_id": context.metadata.get("mcp_operation_id"),
                 "professional_identity_reference_strategy": context.metadata.get(
                     "professional_identity_reference_strategy"
                 ),

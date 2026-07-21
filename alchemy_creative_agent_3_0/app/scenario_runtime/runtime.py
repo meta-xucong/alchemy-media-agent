@@ -160,6 +160,7 @@ class ScenarioRuntime:
         planning_metadata["shared_capabilities"] = capability_metadata
         planning_metadata["visual_cluster"] = capability_metadata.get("visual_cluster", {})
         planning_metadata.update(self._activation_metadata(preparation))
+        planning_metadata.update(self._renderer_channel_metadata(runtime_request))
         planning_metadata.update(self._frozen_professional_provider_metadata(preparation))
         planning_result = run_creative_planning(
             user_input=runtime_request.user_input,
@@ -236,6 +237,7 @@ class ScenarioRuntime:
         generation_metadata["shared_capabilities"] = capability_metadata
         generation_metadata["visual_cluster"] = capability_metadata.get("visual_cluster", {})
         generation_metadata.update(self._activation_metadata(preparation))
+        generation_metadata.update(self._renderer_channel_metadata(runtime_request))
         # ``run_generation_loop`` materializes the Provider request before
         # ``_enrich_activation_result`` returns the public result.  Therefore
         # the immutable Professional stage selectors must be present here,
@@ -3235,6 +3237,25 @@ class ScenarioRuntime:
                 "shared_execution_owner": "v3_shared_runtime",
             }
         return metadata
+
+    @staticmethod
+    def _renderer_channel_metadata(request: ScenarioRuntimeRequest) -> dict[str, Any]:
+        """Carry an explicit renderer channel into every frozen generation plan.
+
+        The MCP handoff is a renderer transport choice, not creative input. It
+        must nevertheless survive the planning-to-materialization boundary so
+        the shared output record can truthfully distinguish MCP from Provider.
+        The default remains Provider for historical and ordinary jobs.
+        """
+
+        channel = str(request.metadata.get("generation_channel") or "").strip().lower()
+        if channel not in {"provider", "mcp"}:
+            return {}
+        payload: dict[str, Any] = {"generation_channel": channel}
+        operation_id = str(request.metadata.get("mcp_operation_id") or "").strip()
+        if channel == "mcp" and operation_id:
+            payload["mcp_operation_id"] = operation_id
+        return payload
 
     def _specialized_metadata(self, preparation: CapabilityPreparationResult) -> dict[str, Any]:
         specialized = preparation.specialized_scenario_plan

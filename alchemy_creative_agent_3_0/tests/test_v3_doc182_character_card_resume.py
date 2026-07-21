@@ -10,6 +10,8 @@ import pytest
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
+from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateResult,
     AnchorCandidateUnavailable,
@@ -34,6 +36,8 @@ from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryVisualAssetCreateRequest,
     VisualAssetLibraryCatalog,
 )
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 
 
 def _face_card() -> CharacterCardState:
@@ -151,6 +155,44 @@ def test_doc183_character_card_failure_exposes_only_resumable_mcp_handoff() -> N
     assert "provider_id" not in public_card
     assert "canonical_prompt" not in public_card
     assert "file_path" not in public_card
+
+
+def test_doc183_mcp_channel_survives_runtime_plan_boundary() -> None:
+    runtime = ScenarioRuntime()
+    request = ScenarioRuntimeRequest(
+        user_input="resume the trusted character-card materialization through MCP",
+        metadata={
+            "generation_channel": "mcp",
+            "mcp_operation_id": "mcp_doc183_channel_boundary",
+        },
+    )
+
+    assert runtime._renderer_channel_metadata(request) == {
+        "generation_channel": "mcp",
+        "mcp_operation_id": "mcp_doc183_channel_boundary",
+    }
+
+    provider_request = ScenarioRuntimeRequest(
+        user_input="ordinary provider materialization",
+        metadata={},
+    )
+    assert runtime._renderer_channel_metadata(provider_request) == {}
+
+
+def test_doc183_central_brain_keeps_mcp_channel_on_materialization_plan() -> None:
+    result = CentralCreativeBrain().run_generation_loop(
+        user_input="Prepare one trusted character-card identity capture.",
+        provider_strategy=ProviderStrategy.MOCK_GENERATION,
+        runtime_metadata={
+            "generation_channel": "mcp",
+            "mcp_operation_id": "mcp_doc183_brain_plan",
+            "requested_image_count": 1,
+        },
+    )
+
+    metadata = result.generation_plans[0].metadata
+    assert metadata["generation_channel"] == "mcp"
+    assert metadata["mcp_operation_id"] == "mcp_doc183_brain_plan"
 
 
 def test_doc182_resume_keeps_winner_and_starts_at_failed_slot() -> None:
