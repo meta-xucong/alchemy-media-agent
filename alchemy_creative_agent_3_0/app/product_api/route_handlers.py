@@ -206,15 +206,18 @@ class V3ProductRouteHandlers:
             "body_silhouette",
         }:
             raise ValueError("character_card_stage_required")
+        resume = payload.get("resume", False)
+        if not isinstance(resume, bool):
+            raise ValueError("character_card_resume_flag_invalid")
         body_request = None
         if stage == "body_silhouette":
-            allowed = {"stage", "source_class", "body_reference_asset_id", "body_facts"}
+            allowed = {"stage", "resume", "source_class", "body_reference_asset_id", "body_facts"}
             if not set(payload).issubset(allowed):
                 raise ValueError("character_card_body_payload_invalid")
             body_request = BodySilhouettePublicRequest.model_validate(
-                {key: value for key, value in payload.items() if key != "stage"}
+                {key: value for key, value in payload.items() if key not in {"stage", "resume"}}
             )
-        elif set(payload) != {"stage"}:
+        elif set(payload) - {"stage", "resume"}:
             # Expression intent remains Brain/host-owned.  A browser may not
             # inject a local expression dictionary or prompt fragment.
             raise ValueError("character_card_stage_payload_invalid")
@@ -222,6 +225,7 @@ class V3ProductRouteHandlers:
             asset = self.visual_asset_library_service.prepare_character_card_face(
                 owner_scope=self._visual_asset_owner_scope(owner_scope),
                 visual_asset_id=visual_asset_id,
+                resume=resume,
             )
         else:
             asset = self.visual_asset_library_service.prepare_character_card_stage(
@@ -345,6 +349,16 @@ class V3ProductRouteHandlers:
             if latest_version is not None
             else None
         )
+        if latest_preparation is not None:
+            failure_attempt_count = int(getattr(latest_version, "failure_attempt_count", 0) or 0)
+            resume_available = bool(
+                getattr(latest_pack, "status", "") == "failed"
+                and getattr(asset, "character_card", None) is not None
+                and getattr(asset.character_card, "resume_available", False)
+            )
+            if failure_attempt_count or resume_available:
+                latest_preparation["failure_attempt_count"] = failure_attempt_count
+                latest_preparation["resume_available"] = resume_available
         if latest_preparation is not None and latest_version.failure_code:
             latest_preparation["failure_code"] = latest_version.failure_code
         card = getattr(asset, "character_card", None)
@@ -356,6 +370,11 @@ class V3ProductRouteHandlers:
                 "body_silhouette_status": card.body_silhouette_status,
                 "face_identity_base_active": card.face_identity_base_active,
                 "face_identity_complete": card.face_identity_complete,
+                "resume_available": bool(card.resume_available),
+                "last_failed_module": card.last_failed_module,
+                "last_failed_slot_key": card.last_failed_slot_key,
+                "last_failure_code": card.last_failure_code,
+                "last_failure_attempt_count": card.last_failure_attempt_count,
                 "slots": {
                     **{
                         key: _character_card_slot_public(slot)

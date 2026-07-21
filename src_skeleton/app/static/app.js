@@ -5334,6 +5334,8 @@ function v3CharacterCardStatusLabel(status) {
 }
 
 function v3CharacterCardAssetFailureMessage(asset) {
+  const card = v3CharacterCardForAsset(asset);
+  if (card?.resume_available) return "这一部分连续尝试后暂时暂停，已完成的内容已保留，可以从断点继续。";
   return v3VisualAssetPreparationFailureMessage(asset?.latest_preparation?.failure_code);
 }
 
@@ -5383,7 +5385,7 @@ function v3CharacterCardModuleAction(module, card) {
   if (status === "active") {
     return `<span class="v3-character-card-complete">✓ 这一部分已完成</span>`;
   }
-  const label = status === "blocked" || status === "stale" ? "重新生成本部分" : `开始${v3CharacterCardModuleMeta[module].title}`;
+  const label = status === "blocked" || status === "partial" || status === "stale" ? "从断点继续" : `开始${v3CharacterCardModuleMeta[module].title}`;
   return `<button class="button compact secondary" type="button" data-v3-character-card-action="prepare" data-v3-character-card-module="${module}" ${!prerequisite.allowed || busy ? "disabled" : ""}>${label}</button>`;
 }
 
@@ -5452,7 +5454,7 @@ function renderV3CharacterCardWorkspace() {
         const state = String(slot.state || "empty");
         const media = preview
           ? `<button class="v3-character-card-slot-media" type="button" data-v3-character-card-action="preview" data-v3-character-card-slot="${slotKey}" aria-label="查看${label}"><img src="${escapeHtml(v3MediaUrl(preview))}" alt="${escapeHtml(label)}" loading="lazy" /></button>`
-          : `<div class="v3-character-card-slot-placeholder"><span>${state === "preparing" ? "正在生成" : state === "blocked" ? "需要重做" : "空位"}</span></div>`;
+          : `<div class="v3-character-card-slot-placeholder"><span>${state === "preparing" ? "正在生成" : state === "blocked" ? "可从断点继续" : "空位"}</span></div>`;
         return `<article class="v3-character-card-slot" data-state="${escapeHtml(state)}">
           ${media}
           <div class="v3-character-card-slot-label"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(v3CharacterCardStatusLabel(state))}</small></div>
@@ -5508,14 +5510,21 @@ async function runV3CharacterCardStage(module, { runAll = false } = {}) {
   renderV3VisualAssetLibrary();
   let advanceAfterStage = false;
   try {
+    const statusBefore = v3CharacterCardModuleStatus(card, module);
     const payload = module === "body_silhouette" ? v3CharacterCardBodyPayload() : { stage: module };
+    if (statusBefore === "blocked" || statusBefore === "partial" || statusBefore === "stale") {
+      payload.resume = true;
+    }
     await request(`${v3VisualAssetPath(assetId)}/character-card/prepare`, { method: "POST", body: payload });
     await loadV3VisualAssets({ silent: true, force: true });
     const prepared = v3State.visualAssets.find((item) => item.visual_asset_id === assetId);
     advanceAfterStage = Boolean(v3State.characterCardRunAll)
       && v3CharacterCardModuleStatus(v3CharacterCardForAsset(prepared), module) === "active";
+    const preparedCard = v3CharacterCardForAsset(prepared);
+    const preparedStatus = v3CharacterCardModuleStatus(preparedCard, module);
     const failed = prepared?.lifecycle_status === "blocked"
-      || v3CharacterCardModuleStatus(v3CharacterCardForAsset(prepared), module) === "blocked";
+      || preparedStatus === "blocked"
+      || preparedStatus === "partial";
     if (failed) {
       updateV3Notice(v3CharacterCardAssetFailureMessage(prepared), "warning");
     } else {

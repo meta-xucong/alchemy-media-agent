@@ -5,6 +5,7 @@
 ```text
 DOC173_LIBRARY_FIRST_RECONSTRUCTION_AUTHORITATIVE
 DOC178_CHARACTER_CARD_MODULE_EXTENSION_AUTHORITATIVE
+DOC182_CHARACTER_CARD_RESUMABLE_FAILURE_RECOVERY_AUTHORITATIVE
 LEGACY_PROJECT_SCOPED_COMPATIBILITY_RETAINED_READ_ONLY
 FRONTEND_RECONSTRUCTION_REQUIRED
 NO_STANDARD_MODE_CHANGE
@@ -70,6 +71,16 @@ Card contract. Empty slots remain visible and unfilled until explicitly
 prepared and reviewed.
 
 ### Primary Product Contract
+
+### Character Card Failure Recovery Authority — Doc182
+
+`../182_V3_CHARACTER_CARD_BOUNDED_FAILURE_PAUSE_AND_RESUME_SPEC.md`
+
+Doc182 defines the shared bounded failure contract for the three Character Card
+modules: three candidate opportunities per missing view or slot, an explicit
+paused checkpoint after exhaustion, and a user-requested append-only resume that
+starts at the first incomplete unit. It does not add a Provider, Brain, review,
+retry, selector, or storage path and does not change Standard Mode.
 
 `PROFESSIONAL_MODE_VISUAL_ASSET_LIBRARY_AND_PEOPLE_ASSET_MODULE_SPEC.md`
 

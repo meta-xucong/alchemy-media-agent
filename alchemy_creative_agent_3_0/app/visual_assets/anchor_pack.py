@@ -246,61 +246,96 @@ class AnchorPackPreparationService:
         self.reviewer = reviewer
         self.catalog = catalog
 
-    def prepare(self, request: AnchorPackPreparationRequest) -> AnchorPackPreparationResult:
+    def prepare(
+        self,
+        request: AnchorPackPreparationRequest,
+        *,
+        resume_from_pack: IdentityAnchorPackVersion | None = None,
+    ) -> AnchorPackPreparationResult:
+        """Prepare a pack, or continue a failed pack from its last good view.
+
+        Each missing view receives the existing three-candidate bounded budget.
+        A failed operation is persisted as a failed pack; an explicit later
+        resume creates a new append-only pack version and reuses only the
+        already reviewed views from that failed version.
+        """
+
         pack_version_id = f"pack_{uuid4().hex}"
         attempts: list[AnchorCandidateAttempt] = []
         generation_failures: list[AnchorCandidateFailure] = []
         passing_fronts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
+        prior_views = self._resume_views(request, resume_from_pack)
+        views = list(prior_views)
+        selected_evidence_ids = [
+            request.root_source_provenance.source_asset_id,
+            *[view.output_id for view in prior_views],
+        ]
+        front_view = next((view for view in prior_views if view.view_role == "standard_front"), None)
+        winner_candidate_id = front_view.source_candidate_ids[0] if front_view is not None else None
 
-        for candidate_index in range(1, self.FRONT_CANDIDATE_COUNT + 1):
-            generation_request = self._generation_request(
-                request=request,
-                pack_version_id=pack_version_id,
-                view_role="standard_front",
-                candidate_index=candidate_index,
-                reference_evidence_ids=[
-                    request.root_source_provenance.source_asset_id,
-                    *request.root_source_provenance.supplementary_source_asset_ids,
-                ],
-            )
-            try:
-                candidate, review = self._generate_and_review(generation_request)
-            except AnchorCandidateUnavailable as exc:
-                generation_failures.append(
-                    AnchorCandidateFailure(
-                        stage="front",
-                        view_role="standard_front",
-                        candidate_index=candidate_index,
-                        failure_code=exc.failure_code,
-                    )
+        if front_view is None:
+            for candidate_index in range(1, self.FRONT_CANDIDATE_COUNT + 1):
+                generation_request = self._generation_request(
+                    request=request,
+                    pack_version_id=pack_version_id,
+                    view_role="standard_front",
+                    candidate_index=candidate_index,
+                    reference_evidence_ids=[
+                        request.root_source_provenance.source_asset_id,
+                        *request.root_source_provenance.supplementary_source_asset_ids,
+                    ],
                 )
-                continue
-            attempts.append(
-                AnchorCandidateAttempt(stage="front", request=generation_request, candidate=candidate, review=review)
-            )
-            if review.status == "pass":
-                passing_fronts.append((candidate, review))
+                try:
+                    candidate, review = self._generate_and_review(generation_request)
+                except AnchorCandidateUnavailable as exc:
+                    generation_failures.append(
+                        AnchorCandidateFailure(
+                            stage="front",
+                            view_role="standard_front",
+                            candidate_index=candidate_index,
+                            failure_code=exc.failure_code,
+                        )
+                    )
+                    continue
+                attempts.append(
+                    AnchorCandidateAttempt(stage="front", request=generation_request, candidate=candidate, review=review)
+                )
+                if review.status == "pass":
+                    passing_fronts.append((candidate, review))
+                else:
+                    generation_failures.append(
+                        AnchorCandidateFailure(
+                            stage="front",
+                            view_role="standard_front",
+                            candidate_index=candidate_index,
+                            failure_code="shared_visual_review_failed",
+                        )
+                    )
 
-        if not passing_fronts:
-            pack = self._pack(request, pack_version_id, [], "failed")
-            self._persist(pack, "fail")
-            return AnchorPackPreparationResult(
-                status="blocked",
-                pack=pack,
-                attempts=attempts,
-                generation_failures=generation_failures,
-                failure_codes=["no_passing_front_candidate"],
-            )
+            if not passing_fronts:
+                pack = self._pack(request, pack_version_id, views, "failed")
+                self._persist(pack, "fail")
+                return AnchorPackPreparationResult(
+                    status="blocked",
+                    pack=pack,
+                    attempts=attempts,
+                    generation_failures=generation_failures,
+                    failure_codes=["no_passing_front_candidate"],
+                )
 
-        winner, winner_review = self._select_winner(passing_fronts)
-        views = [self._view(winner, winner_review)]
-        selected_evidence_ids = [request.root_source_provenance.source_asset_id, winner.output_id]
+            winner, winner_review = self._select_winner(passing_fronts)
+            views.append(self._view(winner, winner_review))
+            selected_evidence_ids = [request.root_source_provenance.source_asset_id, winner.output_id]
+            winner_candidate_id = winner.candidate_id
+
         supplementary_roles = (
             self.CHARACTER_CARD_SUPPLEMENTARY_ROLES
             if request.face_view_scope == "character_card"
             else self.SUPPLEMENTARY_ROLES
         )
         for role in supplementary_roles:
+            if any(view.view_role == role for view in views):
+                continue
             passing_supplementary: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
             for candidate_index in range(1, self.SUPPLEMENTARY_CANDIDATE_COUNT + 1):
                 generation_request = self._generation_request(
@@ -329,6 +364,15 @@ class AnchorPackPreparationService:
                 )
                 if review.status == "pass":
                     passing_supplementary.append((candidate, review))
+                else:
+                    generation_failures.append(
+                        AnchorCandidateFailure(
+                            stage="supplementary",
+                            view_role=role,
+                            candidate_index=candidate_index,
+                            failure_code="shared_visual_review_failed",
+                        )
+                    )
 
             if not passing_supplementary:
                 pack = self._pack(request, pack_version_id, views, "failed")
@@ -338,7 +382,7 @@ class AnchorPackPreparationService:
                     pack=pack,
                     attempts=attempts,
                     generation_failures=generation_failures,
-                    winner_candidate_id=winner.candidate_id,
+                    winner_candidate_id=winner_candidate_id,
                     failure_codes=["required_supplementary_view_failed"],
                 )
 
@@ -353,8 +397,34 @@ class AnchorPackPreparationService:
             pack=pack,
             attempts=attempts,
             generation_failures=generation_failures,
-            winner_candidate_id=winner.candidate_id,
+            winner_candidate_id=winner_candidate_id,
         )
+
+    @staticmethod
+    def _resume_views(
+        request: AnchorPackPreparationRequest,
+        resume_from_pack: IdentityAnchorPackVersion | None,
+    ) -> list[AnchorView]:
+        if resume_from_pack is None:
+            return []
+        if resume_from_pack.status != "failed":
+            raise ValueError("only a failed Character Card pack can be resumed")
+        if (
+            resume_from_pack.people_asset_id != request.asset.people_asset_id
+            or resume_from_pack.root_source_provenance.source_asset_id
+            != request.root_source_provenance.source_asset_id
+        ):
+            raise ValueError("character_card_resume_binding_mismatch")
+        roles = (
+            ("standard_front", *AnchorPackPreparationService.CHARACTER_CARD_SUPPLEMENTARY_ROLES)
+            if request.face_view_scope == "character_card"
+            else ("standard_front", *AnchorPackPreparationService.SUPPLEMENTARY_ROLES)
+        )
+        views = [view for view in resume_from_pack.anchor_views if view.active]
+        view_roles = [view.view_role for view in views]
+        if len(view_roles) != len(set(view_roles)) or tuple(view_roles) != roles[: len(view_roles)]:
+            raise ValueError("character_card_resume_checkpoint_invalid")
+        return views
 
     def activate(self, pack: IdentityAnchorPackVersion, *, confirmed: bool) -> IdentityAnchorPackVersion:
         if pack.status != "review":

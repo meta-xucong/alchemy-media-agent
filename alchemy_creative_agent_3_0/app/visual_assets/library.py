@@ -105,6 +105,7 @@ class VisualAssetVersion(_StrictLibraryModel):
     # Safe operator-facing classification for a failed preparation.  This is
     # deliberately not a provider error body, prompt, endpoint, or job ID.
     failure_code: str | None = None
+    failure_attempt_count: int = Field(default=0, ge=0, le=3)
 
     @field_validator("version_id", "visual_asset_id")
     @classmethod
@@ -947,8 +948,14 @@ class VisualAssetLibraryLifecycleService:
             result = method(asset=asset, card=card)
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")
-        if getattr(result, "shared_runtime_receipt", None) is None:
-            raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_required")
+        if getattr(result, "status", None) == "review":
+            if getattr(result, "shared_runtime_receipt", None) is None:
+                raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_required")
+        elif getattr(result, "status", None) == "blocked":
+            if getattr(result, "shared_runtime_failure", None) is None:
+                raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_failure_receipt_required")
+        else:
+            raise CharacterCardRuntimeUnavailable("character_card_stage_status_invalid")
         return self.catalog.save(
             asset.model_copy(update={"character_card": result.card, "updated_at": _utc_now()})
         )
@@ -971,7 +978,13 @@ class VisualAssetLibraryLifecycleService:
             raise ValueError("character_card_body_reference_consent_required")
         return source
 
-    def prepare_character_card_face(self, *, owner_scope: str, visual_asset_id: str) -> VisualAsset:
+    def prepare_character_card_face(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        resume: bool = False,
+    ) -> VisualAsset:
         """Prepare all five Face Identity slots through the existing host."""
 
         if self.anchor_pack_host is None:
@@ -1000,10 +1013,29 @@ class VisualAssetLibraryLifecycleService:
             preparation_intent=asset.preparation_intent,
             status="draft",
         )
+        resume_pack = None
+        if resume:
+            resume_pack = next(
+                (
+                    version.anchor_pack
+                    for version in reversed(asset.versions)
+                    if version.lifecycle_status == "failed"
+                    and version.anchor_pack is not None
+                    and version.anchor_pack.status == "failed"
+                ),
+                None,
+            )
+            if resume_pack is None:
+                raise ValueError("character_card_face_resume_checkpoint_missing")
+        method_kwargs = {
+            "project_id": staging_project_id,
+            "people_asset": people_asset,
+            "root_source_provenance": people_asset.root_source_provenance,
+        }
+        if resume_pack is not None:
+            method_kwargs["resume_from_pack"] = resume_pack
         result = method(
-            project_id=staging_project_id,
-            people_asset=people_asset,
-            root_source_provenance=people_asset.root_source_provenance,
+            **method_kwargs,
         )
         pack = result.pack
         if pack.people_asset_id != asset.visual_asset_id or pack.root_source_provenance.source_asset_id != asset.root_source_provenance.source_asset_id:
@@ -1031,12 +1063,29 @@ class VisualAssetLibraryLifecycleService:
                     else None
                 )
             ),
+            failure_attempt_count=(
+                min(3, max(1, len(result.generation_failures) or len(result.failure_codes) or 3))
+                if pack.status != "review"
+                else 0
+            ),
         )
         existing_versions = [item for item in asset.versions if item.version_id != version.version_id]
         card = asset.character_card
-        if pack.status == "review":
+        if pack.status in {"review", "failed"}:
             card = apply_face_identity_pack_to_card(card, pack)
-            card = card.model_copy(update={"face_identity_status": "reviewing"})
+            if pack.status == "review":
+                card = card.model_copy(update={"face_identity_status": "reviewing"})
+            else:
+                failure_code = version.failure_code or "character_card_face_prepare_paused"
+                active_view_count = sum(1 for item in pack.anchor_views if item.active)
+                card = card.model_copy(
+                    update={
+                        "face_identity_status": "partial" if active_view_count else "blocked",
+                        "last_failure_code": failure_code,
+                        "last_failure_attempt_count": 3,
+                        "resume_available": True,
+                    }
+                )
         updated = asset.model_copy(
             update={
                 "versions": [*existing_versions, version],

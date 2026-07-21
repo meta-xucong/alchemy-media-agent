@@ -224,6 +224,11 @@ class CharacterCardState(_CharacterCardModel):
     expression_activation_confirmed: bool = False
     body_activation_confirmed: bool = False
     append_only_revision: int = Field(default=0, ge=0)
+    last_failed_module: CharacterCardModule | None = None
+    last_failed_slot_key: CharacterCardSlotKey | None = None
+    last_failure_code: str | None = None
+    last_failure_attempt_count: int = Field(default=0, ge=0, le=3)
+    resume_available: bool = False
 
     @classmethod
     def initial(cls, *, card_version_id: str) -> "CharacterCardState":
@@ -257,6 +262,14 @@ class CharacterCardState(_CharacterCardModel):
                 raise ValueError("Body Silhouette requires an active Expression Set")
         if self.active_version_id and not self.user_activation_confirmed:
             raise ValueError("active Character Card versions require explicit user activation")
+        if self.resume_available:
+            if (
+                self.last_failed_module is None
+                or self.last_failed_slot_key is None
+                or not str(self.last_failure_code or "").strip()
+                or self.last_failure_attempt_count < 1
+            ):
+                raise ValueError("resumable Character Card state requires a safe failure checkpoint")
         return self
 
     def all_slots(self) -> list[CharacterCardSlot]:
@@ -399,16 +412,27 @@ class CharacterCardCandidateAttempt(_CharacterCardModel):
     review: Any
 
 
+class CharacterCardFailureEvent(_CharacterCardModel):
+    """Safe per-candidate failure evidence retained for manual continuation."""
+
+    module: CharacterCardModule
+    slot_key: CharacterCardSlotKey
+    candidate_index: int = Field(ge=1, le=3)
+    failure_code: str
+
+
 class CharacterCardStageResult(_CharacterCardModel):
     status: Literal["review", "blocked"]
     card: CharacterCardState
     attempts: list[CharacterCardCandidateAttempt] = Field(default_factory=list)
     winner_output_ids: dict[str, str] = Field(default_factory=dict)
     failure_codes: list[str] = Field(default_factory=list)
+    failures: list[CharacterCardFailureEvent] = Field(default_factory=list)
     # Production hosts must return a receipt proving that the existing shared
     # review/retry/final-winner path handled this stage.  The offline contract
     # service below intentionally leaves it empty and is never a route host.
     shared_runtime_receipt: "CharacterCardSharedRuntimeReceipt | None" = None
+    shared_runtime_failure: "CharacterCardSharedRuntimeFailureReceipt | None" = None
 
 
 class CharacterCardSharedRuntimeReceipt(_CharacterCardModel):
@@ -427,6 +451,16 @@ class CharacterCardSharedRuntimeReceipt(_CharacterCardModel):
         if not self.final_winner_selection_verified or not self.prompt_reference_parity_verified:
             raise ValueError("shared Character Card runtime receipt is incomplete")
         return self
+
+
+class CharacterCardSharedRuntimeFailureReceipt(_CharacterCardModel):
+    """Proof that a blocked stage used shared generation/review before pausing."""
+
+    review_owner: Literal["v3_shared_vision"] = "v3_shared_vision"
+    retry_owner: Literal["v3_shared_visual_retry"] = "v3_shared_visual_retry"
+    candidate_count: Literal[3] = 3
+    failure_count: int = Field(ge=1, le=3)
+    resume_available: Literal[True] = True
 
 
 class ExpressionPreparationRequest(_CharacterCardModel):
@@ -577,6 +611,7 @@ class CharacterCardPreparationService:
         intents = user_intents
         attempts: list[CharacterCardCandidateAttempt] = []
         winners: dict[str, str] = {}
+        failures: list[CharacterCardFailureEvent] = []
         slots = dict(card.expression_slots)
         neutral = CharacterCardSlot(
             slot_key="expression.neutral",
@@ -589,15 +624,20 @@ class CharacterCardPreparationService:
         )
         slots["expression.neutral"] = neutral
         for expression in ("smile", "anger", "sad"):
+            slot_key = f"expression.{expression}"
+            existing = slots[slot_key]
+            if existing.state in {"winner_selected", "active"} and existing.output_id:
+                winners[slot_key] = existing.output_id
+                continue
             request = ExpressionPreparationRequest(
                 expression=expression,
                 front_output_id=front_output_id,
                 user_intent=str(intents.get(expression) or expression),
             )
-            winner, expression_attempts = self._prepare_slot(
+            winner, expression_attempts, slot_failures = self._prepare_slot(
                 card=card,
                 module="expression_set",
-                slot_key=f"expression.{expression}",
+                slot_key=slot_key,
                 project_id=project_id,
                 people_asset_id=people_asset_id,
                 reference_output_ids=request.reference_output_ids,
@@ -606,20 +646,30 @@ class CharacterCardPreparationService:
                 attempts=attempts,
             )
             attempts.extend(expression_attempts)
+            failures.extend(slot_failures)
             if winner is None:
+                failure_code = slot_failures[-1].failure_code if slot_failures else f"{slot_key}_review_failed"
+                failed_card = self._blocked_card(
+                    card,
+                    module="expression_set",
+                    slot_key=slot_key,
+                    failure_code=failure_code,
+                    failure_attempt_count=max(1, len(slot_failures)),
+                    slots=slots,
+                    status_field="expression_set_status",
+                )
                 return CharacterCardStageResult(
                     status="blocked",
-                    card=card.model_copy(
-                        update={"expression_set_status": "blocked", "expression_slots": slots}
-                    ),
+                    card=failed_card,
                     attempts=attempts,
                     winner_output_ids=winners,
-                    failure_codes=[f"expression_{expression}_no_reviewed_winner"],
+                    failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
+                    failures=failures,
                 )
-            slots[f"expression.{expression}"] = self._winner_slot(
-                module="expression_set", slot_key=f"expression.{expression}", winner=winner
+            slots[slot_key] = self._winner_slot(
+                module="expression_set", slot_key=slot_key, winner=winner
             )
-            winners[f"expression.{expression}"] = winner.output_id
+            winners[slot_key] = winner.output_id
         updated = card.model_copy(
             update={
                 "expression_slots": slots,
@@ -627,9 +677,14 @@ class CharacterCardPreparationService:
                 "expression_set_version_id": f"expression_{uuid4().hex}",
                 "expression_activation_confirmed": False,
                 "append_only_revision": card.append_only_revision + 1,
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_attempt_count": 0,
+                "resume_available": False,
             }
         )
-        return CharacterCardStageResult(status="review", card=updated, attempts=attempts, winner_output_ids=winners)
+        return CharacterCardStageResult(status="review", card=updated, attempts=attempts, winner_output_ids=winners, failures=failures)
 
     def prepare_body_silhouette(
         self,
@@ -659,9 +714,14 @@ class CharacterCardPreparationService:
             raise ValueError("Body Silhouette requires Brain/user-owned body preparation intent")
         attempts: list[CharacterCardCandidateAttempt] = []
         winners: dict[str, str] = {}
+        failures: list[CharacterCardFailureEvent] = []
         slots = dict(card.body_slots)
         for slot_key in BODY_SLOT_KEYS:
-            winner, slot_attempts = self._prepare_slot(
+            existing = slots[slot_key]
+            if existing.state in {"winner_selected", "active"} and existing.output_id:
+                winners[slot_key] = existing.output_id
+                continue
+            winner, slot_attempts, slot_failures = self._prepare_slot(
                 card=card,
                 module="body_silhouette",
                 slot_key=slot_key,
@@ -674,15 +734,24 @@ class CharacterCardPreparationService:
                 attempts=attempts,
             )
             attempts.extend(slot_attempts)
+            failures.extend(slot_failures)
             if winner is None:
+                failure_code = slot_failures[-1].failure_code if slot_failures else f"{slot_key}_review_failed"
                 return CharacterCardStageResult(
                     status="blocked",
-                    card=card.model_copy(
-                        update={"body_silhouette_status": "blocked", "body_slots": slots}
+                    card=self._blocked_card(
+                        card,
+                        module="body_silhouette",
+                        slot_key=slot_key,
+                        failure_code=failure_code,
+                        failure_attempt_count=max(1, len(slot_failures)),
+                        slots=slots,
+                        status_field="body_silhouette_status",
                     ),
                     attempts=attempts,
                     winner_output_ids=winners,
-                    failure_codes=[f"{slot_key}_no_reviewed_winner"],
+                    failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
+                    failures=failures,
                 )
             slots[slot_key] = self._winner_slot(
                 module="body_silhouette",
@@ -699,9 +768,14 @@ class CharacterCardPreparationService:
                 "body_silhouette_version_id": f"body_{uuid4().hex}",
                 "body_activation_confirmed": False,
                 "append_only_revision": card.append_only_revision + 1,
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_attempt_count": 0,
+                "resume_available": False,
             }
         )
-        return CharacterCardStageResult(status="review", card=updated, attempts=attempts, winner_output_ids=winners)
+        return CharacterCardStageResult(status="review", card=updated, attempts=attempts, winner_output_ids=winners, failures=failures)
 
     def _prepare_slot(
         self,
@@ -716,8 +790,15 @@ class CharacterCardPreparationService:
         source_class: BodySourceClass | None,
         consent_provenance_id: str | None = None,
         attempts: list[CharacterCardCandidateAttempt],
-    ) -> tuple[CharacterCardCandidateResult | None, list[CharacterCardCandidateAttempt]]:
+    ) -> tuple[
+        CharacterCardCandidateResult | None,
+        list[CharacterCardCandidateAttempt],
+        list[CharacterCardFailureEvent],
+    ]:
+        from .anchor_pack import AnchorCandidateUnavailable
+
         slot_attempts: list[CharacterCardCandidateAttempt] = []
+        slot_failures: list[CharacterCardFailureEvent] = []
         passing: list[tuple[CharacterCardCandidateResult, Any]] = []
         for candidate_index in range(1, self.CANDIDATE_COUNT + 1):
             request = CharacterCardCandidateRequest(
@@ -732,16 +813,61 @@ class CharacterCardPreparationService:
                 source_class=source_class,
                 consent_provenance_id=consent_provenance_id,
             )
-            candidate = self.generator.generate(request)
+            try:
+                candidate = self.generator.generate(request)
+            except AnchorCandidateUnavailable as exc:
+                slot_failures.append(
+                    CharacterCardFailureEvent(
+                        module=module,
+                        slot_key=slot_key,  # type: ignore[arg-type]
+                        candidate_index=candidate_index,
+                        failure_code=exc.failure_code,
+                    )
+                )
+                continue
             review = self.reviewer.review(candidate)
             attempt = CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
             slot_attempts.append(attempt)
             if getattr(review, "status", None) == "pass":
                 passing.append((candidate, review))
         if not passing:
-            return None, slot_attempts
+            if not slot_failures:
+                slot_failures = [
+                    CharacterCardFailureEvent(
+                        module=module,
+                        slot_key=slot_key,  # type: ignore[arg-type]
+                        candidate_index=index,
+                        failure_code="character_card_shared_review_failed",
+                    )
+                    for index in range(1, self.CANDIDATE_COUNT + 1)
+                ]
+            return None, slot_attempts, slot_failures
         selected = max(passing, key=lambda item: self._selection_key(item[1]))
-        return selected[0], slot_attempts
+        return selected[0], slot_attempts, slot_failures
+
+    @staticmethod
+    def _blocked_card(
+        card: CharacterCardState,
+        *,
+        module: CharacterCardModule,
+        slot_key: str,
+        failure_code: str,
+        failure_attempt_count: int,
+        slots: dict[str, CharacterCardSlot],
+        status_field: Literal["expression_set_status", "body_silhouette_status"],
+    ) -> CharacterCardState:
+        return card.model_copy(
+            update={
+                status_field: "blocked",
+                "expression_slots" if module == "expression_set" else "body_slots": slots,
+                "last_failed_module": module,
+                "last_failed_slot_key": slot_key,
+                "last_failure_code": failure_code,
+                "last_failure_attempt_count": min(3, max(1, failure_attempt_count)),
+                "resume_available": True,
+                "append_only_revision": card.append_only_revision + 1,
+            }
+        )
 
     @staticmethod
     def _selection_key(review: Any) -> tuple[Any, ...]:
@@ -855,8 +981,9 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
         "reverse_three_quarter": "face.reverse_three_quarter",
         "rear_head": "face.rear_head",
     }
+    pack_status = str(getattr(pack, "status", "") or "")
     slot_state: Literal["winner_selected", "active"] = (
-        "active" if str(getattr(pack, "status", "")) == "active" else "winner_selected"
+        "active" if pack_status == "active" else "winner_selected"
     )
     face_slots = dict(card.face_slots)
     for view in getattr(pack, "anchor_views", []):
@@ -874,16 +1001,51 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
             prompt_reference_parity_verified=True,
             candidate_attempt_count=3,
         )
+    active_view_count = sum(1 for view in getattr(pack, "anchor_views", []) if getattr(view, "active", False))
+    missing_slot = next(
+        (
+            slot_key
+            for role, slot_key in role_to_slot.items()
+            if not any(
+                getattr(view, "active", False) and str(getattr(view, "view_role", "")) == role
+                for view in getattr(pack, "anchor_views", [])
+            )
+        ),
+        "face.front",
+    )
+    update = {
+        "face_identity_status": "active" if pack_status == "active" else (
+            "reviewing" if pack_status == "review" else ("partial" if active_view_count else "blocked")
+        ),
+        "face_identity_version_id": pack_version_id,
+        "face_slots": face_slots,
+        "card_version_id": f"card_{pack_version_id}",
+        "active_version_id": None,
+        "user_activation_confirmed": False,
+        "append_only_revision": card.append_only_revision + 1,
+    }
+    if pack_status == "failed":
+        update.update(
+            {
+                "last_failed_module": "face_identity",
+                "last_failed_slot_key": missing_slot,
+                "last_failure_code": "character_card_face_prepare_paused",
+                "last_failure_attempt_count": 3,
+                "resume_available": True,
+            }
+        )
+    else:
+        update.update(
+            {
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_attempt_count": 0,
+                "resume_available": False,
+            }
+        )
     return card.model_copy(
-        update={
-            "face_identity_status": "active" if slot_state == "active" else "reviewing",
-            "face_identity_version_id": pack_version_id,
-            "face_slots": face_slots,
-            "card_version_id": f"card_{pack_version_id}",
-            "active_version_id": None,
-            "user_activation_confirmed": False,
-            "append_only_revision": card.append_only_revision + 1,
-        }
+        update=update
     )
 
 
@@ -898,7 +1060,10 @@ __all__ = [
     "CharacterCardCandidateRequest",
     "CharacterCardCandidateResult",
     "CharacterCardPreparationService",
+    "CharacterCardFailureEvent",
     "CharacterCardStageHost",
+    "CharacterCardSharedRuntimeFailureReceipt",
+    "CharacterCardSharedRuntimeReceipt",
     "CharacterCardSlot",
     "CharacterCardState",
     "CharacterCardStageResult",

@@ -25,6 +25,7 @@ from ..visual_assets.character_card import (
     CharacterCardCandidateResult,
     CharacterCardPreparationService,
     CharacterCardSharedRuntimeReceipt,
+    CharacterCardSharedRuntimeFailureReceipt,
     CharacterCardStageResult,
     CharacterCardState,
 )
@@ -94,6 +95,7 @@ class ProductApiAnchorPackPreparationHost:
         project_id: str,
         people_asset: PeopleAsset,
         root_source_provenance: RootSourceProvenance,
+        resume_from_pack: IdentityAnchorPackVersion | None = None,
     ) -> AnchorPackPreparationResult:
         """Reuse the same host for the two additive Doc178 Face slots."""
 
@@ -104,7 +106,8 @@ class ProductApiAnchorPackPreparationHost:
                 root_source_provenance=root_source_provenance,
                 preparation_intent=people_asset.preparation_intent,
                 face_view_scope="character_card",
-            )
+            ),
+            resume_from_pack=resume_from_pack,
         )
 
     def activate(
@@ -281,7 +284,22 @@ class ProductApiAnchorPackPreparationHost:
         stage_key = (asset.visual_asset_id, stage)
         retry_count = self._character_card_retry_counts.get(stage_key, 0)
         if result.status != "review":
-            return result
+            return result.model_copy(
+                update={
+                    "shared_runtime_failure": CharacterCardSharedRuntimeFailureReceipt(
+                        failure_count=max(
+                            1,
+                            min(
+                                3,
+                                len(result.failures)
+                                or int(getattr(result.card, "last_failure_attempt_count", 0) or 0)
+                                or len(result.failure_codes)
+                                or 3,
+                            ),
+                        ),
+                    )
+                }
+            )
         return result.model_copy(
             update={
                 "shared_runtime_receipt": CharacterCardSharedRuntimeReceipt(
