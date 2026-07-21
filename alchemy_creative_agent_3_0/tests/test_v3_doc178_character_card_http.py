@@ -199,6 +199,31 @@ def test_doc178_route_handler_rejects_expression_payload_and_no_host_is_safe() -
         handlers.post_visual_asset_character_card_prepare("asset_1", {"stage": "face_identity"})
 
 
+def test_doc180_character_card_activate_route_accepts_face_identity_module() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _catalog_asset(catalog)
+    captured = {}
+
+    class _Lifecycle:
+        def activate_character_card_face(self, **kwargs):
+            captured.update(kwargs)
+            return asset
+
+    handlers = V3ProductRouteHandlers(service=V3ProductApiService(), visual_asset_library_catalog=catalog)
+    handlers.visual_asset_library_service = _Lifecycle()
+    payload = handlers.post_visual_asset_character_card_activate(
+        asset.visual_asset_id,
+        {"module": "face_identity", "confirm_activation": True},
+    )
+
+    assert captured == {
+        "owner_scope": "local_default",
+        "visual_asset_id": asset.visual_asset_id,
+        "confirm_activation": True,
+    }
+    assert payload["visual_asset"]["visual_asset_id"] == asset.visual_asset_id
+
+
 def test_doc180_public_character_card_projection_exposes_only_server_owned_media_urls() -> None:
     catalog = VisualAssetLibraryCatalog()
     asset = _catalog_asset(catalog)

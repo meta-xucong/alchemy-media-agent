@@ -270,6 +270,9 @@ def test_doc180_character_card_is_the_single_professional_preparation_surface() 
     assert 'body: { stage: "body_silhouette"' not in source
     assert 'character-card/prepare' in source
     assert 'character-card/activate' in source
+    activate = _function(source, "activateV3CharacterCardModule", "runNextV3CharacterCardModule")
+    assert 'body: { module, confirm_activation: true }' in activate
+    assert "activateV3VisualAsset(assetId)" not in activate
     assert "function startV3CharacterCardRunAll" in source
     assert "function openV3CharacterCard" in source
     assert "function closeV3CharacterCard" in source

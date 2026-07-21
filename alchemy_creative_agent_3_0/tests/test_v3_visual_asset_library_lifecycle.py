@@ -286,6 +286,30 @@ def test_library_prepare_activate_and_project_binding_reuse_shared_host(tmp_path
     assert binding["bindings"][0]["visual_asset_id"] == visual_asset_id
 
 
+def test_character_card_face_activation_uses_unified_module_route(tmp_path) -> None:
+    handlers, _, _, root_source_asset_id = _handlers(tmp_path)
+    host = _PreparationHost(root_source_asset_id)
+    handlers = V3ProductRouteHandlers(
+        service=handlers.service,
+        project_store=handlers.project_service.project_store,
+        anchor_pack_preparation_host=host,
+        visual_asset_library_catalog=handlers.visual_asset_library_catalog,
+    )
+    created = _create_library_asset(handlers, root_source_asset_id)
+    visual_asset_id = str(created["visual_asset_id"])
+    prepared = handlers.post_visual_asset_prepare(visual_asset_id, {})["visual_asset"]
+    assert prepared["latest_preparation"]["status"] == "review"
+
+    activated = handlers.post_visual_asset_character_card_activate(
+        visual_asset_id,
+        {"module": "face_identity", "confirm_activation": True},
+    )["visual_asset"]
+
+    assert activated["lifecycle_status"] == "active"
+    assert activated["character_card"]["face_identity_status"] == "active"
+    assert activated["character_card"]["slots"]["face.front"]["available"] is True
+
+
 def test_library_prepare_projects_safe_brain_failure_class_for_browser_recovery(tmp_path) -> None:
     handlers, _, _, root_source_asset_id = _handlers(tmp_path)
 

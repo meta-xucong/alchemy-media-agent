@@ -106,13 +106,16 @@ which reuses the existing Anchor Pack/Brain/Provider/Vision path. Expression
 and Body stages use the existing Character Card routes. No new Provider,
 Brain, review, retry, selector or storage path is introduced.
 
-Implementation audit (2026-07-21): the Face route is wired to the concrete
-`ProductApiAnchorPackPreparationHost`. The default controlled application does
-not yet inject a production `CharacterCardStageHost` for Expression Set or
-Body Silhouette, so those two routes correctly fail closed with a safe
-unavailable state until an existing shared-runtime adapter is wired. The
-offline `CharacterCardPreparationService` is not an acceptable substitute and
-must not be enabled merely to make the browser appear complete.
+Implementation audit (2026-07-21): the controlled application wires Face,
+Expression Set and Body Silhouette to the concrete
+`ProductApiAnchorPackPreparationHost`. The host reuses the existing shared
+Product API runtime, Remote Brain, Provider/MCP materialization, shared Vision
+review, bounded retry and winner selection. The Character Card activation route
+accepts the same `face_identity`, `expression_set` and `body_silhouette`
+module contract, while the older Visual Asset activation route remains only as
+a compatibility surface for legacy list actions. The offline
+`CharacterCardPreparationService` is still not an acceptable production
+substitute.
 
 ## 5. Safe public data needed by the card
 
@@ -131,10 +134,8 @@ without exposing internal prompt or provider data.
   current Face Identity/three-view summary only.
 - A missing shared Character Card host is rendered as “专业建模服务暂不可用”
   with a retry action; it never falls back to an offline generator or General.
-- The missing default Expression/Body host is a known integration dependency,
-  not a successful stage. A complete card acceptance requires a real shared
-  Brain → Provider → Vision → bounded retry → winner receipt for all three
-  modules.
+- A complete card acceptance requires a real shared Brain → Provider/MCP →
+  Vision → bounded retry → winner receipt for all three modules.
 - All stage calls are idempotent at the UI level through busy guards and use
   the server's append-only lifecycle as the authority.
 

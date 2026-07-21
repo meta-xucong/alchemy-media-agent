@@ -413,4 +413,6 @@ def test_doc182_frontend_exposes_explicit_resume_action() -> None:
     ).read_text(encoding="utf-8")
     assert 'status === "partial"' in source
     assert 'payload.resume = true' in source
+    assert "const resumeFace = Boolean" in source
+    assert "...(resumeFace ? { resume: true } : {})" in source
     assert "从断点继续" in source

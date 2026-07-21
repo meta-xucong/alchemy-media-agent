@@ -5558,10 +5558,6 @@ async function runV3CharacterCardStage(module, { runAll = false } = {}) {
 async function activateV3CharacterCardModule(module) {
   const assetId = String(v3State.visualAssetWorkflowAssetId || "").trim();
   if (!assetId || v3State.visualAssetBusy) return;
-  if (module === "face_identity") {
-    await activateV3VisualAsset(assetId);
-    return;
-  }
   v3State.visualAssetBusy = true;
   v3State.characterCardBusyModule = module;
   renderV3VisualAssetLibrary();
@@ -6128,6 +6124,13 @@ async function createV3VisualAsset(event) {
 
 async function prepareV3VisualAsset(visualAssetId, { fromWorkflow = false } = {}) {
   if (!visualAssetId || (v3State.visualAssetBusy && !fromWorkflow)) return;
+  const assetBefore = v3State.visualAssets.find((item) => item.visual_asset_id === visualAssetId);
+  const cardBefore = v3CharacterCardForAsset(assetBefore);
+  const resumeFace = Boolean(
+    assetBefore?.lifecycle_status === "blocked"
+    || cardBefore?.resume_available
+    || ["blocked", "partial", "stale"].includes(v3CharacterCardModuleStatus(cardBefore, "face_identity"))
+  );
   v3State.visualAssetWorkflowAssetId = visualAssetId;
   v3State.visualAssetWorkflowStage = "preparing";
   v3State.visualAssetBusy = true;
@@ -6141,6 +6144,7 @@ async function prepareV3VisualAsset(visualAssetId, { fromWorkflow = false } = {}
       body: {
         stage: "face_identity",
         generation_channel: v3State.characterCardGenerationChannel === "mcp" ? "mcp" : "provider",
+        ...(resumeFace ? { resume: true } : {}),
       },
     });
     await loadV3VisualAssets({ silent: true, force: true });

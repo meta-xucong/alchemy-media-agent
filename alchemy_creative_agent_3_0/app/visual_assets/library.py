@@ -1134,6 +1134,28 @@ class VisualAssetLibraryLifecycleService:
         )
         return self.catalog.save(asset.model_copy(update={"character_card": card, "updated_at": _utc_now()}))
 
+    def activate_character_card_face(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        confirm_activation: bool,
+    ) -> VisualAsset:
+        """Activate the reviewed Face Identity module from the Character Card route."""
+
+        if not confirm_activation:
+            raise ValueError("character_card_face_activation_confirmation_required")
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        latest_version = asset.versions[-1] if asset.versions else None
+        if latest_version is None or latest_version.lifecycle_status != "review":
+            raise ValueError("character_card_face_not_ready_for_activation")
+        return self.activate(
+            owner_scope=owner_scope,
+            visual_asset_id=visual_asset_id,
+            version_id=latest_version.version_id,
+            confirm_activation=True,
+        )
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()

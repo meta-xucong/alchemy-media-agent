@@ -258,14 +258,23 @@ class V3ProductRouteHandlers:
     ) -> dict[str, Any]:
         if set(payload) != {"module", "confirm_activation"}:
             raise ValueError("character_card_module_activation_payload_invalid")
-        if payload.get("module") not in {"expression_set", "body_silhouette"}:
+        module = payload.get("module")
+        if module not in {"face_identity", "expression_set", "body_silhouette"}:
             raise ValueError("character_card_module_required")
-        asset = self.visual_asset_library_service.activate_character_card_module(
-            owner_scope=self._visual_asset_owner_scope(owner_scope),
-            visual_asset_id=visual_asset_id,
-            module=payload["module"],
-            confirm_activation=payload.get("confirm_activation") is True,
-        )
+        owner = self._visual_asset_owner_scope(owner_scope)
+        if module == "face_identity":
+            asset = self.visual_asset_library_service.activate_character_card_face(
+                owner_scope=owner,
+                visual_asset_id=visual_asset_id,
+                confirm_activation=payload.get("confirm_activation") is True,
+            )
+        else:
+            asset = self.visual_asset_library_service.activate_character_card_module(
+                owner_scope=owner,
+                visual_asset_id=visual_asset_id,
+                module=module,
+                confirm_activation=payload.get("confirm_activation") is True,
+            )
         return {"visual_asset": self._visual_asset_public_record(asset)}
 
     def post_visual_asset_archive(
