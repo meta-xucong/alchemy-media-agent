@@ -228,6 +228,23 @@ def test_doc176_two_source_front_uses_bounded_calibration_then_serial_winners() 
     assert "v3_asset_supplement" not in str(service.requests[3:])
 
 
+def test_doc178_extension_views_keep_lineage_but_bound_provider_evidence_to_five() -> None:
+    root = "v3_asset_root"
+    front = "v3_output_front"
+    three_quarter = "v3_output_three_quarter"
+    profile = "v3_output_profile"
+    reverse = "v3_output_reverse"
+
+    assert V3ProductApiService._professional_anchor_provider_evidence_ids(
+        view_role="reverse_three_quarter",
+        evidence_ids=[root, front, three_quarter, profile],
+    ) == [root, three_quarter, profile]
+    assert V3ProductApiService._professional_anchor_provider_evidence_ids(
+        view_role="rear_head",
+        evidence_ids=[root, front, three_quarter, profile, reverse],
+    ) == [root, profile, reverse]
+
+
 def test_doc165_provider_failure_without_pixels_does_not_consume_stage_repair() -> None:
     service = _SharedProductService()
     original_generate = service.generate_job

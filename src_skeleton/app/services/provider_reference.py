@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -683,7 +684,34 @@ def _normalized_face_box_in_crop(
 
 
 def _detect_primary_face_box(source: Path) -> tuple[float, float, float, float] | None:
-    """Return one ephemeral normalized face box; never persist landmarks or vectors."""
+    """Return one ephemeral normalized face box; never persist landmarks or vectors.
+
+    A Character Card intentionally reuses the same source across several
+    candidate/reference operations. Cache only the normalized box for the
+    source's current path/size/mtime; the cache contains no image, landmark,
+    embedding, or biometric vector and is invalidated when the file changes.
+    """
+    try:
+        stat = source.stat()
+        return _detect_primary_face_box_cached(
+            str(source.resolve()), int(stat.st_size), int(stat.st_mtime_ns)
+        )
+    except Exception:
+        return _detect_primary_face_box_uncached(source)
+
+
+@lru_cache(maxsize=128)
+def _detect_primary_face_box_cached(
+    source_name: str,
+    size_bytes: int,
+    modified_ns: int,
+) -> tuple[float, float, float, float] | None:
+    """Reuse one ephemeral detection per immutable source-file version."""
+    return _detect_primary_face_box_uncached(Path(source_name))
+
+
+def _detect_primary_face_box_uncached(source: Path) -> tuple[float, float, float, float] | None:
+    """Run the local detector once; callers own any ephemeral cache policy."""
     try:
         import cv2 as cv
 

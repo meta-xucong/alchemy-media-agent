@@ -2945,6 +2945,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
         """
 
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if metadata.get("professional_identity_reference_strategy") == "character_card_shared_identity_v1":
+            stage = str(metadata.get("professional_character_card_stage") or "").strip()
+            if stage == "expression_set":
+                return ("portrait_identity_crop", "portrait_identity_pose_geometry_crop")
+            if stage == "body_silhouette":
+                # Three face continuity winners remain three native evidence
+                # inputs; do not expand each into a pair and exceed the
+                # shared Provider reference budget.
+                return ("portrait_identity_crop",)
         if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
             return None
         stage = str(metadata.get("professional_reference_stage") or "").strip()

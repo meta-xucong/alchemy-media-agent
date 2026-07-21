@@ -458,6 +458,17 @@ def _enforced_inspection_prompt(
             "current direction must still fail normally. Frozen authority: "
             + json.dumps(serial_anchor_review, ensure_ascii=False)
         )
+        if serial_anchor_review.get("target_view_role") == "rear_head":
+            lines.append(
+                "Rear-head evidence rule: the target view intentionally hides the face. Do not mark a result "
+                "as an identity failure, low-confidence identity review, or neutral-capture failure solely "
+                "because facial landmarks are unavailable. Judge the visible continuity evidence instead: "
+                "head and hair mass, parting and length, ears/neck/shoulder relationship, age-appropriate "
+                "presentation, lighting/material realism, requested viewpoint, and absence of root-scene or "
+                "wardrobe leakage. Do not invent facial scores; mark face-specific dimensions not verifiable "
+                "when necessary, while still failing genuine continuity, realism, prompt-ownership, or "
+                "technical defects."
+            )
     if review_contract.get("human_naturalness_verdict_required"):
         lines.append(
             "Human authenticity attestation: assess the frozen personhood, developmental-age coherence, situation-owned expression, complexion and scene-balanced color, and photographic material obligations from pixels. "
@@ -497,23 +508,29 @@ def _professional_serial_anchor_review_context(
         "standard_front": 0,
         "three_quarter": 1,
         "profile": 2,
+        "reverse_three_quarter": 3,
+        "rear_head": 4,
     }.get(stage)
     if (
         not isinstance(professional, dict)
         or not professional.get("applies")
         or strategy != "serial_anchor_pack_root_reuse_v1"
         or previous_winner_count is None
-        or reference_count < 1 + previous_winner_count
+        or reference_count < 1
     ):
         return {}
+    inspected_prior_count = max(0, reference_count - 1)
     return {
         "contract_version": "professional_serial_anchor_review_authority_v1",
         "strategy": strategy,
         "stage": stage,
+        "target_view_role": stage,
+        "target_face_visibility": "not_expected" if stage == "rear_head" else "expected_or_partial",
+        "prior_winner_count": previous_winner_count,
         "root_reference_image_index": 2,
         "root_authority": "same_person_identity_only",
         "reviewed_prior_anchor_image_indexes": list(
-            range(3, 3 + previous_winner_count)
+            range(3, 3 + inspected_prior_count)
         ),
         "reviewed_prior_anchor_authority": (
             "same_person_identity_plus_neutral_anchor_capture_continuity"

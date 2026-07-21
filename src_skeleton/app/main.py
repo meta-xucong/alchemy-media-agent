@@ -124,10 +124,12 @@ _v3_project_visual_asset_binding_service = PersistentProjectVisualAssetBindingSe
     _v3_visual_asset_library_catalog,
     V3_VISUAL_ASSET_LIBRARY_ROOT,
 )
+_v3_shared_professional_host = ProductApiAnchorPackPreparationHost(_v3_product_service)
 v3_route_handlers = V3ProductRouteHandlers(
     service=_v3_product_service,
     project_store=PersistentProjectStore(),
-    anchor_pack_preparation_host=ProductApiAnchorPackPreparationHost(_v3_product_service),
+    anchor_pack_preparation_host=_v3_shared_professional_host,
+    character_card_stage_host=_v3_shared_professional_host,
     visual_asset_library_catalog=_v3_visual_asset_library_catalog,
     project_visual_asset_binding_service=_v3_project_visual_asset_binding_service,
 )

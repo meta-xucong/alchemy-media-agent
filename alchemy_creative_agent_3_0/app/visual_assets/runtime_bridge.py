@@ -128,6 +128,27 @@ class ProfessionalModeRuntimeBridge:
         }
 
     @staticmethod
+    def character_card_stage_metadata(
+        *,
+        stage: Literal["expression_set", "body_silhouette"],
+        slot_key: str,
+        source_class: str | None = None,
+    ) -> dict[str, object]:
+        """Return typed stage context while leaving creative wording to Brain."""
+
+        if stage not in {"expression_set", "body_silhouette"} or not slot_key.strip():
+            raise ValueError("character card stage metadata is invalid")
+        return {
+            "contract_version": "professional_character_card_stage_v1",
+            "stage": stage,
+            "slot_key": slot_key.strip(),
+            "source_class": source_class,
+            "creative_direction_owner": "remote_v3_llm_brain",
+            "reference_channel_owner": "shared_v3_reference_policy",
+            "review_owner": "v3_shared_vision",
+        }
+
+    @staticmethod
     def planning_metadata(
         binding: ProfessionalModeBinding,
         *,

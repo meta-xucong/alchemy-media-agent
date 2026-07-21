@@ -837,20 +837,27 @@ class V3ProductApiService:
         trusted_photography_continuation: bool = False,
         trusted_capability_plan_reuse: bool = False,
         trusted_professional_anchor_preparation: bool = False,
+        trusted_professional_character_card: bool = False,
         professional_anchor_view_role: Literal[
             "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
         ] | None = None,
         professional_anchor_reference_evidence_ids: list[str] | None = None,
+        professional_character_card_stage: Literal["expression_set", "body_silhouette"] | None = None,
+        professional_character_card_slot: str | None = None,
+        professional_character_card_reference_output_ids: list[str] | None = None,
+        professional_character_card_source_class: str | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         self._reject_legacy_professional_mode_forward_write(
             create_request,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
+            trusted_professional_character_card=trusted_professional_character_card,
         )
         self._assert_runtime_metadata_server_owned(
             create_request,
             trusted_capability_plan_reuse=trusted_capability_plan_reuse,
+            trusted_professional_character_card=trusted_professional_character_card,
         )
         self._bind_server_job_instance_id(create_request)
         if project_visual_asset_binding_service is not None:
@@ -890,6 +897,38 @@ class V3ProductApiService:
                 "professional_anchor_initial_multi_source": bool(
                     professional_anchor_view_role == "standard_front"
                     and len(professional_anchor_reference_evidence_ids or []) == 2
+                ),
+            }
+        elif trusted_professional_character_card:
+            if professional_character_card_stage not in {"expression_set", "body_silhouette"}:
+                raise ValueError("professional_character_card_stage_invalid")
+            if not str(professional_character_card_slot or "").strip():
+                raise ValueError("professional_character_card_slot_invalid")
+            reference_ids = [
+                str(item or "").strip()
+                for item in (professional_character_card_reference_output_ids or [])
+                if str(item or "").strip()
+            ]
+            if not reference_ids or len(reference_ids) != len(set(reference_ids)):
+                raise ValueError("professional_character_card_reference_chain_invalid")
+            planning_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+                stage=professional_character_card_stage,
+                slot_key=str(professional_character_card_slot),
+                source_class=professional_character_card_source_class,
+            )
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                "professional_mode": True,
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": professional_character_card_stage,
+                "professional_character_card_slot": str(professional_character_card_slot),
+                "professional_character_card_source_class": professional_character_card_source_class,
+                "professional_character_card_reference_output_ids": reference_ids,
+                "professional_planning_metadata": planning_metadata,
+                "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+                "professional_reference_stage": f"character_card_{professional_character_card_stage}",
+                "professional_anchor_reference_assets": self._professional_character_card_reference_assets(
+                    reference_ids
                 ),
             }
         else:
@@ -1027,6 +1066,27 @@ class V3ProductApiService:
             professional_anchor_reference_evidence_ids=reference_evidence_ids,
         )
 
+    def create_professional_character_card_stage_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+        *,
+        stage: Literal["expression_set", "body_silhouette"],
+        slot_key: str,
+        reference_output_ids: list[str],
+        source_class: str | None = None,
+    ) -> ProductJobStatus:
+        """Create one Character Card candidate through shared V3 execution."""
+
+        create_request = self._coerce_create_job_request(request)
+        return self._create_creative_job(
+            create_request,
+            trusted_professional_character_card=True,
+            professional_character_card_stage=stage,
+            professional_character_card_slot=slot_key,
+            professional_character_card_reference_output_ids=list(reference_output_ids),
+            professional_character_card_source_class=source_class,
+        )
+
     def _professional_anchor_reference_assets(
         self,
         request: CreateCreativeJobRequest,
@@ -1062,12 +1122,23 @@ class V3ProductApiService:
         if root is None or root_status != "ready":
             raise ValueError("professional_anchor_reference_root_not_ready")
 
+        # Keep the complete serial lineage on AnchorGenerationRequest, while
+        # giving the shared Provider materializer the bounded evidence set it
+        # can actually admit.  The two Character Card extension views follow
+        # the same 2/3/5 native budget as the base Face Identity stages: the
+        # root geometry anchor plus the two nearest reviewed winners produces
+        # five derivatives.  Older winners remain in append-only lineage and
+        # are not silently deleted or reused as ordinary uploads.
+        provider_evidence_ids = self._professional_anchor_provider_evidence_ids(
+            view_role=view_role,
+            evidence_ids=evidence_ids,
+        )
         selected: list[dict[str, Any]] = []
         if view_role == "standard_front":
             # Direct supplementary evidence is resolved through the existing
             # upload store.  The Provider receives it only in the first
             # neutral capture, then the reviewed front winner replaces it.
-            for supplementary_asset_id in evidence_ids[1:]:
+            for supplementary_asset_id in provider_evidence_ids[1:]:
                 if supplementary_asset_id not in request.uploaded_asset_ids:
                     raise ValueError("professional_anchor_supplementary_root_mismatch")
                 supplementary = self.asset_store.get_upload(supplementary_asset_id)
@@ -1082,7 +1153,7 @@ class V3ProductApiService:
                 if supplementary_role != "face_reference":
                     raise ValueError("professional_anchor_supplementary_requires_face_reference")
             return selected
-        for output_id in evidence_ids[1:]:
+        for output_id in provider_evidence_ids[1:]:
             output = self.output_store.get_output(output_id)
             path = Path(output.file_path) if output is not None and output.file_path else None
             if output is None or path is None or not path.is_file():
@@ -1115,6 +1186,67 @@ class V3ProductApiService:
                 }
             )
         return selected
+
+    def _professional_character_card_reference_assets(
+        self,
+        reference_output_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """Resolve reviewed Face outputs without accepting caller paths."""
+
+        references: list[dict[str, Any]] = []
+        for output_id in reference_output_ids:
+            output = self.output_store.get_output(output_id)
+            path = Path(output.file_path) if output is not None and output.file_path else None
+            if output is None or path is None or not path.is_file():
+                raise ValueError("professional_character_card_reference_output_not_found")
+            references.append(
+                {
+                    "asset_id": output.output_id,
+                    "output_id": output.output_id,
+                    "role": "face_reference",
+                    "source_type": "selected_output",
+                    "use_policy": "identity",
+                    "strength": "hard",
+                    "provider_input_required": True,
+                    "file_path": str(path),
+                    "uri": output.preview_url,
+                    "filename": path.name,
+                    "mime_type": output.mime_type,
+                    "metadata": {
+                        "source_type": "selected_output",
+                        "output_id": output.output_id,
+                        "source_job_id": output.job_id,
+                        "use_policy": "identity",
+                        "strength": "hard",
+                        "provider_input_required": True,
+                        "canonical_output_binding": True,
+                        "professional_character_card_lineage_evidence": True,
+                    },
+                }
+            )
+        return references
+
+    @staticmethod
+    def _professional_anchor_provider_evidence_ids(
+        *,
+        view_role: Literal[
+            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+        ],
+        evidence_ids: list[str],
+    ) -> list[str]:
+        """Select a bounded Provider set without changing serial lineage.
+
+        The request keeps every prior winner so the append-only character-card
+        history remains auditable.  The two extension views use the root plus
+        the two nearest prior winners; each generated winner contributes its
+        feature-detail and pose-geometry pair, so this is exactly five native
+        reference inputs.  This is an evidence-authority decision, not a
+        prompt recipe or a quality shortcut.
+        """
+
+        if view_role in {"reverse_three_quarter", "rear_head"} and len(evidence_ids) > 3:
+            return [evidence_ids[0], *evidence_ids[-2:]]
+        return list(evidence_ids)
 
     def get_job_record(self, job_id: str) -> ProductJobRecord | None:
         """Internal Project Mode lookup; no new public low-level API is exposed."""
@@ -7795,6 +7927,11 @@ class V3ProductApiService:
             "professional_anchor_reference_assets",
             "professional_anchor_initial_multi_source",
             "professional_anchor_stage_plan_reuse",
+            "professional_character_card_preparation",
+            "professional_character_card_stage",
+            "professional_character_card_slot",
+            "professional_character_card_source_class",
+            "professional_character_card_reference_output_ids",
             "frozen_visual_asset_binding_set",
             "visual_asset_library_reference_assets",
             "visual_asset_library_execution",
@@ -7884,6 +8021,7 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest,
         *,
         trusted_professional_anchor_preparation: bool,
+        trusted_professional_character_card: bool = False,
     ) -> None:
         """Keep project-scoped Professional fields readable, never forward-writable.
 
@@ -7894,7 +8032,7 @@ class V3ProductApiService:
         preparation contract while the asset is being built.
         """
 
-        if trusted_professional_anchor_preparation:
+        if trusted_professional_anchor_preparation or trusted_professional_character_card:
             return
         metadata = dict(request.metadata or {})
         legacy_metadata_keys = {
@@ -8059,11 +8197,12 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest,
         *,
         trusted_capability_plan_reuse: bool,
+        trusted_professional_character_card: bool = False,
     ) -> None:
         """Keep browser/API metadata from impersonating a frozen runtime job."""
 
         supplied = set(dict(request.metadata or {})).intersection(self._SERVER_OWNED_RUNTIME_METADATA)
-        if supplied and not trusted_capability_plan_reuse:
+        if supplied and not (trusted_capability_plan_reuse or trusted_professional_character_card):
             raise ValueError(
                 "runtime_metadata_server_owned: " + ", ".join(sorted(supplied))
             )

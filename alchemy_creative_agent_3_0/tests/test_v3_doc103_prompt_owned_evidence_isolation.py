@@ -128,6 +128,21 @@ def test_face_localized_identity_evidence_suppresses_nonidentity_pixels_across_s
         assert _channel_range(lower_context) <= 20
 
 
+def test_doc180_face_localization_reuses_one_ephemeral_box_per_source_version(tmp_path, monkeypatch) -> None:
+    source = _colored_portrait(tmp_path / "character-card-source.png")
+    calls = []
+
+    def _detector(_source):
+        calls.append(str(_source))
+        return (0.25, 0.20, 0.50, 0.42)
+
+    provider_reference._detect_primary_face_box_cached.cache_clear()
+    monkeypatch.setattr(provider_reference, "_detect_primary_face_box_uncached", _detector)
+    assert provider_reference._detect_primary_face_box(source) == (0.25, 0.20, 0.50, 0.42)
+    assert provider_reference._detect_primary_face_box(source) == (0.25, 0.20, 0.50, 0.42)
+    assert calls == [str(source.resolve())]
+
+
 def test_prompt_owned_portrait_evidence_reduces_outer_color_without_flattening_face(tmp_path) -> None:
     source = _colored_portrait(tmp_path / "portrait.png")
     package, policy = _policy(

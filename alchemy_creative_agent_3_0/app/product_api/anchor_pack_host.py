@@ -19,6 +19,15 @@ from ..visual_assets.anchor_pack import (
     AnchorPackPreparationService,
     AnchorReviewDecision,
 )
+from ..visual_assets.character_card import (
+    BodyPreparationRequest,
+    CharacterCardCandidateRequest,
+    CharacterCardCandidateResult,
+    CharacterCardPreparationService,
+    CharacterCardSharedRuntimeReceipt,
+    CharacterCardStageResult,
+    CharacterCardState,
+)
 from ..visual_assets.contracts import (
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
@@ -53,11 +62,15 @@ class ProductApiAnchorPackPreparationHost:
         self._review_by_candidate_id: dict[str, AnchorReviewDecision] = {}
         self._stage_plan_source_job_ids: dict[tuple[str, str], str] = {}
         self._stage_visual_retry_consumed: set[tuple[str, str]] = set()
+        self._character_card_reviews: dict[str, AnchorReviewDecision] = {}
+        self._character_card_retry_counts: dict[tuple[str, str], int] = {}
         self._orchestrator = AnchorPackPreparationService(
             generator=self,
             reviewer=self,
             catalog=service.visual_asset_catalog,
         )
+
+    production_shared_runtime = True
 
     def prepare(
         self,
@@ -102,8 +115,14 @@ class ProductApiAnchorPackPreparationHost:
     ) -> IdentityAnchorPackVersion:
         return self._orchestrator.activate(pack, confirmed=confirmed)
 
-    def generate(self, request: AnchorGenerationRequest) -> AnchorCandidateResult:
+    def generate(
+        self,
+        request: AnchorGenerationRequest | CharacterCardCandidateRequest,
+    ) -> AnchorCandidateResult | CharacterCardCandidateResult:
         """Materialize one bounded candidate through the ordinary Product API."""
+
+        if isinstance(request, CharacterCardCandidateRequest):
+            return self._generate_character_card_candidate(request)
 
         stage_key = (request.pack_version_id, request.view_role)
         # At the first stage both admitted source uploads are direct evidence.
@@ -185,11 +204,216 @@ class ProductApiAnchorPackPreparationHost:
         if executed_count > 0:
             self._stage_visual_retry_consumed.add(stage_key)
 
-    def review(self, candidate: AnchorCandidateResult) -> AnchorReviewDecision:
+    def review(
+        self,
+        candidate: AnchorCandidateResult | CharacterCardCandidateResult,
+    ) -> AnchorReviewDecision:
+        if isinstance(candidate, CharacterCardCandidateResult):
+            decision = self._character_card_reviews.get(candidate.candidate_id)
+            if decision is None:
+                raise RuntimeError("character_card_shared_review_missing")
+            return decision
         decision = self._review_by_candidate_id.get(candidate.candidate_id)
         if decision is None:
             raise RuntimeError("professional_anchor_shared_review_missing")
         return decision
+
+    def prepare_expression_set(self, *, asset: Any, card: CharacterCardState) -> CharacterCardStageResult:
+        front_output_id = str(card.face_slots["face.front"].output_id or "").strip()
+        if not front_output_id:
+            raise ValueError("character_card_expression_front_winner_missing")
+        preparation = CharacterCardPreparationService(generator=self, reviewer=self)
+        base_intent = str(getattr(asset, "preparation_intent", "") or "").strip()
+        if not base_intent:
+            raise ValueError("character_card_expression_intent_missing")
+        result = preparation.prepare_expression_set(
+            card,
+            front_output_id=front_output_id,
+            project_id=f"visual_asset_{asset.visual_asset_id}",
+            people_asset_id=asset.visual_asset_id,
+            user_intents={key: base_intent for key in ("smile", "anger", "sad")},
+        )
+        return self._attach_character_card_receipt(result, asset=asset, stage="expression_set")
+
+    def prepare_body_silhouette(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        request: Any = None,
+    ) -> CharacterCardStageResult:
+        if request is None:
+            raise ValueError("character_card_body_source_required")
+        face_reference_output_ids = [
+            str(card.face_slots[key].output_id or "").strip()
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ]
+        if any(not item for item in face_reference_output_ids):
+            raise ValueError("character_card_body_face_winners_missing")
+        body_evidence_ids = (
+            [str(request.body_reference_asset_id)]
+            if request.source_class == "observed" and request.body_reference_asset_id
+            else []
+        )
+        user_intent = str(request.body_facts or getattr(asset, "preparation_intent", "") or "").strip()
+        if not user_intent:
+            raise ValueError("character_card_body_intent_missing")
+        preparation = CharacterCardPreparationService(generator=self, reviewer=self)
+        result = preparation.prepare_body_silhouette(
+            card,
+            face_reference_output_ids=face_reference_output_ids,
+            source_class=request.source_class,
+            project_id=f"visual_asset_{asset.visual_asset_id}",
+            people_asset_id=asset.visual_asset_id,
+            body_evidence_ids=body_evidence_ids,
+            consent_provenance_id=getattr(asset.root_source_provenance, "consent_reference", None),
+            user_intent=user_intent,
+        )
+        return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
+
+    def _attach_character_card_receipt(
+        self,
+        result: CharacterCardStageResult,
+        *,
+        asset: Any,
+        stage: str,
+    ) -> CharacterCardStageResult:
+        stage_key = (asset.visual_asset_id, stage)
+        retry_count = self._character_card_retry_counts.get(stage_key, 0)
+        if result.status != "review":
+            return result
+        return result.model_copy(
+            update={
+                "shared_runtime_receipt": CharacterCardSharedRuntimeReceipt(
+                    retry_count=retry_count,
+                    final_winner_selection_verified=bool(result.winner_output_ids),
+                    prompt_reference_parity_verified=all(
+                        attempt.candidate.prompt_reference_parity_verified
+                        for attempt in result.attempts
+                    ),
+                )
+            }
+        )
+
+    def _generate_character_card_candidate(
+        self,
+        request: CharacterCardCandidateRequest,
+    ) -> CharacterCardCandidateResult:
+        stage_key = (request.people_asset_id, request.module, request.slot_key)
+        status = self.product_service.create_professional_character_card_stage_job(
+            {
+                "user_input": request.user_intent,
+                "scenario_selection": {"scenario_id": "general_creative"},
+                "metadata": {
+                    "project_id": request.project_id,
+                    "requested_image_count": 1,
+                    "require_real_images": True,
+                },
+            },
+            stage=request.module,
+            slot_key=request.slot_key,
+            reference_output_ids=request.reference_output_ids,
+            source_class=request.source_class,
+        )
+        if status.status != ProductJobStatusValue.PLANNED:
+            raise AnchorCandidateUnavailable("character_card_candidate_planning_blocked")
+        generation = self.product_service.generate_job(
+            status.job_id,
+            {"quality_mode": "strict", "metadata": {"max_visual_retry_attempts": 1}},
+        )
+        self._record_character_card_retry_usage(stage_key, status.job_id)
+        if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
+            raise AnchorCandidateUnavailable("character_card_candidate_generation_failed")
+        candidate, review = self._character_card_candidate_and_review(status.job_id, request)
+        self._character_card_reviews[candidate.candidate_id] = review
+        return candidate
+
+    def _record_character_card_retry_usage(self, stage_key: tuple[str, str, str], job_id: str) -> None:
+        record = self.product_service.get_job_record(job_id)
+        result = record.generation_result if record is not None else None
+        metadata = result.metadata if result is not None and isinstance(result.metadata, dict) else {}
+        retry = metadata.get("visual_auto_retry")
+        if isinstance(retry, dict) and int(retry.get("executed_count") or 0) > 0:
+            self._character_card_retry_counts[(stage_key[0], stage_key[1])] = (
+                self._character_card_retry_counts.get((stage_key[0], stage_key[1]), 0) + 1
+            )
+
+    def _character_card_candidate_and_review(
+        self,
+        job_id: str,
+        request: CharacterCardCandidateRequest,
+    ) -> tuple[CharacterCardCandidateResult, AnchorReviewDecision]:
+        record = self.product_service.get_job_record(job_id)
+        result = record.generation_result if record is not None else None
+        if result is None:
+            raise RuntimeError("character_card_generation_result_missing")
+        package = result.metadata.get("post_generation_review_package")
+        inspections = [
+            dict(item)
+            for item in (package.get("inspections", []) if isinstance(package, dict) else [])
+            if isinstance(item, dict)
+        ]
+        outputs = self.product_service.output_store.list_by_job(job_id)
+        if not outputs or not inspections:
+            raise RuntimeError("character_card_real_pixel_review_missing")
+        by_output = {
+            str(item.get("output_id") or ""): item
+            for item in inspections
+            if str(item.get("output_id") or "").strip()
+        }
+        reviewed = [item for item in outputs if item.output_id in by_output]
+        if not reviewed:
+            raise RuntimeError("character_card_review_output_binding_missing")
+        selected = max(reviewed, key=lambda item: self._review_rank(by_output[item.output_id]))
+        inspection = by_output[selected.output_id]
+        score_card = {
+            str(key): float(value)
+            for key, value in dict(inspection.get("score_card") or {}).items()
+            if isinstance(value, (int, float))
+        }
+        verified = (
+            str(inspection.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
+            and str(inspection.get("verification_state") or "").strip().lower() == "verified"
+        )
+        output_metadata = dict(selected.metadata or {})
+        expected_refs = 2 if request.module == "expression_set" else 3
+        parity = bool(
+            str(output_metadata.get("provider_prompt_sha256") or "").strip()
+            and str(output_metadata.get("prompt_compilation_id") or "").strip()
+            and int(output_metadata.get("provider_reference_image_count") or 0) == expected_refs
+        )
+        candidate = CharacterCardCandidateResult(
+            candidate_id=selected.candidate_id,
+            output_id=selected.output_id,
+            module=request.module,
+            slot_key=request.slot_key,
+            candidate_index=request.candidate_index,
+            source_candidate_ids=[item.candidate_id for item in outputs],
+            source_output_ids=list(request.reference_output_ids),
+            canonical_prompt_hash=str(output_metadata.get("provider_prompt_sha256") or ""),
+            prompt_compilation_id=str(output_metadata.get("prompt_compilation_id") or ""),
+            prompt_reference_parity_verified=parity,
+        )
+        raw_issues = inspection.get("issue_codes") or inspection.get("detected_issues") or []
+        issue_codes = [
+            str(item.get("code") if isinstance(item, dict) else item).strip()
+            for item in raw_issues
+            if str(item.get("code") if isinstance(item, dict) else item).strip()
+        ]
+        review = AnchorReviewDecision(
+            status="pass" if verified and str(inspection.get("status") or "").lower() in {"pass", "warning"} and parity else "fail",
+            identity_scores=IdentityScoreSummary(
+                same_face_score=score_card.get("same_person_readability", score_card.get("identity", 0.0)),
+                visual_quality_score=score_card.get("visual_quality", score_card.get("overall", 0.0)),
+                distinctive_feature_score=score_card.get("distinctive_feature_readability", 0.0),
+                human_realism_score=score_card.get("human_realism", 0.0),
+                pose_compliance_score=score_card.get("pose_compliance", 0.0),
+                ai_overperfection_penalty=score_card.get("ai_overperfection_penalty", 1.0),
+                evidence_codes=["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"],
+            ),
+            issue_codes=list(dict.fromkeys(issue_codes)),
+        )
+        return candidate, review
 
     def _candidate_and_review(
         self,

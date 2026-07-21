@@ -529,6 +529,37 @@ class ScenarioRuntime:
         """Admit explicit Professional Mode before the shared plan freezes."""
 
         metadata = dict(request.metadata or {})
+        if metadata.get("professional_character_card_preparation") is True:
+            if activation_mode != "enforced":
+                raise CapabilityActivationError("professional_mode_requires_enforced_activation")
+            raw_mode = metadata.get("professional_mode")
+            if raw_mode is not True and str(raw_mode or "").strip().lower() != "professional":
+                raise CapabilityActivationError("professional_character_card_mode_missing")
+            stage = metadata.get("professional_character_card_stage")
+            slot_key = str(metadata.get("professional_character_card_slot") or "").strip()
+            if stage not in {"expression_set", "body_silhouette"} or not slot_key:
+                raise CapabilityActivationError("professional_character_card_stage_invalid")
+            planning_metadata = metadata.get("professional_planning_metadata")
+            if not isinstance(planning_metadata, dict):
+                raise CapabilityActivationError("professional_character_card_contract_missing")
+            if (
+                planning_metadata.get("stage") != stage
+                or planning_metadata.get("slot_key") != slot_key
+                or planning_metadata.get("creative_direction_owner") != "remote_v3_llm_brain"
+            ):
+                raise CapabilityActivationError("professional_character_card_contract_invalid")
+            reference_assets = metadata.get("professional_anchor_reference_assets")
+            if not isinstance(reference_assets, list) or not reference_assets:
+                raise CapabilityActivationError("professional_character_card_reference_evidence_missing")
+            safe_metadata = {
+                **metadata,
+                "professional_mode": True,
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": stage,
+                "professional_character_card_slot": slot_key,
+                "professional_planning_metadata": dict(planning_metadata),
+            }
+            return None, None, request.model_copy(update={"metadata": safe_metadata})
         if metadata.get("professional_anchor_pack_preparation") is True:
             if activation_mode != "enforced":
                 raise CapabilityActivationError("professional_mode_requires_enforced_activation")
