@@ -4,6 +4,11 @@
 > remote-Brain canonical prompt and admitted references. Structural roles are
 > opaque lineage, never local camera/scene/phrase instructions.
 
+> **Doc183 boundary:** Specialized relays remain conversation-only unless a
+> trusted Character Card stage explicitly creates the new local handoff. The
+> handoff still consumes the frozen plan and shared V3 finalization; it never
+> becomes a General/E-Commerce/Photography fallback.
+
 Status: active, explicit, conversation-only developer-preview extension of
 Docs130/131. It supersedes only their former Local MCP availability restriction
 for `ecommerce_template` and `photographer_template`; it does **not** relax

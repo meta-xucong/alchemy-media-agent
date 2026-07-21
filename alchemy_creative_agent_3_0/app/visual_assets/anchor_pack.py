@@ -50,6 +50,8 @@ class AnchorGenerationRequest(V3BaseModel):
     brain_plan_id: str | None = None
     canonical_prompt_hash: str | None = None
     reference_strategy: Literal["serial_anchor_pack_root_reuse_v1"] = "serial_anchor_pack_root_reuse_v1"
+    generation_channel: Literal["provider", "mcp"] = "provider"
+    mcp_operation_id: str | None = None
 
     @field_validator(
         "brain_plan_id",
@@ -108,6 +110,7 @@ class AnchorPackPreparationRequest(V3BaseModel):
     brain_plan_id: str | None = None
     canonical_prompt_hash: str | None = None
     face_view_scope: Literal["base", "character_card"] = "base"
+    generation_channel: Literal["provider", "mcp"] = "provider"
 
     @field_validator("brain_plan_id", "canonical_prompt_hash", "preparation_intent")
     @classmethod
@@ -180,14 +183,19 @@ class AnchorCandidateFailure(V3BaseModel):
     view_role: FaceViewRole
     candidate_index: int = Field(ge=1, le=3)
     failure_code: str
+    # An MCP handoff is an opaque, resumable receipt.  It is the only
+    # materialization detail allowed to cross this failure boundary; prompts,
+    # paths, provider responses and artifacts remain private to V3.
+    mcp_handoff_id: str | None = None
 
 
 class AnchorCandidateUnavailable(RuntimeError):
     """Expected fail-closed terminal state for one bounded materialization."""
 
-    def __init__(self, failure_code: str) -> None:
+    def __init__(self, failure_code: str, *, mcp_handoff_id: str | None = None) -> None:
         super().__init__(failure_code)
         self.failure_code = failure_code
+        self.mcp_handoff_id = mcp_handoff_id
 
 
 class AnchorPackPreparationResult(V3BaseModel):
@@ -199,6 +207,10 @@ class AnchorPackPreparationResult(V3BaseModel):
     generation_failures: list[AnchorCandidateFailure] = Field(default_factory=list)
     winner_candidate_id: str | None = None
     failure_codes: list[str] = Field(default_factory=list)
+    # Public-safe discovery for an explicit MCP continuation.  The list is
+    # intentionally opaque and append-only; submitting an artifact still
+    # requires the per-handoff nonce/hash contract in the shared router.
+    mcp_handoff_ids: list[str] = Field(default_factory=list)
 
 
 class AnchorCandidateGenerator(Protocol):
@@ -294,6 +306,7 @@ class AnchorPackPreparationService:
                             view_role="standard_front",
                             candidate_index=candidate_index,
                             failure_code=exc.failure_code,
+                            mcp_handoff_id=exc.mcp_handoff_id,
                         )
                     )
                     continue
@@ -321,6 +334,7 @@ class AnchorPackPreparationService:
                     attempts=attempts,
                     generation_failures=generation_failures,
                     failure_codes=["no_passing_front_candidate"],
+                    mcp_handoff_ids=self._mcp_handoff_ids(generation_failures),
                 )
 
             winner, winner_review = self._select_winner(passing_fronts)
@@ -354,6 +368,7 @@ class AnchorPackPreparationService:
                             view_role=role,
                             candidate_index=candidate_index,
                             failure_code=exc.failure_code,
+                            mcp_handoff_id=exc.mcp_handoff_id,
                         )
                     )
                     continue
@@ -384,6 +399,7 @@ class AnchorPackPreparationService:
                     generation_failures=generation_failures,
                     winner_candidate_id=winner_candidate_id,
                     failure_codes=["required_supplementary_view_failed"],
+                    mcp_handoff_ids=self._mcp_handoff_ids(generation_failures),
                 )
 
             supplementary_winner, supplementary_review = self._select_winner(passing_supplementary)
@@ -398,6 +414,17 @@ class AnchorPackPreparationService:
             attempts=attempts,
             generation_failures=generation_failures,
             winner_candidate_id=winner_candidate_id,
+            mcp_handoff_ids=self._mcp_handoff_ids(generation_failures),
+        )
+
+    @staticmethod
+    def _mcp_handoff_ids(failures: list[AnchorCandidateFailure]) -> list[str]:
+        return list(
+            dict.fromkeys(
+                str(item.mcp_handoff_id).strip()
+                for item in failures
+                if str(item.mcp_handoff_id or "").strip()
+            )
         )
 
     @staticmethod
@@ -469,6 +496,12 @@ class AnchorPackPreparationService:
             brain_plan_id=request.brain_plan_id,
             canonical_prompt_hash=request.canonical_prompt_hash,
             reference_strategy="serial_anchor_pack_root_reuse_v1",
+            generation_channel=request.generation_channel,
+            mcp_operation_id=(
+                f"{request.asset.people_asset_id}:{view_role}:{candidate_index}"
+                if request.generation_channel == "mcp"
+                else None
+            ),
         )
 
     def _generate_and_review(

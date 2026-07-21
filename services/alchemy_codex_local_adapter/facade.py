@@ -1,4 +1,8 @@
-"""Explicit, disabled-by-default facade for Doc130 canonical prompt planning."""
+"""Explicit, disabled-by-default facade for legacy canonical prompt planning.
+
+Materialized MCP handoffs are handled by the separate localhost bridge and
+the shared V3 runtime; this facade remains conversation-only by design.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from .professional_binding import persistent_professional_binding_resolver
 
 
 class CodexNativeImageGenFacade:
-    """No artifact, candidate, review, retry, or delivery state exists here."""
+    """Legacy planner state only; it never owns materialized V3 delivery."""
 
     def __init__(
         self,

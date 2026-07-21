@@ -229,6 +229,17 @@ class CharacterCardState(_CharacterCardModel):
     last_failure_code: str | None = None
     last_failure_attempt_count: int = Field(default=0, ge=0, le=3)
     resume_available: bool = False
+    # Opaque local-MCP receipts for a blocked stage.  They are cleared by a
+    # successful stage and never carry prompt, path, provider or artifact data.
+    pending_mcp_handoff_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("pending_mcp_handoff_ids")
+    @classmethod
+    def unique_mcp_handoffs(cls, value: list[str]) -> list[str]:
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("Character Card MCP handoff IDs must be unique")
+        return cleaned
 
     @classmethod
     def initial(cls, *, card_version_id: str) -> "CharacterCardState":
@@ -348,6 +359,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     user_intent: str
     source_class: BodySourceClass | None = None
     consent_provenance_id: str | None = None
+    generation_channel: Literal["provider", "mcp"] = "provider"
     candidate_count: Literal[3] = 3
 
     @field_validator("project_id", "people_asset_id", "card_version_id", "user_intent")
@@ -419,6 +431,7 @@ class CharacterCardFailureEvent(_CharacterCardModel):
     slot_key: CharacterCardSlotKey
     candidate_index: int = Field(ge=1, le=3)
     failure_code: str
+    mcp_handoff_id: str | None = None
 
 
 class CharacterCardStageResult(_CharacterCardModel):
@@ -433,6 +446,7 @@ class CharacterCardStageResult(_CharacterCardModel):
     # service below intentionally leaves it empty and is never a route host.
     shared_runtime_receipt: "CharacterCardSharedRuntimeReceipt | None" = None
     shared_runtime_failure: "CharacterCardSharedRuntimeFailureReceipt | None" = None
+    mcp_handoff_ids: list[str] = Field(default_factory=list)
 
 
 class CharacterCardSharedRuntimeReceipt(_CharacterCardModel):
@@ -539,13 +553,14 @@ class CharacterCardStageHost(Protocol):
     production_shared_runtime: bool
 
     def prepare_expression_set(
-        self, *, asset: Any, card: CharacterCardState
+        self, *, asset: Any, card: CharacterCardState, generation_channel: str = "provider"
     ) -> CharacterCardStageResult:
         ...
 
     def prepare_body_silhouette(
         self, *, asset: Any, card: CharacterCardState,
         request: BodySilhouettePublicRequest | None = None,
+        generation_channel: str = "provider",
     ) -> CharacterCardStageResult:
         ...
 
@@ -602,6 +617,7 @@ class CharacterCardPreparationService:
         project_id: str = "project",
         people_asset_id: str = "people_asset",
         user_intents: Mapping[ExpressionKey, str] | None = None,
+        generation_channel: Literal["provider", "mcp"] = "provider",
     ) -> CharacterCardStageResult:
         self._require_face_active(card, front_output_id)
         if self.generator is None or self.reviewer is None:
@@ -643,6 +659,7 @@ class CharacterCardPreparationService:
                 reference_output_ids=request.reference_output_ids,
                 user_intent=request.user_intent,
                 source_class=None,
+                generation_channel=generation_channel,
                 attempts=attempts,
             )
             attempts.extend(expression_attempts)
@@ -660,11 +677,14 @@ class CharacterCardPreparationService:
                 )
                 return CharacterCardStageResult(
                     status="blocked",
-                    card=failed_card,
+                    card=failed_card.model_copy(
+                        update={"pending_mcp_handoff_ids": self._mcp_handoff_ids(slot_failures)}
+                    ),
                     attempts=attempts,
                     winner_output_ids=winners,
                     failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
                     failures=failures,
+                    mcp_handoff_ids=self._mcp_handoff_ids(failures),
                 )
             slots[slot_key] = self._winner_slot(
                 module="expression_set", slot_key=slot_key, winner=winner
@@ -682,6 +702,7 @@ class CharacterCardPreparationService:
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
                 "resume_available": False,
+                "pending_mcp_handoff_ids": [],
             }
         )
         return CharacterCardStageResult(status="review", card=updated, attempts=attempts, winner_output_ids=winners, failures=failures)
@@ -697,6 +718,7 @@ class CharacterCardPreparationService:
         body_evidence_ids: list[str] | None = None,
         consent_provenance_id: str | None = None,
         user_intent: str | None = None,
+        generation_channel: Literal["provider", "mcp"] = "provider",
     ) -> CharacterCardStageResult:
         if card.face_identity_status != "active":
             raise ValueError("Body Silhouette requires an active Face Identity module")
@@ -731,6 +753,7 @@ class CharacterCardPreparationService:
                 user_intent=user_intent,
                 source_class=source_class,
                 consent_provenance_id=consent_provenance_id,
+                generation_channel=generation_channel,
                 attempts=attempts,
             )
             attempts.extend(slot_attempts)
@@ -747,11 +770,14 @@ class CharacterCardPreparationService:
                         failure_attempt_count=max(1, len(slot_failures)),
                         slots=slots,
                         status_field="body_silhouette_status",
+                    ).model_copy(
+                        update={"pending_mcp_handoff_ids": self._mcp_handoff_ids(slot_failures)}
                     ),
                     attempts=attempts,
                     winner_output_ids=winners,
                     failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
                     failures=failures,
+                    mcp_handoff_ids=self._mcp_handoff_ids(failures),
                 )
             slots[slot_key] = self._winner_slot(
                 module="body_silhouette",
@@ -773,6 +799,7 @@ class CharacterCardPreparationService:
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
                 "resume_available": False,
+                "pending_mcp_handoff_ids": [],
             }
         )
         return CharacterCardStageResult(status="review", card=updated, attempts=attempts, winner_output_ids=winners, failures=failures)
@@ -789,6 +816,7 @@ class CharacterCardPreparationService:
         user_intent: str,
         source_class: BodySourceClass | None,
         consent_provenance_id: str | None = None,
+        generation_channel: Literal["provider", "mcp"] = "provider",
         attempts: list[CharacterCardCandidateAttempt],
     ) -> tuple[
         CharacterCardCandidateResult | None,
@@ -812,6 +840,7 @@ class CharacterCardPreparationService:
                 user_intent=user_intent,
                 source_class=source_class,
                 consent_provenance_id=consent_provenance_id,
+                generation_channel=generation_channel,
             )
             try:
                 candidate = self.generator.generate(request)
@@ -822,6 +851,7 @@ class CharacterCardPreparationService:
                         slot_key=slot_key,  # type: ignore[arg-type]
                         candidate_index=candidate_index,
                         failure_code=exc.failure_code,
+                        mcp_handoff_id=exc.mcp_handoff_id,
                     )
                 )
                 continue
@@ -844,6 +874,16 @@ class CharacterCardPreparationService:
             return None, slot_attempts, slot_failures
         selected = max(passing, key=lambda item: self._selection_key(item[1]))
         return selected[0], slot_attempts, slot_failures
+
+    @staticmethod
+    def _mcp_handoff_ids(failures: list[CharacterCardFailureEvent]) -> list[str]:
+        return list(
+            dict.fromkeys(
+                str(item.mcp_handoff_id).strip()
+                for item in failures
+                if str(item.mcp_handoff_id or "").strip()
+            )
+        )
 
     @staticmethod
     def _blocked_card(

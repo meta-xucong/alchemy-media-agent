@@ -4,6 +4,11 @@
 > prompt/reference parity only; Local MCP must not author, append, repair or
 > persist a substitute renderer prompt.
 
+> **Doc183 clarification:** Provider-independent acceptance may include a
+> submitted local MCP artifact entering the same V3 output/review/winner path.
+> This proves Alchemy code closure only; it is not Provider, Gate C/D or
+> production evidence.
+
 Status: active companion to Doc127. This document defines the fastest
 complete acceptance route for **Alchemy-owned code** while the Web image
 gateway or an upstream Provider is unavailable. It does not loosen Doc127's

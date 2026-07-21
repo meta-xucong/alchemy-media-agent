@@ -76,14 +76,18 @@ def _character_candidate(request) -> CharacterCardCandidateResult:
 
 
 class _ExpressionGenerator:
-    def __init__(self, *, failing_slots: set[str] | None = None) -> None:
+    def __init__(self, *, failing_slots: set[str] | None = None, handoff_ids: dict[str, str] | None = None) -> None:
         self.failing_slots = set(failing_slots or set())
+        self.handoff_ids = dict(handoff_ids or {})
         self.requests = []
 
     def generate(self, request):
         self.requests.append(request)
         if request.slot_key in self.failing_slots:
-            raise AnchorCandidateUnavailable("character_card_candidate_provider_failed")
+            raise AnchorCandidateUnavailable(
+                "character_card_candidate_provider_failed",
+                mcp_handoff_id=self.handoff_ids.get(request.slot_key),
+            )
         return _character_candidate(request)
 
 
@@ -124,6 +128,31 @@ def test_doc182_three_failures_pause_without_unhandled_exception() -> None:
     assert receipt.review_owner == "v3_shared_vision"
 
 
+def test_doc183_character_card_failure_exposes_only_resumable_mcp_handoff() -> None:
+    service = CharacterCardPreparationService(
+        generator=_ExpressionGenerator(
+            failing_slots={"expression.smile"},
+            handoff_ids={"expression.smile": "mcp_handoff_expression_smile"},
+        ),
+        reviewer=_PassReviewer(),
+    )
+    result = service.prepare_expression_set(
+        _face_card(),
+        front_output_id="front_winner",
+        user_intents={"smile": "natural smile", "anger": "quietly serious", "sad": "subtle sadness"},
+        generation_channel="mcp",
+    )
+
+    assert result.status == "blocked"
+    assert result.mcp_handoff_ids == ["mcp_handoff_expression_smile"]
+    assert result.card.pending_mcp_handoff_ids == ["mcp_handoff_expression_smile"]
+    assert result.failures[0].mcp_handoff_id == "mcp_handoff_expression_smile"
+    public_card = result.card.model_dump_json()
+    assert "provider_id" not in public_card
+    assert "canonical_prompt" not in public_card
+    assert "file_path" not in public_card
+
+
 def test_doc182_resume_keeps_winner_and_starts_at_failed_slot() -> None:
     first_generator = _ExpressionGenerator(failing_slots={"expression.anger"})
     service = CharacterCardPreparationService(generator=first_generator, reviewer=_PassReviewer())
@@ -162,14 +191,18 @@ def test_doc182_resume_keeps_winner_and_starts_at_failed_slot() -> None:
 
 
 class _AnchorGenerator:
-    def __init__(self, *, failing_roles: set[str] | None = None) -> None:
+    def __init__(self, *, failing_roles: set[str] | None = None, handoff_ids: dict[tuple[str, int], str] | None = None) -> None:
         self.failing_roles = set(failing_roles or set())
+        self.handoff_ids = dict(handoff_ids or {})
         self.requests = []
 
     def generate(self, request):
         self.requests.append(request)
         if request.view_role in self.failing_roles:
-            raise AnchorCandidateUnavailable("anchor_candidate_provider_failed")
+            raise AnchorCandidateUnavailable(
+                "anchor_candidate_provider_failed",
+                mcp_handoff_id=self.handoff_ids.get((request.view_role, request.candidate_index)),
+            )
         token = f"{request.view_role}_{request.candidate_index}"
         return AnchorCandidateResult(
             candidate_id=f"candidate_{token}",
@@ -224,6 +257,29 @@ def test_doc182_face_resume_skips_completed_views_and_creates_new_pack() -> None
     assert [request.view_role for request in second_generator.requests[:3]] == ["profile"] * 3
     assert all(request.view_role not in {"standard_front", "three_quarter"} for request in second_generator.requests)
     assert first.pack.status == "failed"
+
+
+def test_doc183_anchor_failure_persists_opaque_mcp_handoffs_for_resume() -> None:
+    service = AnchorPackPreparationService(
+        generator=_AnchorGenerator(
+            failing_roles={"standard_front"},
+            handoff_ids={
+                ("standard_front", 1): "mcp_handoff_front_1",
+                ("standard_front", 2): "mcp_handoff_front_2",
+                ("standard_front", 3): "mcp_handoff_front_3",
+            },
+        ),
+        reviewer=_PassReviewer(),
+    )
+    result = service.prepare(_anchor_request())
+
+    assert result.status == "blocked"
+    assert result.mcp_handoff_ids == [
+        "mcp_handoff_front_1",
+        "mcp_handoff_front_2",
+        "mcp_handoff_front_3",
+    ]
+    assert all(item.mcp_handoff_id for item in result.generation_failures)
 
 
 def test_doc182_resume_route_is_explicit_and_non_boolean_flag_is_rejected() -> None:

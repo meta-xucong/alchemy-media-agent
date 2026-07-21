@@ -251,6 +251,8 @@ def test_specialized_relay_fails_closed_for_disabled_templates_named_profiles_an
 
 def test_specialized_mcp_tool_is_explicit_and_general_contract_remains_compatible() -> None:
     assert [tool["name"] for tool in TOOL_SCHEMAS] == [
+        "prepare_shared_mcp_materialization",
+        "submit_shared_mcp_materialization",
         "prepare_native_imagegen_plan",
         "prepare_frozen_specialized_native_imagegen_plan",
         "prepare_frozen_professional_native_imagegen_plan",

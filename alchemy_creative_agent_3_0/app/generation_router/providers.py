@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -24,6 +25,7 @@ from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
 from app.providers.base import ProviderRuntimeError
+from .mcp_materialization import McpMaterializationError, McpMaterializationHandoffStore
 
 
 def safe_runtime_execution_budget(execution_audit: Any) -> dict[str, Any]:
@@ -179,6 +181,8 @@ def build_provider_generation_request(
             "normalized_input": metadata.get("normalized_input"),
             "veyra_user_id": metadata.get("veyra_user_id"),
             "provider_strategy": generation_plan.provider_strategy.value,
+            "generation_channel": metadata.get("generation_channel", "provider"),
+            "mcp_operation_id": metadata.get("mcp_operation_id"),
         },
     )
 
@@ -951,6 +955,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 metadata={
                     "source": self.provider_name,
                     "provider_version": self.provider_version,
+                    "generation_channel": request.metadata.get("generation_channel", "provider"),
                     "prompt_compilation_id": request.prompt_compilation.prompt_compilation_id,
                     "condition_plan_id": request.condition_plan.condition_plan_id,
                     "reference_asset_count": reference_asset_count,
@@ -1028,6 +1033,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     is_mock=False,
                     metadata={
                         "runtime_mode": "production_image_generation",
+                        "generation_channel": request.metadata.get("generation_channel", "provider"),
                         "provider_version": self.provider_version,
                         "actual_provider": str(getattr(result, "provider", provider_name)),
                         "actual_model": str(getattr(result, "model", "") or ""),
@@ -1112,6 +1118,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "provider_name": self.provider_name,
                 "provider_version": self.provider_version,
                 "runtime_mode": "production_image_generation",
+                "generation_channel": request.metadata.get("generation_channel", "provider"),
                 "actual_provider": str(getattr(result, "provider", provider_name)),
                 "actual_model": str(getattr(result, "model", "") or ""),
                 "reference_asset_count": reference_asset_count,
@@ -1349,6 +1356,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         # These are local contract failures raised before an upstream request
         # exists.  They must never consume the visual-retry budget or be
         # reported as a transient Provider outage.
+        if declared_failure_code.startswith("mcp_materialization_"):
+            # MCP handoff state is controlled by the local Codex bridge.  It
+            # must be resumed with the same handoff, never replayed through
+            # V3's Provider retry budget or silently sent to Web mode.
+            return "non_retryable_provider_failure"
         if declared_failure_code in {
             "remote_creative_brain_prompt_signoff_missing",
             "canonical_provider_prompt_exceeds_transport_limit",
@@ -1435,6 +1447,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         detail = getattr(exc, "detail", None)
         detail = dict(detail) if isinstance(detail, dict) else {}
         local_contract_failure = str(detail.get("failure_code") or "").strip()
+        if local_contract_failure.startswith("mcp_materialization_"):
+            return local_contract_failure
         if local_contract_failure in {
             "remote_creative_brain_prompt_signoff_missing",
             "canonical_provider_prompt_exceeds_transport_limit",
@@ -1721,6 +1735,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "requested_image_size": materialization.size,
                 "input_fidelity": materialization.input_fidelity,
                 "input_fidelity_required": self._input_fidelity_is_required(materialization.asset_plan),
+                "generation_channel": request.metadata.get("generation_channel", "provider"),
+                "mcp_operation_id": request.metadata.get("mcp_operation_id"),
                 "identity_repair_canvas_path": request.metadata.get("identity_repair_canvas_path"),
                 "identity_repair_mask_path": request.metadata.get("identity_repair_mask_path"),
             },
@@ -4981,6 +4997,140 @@ class ProductionImageGenerationProvider(GenerationProvider):
         except Exception:
             value = 12.0
         return max(0.0, min(float(value), 30.0))
+
+
+class McpMaterializationProvider(ProductionImageGenerationProvider):
+    """Codex/MCP transport adapter over the ordinary V3 Provider pipeline.
+
+    It inherits prompt materialization, output persistence, failure records and
+    candidate metadata from ``ProductionImageGenerationProvider``.  The only
+    transport difference is that a local MCP client supplies one image to the
+    frozen handoff instead of an OpenAI-compatible HTTP client.
+    """
+
+    provider_name = "mcp_codex_native_materialization"
+    provider_version = "v3.1-doc183-shared-materialization"
+
+    def __init__(self, output_store: Any | None = None, handoff_store: McpMaterializationHandoffStore | None = None) -> None:
+        super().__init__(output_store=output_store)
+        self.handoff_store = handoff_store or McpMaterializationHandoffStore()
+
+    def _select_provider(self, reference_assets: list[dict[str, Any]]) -> str:
+        return "codex_builtin_imagegen"
+
+    def _build_app_request(self, request: GenerationRequest):
+        app_request, provider_name, reference_assets = super()._build_app_request(request)
+        variables = dict(getattr(app_request.prompt_plan, "variables", {}) or {})
+        contract = {
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": app_request.prompt_plan.size,
+            "quality": app_request.prompt_plan.quality,
+            "output_format": app_request.prompt_plan.output_format,
+            "count": 1,
+            "api_operation": "image_edit" if reference_assets else "image_generate",
+            "input_fidelity": variables.get("input_fidelity"),
+            "input_fidelity_required": bool(variables.get("input_fidelity_required")),
+        }
+        context = {
+            "operation_id": str(
+                request.metadata.get("mcp_operation_id")
+                or variables.get("mcp_operation_id")
+                or stable_id(
+                    "mcp_operation",
+                    request.metadata.get("job_id"),
+                    request.generation_plan.asset_id,
+                    request.prompt_compilation.prompt_compilation_id,
+                )
+            ),
+            "canonical_prompt": str(variables.get("generation_prompt") or ""),
+            "prompt_sha256": str(variables.get("provider_prompt_sha256") or ""),
+            "reference_assets": [dict(item or {}) for item in reference_assets],
+            "rendering_contract": contract,
+        }
+        variables["mcp_materialization_context"] = context
+        prompt_plan = app_request.prompt_plan.model_copy(update={"variables": variables})
+        return app_request.model_copy(update={"prompt_plan": prompt_plan}), provider_name, reference_assets
+
+    def _run_app_provider_with_timeout_retry(
+        self,
+        provider_name: str,
+        app_request,
+        reference_assets: list[dict[str, Any]],
+        *,
+        reference_input_execution: dict[str, Any],
+    ):
+        variables = dict(getattr(app_request.prompt_plan, "variables", {}) or {})
+        context = dict(variables.get("mcp_materialization_context") or {})
+        if not context:
+            raise ProviderRuntimeError(
+                "MCP materialization context is missing.",
+                provider=self.provider_name,
+                detail={"failure_code": "mcp_materialization_contract_incomplete"},
+            )
+        try:
+            handoff = self.handoff_store.ensure_pending(
+                operation_id=str(context.get("operation_id") or ""),
+                prompt=str(context.get("canonical_prompt") or ""),
+                prompt_sha256=str(context.get("prompt_sha256") or ""),
+                reference_assets=list(context.get("reference_assets") or []),
+                rendering_contract=dict(context.get("rendering_contract") or {}),
+            )
+            artifact = self.handoff_store.consume(str(handoff["handoff_id"]))
+        except McpMaterializationError as exc:
+            code = exc.code
+            summary = {
+                "executed_count": 0,
+                "max_attempts": 1,
+                "fresh_upstream_requests": 0,
+                "final_status": "pending" if code == "mcp_materialization_pending" else "failed",
+                "final_classification": "mcp_handoff_pending" if code == "mcp_materialization_pending" else "non_retryable_provider_failure",
+                "final_failure_code": code,
+                "attempts": [],
+                "execution_audit": {"generation_channel": "mcp", "outer_max_attempts": 1},
+                "mcp_handoff_id": handoff.get("handoff_id") if "handoff" in locals() else None,
+            }
+            self._last_provider_failure_retry_summary = summary
+            error = ProviderRuntimeError(
+                "MCP image handoff is waiting for one submitted image artifact." if code == "mcp_materialization_pending" else "MCP image handoff failed.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": code,
+                    "handoff_id": summary.get("mcp_handoff_id"),
+                    "safe_message": "Submit the image from the local Codex ImageGen conversation, then resume the same Character Card stage.",
+                },
+            )
+            setattr(error, "provider_failure_retry", summary)
+            raise error from exc
+        self._last_provider_failure_retry_summary = {
+            "executed_count": 0,
+            "max_attempts": 1,
+            "fresh_upstream_requests": 0,
+            "final_status": "succeeded",
+            "final_classification": "mcp_materialization_submitted",
+            "final_failure_code": None,
+            "attempts": [{"attempt": 1, "status": "succeeded"}],
+            "execution_audit": {"generation_channel": "mcp", "outer_max_attempts": 1},
+            "mcp_handoff_id": handoff["handoff_id"],
+        }
+        return SimpleNamespace(
+            outputs=[
+                {
+                    "b64_json": artifact["artifact_base64"],
+                    "mime_type": artifact["artifact_mime_type"],
+                    "format": artifact["artifact_format"],
+                    "api_operation": (context.get("rendering_contract") or {}).get("api_operation"),
+                    "request_index": 0,
+                }
+            ],
+            provider="codex_builtin_imagegen",
+            model="gpt-image-2",
+            raw_response_summary={
+                "output_count": 1,
+                "mcp_handoff_id": handoff["handoff_id"],
+                "artifact_sha256": artifact.get("artifact_sha256"),
+            },
+        )
 
 def _run_async_blocking(coro, *, timeout_seconds: float | None = None):
     try:

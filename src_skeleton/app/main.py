@@ -318,6 +318,15 @@ def _run_v3_handler(handler, *args, **kwargs):
         )
 
 
+def _require_local_mcp_materialization(request: Request) -> None:
+    host = str(request.client.host if request.client else "").strip().lower()
+    if host not in {"127.0.0.1", "::1", "localhost"}:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "mcp_materialization_local_only", "message": "MCP materialization is local-only."},
+        )
+
+
 async def _run_v3_handler_threaded(handler, *args):
     return await run_in_threadpool(_run_v3_handler, handler, *args)
 
@@ -1074,6 +1083,19 @@ async def v3_create_upload_endpoint(request: Request, authorization: str = Heade
     _require_veyra_user_if_enabled(request, authorization)
     payload = await _v3_json_payload(request)
     return _run_v3_handler(v3_route_handlers.post_uploads, payload)
+
+
+@app.get("/api/v3/creative-agent/mcp-materializations/{handoff_id}")
+def v3_get_mcp_materialization_endpoint(handoff_id: str, request: Request):
+    _require_local_mcp_materialization(request)
+    return _run_v3_handler(v3_route_handlers.get_mcp_materialization, handoff_id)
+
+
+@app.post("/api/v3/creative-agent/mcp-materializations/{handoff_id}/submit")
+async def v3_submit_mcp_materialization_endpoint(handoff_id: str, request: Request):
+    _require_local_mcp_materialization(request)
+    payload = await _v3_json_payload(request)
+    return _run_v3_handler(v3_route_handlers.post_mcp_materialization_submit, handoff_id, payload)
 
 
 @app.put("/api/v3/creative-agent/uploads/{asset_id}/content")

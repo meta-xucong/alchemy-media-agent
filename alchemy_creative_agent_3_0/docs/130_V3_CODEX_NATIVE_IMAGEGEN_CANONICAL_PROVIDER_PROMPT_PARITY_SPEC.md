@@ -4,6 +4,11 @@
 > a matching hash: Local MCP cannot repair, paraphrase, append, deduplicate or
 > replace the Brain-approved renderer prompt with local keyword/recipe logic.
 
+> **Doc183 materialization note:** This document remains the authority for
+> canonical prompt parity. The explicit materialized MCP handoff may submit
+> one Codex image into the shared V3 pipeline, but it does not create a second
+> delivery path or change the conversation-only planning rules.
+
 Status: active developer-preview Local Mode authority. This document supersedes
 Doc129's "Codex authors the image direction" contract for every new Local Mode
 call. Doc126 remains an archive of the rejected Platform API/artifact route;

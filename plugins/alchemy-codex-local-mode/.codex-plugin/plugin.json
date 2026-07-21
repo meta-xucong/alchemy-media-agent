@@ -1,19 +1,19 @@
 {
   "name": "alchemy-codex-local-mode",
-  "version": "0.6.0+codex.20260717193000",
-  "description": "Exact V3 Provider Prompt parity for conversation-only Codex images",
+  "version": "0.7.0+codex.20260721000000",
+  "description": "Exact V3 Provider/MCP materialization parity for Codex images",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Alchemy Codex Local Mode",
-    "shortDescription": "Exact Alchemy Provider Prompts for Codex native ImageGen.",
-    "longDescription": "A disabled-by-default canonical-prompt plugin. Alchemy uses its remote Brain and the same final Provider materializer; Codex renders the returned prompt verbatim as a conversation-only image.",
+    "shortDescription": "Exact Alchemy Provider/MCP parity for Codex ImageGen.",
+    "longDescription": "A disabled-by-default parity plugin. Alchemy freezes one Brain-owned plan and canonical Provider contract; Web Provider or explicit local MCP materialization then use the same output, review, retry and Character Card slot path.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Use Codex Native ImageGen Mode only when I explicitly request it. Obtain each canonical Alchemy Provider Prompt, pass it to native ImageGen verbatim once, and do not treat the conversation-only image as an Alchemy delivery."
+    "defaultPrompt": "Use Alchemy Local Mode only when I explicitly request it. Preserve the frozen Alchemy prompt, references and rendering contract exactly; choose Web Provider or explicit MCP materialization, and never bypass shared review, retry, winner selection or Character Card slot writeback."
   },
   "mcpServers": "./.mcp.json"
 }

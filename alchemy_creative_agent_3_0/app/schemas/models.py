@@ -79,6 +79,7 @@ class ProviderStrategy(StrEnum):
     MOCK_GENERATION = "mock_generation"
     DEFAULT_IMAGE_PROVIDER = "default_image_provider"
     REFERENCE_CONDITIONED_PROVIDER = "reference_conditioned_provider"
+    MCP_MATERIALIZATION = "mcp_materialization"
     LAYOUT_CONDITIONED_PROVIDER = "layout_conditioned_provider"
     EXTERNAL_RENDERER_ONLY = "external_renderer_only"
 

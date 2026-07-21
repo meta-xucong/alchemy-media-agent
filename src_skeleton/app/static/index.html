@@ -1937,6 +1937,14 @@
                     <span>建模说明</span>
                     <textarea id="v3VisualAssetIntentInput" rows="3" maxlength="1200" required placeholder="例如：建立这个人物自然、年龄合适、不同视角仍可辨认的标准化身份参考。"></textarea>
                   </label>
+                  <label class="field">
+                    <span>图片生成方式</span>
+                    <select id="v3CharacterCardGenerationChannelInput">
+                      <option value="provider">网页生成（默认）</option>
+                      <option value="mcp">本地 Codex / MCP</option>
+                    </select>
+                    <small>两种方式使用同一份中枢提示词、参考图、审查和角色卡位置；如果一种方式暂时不可用，可以在断点继续时切换。</small>
+                  </label>
                   <label class="v3-confirm-checkbox">
                     <input id="v3VisualAssetConsentInput" type="checkbox" required />
                     <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>

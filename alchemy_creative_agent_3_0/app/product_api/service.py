@@ -23,6 +23,8 @@ from ..app_shell.routes import API_NAMESPACE, get_route_contracts
 from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..generation_router import GenerationRouter, ProductionImageGenerationProvider, safe_runtime_execution_budget
+from ..generation_router.providers import McpMaterializationProvider
+from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
 from ..photography_profiles import (
     PhotographerProfileBinding,
@@ -723,6 +725,7 @@ class V3ProductApiService:
         photographer_profile_catalog: PhotographerProfileCatalog | None = None,
         photographer_profile_region_resolver: Callable[[], str | None] | None = None,
         visual_asset_catalog: InMemoryVisualAssetCatalog | None = None,
+        mcp_materialization_store: McpMaterializationHandoffStore | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -730,6 +733,7 @@ class V3ProductApiService:
         self.ecommerce_planner = ecommerce_planner or EcommerceScenarioPackPlanner()
         self.asset_store = asset_store or V3UploadedAssetStore()
         self.output_store = output_store or V3GeneratedOutputStore()
+        self.mcp_materialization_store = mcp_materialization_store or McpMaterializationHandoffStore()
         operator_catalog = self._default_photography_operator_catalog() if scenario_runtime is None else None
         self.photographer_profile_catalog = (
             photographer_profile_catalog
@@ -748,6 +752,10 @@ class V3ProductApiService:
 
         generation_router = GenerationRouter(
             production_provider=ProductionImageGenerationProvider(output_store=self.output_store),
+            mcp_provider=McpMaterializationProvider(
+                output_store=self.output_store,
+                handoff_store=self.mcp_materialization_store,
+            ),
         )
         if operator_catalog is None:
             return ScenarioRuntime(
@@ -846,9 +854,15 @@ class V3ProductApiService:
         professional_character_card_slot: str | None = None,
         professional_character_card_reference_output_ids: list[str] | None = None,
         professional_character_card_source_class: str | None = None,
+        generation_channel: Literal["provider", "mcp"] = "provider",
+        mcp_operation_id: str | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
+        if generation_channel == "mcp" and not (
+            trusted_professional_anchor_preparation or trusted_professional_character_card
+        ):
+            raise ValueError("mcp_generation_channel_requires_trusted_professional_stage")
         self._reject_legacy_professional_mode_forward_write(
             create_request,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
@@ -858,6 +872,7 @@ class V3ProductApiService:
             create_request,
             trusted_capability_plan_reuse=trusted_capability_plan_reuse,
             trusted_professional_character_card=trusted_professional_character_card,
+            trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
         )
         self._bind_server_job_instance_id(create_request)
         if project_visual_asset_binding_service is not None:
@@ -898,6 +913,8 @@ class V3ProductApiService:
                     professional_anchor_view_role == "standard_front"
                     and len(professional_anchor_reference_evidence_ids or []) == 2
                 ),
+                "generation_channel": generation_channel,
+                "mcp_operation_id": mcp_operation_id,
             }
         elif trusted_professional_character_card:
             if professional_character_card_stage not in {"expression_set", "body_silhouette"}:
@@ -930,6 +947,8 @@ class V3ProductApiService:
                 "professional_anchor_reference_assets": self._professional_character_card_reference_assets(
                     reference_ids
                 ),
+                "generation_channel": generation_channel,
+                "mcp_operation_id": mcp_operation_id,
             }
         else:
             self._bind_professional_mode(
@@ -1024,6 +1043,8 @@ class V3ProductApiService:
         ],
         reference_evidence_ids: list[str] | None = None,
         stage_plan_source_job_id: str | None = None,
+        generation_channel: Literal["provider", "mcp"] = "provider",
+        mcp_operation_id: str | None = None,
     ) -> ProductJobStatus:
         """Internal host entry for a pre-activation Face Identity view.
 
@@ -1064,6 +1085,8 @@ class V3ProductApiService:
             trusted_professional_anchor_preparation=True,
             professional_anchor_view_role=view_role,
             professional_anchor_reference_evidence_ids=reference_evidence_ids,
+            generation_channel=generation_channel,
+            mcp_operation_id=mcp_operation_id,
         )
 
     def create_professional_character_card_stage_job(
@@ -1074,6 +1097,8 @@ class V3ProductApiService:
         slot_key: str,
         reference_output_ids: list[str],
         source_class: str | None = None,
+        generation_channel: Literal["provider", "mcp"] = "provider",
+        mcp_operation_id: str | None = None,
     ) -> ProductJobStatus:
         """Create one Character Card candidate through shared V3 execution."""
 
@@ -1085,6 +1110,8 @@ class V3ProductApiService:
             professional_character_card_slot=slot_key,
             professional_character_card_reference_output_ids=list(reference_output_ids),
             professional_character_card_source_class=source_class,
+            generation_channel=generation_channel,
+            mcp_operation_id=mcp_operation_id,
         )
 
     def _professional_anchor_reference_assets(
@@ -1601,6 +1628,20 @@ class V3ProductApiService:
                     "provider_failure_retry": provider_failure_retry,
                     "provider_failure_retry_exhausted": provider_failure_retry.get("final_status") == "failed",
                 }
+            detail = getattr(exc, "detail", None)
+            handoff_id = str(detail.get("handoff_id") or "").strip() if isinstance(detail, dict) else ""
+            if handoff_id:
+                handoff_failure_code = str(detail.get("failure_code") or getattr(exc, "code", "") or "").strip()
+                record.request.metadata = {
+                    **dict(record.request.metadata),
+                    "mcp_materialization": {
+                        "handoff_id": handoff_id,
+                        "status": "pending" if handoff_failure_code == "mcp_materialization_pending" else "failed",
+                        "failure_code": handoff_failure_code or None,
+                        "generation_channel": "mcp",
+                        "resume_required": True,
+                    },
+                }
             record.warnings.append(self._generation_failure_message(exc, provider_strategy))
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
@@ -2082,6 +2123,9 @@ class V3ProductApiService:
         frozen_metadata = dict(record.request.metadata)
         attempt_metadata = dict(generate_request.metadata)
         metadata = {**frozen_metadata, **attempt_metadata}
+        channel = str(metadata.get("generation_channel") or "provider").strip().lower()
+        if channel == "mcp":
+            return ProviderStrategy.MCP_MATERIALIZATION
         require_real_images = bool(
             frozen_metadata.get("require_real_images")
             or frozen_metadata.get("real_image_generation")
@@ -6004,6 +6048,9 @@ class V3ProductApiService:
             "remote_creative_brain_outcome",
             "provider_failure_retry",
             "provider_failure_retry_exhausted",
+            "generation_channel",
+            "mcp_operation_id",
+            "mcp_materialization",
             "generation_lifecycle_timeout",
             "generation_lifecycle_failure",
             "background_generation_watchdog",
@@ -7932,6 +7979,8 @@ class V3ProductApiService:
             "professional_character_card_slot",
             "professional_character_card_source_class",
             "professional_character_card_reference_output_ids",
+            "generation_channel",
+            "mcp_operation_id",
             "frozen_visual_asset_binding_set",
             "visual_asset_library_reference_assets",
             "visual_asset_library_execution",
@@ -8198,11 +8247,16 @@ class V3ProductApiService:
         *,
         trusted_capability_plan_reuse: bool,
         trusted_professional_character_card: bool = False,
+        trusted_professional_anchor_preparation: bool = False,
     ) -> None:
         """Keep browser/API metadata from impersonating a frozen runtime job."""
 
         supplied = set(dict(request.metadata or {})).intersection(self._SERVER_OWNED_RUNTIME_METADATA)
-        if supplied and not (trusted_capability_plan_reuse or trusted_professional_character_card):
+        if supplied and not (
+            trusted_capability_plan_reuse
+            or trusted_professional_character_card
+            or trusted_professional_anchor_preparation
+        ):
             raise ValueError(
                 "runtime_metadata_server_owned: " + ", ".join(sorted(supplied))
             )

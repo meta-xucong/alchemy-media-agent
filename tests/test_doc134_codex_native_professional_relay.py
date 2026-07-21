@@ -319,11 +319,13 @@ def test_professional_serial_relay_uses_the_formal_neutral_anchor_preparation_co
 def test_professional_mcp_schema_and_dispatch_are_explicit_and_safe(tmp_path: Path) -> None:
     names = [tool["name"] for tool in TOOL_SCHEMAS]
     assert names == [
+        "prepare_shared_mcp_materialization",
+        "submit_shared_mcp_materialization",
         "prepare_native_imagegen_plan",
         "prepare_frozen_specialized_native_imagegen_plan",
         "prepare_frozen_professional_native_imagegen_plan",
     ]
-    schema = TOOL_SCHEMAS[2]
+    schema = next(item for item in TOOL_SCHEMAS if item["name"] == "prepare_frozen_professional_native_imagegen_plan")
     assert schema["inputSchema"]["additionalProperties"] is False
     assert "professional_mode_binding_record" not in schema["inputSchema"]["properties"]
     assert "pack_version_id" not in schema["inputSchema"]["properties"]

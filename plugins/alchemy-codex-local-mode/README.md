@@ -1,15 +1,17 @@
 # Alchemy Codex Native ImageGen Mode
 
-This isolated Docs130/131/133 plugin gives an interactive Codex agent two local
-stdio MCP canonical-prompt tools: `prepare_native_imagegen_plan`,
+This isolated Docs130/131/133/183 plugin gives an interactive Codex agent the
+legacy canonical-prompt tools `prepare_native_imagegen_plan`,
 `prepare_frozen_specialized_native_imagegen_plan`, and
-`prepare_frozen_professional_native_imagegen_plan`. It does not create
-images, open a listener, start a background worker, control Codex, call an
-image Provider, or change Web Mode. It does use the configured remote Central
-Brain because an exact final Provider prompt cannot be created from a local
-creative fallback.
+`prepare_frozen_professional_native_imagegen_plan`, plus the explicit
+materialized tools `prepare_shared_mcp_materialization` and
+`submit_shared_mcp_materialization`. The materialized tools read a V3-frozen
+handoff and submit exactly one Codex built-in ImageGen artifact back into the
+same V3 output, review, bounded-retry, winner, and Character Card slot path as
+Web Provider. Neither surface calls a Platform API, reads Codex auth/session/
+cache, or creates a private creative pipeline.
 
-The flow is intentionally one-way:
+The legacy flow is intentionally conversation-only:
 
 ```text
 explicit user choice -> Codex -> local Alchemy planning MCP
@@ -19,6 +21,22 @@ explicit user choice -> Codex -> local Alchemy planning MCP
 The result is neither an Alchemy project output nor a certified delivery.  It
 has no artifact import, candidate, review, retry, final-delivery, or
 continuation surface.
+
+The opt-in materialized flow is resumable and shared:
+
+```text
+explicit MCP channel -> V3 freezes Brain-owned plan and handoff
+-> Codex reads the exact prompt/reference/rendering contract
+-> one built-in ImageGen call
+-> MCP submits the artifact with nonce/hash checks
+-> V3 shared output store -> Vision review/retry/winner
+-> Character Card fixed slot after a verified winner
+```
+
+Provider and MCP are contract-equivalent and can be switched per attempt. The
+prompt, reference hashes/order, rendering parameters, review rules, retry
+budget, and slot writeback are shared. Independent stochastic renders are not
+promised to be pixel-identical.
 
 ## Input boundary
 
@@ -139,6 +157,14 @@ delivery_state=conversation_only_not_certified
 
 It cannot support a Provider Gate, General Gate D, Photography P10,
 E-Commerce production gate, or Professional M5 pixel certification.
+
+For a materialized handoff, the safe public receipt contains only an opaque
+`handoff_id`, nonce, canonical prompt/hash, admitted reference hashes, and the
+rendering contract. A pending handoff is projected in V3 job/asset status and
+can be resumed later. Submitting it never bypasses shared Vision review or
+activates a Character Card. The artifact is consumed once, written through
+the existing V3 output store, and can fill a fixed slot only after the normal
+verified winner decision.
 
 Validate the plugin after manifest changes:
 

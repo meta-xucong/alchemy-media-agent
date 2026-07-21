@@ -324,6 +324,7 @@ const v3State = {
   characterCardRunAll: false,
   characterCardBusyModule: "",
   characterCardBodySource: "brain_inferred",
+  characterCardGenerationChannel: "provider",
   projectVisualAssetBindings: [],
   projectVisualAssetBindingState: "empty",
   projectVisualAssetBindingsLoading: false,
@@ -574,6 +575,7 @@ const els = {
   v3VisualAssetSourceFeedback: document.querySelector("#v3VisualAssetSourceFeedback"),
   v3VisualAssetCreateFeedback: document.querySelector("#v3VisualAssetCreateFeedback"),
   v3VisualAssetIntentInput: document.querySelector("#v3VisualAssetIntentInput"),
+  v3CharacterCardGenerationChannelInput: document.querySelector("#v3CharacterCardGenerationChannelInput"),
   v3VisualAssetConsentInput: document.querySelector("#v3VisualAssetConsentInput"),
   v3VisualAssetCreateBtn: document.querySelector("#v3VisualAssetCreateBtn"),
   v3VisualAssetWorkflowPanel: document.querySelector("#v3VisualAssetWorkflowPanel"),
@@ -1247,6 +1249,12 @@ function bindControls() {
   if (els.v3VisualAssetSourceList) els.v3VisualAssetSourceList.addEventListener("click", handleV3VisualAssetSourceListClick);
   if (els.v3VisualAssetNameInput) els.v3VisualAssetNameInput.addEventListener("input", clearV3VisualAssetCreateFeedback);
   if (els.v3VisualAssetIntentInput) els.v3VisualAssetIntentInput.addEventListener("input", clearV3VisualAssetCreateFeedback);
+  if (els.v3CharacterCardGenerationChannelInput) {
+    els.v3CharacterCardGenerationChannelInput.addEventListener("change", (event) => {
+      const value = event.target.value === "mcp" ? "mcp" : "provider";
+      v3State.characterCardGenerationChannel = value;
+    });
+  }
   if (els.v3VisualAssetConsentInput) els.v3VisualAssetConsentInput.addEventListener("change", clearV3VisualAssetCreateFeedback);
   if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.addEventListener("submit", createV3VisualAsset);
   if (els.v3VisualAssetWorkflowActivateBtn) els.v3VisualAssetWorkflowActivateBtn.addEventListener("click", () => {
@@ -5335,6 +5343,9 @@ function v3CharacterCardStatusLabel(status) {
 
 function v3CharacterCardAssetFailureMessage(asset) {
   const card = v3CharacterCardForAsset(asset);
+  const pendingMcp = (Array.isArray(card?.pending_mcp_handoff_ids) && card.pending_mcp_handoff_ids.length)
+    || (Array.isArray(asset?.latest_preparation?.mcp_handoff_ids) && asset.latest_preparation.mcp_handoff_ids.length);
+  if (pendingMcp) return "本地生成已经准备好，图片完成后会自动回到这张角色卡；请在本地 MCP 专用会话继续，完成后再从这里继续。";
   if (card?.resume_available) return "这一部分连续尝试后暂时暂停，已完成的内容已保留，可以从断点继续。";
   return v3VisualAssetPreparationFailureMessage(asset?.latest_preparation?.failure_code);
 }
@@ -5411,6 +5422,9 @@ function renderV3CharacterCardWorkspace() {
   });
   if (els.v3CharacterCardBodyFacts) {
     els.v3CharacterCardBodyFacts.hidden = (v3State.characterCardBodySource || "brain_inferred") !== "user_described";
+  }
+  if (els.v3CharacterCardGenerationChannelInput) {
+    els.v3CharacterCardGenerationChannelInput.value = v3State.characterCardGenerationChannel === "mcp" ? "mcp" : "provider";
   }
   const moduleStatuses = v3CharacterCardModuleOrder.map((module) => v3CharacterCardModuleStatus(card, module));
   const activeCount = moduleStatuses.filter((status) => status === "active").length;
@@ -5512,6 +5526,7 @@ async function runV3CharacterCardStage(module, { runAll = false } = {}) {
   try {
     const statusBefore = v3CharacterCardModuleStatus(card, module);
     const payload = module === "body_silhouette" ? v3CharacterCardBodyPayload() : { stage: module };
+    payload.generation_channel = v3State.characterCardGenerationChannel === "mcp" ? "mcp" : "provider";
     if (statusBefore === "blocked" || statusBefore === "partial" || statusBefore === "stale") {
       payload.resume = true;
     }
@@ -5611,6 +5626,7 @@ function openV3CharacterCard(visualAssetId) {
   v3State.visualAssetWorkflowAssetId = visualAssetId;
   v3State.visualAssetWorkflowStage = "character_card";
   v3State.characterCardRunAll = false;
+  v3State.characterCardGenerationChannel = els.v3CharacterCardGenerationChannelInput?.value === "mcp" ? "mcp" : "provider";
   if (els.v3CharacterCardBodyFacts) els.v3CharacterCardBodyFacts.value = "";
   renderV3VisualAssetLibrary();
 }
@@ -5636,7 +5652,7 @@ function v3VisualAssetLifecycleLabel(asset) {
   if (status === "blocked") {
     return {
       title: "需要重新处理",
-      detail: v3VisualAssetPreparationFailureMessage(preparation?.failure_code),
+      detail: v3CharacterCardAssetFailureMessage(asset),
     };
   }
   if (status === "preparing") {
@@ -6122,7 +6138,10 @@ async function prepareV3VisualAsset(visualAssetId, { fromWorkflow = false } = {}
     v3State.characterCardRunAll = false;
     await request(`${v3VisualAssetPath(visualAssetId)}/character-card/prepare`, {
       method: "POST",
-      body: { stage: "face_identity" },
+      body: {
+        stage: "face_identity",
+        generation_channel: v3State.characterCardGenerationChannel === "mcp" ? "mcp" : "provider",
+      },
     });
     await loadV3VisualAssets({ silent: true, force: true });
     const preparedAsset = v3State.visualAssets.find((item) => item.visual_asset_id === visualAssetId);

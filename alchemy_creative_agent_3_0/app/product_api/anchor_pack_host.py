@@ -96,6 +96,7 @@ class ProductApiAnchorPackPreparationHost:
         people_asset: PeopleAsset,
         root_source_provenance: RootSourceProvenance,
         resume_from_pack: IdentityAnchorPackVersion | None = None,
+        generation_channel: str = "provider",
     ) -> AnchorPackPreparationResult:
         """Reuse the same host for the two additive Doc178 Face slots."""
 
@@ -106,6 +107,7 @@ class ProductApiAnchorPackPreparationHost:
                 root_source_provenance=root_source_provenance,
                 preparation_intent=people_asset.preparation_intent,
                 face_view_scope="character_card",
+                generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
             ),
             resume_from_pack=resume_from_pack,
         )
@@ -137,24 +139,37 @@ class ProductApiAnchorPackPreparationHost:
             if request.view_role == "standard_front"
             else [request.root_source_asset_id]
         )
-        status = self.product_service.create_professional_anchor_preparation_job(
-            {
-                "user_input": request.preparation_intent,
-                "scenario_selection": {"scenario_id": "general_creative"},
-                "uploaded_asset_ids": uploaded_asset_ids,
-                "metadata": {
-                    "project_id": request.project_id,
-                    "requested_image_count": 1,
-                    "require_real_images": True,
-                    "professional_people_asset_id": request.people_asset_id,
-                    "professional_anchor_pack_version_id": request.pack_version_id,
-                    "professional_anchor_candidate_index": request.candidate_index,
-                },
+        job_request = {
+            "user_input": request.preparation_intent,
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "uploaded_asset_ids": uploaded_asset_ids,
+            "metadata": {
+                "project_id": request.project_id,
+                "requested_image_count": 1,
+                "require_real_images": True,
+                "professional_people_asset_id": request.people_asset_id,
+                "professional_anchor_pack_version_id": request.pack_version_id,
+                "professional_anchor_candidate_index": request.candidate_index,
             },
-            view_role=request.view_role,
-            reference_evidence_ids=list(request.reference_evidence_ids),
-            stage_plan_source_job_id=self._stage_plan_source_job_ids.get(stage_key),
-        )
+        }
+        job_kwargs = {
+            "view_role": request.view_role,
+            "reference_evidence_ids": list(request.reference_evidence_ids),
+            "stage_plan_source_job_id": self._stage_plan_source_job_ids.get(stage_key),
+        }
+        # Existing Provider host seams keep their original call contract. The
+        # extra fields are needed only when the explicitly selected MCP
+        # renderer must recover an opaque handoff after a pending run.
+        if request.generation_channel == "mcp":
+            job_request["metadata"].update(
+                generation_channel="mcp",
+                mcp_operation_id=request.mcp_operation_id,
+            )
+            job_kwargs.update(
+                generation_channel="mcp",
+                mcp_operation_id=request.mcp_operation_id,
+            )
+        status = self.product_service.create_professional_anchor_preparation_job(job_request, **job_kwargs)
         if status.status != ProductJobStatusValue.PLANNED:
             record = self.product_service.get_job_record(status.job_id)
             request_metadata = dict(record.request.metadata) if record is not None else {}
@@ -221,7 +236,9 @@ class ProductApiAnchorPackPreparationHost:
             raise RuntimeError("professional_anchor_shared_review_missing")
         return decision
 
-    def prepare_expression_set(self, *, asset: Any, card: CharacterCardState) -> CharacterCardStageResult:
+    def prepare_expression_set(
+        self, *, asset: Any, card: CharacterCardState, generation_channel: str = "provider"
+    ) -> CharacterCardStageResult:
         front_output_id = str(card.face_slots["face.front"].output_id or "").strip()
         if not front_output_id:
             raise ValueError("character_card_expression_front_winner_missing")
@@ -235,6 +252,7 @@ class ProductApiAnchorPackPreparationHost:
             project_id=f"visual_asset_{asset.visual_asset_id}",
             people_asset_id=asset.visual_asset_id,
             user_intents={key: base_intent for key in ("smile", "anger", "sad")},
+            generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="expression_set")
 
@@ -244,6 +262,7 @@ class ProductApiAnchorPackPreparationHost:
         asset: Any,
         card: CharacterCardState,
         request: Any = None,
+        generation_channel: str = "provider",
     ) -> CharacterCardStageResult:
         if request is None:
             raise ValueError("character_card_body_source_required")
@@ -271,6 +290,7 @@ class ProductApiAnchorPackPreparationHost:
             body_evidence_ids=body_evidence_ids,
             consent_provenance_id=getattr(asset.root_source_provenance, "consent_reference", None),
             user_intent=user_intent,
+            generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
 
@@ -332,6 +352,8 @@ class ProductApiAnchorPackPreparationHost:
             slot_key=request.slot_key,
             reference_output_ids=request.reference_output_ids,
             source_class=request.source_class,
+            generation_channel=request.generation_channel,
+            mcp_operation_id=f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}",
         )
         if status.status != ProductJobStatusValue.PLANNED:
             raise AnchorCandidateUnavailable("character_card_candidate_planning_blocked")
@@ -341,6 +363,24 @@ class ProductApiAnchorPackPreparationHost:
         )
         self._record_character_card_retry_usage(stage_key, status.job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
+            generation_metadata = getattr(generation, "metadata", {})
+            mcp_materialization = (
+                generation_metadata.get("mcp_materialization")
+                if isinstance(generation_metadata, dict)
+                else None
+            )
+            handoff_id = (
+                str(mcp_materialization.get("handoff_id") or "").strip()
+                if isinstance(mcp_materialization, dict)
+                else ""
+            )
+            if request.generation_channel == "mcp" and handoff_id:
+                raise AnchorCandidateUnavailable(
+                    "mcp_materialization_pending"
+                    if str(mcp_materialization.get("status") or "").lower() == "pending"
+                    else "mcp_materialization_failed",
+                    mcp_handoff_id=handoff_id,
+                )
             raise AnchorCandidateUnavailable("character_card_candidate_generation_failed")
         candidate, review = self._character_card_candidate_and_review(status.job_id, request)
         self._character_card_reviews[candidate.candidate_id] = review

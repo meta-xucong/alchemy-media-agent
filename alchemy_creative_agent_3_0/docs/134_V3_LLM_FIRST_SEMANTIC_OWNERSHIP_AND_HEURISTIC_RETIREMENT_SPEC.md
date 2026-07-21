@@ -7,6 +7,10 @@ could overrule an already-frozen Human Realism decision.  It applies to every
 template.  It creates no children, apparel, commerce, General, or Photography
 creative recipe.
 
+> **Doc183 boundary:** An MCP materialized artifact is accepted only after the
+> same Brain-owned final prompt, reference contract and shared review path are
+> preserved. MCP never performs semantic repair or heuristic prompt assembly.
+
 ## 1. The defect this closes
 
 The controlled request asked for a real photograph of a person wearing a

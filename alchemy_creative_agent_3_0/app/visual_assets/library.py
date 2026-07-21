@@ -106,6 +106,13 @@ class VisualAssetVersion(_StrictLibraryModel):
     # deliberately not a provider error body, prompt, endpoint, or job ID.
     failure_code: str | None = None
     failure_attempt_count: int = Field(default=0, ge=0, le=3)
+    # The renderer channel is provenance only.  Both channels write through
+    # the same V3 output/review/winner contract and therefore the same card
+    # slots; it never changes the asset's identity semantics.
+    generation_channel: Literal["provider", "mcp"] = "provider"
+    # Opaque receipts used only to resume a blocked local MCP materialization.
+    # They never contain a path, prompt, provider response, or artifact.
+    mcp_handoff_ids: list[str] = Field(default_factory=list)
 
     @field_validator("version_id", "visual_asset_id")
     @classmethod
@@ -845,6 +852,7 @@ class VisualAssetLibraryLifecycleService:
                     else None
                 )
             ),
+            mcp_handoff_ids=list(getattr(result, "mcp_handoff_ids", []) or []),
         )
         existing_versions = [item for item in asset.versions if item.version_id != version.version_id]
         updated = asset.model_copy(
@@ -916,6 +924,7 @@ class VisualAssetLibraryLifecycleService:
         visual_asset_id: str,
         stage: Literal["expression_set", "body_silhouette"],
         body_request: BodySilhouettePublicRequest | None = None,
+        generation_channel: Literal["provider", "mcp"] = "provider",
     ) -> VisualAsset:
         """Resume one Character Card stage through a shared-runtime host."""
 
@@ -940,12 +949,18 @@ class VisualAssetLibraryLifecycleService:
         if not callable(method):
             raise CharacterCardRuntimeUnavailable("character_card_stage_prepare_unavailable")
         if stage == "body_silhouette":
-            result = method(asset=asset, card=card, request=body_request)
+            method_kwargs = {"asset": asset, "card": card, "request": body_request}
+            if generation_channel == "mcp":
+                method_kwargs["generation_channel"] = "mcp"
+            result = method(**method_kwargs)
         else:
             # Expression intent must come from the shared host/Brain.  There is
             # intentionally no browser-side expression dictionary or local
             # default wording to pass here.
-            result = method(asset=asset, card=card)
+            method_kwargs = {"asset": asset, "card": card}
+            if generation_channel == "mcp":
+                method_kwargs["generation_channel"] = "mcp"
+            result = method(**method_kwargs)
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")
         if getattr(result, "status", None) == "review":
@@ -984,6 +999,7 @@ class VisualAssetLibraryLifecycleService:
         owner_scope: str,
         visual_asset_id: str,
         resume: bool = False,
+        generation_channel: Literal["provider", "mcp"] = "provider",
     ) -> VisualAsset:
         """Prepare all five Face Identity slots through the existing host."""
 
@@ -1034,6 +1050,8 @@ class VisualAssetLibraryLifecycleService:
         }
         if resume_pack is not None:
             method_kwargs["resume_from_pack"] = resume_pack
+        if generation_channel == "mcp":
+            method_kwargs["generation_channel"] = "mcp"
         result = method(
             **method_kwargs,
         )
@@ -1068,6 +1086,8 @@ class VisualAssetLibraryLifecycleService:
                 if pack.status != "review"
                 else 0
             ),
+            generation_channel=generation_channel,
+            mcp_handoff_ids=list(getattr(result, "mcp_handoff_ids", []) or []),
         )
         existing_versions = [item for item in asset.versions if item.version_id != version.version_id]
         card = asset.character_card

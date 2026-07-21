@@ -163,9 +163,9 @@ def configure_import_paths(root: Path) -> None:
 
     ``services`` is rooted at the repository, while established V3 modules
     retain absolute imports rooted at both ``alchemy_creative_agent_3_0`` and
-    the compatibility-only ``src_skeleton`` package root. The plugin only
-    needs these source paths to start its planning-only MCP; it does not load
-    a Web Provider, secret, or runtime image route.
+    the compatibility-only ``src_skeleton`` package root. The plugin needs
+    these source paths for its legacy planning MCP and explicit local handoff
+    bridge; it does not load a Web Provider, secret, or runtime image route.
     """
 
     for candidate in (root, root / "alchemy_creative_agent_3_0", root / "src_skeleton"):

@@ -1,5 +1,10 @@
 # Doc131: V3 Codex Native ImageGen Reference Input Parity
 
+> **Doc183 materialization note:** The reference/hash/order parity defined here
+> is also required by the explicit local MCP handoff. The handoff adds no
+> reference interpretation and does not make this legacy planning surface a
+> delivery store.
+
 Status: active developer-preview extension of Doc130.  This is a General-only,
 conversation-only planning surface; it changes neither Web Mode nor any
 Provider, review, retry, delivery, or production gate.

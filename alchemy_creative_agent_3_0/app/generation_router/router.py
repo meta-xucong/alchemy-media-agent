@@ -7,6 +7,7 @@ from .providers import (
     GenerationRequest,
     GenerationResponse,
     MockGenerationProvider,
+    McpMaterializationProvider,
     PlanningOnlyGenerationProvider,
     ProductionImageGenerationProvider,
 )
@@ -18,14 +19,17 @@ class GenerationRouter:
         self,
         provider: GenerationProvider | None = None,
         production_provider: GenerationProvider | None = None,
+        mcp_provider: GenerationProvider | None = None,
     ) -> None:
         production = production_provider or ProductionImageGenerationProvider()
+        mcp = mcp_provider or McpMaterializationProvider()
         self.provider = provider
         self.providers: dict[ProviderStrategy, GenerationProvider] = {
             ProviderStrategy.PLANNING_ONLY: PlanningOnlyGenerationProvider(),
             ProviderStrategy.MOCK_GENERATION: MockGenerationProvider(),
             ProviderStrategy.DEFAULT_IMAGE_PROVIDER: production,
             ProviderStrategy.REFERENCE_CONDITIONED_PROVIDER: production,
+            ProviderStrategy.MCP_MATERIALIZATION: mcp,
         }
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:

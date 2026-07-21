@@ -64,8 +64,8 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3ProjectSnapshot"' in index.text
     assert 'id="v3PersistentDisplayRegion"' in index.text
     assert index.text.count('id="v3PersistentDisplayRegion"') == 1
-    assert "/static/styles.css?v=20260719-v3-frontend-ux" in index.text
-    assert "/static/app.js?v=20260719-v3-frontend-ux-fix2" in index.text
+    assert "/static/styles.css?v=20260721-professional-character-card" in index.text
+    assert "/static/app.js?v=20260721-professional-character-card" in index.text
     assert 'id="v3ProjectOutputBoard"' in index.text
     assert 'id="v3UsefulReferenceBoard"' in index.text
     assert 'id="v3ProjectWorkflow"' in index.text

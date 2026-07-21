@@ -1,4 +1,4 @@
-"""Doc130/131 native ImageGen stdio MCP: canonical prompt projection, no image transport."""
+"""Doc183 shared V3 materialization plus legacy native ImageGen MCP tools."""
 
 from __future__ import annotations
 
@@ -14,9 +14,41 @@ from .contracts import (
     NativeSpecializedImageGenPlanRequest,
 )
 from .facade import CodexNativeImageGenFacade
+from .materialized_bridge import MaterializedBridgeError, V3MaterializedMcpBridge
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "name": "prepare_shared_mcp_materialization",
+        "description": "Read one frozen V3 MCP handoff from localhost. The prompt, references, and rendering parameters are the exact Web Provider contract; the tool does not replan or render.",
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["handoff_id"],
+            "properties": {
+                "handoff_id": {"type": "string"},
+                "v3_base_url": {"type": ["string", "null"]},
+            },
+        },
+    },
+    {
+        "name": "submit_shared_mcp_materialization",
+        "description": "Submit exactly one local Codex ImageGen artifact to a frozen V3 handoff. The shared V3 Provider/output/review/retry/Character Card pipeline consumes it; this tool never writes a candidate or slot itself.",
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["handoff_id", "nonce", "prompt_sha256", "reference_asset_hashes"],
+            "properties": {
+                "handoff_id": {"type": "string"},
+                "nonce": {"type": "string"},
+                "prompt_sha256": {"type": "string"},
+                "reference_asset_hashes": {"type": "array", "items": {"type": "string"}},
+                "artifact_path": {"type": ["string", "null"]},
+                "artifact_base64": {"type": ["string", "null"]},
+                "v3_base_url": {"type": ["string", "null"]},
+            },
+        },
+    },
     {
         "name": "prepare_native_imagegen_plan",
         "description": "Prepare exact canonical V3 GPT Image 2 prompts and admitted reference paths for one explicit Codex Native ImageGen request; the MCP never creates, imports, or stores an image.",
@@ -146,6 +178,30 @@ def _tool_error(exc: CodexNativeImageGenError) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(exc.as_dict(), ensure_ascii=False)}], "isError": True}
 
 
+def _bridge_error(exc: MaterializedBridgeError) -> dict[str, Any]:
+    return {
+        "content": [{"type": "text", "text": json.dumps({"code": exc.code, "message": str(exc)}, ensure_ascii=False)}],
+        "isError": True,
+    }
+
+
+def _prepare_shared_mcp_materialization(args: dict[str, Any]) -> dict[str, Any]:
+    bridge = V3MaterializedMcpBridge(args.get("v3_base_url"))
+    return bridge.get_handoff(str(args.get("handoff_id") or ""))
+
+
+def _submit_shared_mcp_materialization(args: dict[str, Any]) -> dict[str, Any]:
+    bridge = V3MaterializedMcpBridge(args.get("v3_base_url"))
+    return bridge.submit(
+        handoff_id=str(args.get("handoff_id") or ""),
+        nonce=str(args.get("nonce") or ""),
+        prompt_sha256=str(args.get("prompt_sha256") or ""),
+        reference_asset_hashes=[str(item or "") for item in (args.get("reference_asset_hashes") or [])],
+        artifact_path=args.get("artifact_path"),
+        artifact_base64=args.get("artifact_base64"),
+    )
+
+
 def _prepare_native_imagegen_plan(adapter: CodexNativeImageGenFacade, args: dict[str, Any]) -> dict[str, Any]:
     request = NativeImageGenPlanRequest.from_mcp_arguments(args)
     return adapter.prepare_native_imagegen_plan(request)
@@ -176,7 +232,7 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
         result: dict[str, Any] = {
             "protocolVersion": str((request.get("params") or {}).get("protocolVersion") or "2025-03-26"),
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.8.0-doc134-professional-relay"},
+            "serverInfo": {"name": "alchemy-codex-native-imagegen", "version": "0.9.0-doc183-shared-materialization"},
         }
     elif method == "tools/list":
         result = {"tools": TOOL_SCHEMAS}
@@ -189,6 +245,16 @@ def dispatch(adapter: CodexNativeImageGenFacade, request: dict[str, Any]) -> dic
             "prepare_frozen_specialized_native_imagegen_plan": _prepare_frozen_specialized_native_imagegen_plan,
             "prepare_frozen_professional_native_imagegen_plan": _prepare_frozen_professional_native_imagegen_plan,
         }
+        bridge_handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+            "prepare_shared_mcp_materialization": _prepare_shared_mcp_materialization,
+            "submit_shared_mcp_materialization": _submit_shared_mcp_materialization,
+        }
+        if name in bridge_handlers:
+            try:
+                result = _tool_result(bridge_handlers[name](dict(args) if isinstance(args, dict) else {}))
+            except MaterializedBridgeError as exc:
+                result = _bridge_error(exc)
+            return {"jsonrpc": "2.0", "id": request_id, "result": result}
         if name not in handlers:
             result = {"content": [{"type": "text", "text": '{"code":"codex_native_imagegen_unknown_tool"}'}], "isError": True}
         else:

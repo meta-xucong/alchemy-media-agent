@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -209,15 +211,25 @@ class V3ProductRouteHandlers:
         resume = payload.get("resume", False)
         if not isinstance(resume, bool):
             raise ValueError("character_card_resume_flag_invalid")
+        generation_channel = payload.get("generation_channel", "provider")
+        if generation_channel not in {"provider", "mcp"}:
+            raise ValueError("character_card_generation_channel_invalid")
         body_request = None
         if stage == "body_silhouette":
-            allowed = {"stage", "resume", "source_class", "body_reference_asset_id", "body_facts"}
+            allowed = {
+                "stage",
+                "resume",
+                "generation_channel",
+                "source_class",
+                "body_reference_asset_id",
+                "body_facts",
+            }
             if not set(payload).issubset(allowed):
                 raise ValueError("character_card_body_payload_invalid")
             body_request = BodySilhouettePublicRequest.model_validate(
-                {key: value for key, value in payload.items() if key not in {"stage", "resume"}}
+                {key: value for key, value in payload.items() if key not in {"stage", "resume", "generation_channel"}}
             )
-        elif set(payload) - {"stage", "resume"}:
+        elif set(payload) - {"stage", "resume", "generation_channel"}:
             # Expression intent remains Brain/host-owned.  A browser may not
             # inject a local expression dictionary or prompt fragment.
             raise ValueError("character_card_stage_payload_invalid")
@@ -226,6 +238,7 @@ class V3ProductRouteHandlers:
                 owner_scope=self._visual_asset_owner_scope(owner_scope),
                 visual_asset_id=visual_asset_id,
                 resume=resume,
+                generation_channel=generation_channel,
             )
         else:
             asset = self.visual_asset_library_service.prepare_character_card_stage(
@@ -233,6 +246,7 @@ class V3ProductRouteHandlers:
                 visual_asset_id=visual_asset_id,
                 stage=stage,
                 body_request=body_request,
+                generation_channel=generation_channel,
             )
         return {"visual_asset": self._visual_asset_public_record(asset)}
 
@@ -333,8 +347,9 @@ class V3ProductRouteHandlers:
         active_version = asset.active_version()
         latest_version = asset.versions[-1] if asset.versions else None
         latest_pack = getattr(latest_version, "anchor_pack", None) if latest_version is not None else None
-        latest_preparation = (
-            {
+        latest_preparation = None
+        if latest_version is not None:
+            latest_preparation = {
                 "status": latest_version.lifecycle_status,
                 "version_id": latest_version.version_id,
                 "user_activation_confirmed": latest_version.activation_confirmed,
@@ -346,9 +361,12 @@ class V3ProductRouteHandlers:
                     for view in getattr(latest_pack, "anchor_views", [])
                 ],
             }
-            if latest_version is not None
-            else None
-        )
+            generation_channel = str(getattr(latest_version, "generation_channel", "") or "")
+            handoff_ids = list(getattr(latest_version, "mcp_handoff_ids", []) or [])
+            if generation_channel == "mcp":
+                latest_preparation["generation_channel"] = generation_channel
+            if handoff_ids:
+                latest_preparation["mcp_handoff_ids"] = handoff_ids
         if latest_preparation is not None:
             failure_attempt_count = int(getattr(latest_version, "failure_attempt_count", 0) or 0)
             resume_available = bool(
@@ -389,7 +407,10 @@ class V3ProductRouteHandlers:
                         for key, slot in card.body_slots.items()
                     },
                 },
-        }
+            }
+            pending_mcp_handoff_ids = list(getattr(card, "pending_mcp_handoff_ids", []) or [])
+            if pending_mcp_handoff_ids:
+                card_public["pending_mcp_handoff_ids"] = pending_mcp_handoff_ids
         return {
             "visual_asset_id": asset.visual_asset_id,
             "display_name": asset.display_name,
@@ -476,6 +497,9 @@ class V3ProductRouteHandlers:
                     }.items()
                 },
             }
+            pending_mcp_handoff_ids = list(getattr(card, "pending_mcp_handoff_ids", []) or [])
+            if pending_mcp_handoff_ids:
+                card_public["pending_mcp_handoff_ids"] = pending_mcp_handoff_ids
         return record
 
     def post_project_people_asset_prepare(
@@ -630,6 +654,40 @@ class V3ProductRouteHandlers:
 
     def get_job(self, job_id: str) -> dict[str, Any]:
         return self.service.get_job(job_id).model_dump(mode="json")
+
+    def get_mcp_materialization(self, handoff_id: str) -> dict[str, Any]:
+        return self.service.mcp_materialization_store.public_view(handoff_id)
+
+    def post_mcp_materialization_submit(self, handoff_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        allowed = {"nonce", "prompt_sha256", "reference_asset_hashes", "artifact_base64", "artifact_path"}
+        if set(payload) - allowed:
+            raise ValueError("mcp_materialization_submit_payload_invalid")
+        if not isinstance(payload.get("reference_asset_hashes"), list):
+            raise ValueError("mcp_materialization_reference_hashes_required")
+        artifact_base64 = payload.get("artifact_base64")
+        artifact_path = payload.get("artifact_path")
+        if bool(artifact_base64) == bool(artifact_path):
+            raise ValueError("mcp_materialization_single_artifact_required")
+        if artifact_path:
+            path = Path(str(artifact_path))
+            if not path.is_file():
+                raise ValueError("mcp_materialization_artifact_path_unavailable")
+            content = path.read_bytes()
+        else:
+            try:
+                raw = str(artifact_base64 or "")
+                if raw.startswith("data:image/") and "," in raw:
+                    raw = raw.split(",", 1)[1]
+                content = base64.b64decode(raw, validate=True)
+            except Exception as exc:
+                raise ValueError("mcp_materialization_artifact_base64_invalid") from exc
+        return self.service.mcp_materialization_store.submit(
+            handoff_id,
+            nonce=str(payload.get("nonce") or ""),
+            prompt_sha256=str(payload.get("prompt_sha256") or ""),
+            reference_asset_hashes=[str(item or "") for item in payload["reference_asset_hashes"]],
+            artifact_bytes=content,
+        )
 
     def get_creative_job(self, job_id: str) -> dict[str, Any]:
         return self.get_job(job_id)

@@ -6,8 +6,28 @@ description: Plan an explicitly selected Codex Native ImageGen request through l
 # Alchemy Codex Native ImageGen
 
 Use this skill only after the user explicitly selects Alchemy Local Mode / Codex
-Native ImageGen Mode.  Never use it because a Web Mode, Central Brain, gateway,
-or Provider request failed.
+Native ImageGen Mode. Never use it because a Web Mode, Central Brain, gateway,
+or Provider request failed. The materialized path is an explicit alternate
+renderer for the same frozen V3 job; it is not an automatic fallback.
+
+## Materialized Character Card path
+
+When the user selects `generation_channel=mcp` for a trusted Professional
+Character Card stage, V3 creates a shared handoff before any image is
+accepted. Read it with `prepare_shared_mcp_materialization`, then make exactly
+one built-in ImageGen call using its canonical prompt, unchanged reference
+list, and rendering contract. Submit that artifact with
+`submit_shared_mcp_materialization`. Do not add or remove prompt text,
+references, parameters, or metadata. The V3 service then consumes the artifact
+through the ordinary output store, shared Vision review, bounded retry and
+winner selection. Only that verified winner may enter the fixed Character Card
+slot.
+
+If the stage returns multiple opaque handoff IDs, render and submit the
+corresponding candidate handoffs independently. If a stage is blocked, leave
+its public checkpoint in place and resume the same stage later; do not create a
+new local recipe or bypass a missing handoff. A nonce/hash/reference mismatch,
+missing artifact, or unavailable built-in ImageGen is a hard stop.
 
 1. For `general_template`, call `prepare_native_imagegen_plan` exactly once.
    For explicit `ecommerce_template` or `photographer_template`, call
@@ -46,9 +66,12 @@ or Provider request failed.
 4. If the built-in image tool is unavailable, stop with
    `codex_native_imagegen_tool_unavailable`.  Do not call an external renderer
    and do not try to recover an image file from Codex internals.
-5. Tell the user the resulting image is conversation-only and non-certified.
-   Do not create an Alchemy artifact, candidate, review, retry, final delivery,
-   continuation, or production-gate claim.
+5. For the legacy planning tools, tell the user the resulting image is
+   conversation-only and non-certified; do not create an Alchemy artifact,
+   candidate, review, retry, final delivery, continuation, or production-gate
+   claim. For the materialized path, report only the shared V3 stage status and
+   safe handoff/slot state; never claim success before shared Vision has
+   produced a verified winner.
 
 The required provenance is `execution_channel=codex_native_imagegen`,
 `renderer=codex_builtin_imagegen`, and
