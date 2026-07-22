@@ -166,6 +166,29 @@ class ProfessionalModeRuntimeBridge:
         }
 
     @staticmethod
+    def _face_card_evidence_capture_contract() -> dict[str, object]:
+        """Objective for reusable identity-card captures.
+
+        The first Character Card views are not beauty portraits.  They are
+        standardized evidence images that later expression/body/product scenes
+        must be able to rely on.  Keep this generic: the requested age, gender,
+        complexion and identity remain owned by user intent and references.
+        """
+
+        return {
+            "contract_version": "v3_character_card_face_evidence_capture_v1",
+            "required": True,
+            "capture_objective": "standardized_identity_evidence_capture_not_portfolio_or_beauty_portrait",
+            "pose_observability": "balanced_ears_cheeks_shoulders_no_head_turn_or_tilt",
+            "expression_standard": "stage_appropriate_relaxed_neutral_attention_not_model_performance",
+            "materiality_standard": "camera_observed_skin_and_hair_detail_with_minor_real_variation",
+            "background_standard": "plain_white_matte_reference_field_no_vignette_or_glamour_gradient",
+            "lens_standard": "low_distortion_portrait_lens_no_big_eye_or_beauty_perspective",
+            "owner": "remote_v3_llm_brain",
+            "review_owner": "v3_shared_vision",
+        }
+
+    @staticmethod
     def anchor_pack_preparation_metadata(
         *,
         view_role: Literal[
@@ -195,6 +218,9 @@ class ProfessionalModeRuntimeBridge:
                 ),
                 "face_card_image_clarity_contract": (
                     ProfessionalModeRuntimeBridge._face_card_image_clarity_contract()
+                ),
+                "face_card_evidence_capture_contract": (
+                    ProfessionalModeRuntimeBridge._face_card_evidence_capture_contract()
                 ),
                 **(
                     {

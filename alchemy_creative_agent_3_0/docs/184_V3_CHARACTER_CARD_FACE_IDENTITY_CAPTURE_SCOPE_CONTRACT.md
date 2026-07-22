@@ -8,8 +8,11 @@ Doc183. It does not replace their lifecycle, UI, bounded-failure, Provider/MCP
 parity, shared Vision, lineage or activation rules.
 
 Doc186 is the current prompt-minimization authority for later Character Card
-slots. This document's face/head capture scope still governs geometric review;
-Doc186 governs how later view slots should be rendered as Brain-signed
+slots. Doc188 is the current Face Identity evidence-grade capture authority:
+commercial cleanliness means technically clean, bright, crisp and reviewable
+identity evidence, not a polished beauty, fashion, social-media or portfolio
+portrait. This document's face/head capture scope still governs geometric
+review; Doc186 governs how later view slots should be rendered as Brain-signed
 reference-led deltas rather than repeated full person-definition prompts. It
 also governs the post-signing slot-scope gate: a signed Face Identity renderer
 prompt may not leave face/head or upper-shoulder identity capture and become a
@@ -91,6 +94,9 @@ verified.
 - Doc183 Provider/MCP equivalence remains unchanged. Both channels carry the
   same capture scope and pass through the same Brain, Provider, Vision, retry,
   winner and storage contracts.
+- Doc188 supersedes any older ambiguity that treats "commercial clean" as
+  beauty-portrait polish. The Face Identity target is evidence-grade identity
+  capture with real camera materiality.
 - Any older wording that treats "head/upper shoulder" as allowing big-head,
   chest-up, waist-up or half-body framing is superseded by the fixed
   head-and-upper-shoulders card crop in Doc186.

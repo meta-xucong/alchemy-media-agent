@@ -17,6 +17,11 @@ This document supersedes older Character Card wording only where that wording
 implies that every Face Identity, Expression Set, or Body Silhouette slot must
 restate the full person definition inside the renderer prompt.
 
+Doc188 is the current Face Identity evidence-grade capture authority. Its
+interpretation of commercial cleanliness supersedes any wording here that could
+be read as beauty-portrait polish: the first face card must be technically
+clean and reviewable while preserving real camera-observed human materiality.
+
 The new authority is:
 
 ```text

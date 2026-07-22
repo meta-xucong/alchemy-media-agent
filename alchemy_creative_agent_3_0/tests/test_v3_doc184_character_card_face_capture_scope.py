@@ -144,6 +144,16 @@ def test_doc184_character_card_scope_is_typed_and_ordinary_anchor_scope_is_uncha
         ]
         == "commercial_clean_translucent_no_smear_no_dirty_noise"
     )
+    evidence_capture = face["professional_face_identity_quality_contract"][
+        "face_card_evidence_capture_contract"
+    ]
+    assert evidence_capture["contract_version"] == "v3_character_card_face_evidence_capture_v1"
+    assert evidence_capture["capture_objective"] == (
+        "standardized_identity_evidence_capture_not_portfolio_or_beauty_portrait"
+    )
+    assert evidence_capture["pose_observability"] == (
+        "balanced_ears_cheeks_shoulders_no_head_turn_or_tilt"
+    )
     assert (
         face["professional_face_identity_quality_contract"]["body_silhouette_contract"]
         == "not_applicable_until_body_silhouette_stage"
@@ -151,6 +161,9 @@ def test_doc184_character_card_scope_is_typed_and_ordinary_anchor_scope_is_uncha
     assert ordinary["professional_anchor_capture_scope"] == "anchor_pack"
     assert ordinary["professional_face_identity_quality_contract"]["scope"] == "face_identity_anchor_pack"
     assert "geometry_scope" not in ordinary["professional_face_identity_quality_contract"]
+    assert "face_card_evidence_capture_contract" not in ordinary[
+        "professional_face_identity_quality_contract"
+    ]
 
 
 def test_doc184_character_card_later_stages_keep_professional_quality_contract() -> None:
@@ -221,6 +234,10 @@ def test_doc184_brain_schema_and_receipt_carry_face_scope_without_prompt_patchin
     assert "face/head angle only" in payload["remote_response_contract"]
     assert "straight-on, symmetric" in payload["remote_response_contract"]
     assert "no dirty cast, no smear" in payload["remote_response_contract"]
+    assert "evidence-grade standardized identity capture" in payload["remote_response_contract"]
+    assert "rather than a portfolio, fashion" in payload["remote_response_contract"]
+    assert "balanced left/right ear and cheek visibility" in payload["remote_response_contract"]
+    assert "plain white matte reference field" in payload["remote_response_contract"]
     assert "full-body portrait" in payload["remote_response_contract"]
     assert "provider_admission_decision" in schema
     assert "concise_positive_renderer_direction" in payload["remote_response_contract"]
@@ -230,6 +247,9 @@ def test_doc184_brain_schema_and_receipt_carry_face_scope_without_prompt_patchin
     ordinary_schema = ordinary_payload["return_schema"]["canonical_provider_prompts"][0]
     assert "capture_scope" not in ordinary_schema["professional_anchor_view_decision"]
     assert "provider_admission_decision" not in ordinary_schema
+    assert "evidence-grade standardized identity capture" not in ordinary_payload[
+        "remote_response_contract"
+    ]
 
 
 class _ScopeEchoProvider(EcommerceRemoteBrainTestProvider):
