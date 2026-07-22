@@ -268,6 +268,47 @@ def test_doc184_brain_schema_and_receipt_carry_face_scope_without_prompt_patchin
     ]
 
 
+def test_doc188_anchor_view_recovery_names_required_aspect_fields() -> None:
+    request = _anchor_request(capture_scope=CAPTURE_SCOPE)
+    recovery_request = request.model_copy(
+        update={
+            "metadata": {
+                **request.metadata,
+                "professional_anchor_view_contract_recovery": {
+                    "contract_version": "v3_professional_anchor_view_contract_recovery_v1",
+                    "attempt": 1,
+                    "same_frozen_context": True,
+                    "target_view_role": "standard_front",
+                    "capture_scope": CAPTURE_SCOPE,
+                    "required_receipt_fields": [
+                        "capture_scope",
+                        "framing_standard",
+                        "crop_policy",
+                        "torso_scope",
+                        "aspect_ratio_standard",
+                        "source_viewpoint_inheritance",
+                        "front_pose_normalization",
+                        "face_axis_alignment",
+                    ],
+                    "required_prompt_materialization": (
+                        "vertical_2_3_reference_card_aspect_language"
+                    ),
+                },
+            }
+        },
+        deep=True,
+    )
+
+    payload = json.loads(build_remote_payload(recovery_request))
+
+    assert payload["professional_anchor_view_contract_recovery"][
+        "required_prompt_materialization"
+    ] == "vertical_2_3_reference_card_aspect_language"
+    assert "required_receipt_fields" in payload["remote_response_contract"]
+    assert "vertical 2:3 reference-card aspect language" in payload["remote_response_contract"]
+    assert "1024x1536 reference-card composition" in payload["remote_response_contract"]
+
+
 class _ScopeEchoProvider(EcommerceRemoteBrainTestProvider):
     def run(self, request):  # noqa: ANN001
         payload = super().run(request)

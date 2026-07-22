@@ -1184,7 +1184,12 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         response_contract += (
             " The prior answer omitted or changed the required typed Professional anchor-view receipt. Re-answer "
             "the complete canonical prompt contract from the same frozen context exactly once; do not return a diff, "
-            "reuse an incomplete answer, or alter the frozen target role."
+            "reuse an incomplete answer, or alter the frozen target role. Include every required receipt field listed "
+            "in professional_anchor_view_contract_recovery.required_receipt_fields with the exact frozen values from "
+            "the return schema. If required_prompt_materialization is vertical_2_3_reference_card_aspect_language, "
+            "the renderer prompt itself must contain concise vertical 2:3 reference-card aspect language such as "
+            "vertical 2:3 card or 1024x1536 reference-card composition, while preserving the same fixed "
+            "head, neck and upper-shoulder Face Identity crop."
         )
     professional_anchor_contract = context.get("professional_face_identity_quality_contract")
     if isinstance(professional_anchor_contract, dict):

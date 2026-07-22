@@ -126,6 +126,17 @@ The adapter rejects a signed Face Identity prompt that has no visible vertical
 card/aspect-ratio materialization language. This is a scope gate like the
 existing head-and-upper-shoulders gate, not a creative prompt recipe.
 
+When the Brain misses this signed field or omits the prompt-side vertical card
+language, the existing one-shot anchor-view recovery must carry a short
+required-field list and the required prompt materialization string:
+
+```text
+required_prompt_materialization: vertical_2_3_reference_card_aspect_language
+```
+
+Recovery re-asks the same frozen context; it must not invent a new asset plan
+or append a local repair suffix.
+
 ## 5. MCP rendering-size parity
 
 The MCP channel is only a transport outlet. It must not let a local ImageGen

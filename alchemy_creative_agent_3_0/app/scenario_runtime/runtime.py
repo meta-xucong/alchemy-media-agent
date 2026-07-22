@@ -953,16 +953,42 @@ class ScenarioRuntime:
             if isinstance(first_exc, BrainProfessionalAnchorViewDecisionMissing):
                 view_contract = canonical_prompt_context.get("professional_anchor_view_decision")
                 view_contract = view_contract if isinstance(view_contract, dict) else {}
+                required_receipt_fields = [
+                    key
+                    for key in (
+                        "capture_scope",
+                        "framing_standard",
+                        "crop_policy",
+                        "torso_scope",
+                        "aspect_ratio_standard",
+                        "source_viewpoint_inheritance",
+                        "front_pose_normalization",
+                        "face_axis_alignment",
+                    )
+                    if view_contract.get(key)
+                ]
+                recovery_context: dict[str, object] = {
+                    "contract_version": "v3_professional_anchor_view_contract_recovery_v1",
+                    "attempt": 1,
+                    "same_frozen_context": True,
+                    "target_view_role": str(view_contract.get("target_view_role") or ""),
+                }
+                if view_contract.get("capture_scope") == "character_card_face_identity":
+                    recovery_context["capture_scope"] = str(view_contract.get("capture_scope") or "")
+                if required_receipt_fields:
+                    recovery_context["required_receipt_fields"] = required_receipt_fields
+                if (
+                    view_contract.get("aspect_ratio_standard")
+                    == "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
+                ):
+                    recovery_context[
+                        "required_prompt_materialization"
+                    ] = "vertical_2_3_reference_card_aspect_language"
                 recovery_request = signing_request.model_copy(
                     update={
                         "metadata": {
                             **dict(signing_request.metadata or {}),
-                            "professional_anchor_view_contract_recovery": {
-                                "contract_version": "v3_professional_anchor_view_contract_recovery_v1",
-                                "attempt": 1,
-                                "same_frozen_context": True,
-                                "target_view_role": str(view_contract.get("target_view_role") or ""),
-                            },
+                            "professional_anchor_view_contract_recovery": recovery_context,
                         }
                     },
                     deep=True,
