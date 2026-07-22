@@ -5,6 +5,12 @@ materialized local MCP execution. It does not open a production gate, replace
 the Web Provider, or turn the legacy conversation-only MCP planner into a
 second delivery system.
 
+Doc186 is the current Character Card prompt-minimization authority. The
+Provider/MCP parity rule in this document still requires one identical
+Brain-signed canonical prompt and reference set for both channels; for later
+Character Card slots, that canonical prompt is expected to be a reference-led
+slot-delta prompt rather than a repeated full identity description.
+
 ## 1. The decision boundary
 
 V3 has two selectable rendering channels:

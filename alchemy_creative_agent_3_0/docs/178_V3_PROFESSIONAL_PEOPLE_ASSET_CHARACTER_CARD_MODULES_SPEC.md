@@ -22,6 +22,13 @@ whole-person pose or body-proportion review contract. It is a face/head or
 upper-shoulder identity-evidence capture; body geometry is deferred to Body
 Silhouette.
 
+Doc186 is the current prompt-minimization authority for this document's
+Character Card generation stages. Where this document describes later Face
+Identity, Expression Set, or Body Silhouette slots as generated through a
+module-specific workflow, it must be read as a reference-led slot-delta
+workflow: approved references carry stable identity, age, complexion and body
+facts, while the renderer prompt should express only the current slot delta.
+
 Where an earlier Professional document says that the first release contains
 only Face Identity, or that body and expression dimensions are future work,
 this document is the newer authority for the Character Card extension. The

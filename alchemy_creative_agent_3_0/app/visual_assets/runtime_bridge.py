@@ -101,6 +101,71 @@ class ProfessionalModeRuntimeBridge:
         return contract
 
     @staticmethod
+    def _reference_led_slot_delta_contract(
+        *,
+        slot_delta_type: Literal["view_angle", "expression", "body_pose"],
+    ) -> dict[str, object]:
+        return {
+            "contract_version": "v3_reference_led_slot_delta_decision_v1",
+            "required": True,
+            "materialization_mode": "reference_led_slot_delta",
+            "stable_identity_source": "approved_character_card_reference",
+            "prompt_scope": "slot_delta_only",
+            "safety_sensitive_repetition_policy": "avoid_repeating_stable_person_biology",
+            "slot_delta_type": slot_delta_type,
+            "owner": "remote_v3_llm_brain",
+        }
+
+    @staticmethod
+    def _front_pose_normalization_contract() -> dict[str, object]:
+        """Contract for the first reusable Character Card front view.
+
+        A source photo can be slightly angled.  For a reusable Face Identity
+        card, that source angle is evidence of identity only, not an owned
+        viewpoint.  The first slot must establish a standard straight-on
+        capture that later slots can depend on.
+        """
+
+        return {
+            "contract_version": "v3_character_card_front_pose_normalization_v1",
+            "required": True,
+            "source_viewpoint_inheritance": "identity_only_do_not_inherit_source_pose_angle",
+            "front_pose_normalization": "normalize_to_symmetric_camera_facing_front",
+            "face_axis_alignment": "face_midline_vertical_eyes_level_nose_centered",
+            "owner": "remote_v3_llm_brain",
+        }
+
+    @staticmethod
+    def _face_identity_framing_contract() -> dict[str, object]:
+        """Fixed framing for reusable Face Identity card views."""
+
+        return {
+            "contract_version": "v3_character_card_face_framing_standard_v1",
+            "required": True,
+            "framing_standard": "consistent_head_and_upper_shoulders_reference_crop",
+            "crop_policy": "head_top_margin_full_face_neck_and_upper_shoulders_visible",
+            "torso_scope": "upper_shoulders_only_no_half_body_or_big_head_crop",
+            "owner": "remote_v3_llm_brain",
+        }
+
+    @staticmethod
+    def _face_card_image_clarity_contract() -> dict[str, object]:
+        """Commercial cleanliness bar for reusable Face Identity card pixels."""
+
+        return {
+            "contract_version": "v3_character_card_commercial_clarity_v1",
+            "required": True,
+            "clarity_standard": "commercial_clean_translucent_no_smear_no_dirty_noise",
+            "skin_materiality_boundary": "real_skin_texture_without_plastic_or_waxy_smoothing",
+            "minimum_review_scores": {
+                "visual_quality": 0.96,
+                "technical_finish": 0.96,
+                "human_realism": 0.92,
+            },
+            "owner": "shared_v3_visual_review",
+        }
+
+    @staticmethod
     def anchor_pack_preparation_metadata(
         *,
         view_role: Literal[
@@ -125,6 +190,21 @@ class ProfessionalModeRuntimeBridge:
                 "scope": "character_card_face_identity",
                 "geometry_scope": "face_and_head_only",
                 "body_silhouette_contract": "not_applicable_until_body_silhouette_stage",
+                "face_identity_framing_contract": (
+                    ProfessionalModeRuntimeBridge._face_identity_framing_contract()
+                ),
+                "face_card_image_clarity_contract": (
+                    ProfessionalModeRuntimeBridge._face_card_image_clarity_contract()
+                ),
+                **(
+                    {
+                        "front_pose_normalization_contract": (
+                            ProfessionalModeRuntimeBridge._front_pose_normalization_contract()
+                        )
+                    }
+                    if view_role == "standard_front"
+                    else {}
+                ),
             }
         return {
             "professional_mode": True,
@@ -135,6 +215,17 @@ class ProfessionalModeRuntimeBridge:
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
             "professional_face_identity_quality_contract": quality_contract,
+            **(
+                {
+                    "reference_led_slot_delta_contract": (
+                        ProfessionalModeRuntimeBridge._reference_led_slot_delta_contract(
+                            slot_delta_type="view_angle"
+                        )
+                    )
+                }
+                if capture_scope == "character_card_face_identity" and view_role != "standard_front"
+                else {}
+            ),
         }
 
     @staticmethod
@@ -148,6 +239,17 @@ class ProfessionalModeRuntimeBridge:
 
         if stage not in {"expression_set", "body_silhouette"} or not slot_key.strip():
             raise ValueError("character card stage metadata is invalid")
+        quality_contract = ProfessionalModeRuntimeBridge._face_identity_quality_contract()
+        quality_contract = {
+            **quality_contract,
+            "scope": f"character_card_{stage}",
+            "face_identity_binding": "must_use_active_face_identity_module",
+            "module_continuity": "derive_from_active_character_card_identity",
+        }
+        if stage == "expression_set":
+            quality_contract["expression_contract"] = "preserve_identity_while_varying_expression_only"
+        else:
+            quality_contract["body_silhouette_contract"] = "preserve_identity_scale_and_age_appropriate_body_proportion"
         return {
             "contract_version": "professional_character_card_stage_v1",
             "stage": stage,
@@ -156,6 +258,12 @@ class ProfessionalModeRuntimeBridge:
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
             "review_owner": "v3_shared_vision",
+            "professional_face_identity_quality_contract": quality_contract,
+            "reference_led_slot_delta_contract": (
+                ProfessionalModeRuntimeBridge._reference_led_slot_delta_contract(
+                    slot_delta_type="expression" if stage == "expression_set" else "body_pose"
+                )
+            ),
         }
 
     @staticmethod

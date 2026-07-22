@@ -297,6 +297,23 @@ class V3LLMBrainAdapter:
             raise BrainProviderAdmissionDecisionMissing(
                 "Remote Brain did not return the required provider-admission receipt."
             )
+        slot_delta_requirement = _required_reference_led_slot_delta_requirement(request)
+        if slot_delta_requirement and not _matches_reference_led_slot_delta_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+            expected_requirement=slot_delta_requirement,
+        ):
+            raise BrainProviderAdmissionDecisionMissing(
+                "Remote Brain did not return the required reference-led slot-delta receipt."
+            )
+        anchor_prompt_scope_violations = _professional_anchor_prompt_scope_violations(
+            prompts_raw,
+            expected_requirement=professional_anchor_view_requirement,
+        )
+        if anchor_prompt_scope_violations:
+            raise BrainProfessionalAnchorViewDecisionMissing(
+                "Remote Brain signed a Character Card Face Identity prompt outside the frozen face/head slot scope."
+            )
         try:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
@@ -360,6 +377,11 @@ class V3LLMBrainAdapter:
                 ),
                 "professional_anchor_view_decision_required": bool(professional_anchor_view_requirement),
                 "professional_anchor_view_decision_signed": bool(professional_anchor_view_requirement),
+                "professional_anchor_prompt_scope_checked": bool(
+                    professional_anchor_view_requirement
+                    and professional_anchor_view_requirement.get("capture_scope")
+                    == "character_card_face_identity"
+                ),
                 "professional_anchor_view_decisions": (
                     [
                         prompt.professional_anchor_view_decision.model_dump(
@@ -380,6 +402,17 @@ class V3LLMBrainAdapter:
                         if prompt.provider_admission_decision is not None
                     ]
                     if provider_admission_requirement
+                    else []
+                ),
+                "reference_led_slot_delta_decision_required": bool(slot_delta_requirement),
+                "reference_led_slot_delta_decision_signed": bool(slot_delta_requirement),
+                "reference_led_slot_delta_decisions": (
+                    [
+                        prompt.reference_led_slot_delta_decision.model_dump(mode="json")
+                        for prompt in prompts
+                        if prompt.reference_led_slot_delta_decision is not None
+                    ]
+                    if slot_delta_requirement
                     else []
                 ),
             },
@@ -1205,6 +1238,14 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
     capture = str(decision.get("capture_presentation") or "").strip()
     continuity = str(decision.get("capture_continuity") or "").strip()
     capture_scope = str(decision.get("capture_scope") or "").strip()
+    framing_standard = str(decision.get("framing_standard") or "").strip()
+    crop_policy = str(decision.get("crop_policy") or "").strip()
+    torso_scope = str(decision.get("torso_scope") or "").strip()
+    source_viewpoint_inheritance = str(
+        decision.get("source_viewpoint_inheritance") or ""
+    ).strip()
+    front_pose_normalization = str(decision.get("front_pose_normalization") or "").strip()
+    face_axis_alignment = str(decision.get("face_axis_alignment") or "").strip()
     if not (
         decision.get("required") is True
         and version in {
@@ -1248,12 +1289,63 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
         raise BrainProfessionalAnchorViewDecisionMissing(
             "A historical Professional anchor-view requirement cannot claim a v3 continuity decision."
         )
+    if capture_scope == "character_card_face_identity":
+        if (
+            framing_standard != "consistent_head_and_upper_shoulders_reference_crop"
+            or crop_policy != "head_top_margin_full_face_neck_and_upper_shoulders_visible"
+            or torso_scope != "upper_shoulders_only_no_half_body_or_big_head_crop"
+        ):
+            raise BrainProfessionalAnchorViewDecisionMissing(
+                "The frozen Character Card Face Identity framing requirement is missing or contradictory."
+            )
+        if target == "standard_front" and (
+            source_viewpoint_inheritance
+            != "identity_only_do_not_inherit_source_pose_angle"
+            or front_pose_normalization
+            != "normalize_to_symmetric_camera_facing_front"
+            or face_axis_alignment
+            != "face_midline_vertical_eyes_level_nose_centered"
+        ):
+            raise BrainProfessionalAnchorViewDecisionMissing(
+                "The frozen Character Card front-pose normalization requirement is missing or contradictory."
+            )
+    elif any(
+        (
+            framing_standard,
+            crop_policy,
+            torso_scope,
+            source_viewpoint_inheritance,
+            front_pose_normalization,
+            face_axis_alignment,
+        )
+    ):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "Ordinary Professional anchor-view requirements cannot claim Character Card framing fields."
+        )
     return {
         "contract_version": version,
         "target_view_role": target,
         **({"capture_presentation": capture} if capture else {}),
         **({"capture_continuity": continuity} if continuity else {}),
         **({"capture_scope": capture_scope} if capture_scope else {}),
+        **(
+            {
+                "framing_standard": framing_standard,
+                "crop_policy": crop_policy,
+                "torso_scope": torso_scope,
+            }
+            if capture_scope == "character_card_face_identity"
+            else {}
+        ),
+        **(
+            {
+                "source_viewpoint_inheritance": source_viewpoint_inheritance,
+                "front_pose_normalization": front_pose_normalization,
+                "face_axis_alignment": face_axis_alignment,
+            }
+            if capture_scope == "character_card_face_identity" and target == "standard_front"
+            else {}
+        ),
     }
 
 
@@ -1271,12 +1363,20 @@ def _matches_professional_anchor_view_receipts(
     expected_continuity = expected_requirement.get("capture_continuity")
     expected_scope = expected_requirement.get("capture_scope")
     expected_keys = {"contract_version", "target_view_role", "status", "owner"}
-    if expected_capture:
-        expected_keys.add("capture_presentation")
-    if expected_continuity:
-        expected_keys.add("capture_continuity")
-    if expected_scope:
-        expected_keys.add("capture_scope")
+    optional_expected_keys = (
+        "capture_presentation",
+        "capture_continuity",
+        "capture_scope",
+        "framing_standard",
+        "crop_policy",
+        "torso_scope",
+        "source_viewpoint_inheritance",
+        "front_pose_normalization",
+        "face_axis_alignment",
+    )
+    for key in optional_expected_keys:
+        if expected_requirement.get(key):
+            expected_keys.add(key)
     if not isinstance(candidate, list) or len(candidate) != expected_count:
         return False
     return all(
@@ -1288,26 +1388,148 @@ def _matches_professional_anchor_view_receipts(
         == expected_version
         and item["professional_anchor_view_decision"].get("target_view_role")
         == expected_target_view_role
-        and (
-            item["professional_anchor_view_decision"].get("capture_presentation") == expected_capture
-            if expected_capture
-            else "capture_presentation" not in item["professional_anchor_view_decision"]
+        and all(
+            item["professional_anchor_view_decision"].get(key) == expected_requirement.get(key)
+            for key in optional_expected_keys
+            if expected_requirement.get(key)
         )
-        and (
-            item["professional_anchor_view_decision"].get("capture_continuity")
-            == expected_continuity
-            if expected_continuity
-            else "capture_continuity" not in item["professional_anchor_view_decision"]
-        )
-        and (
-            item["professional_anchor_view_decision"].get("capture_scope") == expected_scope
-            if expected_scope
-            else "capture_scope" not in item["professional_anchor_view_decision"]
+        and all(
+            key not in item["professional_anchor_view_decision"]
+            for key in optional_expected_keys
+            if not expected_requirement.get(key)
         )
         and item["professional_anchor_view_decision"].get("status") in {"approved", "rewritten"}
         and item["professional_anchor_view_decision"].get("owner") == "remote_v3_llm_brain"
         for index, item in enumerate(candidate, start=1)
     )
+
+
+def _professional_anchor_prompt_scope_violations(
+    candidate: Any,
+    *,
+    expected_requirement: dict[str, str],
+) -> list[str]:
+    """Reject obvious prompt/channel drift after a signed Character Card receipt.
+
+    The Remote Brain still owns renderer wording.  This is not a local prompt
+    recipe, a child-specific aesthetic list, or a repair patch.  It only
+    verifies that a signed Character Card Face Identity prompt has not left
+    the frozen face/head identity-capture slot and become a body, wardrobe or
+    location scene.  Those channels belong to later modules or the current
+    project prompt, not the reusable Face Identity base.
+    """
+
+    if (
+        not expected_requirement
+        or expected_requirement.get("capture_scope") != "character_card_face_identity"
+    ):
+        return []
+    if not isinstance(candidate, list):
+        return ["canonical_provider_prompts"]
+
+    target = str(expected_requirement.get("target_view_role") or "").strip()
+    forbidden_scope_terms = (
+        "full-body",
+        "full body",
+        "full-length",
+        "full length",
+        "head to toe",
+        "head-to-toe",
+        "whole body",
+        "entire body",
+        "from head to toe",
+        "standing in a",
+        "standing on a",
+        "walking in a",
+        "sunlit park",
+        "park with",
+        "garden",
+        "beach",
+        "street",
+        "forest",
+        "outdoor",
+        "golden backlight",
+        "cinematic focus",
+        "fashion shoot",
+        "body silhouette",
+        "body proportion",
+        "height estimate",
+        "extreme close-up",
+        "tight close-up",
+        "big head",
+        "big-head",
+        "half-body",
+        "half body",
+        "waist-up",
+        "waist up",
+        "chest-up",
+        "chest up",
+        "upper body",
+        "torso",
+    )
+    required_framing_terms = (
+        "head-and-shoulders",
+        "head and shoulders",
+        "head-and-upper-shoulders",
+        "head and upper shoulders",
+        "upper-shoulder",
+        "upper shoulders",
+    )
+    view_requirements = {
+        "standard_front": (
+            "front-facing",
+            "front facing",
+            "front view",
+            "frontal",
+            "standard front",
+            "facing the camera",
+            "directly facing",
+            "straight-on",
+            "straight on",
+        ),
+        "three_quarter": ("three-quarter", "3/4", "45-degree", "45 degree"),
+        "profile": ("profile", "side profile", "side view", "90-degree", "90 degree"),
+        "reverse_three_quarter": (
+            "reverse three-quarter",
+            "rear three-quarter",
+            "back three-quarter",
+            "back 3/4",
+        ),
+        "rear_head": ("rear head", "back of head", "rear view", "back view"),
+    }
+    violations: list[str] = []
+    for index, item in enumerate(candidate, start=1):
+        prompt = str(item.get("prompt") or "") if isinstance(item, dict) else ""
+        normalized = re.sub(r"\s+", " ", prompt.lower()).strip()
+        if not normalized:
+            violations.append(f"output_{index}:empty_prompt")
+            continue
+        leaked = next((term for term in forbidden_scope_terms if term in normalized), "")
+        if leaked:
+            violations.append(f"output_{index}:scope_leak:{leaked}")
+        if not any(term in normalized for term in required_framing_terms):
+            violations.append(f"output_{index}:framing_not_standard")
+        required_view_terms = view_requirements.get(target, ())
+        if required_view_terms and not any(term in normalized for term in required_view_terms):
+            violations.append(f"output_{index}:view_not_materialized:{target}")
+        if target == "standard_front" and (
+            expected_requirement.get("front_pose_normalization")
+            == "normalize_to_symmetric_camera_facing_front"
+        ):
+            straight_terms = ("straight-on", "straight on")
+            alignment_terms = (
+                "symmetric",
+                "symmetrical",
+                "centered",
+                "nose centered",
+                "face midline",
+                "eyes level",
+            )
+            if not any(term in normalized for term in straight_terms):
+                violations.append(f"output_{index}:front_pose_not_straight_on")
+            if not any(term in normalized for term in alignment_terms):
+                violations.append(f"output_{index}:front_axis_not_normalized")
+    return violations
 
 
 def _required_provider_admission_requirement(request: BrainRunRequest) -> dict[str, str]:
@@ -1358,6 +1580,61 @@ def _matches_provider_admission_receipts(
             for key, value in expected_requirement.items()
         )
         and item["provider_admission_decision"].get("status") in {"approved", "rewritten"}
+        for index, item in enumerate(candidate, start=1)
+    )
+
+
+def _required_reference_led_slot_delta_requirement(request: BrainRunRequest) -> dict[str, str]:
+    """Return the exact Doc186 slot-delta contract when required."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    decision = context.get("reference_led_slot_delta_decision")
+    if not isinstance(decision, dict):
+        return {}
+    expected = {
+        "contract_version": "v3_reference_led_slot_delta_decision_v1",
+        "materialization_mode": "reference_led_slot_delta",
+        "stable_identity_source": "approved_character_card_reference",
+        "prompt_scope": "slot_delta_only",
+        "safety_sensitive_repetition_policy": "avoid_repeating_stable_person_biology",
+        "slot_delta_type": str(decision.get("slot_delta_type") or "").strip(),
+        "owner": "remote_v3_llm_brain",
+    }
+    if not (
+        decision.get("required") is True
+        and expected["slot_delta_type"] in {"view_angle", "expression", "body_pose"}
+        and all(decision.get(key) == value for key, value in expected.items())
+        and isinstance(decision.get("frozen_binding"), dict)
+    ):
+        raise BrainProviderAdmissionDecisionMissing(
+            "The frozen reference-led slot-delta requirement is malformed."
+        )
+    return expected
+
+
+def _matches_reference_led_slot_delta_receipts(
+    candidate: Any,
+    *,
+    expected_count: int,
+    expected_requirement: dict[str, str],
+) -> bool:
+    """Validate Doc186 slot-delta parity without inspecting prompt prose."""
+
+    expected_keys = {*expected_requirement, "status"}
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    return all(
+        isinstance(item, dict)
+        and int(item.get("output_index") or 0) == index
+        and isinstance(item.get("reference_led_slot_delta_decision"), dict)
+        and set(item["reference_led_slot_delta_decision"]) == expected_keys
+        and all(
+            item["reference_led_slot_delta_decision"].get(key) == value
+            for key, value in expected_requirement.items()
+        )
+        and item["reference_led_slot_delta_decision"].get("status") in {"approved", "rewritten"}
         for index, item in enumerate(candidate, start=1)
     )
 

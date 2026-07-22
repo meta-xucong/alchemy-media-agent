@@ -742,6 +742,56 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         if isinstance(anchor_view_requirement, dict)
         else ""
     )
+    anchor_framing_standard = (
+        str(anchor_view_requirement.get("framing_standard") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
+    anchor_crop_policy = (
+        str(anchor_view_requirement.get("crop_policy") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
+    anchor_torso_scope = (
+        str(anchor_view_requirement.get("torso_scope") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
+    anchor_source_viewpoint_inheritance = (
+        str(anchor_view_requirement.get("source_viewpoint_inheritance") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
+    anchor_front_pose_normalization = (
+        str(anchor_view_requirement.get("front_pose_normalization") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
+    anchor_face_axis_alignment = (
+        str(anchor_view_requirement.get("face_axis_alignment") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
+    anchor_character_card_framing_valid = (
+        anchor_capture_scope != "character_card_face_identity"
+        or (
+            anchor_framing_standard == "consistent_head_and_upper_shoulders_reference_crop"
+            and anchor_crop_policy == "head_top_margin_full_face_neck_and_upper_shoulders_visible"
+            and anchor_torso_scope == "upper_shoulders_only_no_half_body_or_big_head_crop"
+        )
+    )
+    anchor_front_pose_normalization_valid = (
+        anchor_capture_scope != "character_card_face_identity"
+        or anchor_view_target != "standard_front"
+        or (
+            anchor_source_viewpoint_inheritance
+            == "identity_only_do_not_inherit_source_pose_angle"
+            and anchor_front_pose_normalization
+            == "normalize_to_symmetric_camera_facing_front"
+            and anchor_face_axis_alignment
+            == "face_midline_vertical_eyes_level_nose_centered"
+        )
+    )
     anchor_view_decision_required = bool(
         isinstance(anchor_view_requirement, dict)
         and anchor_view_requirement.get("required") is True
@@ -760,6 +810,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "rear_head",
         }
         and anchor_capture_scope in {"", "character_card_face_identity"}
+        and anchor_character_card_framing_valid
+        and anchor_front_pose_normalization_valid
         and (
             anchor_capture_presentation == "neutral_identity_evidence_capture"
             and anchor_capture_continuity
@@ -791,6 +843,29 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     )
     if isinstance(provider_admission_requirement, dict) and not provider_admission_required:
         raise ValueError("Provider admission requires one valid frozen Brain contract.")
+    slot_delta_requirement = context.get("reference_led_slot_delta_decision")
+    slot_delta_type = (
+        str(slot_delta_requirement.get("slot_delta_type") or "").strip()
+        if isinstance(slot_delta_requirement, dict)
+        else ""
+    )
+    slot_delta_required = bool(
+        isinstance(slot_delta_requirement, dict)
+        and slot_delta_requirement.get("required") is True
+        and slot_delta_requirement.get("contract_version")
+        == "v3_reference_led_slot_delta_decision_v1"
+        and slot_delta_requirement.get("materialization_mode") == "reference_led_slot_delta"
+        and slot_delta_requirement.get("stable_identity_source")
+        == "approved_character_card_reference"
+        and slot_delta_requirement.get("prompt_scope") == "slot_delta_only"
+        and slot_delta_requirement.get("safety_sensitive_repetition_policy")
+        == "avoid_repeating_stable_person_biology"
+        and slot_delta_type in {"view_angle", "expression", "body_pose"}
+        and slot_delta_requirement.get("owner") == "remote_v3_llm_brain"
+        and isinstance(slot_delta_requirement.get("frozen_binding"), dict)
+    )
+    if isinstance(slot_delta_requirement, dict) and not slot_delta_required:
+        raise ValueError("Reference-led slot-delta finalization requires one valid frozen Brain contract.")
     if decision_required and not (
         isinstance(decision_requirement, dict)
         and decision_requirement.get("required") is True
@@ -860,6 +935,25 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 if anchor_capture_scope
                 else {}
             ),
+            **(
+                {
+                    "framing_standard": anchor_framing_standard,
+                    "crop_policy": anchor_crop_policy,
+                    "torso_scope": anchor_torso_scope,
+                }
+                if anchor_capture_scope == "character_card_face_identity"
+                else {}
+            ),
+            **(
+                {
+                    "source_viewpoint_inheritance": anchor_source_viewpoint_inheritance,
+                    "front_pose_normalization": anchor_front_pose_normalization,
+                    "face_axis_alignment": anchor_face_axis_alignment,
+                }
+                if anchor_capture_scope == "character_card_face_identity"
+                and anchor_view_target == "standard_front"
+                else {}
+            ),
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
@@ -869,6 +963,17 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "provider_admission_status": "admitted",
             "prompt_language_mode": "concise_positive_renderer_direction",
             "safety_sensitive_prompt_normalized": "applied",
+            "status": "approved|rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
+    if slot_delta_required:
+        prompt_schema["reference_led_slot_delta_decision"] = {
+            "contract_version": "v3_reference_led_slot_delta_decision_v1",
+            "materialization_mode": "reference_led_slot_delta",
+            "stable_identity_source": "approved_character_card_reference",
+            "prompt_scope": "slot_delta_only",
+            "safety_sensitive_repetition_policy": "avoid_repeating_stable_person_biology",
+            "slot_delta_type": slot_delta_type,
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
@@ -905,6 +1010,21 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "to omit protected user intent. Return the exact provider_admission_decision receipt with provider_admission_status "
             "admitted, prompt_language_mode concise_positive_renderer_direction, safety_sensitive_prompt_normalized applied, "
             "and owner remote_v3_llm_brain."
+        )
+    if slot_delta_required:
+        response_contract += (
+            " This Character Card output is a reference-led slot delta. Treat approved reference images and typed contracts "
+            "as the authority for stable identity, age stage, complexion direction, body continuity and presentation. "
+            "The renderer prompt should primarily describe the current slot change only: "
+            f"{slot_delta_type}. Keep it short, positive and photographic. Do not restate stable person biology, "
+            "height, body build, skin micro-detail, complexion slogans, mouth/teeth anatomy, demographic checklists or "
+            "long contrastive safety wording unless the current slot itself explicitly needs one minimal phrase. "
+            "Do not omit protected identity continuity; carry it through the references rather than by repeating a full "
+            "person-definition prompt. For every output, return the exact schema-only reference_led_slot_delta_decision "
+            "with contract_version v3_reference_led_slot_delta_decision_v1, materialization_mode reference_led_slot_delta, "
+            "stable_identity_source approved_character_card_reference, prompt_scope slot_delta_only, "
+            "safety_sensitive_repetition_policy avoid_repeating_stable_person_biology, the exact slot_delta_type, "
+            "owner remote_v3_llm_brain, and status approved or rewritten."
         )
     if decision_required:
         response_contract += (
@@ -987,10 +1107,18 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             response_contract += (
                 " Also reconcile this as a Character Card Face Identity capture: the frozen view role is a face/head "
                 "angle only. Make facial identity, age-stage presence, camera-observed human materiality and the exact "
-                "angle legible in a clean photographic head or upper-shoulder frame. Do not turn this face stage into "
+                "angle legible in a clean photographic head-and-upper-shoulders reference frame with a fixed reusable "
+                "crop: head top margin, full face, neck and upper shoulders visible, never a big-head crop, half-body "
+                "crop, torso portrait or waist-up frame. Do not turn this face stage into "
                 "a full-body portrait, body-proportion measurement, height estimate or Body Silhouette pose contract. "
+                "For the standard_front slot, preserve the person's identity but do not inherit a slightly angled source "
+                "viewpoint as the final card pose; normalize it into a straight-on, symmetric, camera-facing front capture "
+                "with the face midline vertical, eyes level and nose centered. Keep the image commercially clean and "
+                "translucent: crisp photographic detail, clean white/high-key neutrality, no dirty cast, no smear, no "
+                "waxy smoothing, no beauty-filter haze, and real skin texture at the visible scale. "
                 "Keep the Remote Brain as the sole author of the complete prompt and return capture_scope "
-                "character_card_face_identity in the typed receipt. This is a semantic scope boundary, not a local "
+                "character_card_face_identity plus the exact frozen framing fields in the typed receipt; for standard_front "
+                "also return the exact frozen front-pose-normalization fields. This is a semantic scope boundary, not a local "
                 "prompt recipe; body geometry is deferred to the Body Silhouette stage."
             )
         elif anchor_capture_presentation:
@@ -1048,7 +1176,9 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "perfect, poreless, retouched, pageant, fashion, or beauty-app face. This is a semantic quality requirement, "
             "not a static prompt recipe; keep the selected view and user-owned styling intact. When the current request "
             "owns an age direction, resolve the whole-person developmental stage coherently rather than altering only "
-            "facial scale or polish."
+            "facial scale or polish. For Character Card Face Identity captures, commercial cleanliness is part of the "
+            "quality contract: the face-card pixels must read clean, bright, crisp and translucent without dirty noise, "
+            "blurred/smeared skin, waxy smoothing or plastic shine, while still preserving real camera-observed skin material."
         )
     payload: dict[str, object] = {
         "task": "finalize_canonical_image_provider_prompts",

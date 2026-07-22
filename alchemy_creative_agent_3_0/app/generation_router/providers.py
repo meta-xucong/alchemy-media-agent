@@ -5048,9 +5048,78 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "reference_assets": [dict(item or {}) for item in reference_assets],
             "rendering_contract": contract,
         }
+        frozen_context = self._existing_mcp_handoff_context(
+            request,
+            current_context=context,
+            current_reference_assets=reference_assets,
+            current_rendering_contract=contract,
+        )
+        if frozen_context is not None:
+            context = frozen_context
+            reference_assets = [dict(item or {}) for item in context.get("reference_assets", [])]
+            variables["generation_prompt"] = str(context.get("canonical_prompt") or "")
+            variables["provider_prompt_sha256"] = str(context.get("prompt_sha256") or "")
+            variables["provider_prompt_chars"] = len(str(context.get("canonical_prompt") or ""))
+            variables["provider_prompt_materialization"] = "v3_mcp_frozen_handoff_resume"
         variables["mcp_materialization_context"] = context
         prompt_plan = app_request.prompt_plan.model_copy(update={"variables": variables})
         return app_request.model_copy(update={"prompt_plan": prompt_plan}), provider_name, reference_assets
+
+    def _existing_mcp_handoff_context(
+        self,
+        request: GenerationRequest,
+        *,
+        current_context: dict[str, Any],
+        current_reference_assets: list[dict[str, Any]],
+        current_rendering_contract: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        materialization = request.metadata.get("mcp_materialization")
+        if not isinstance(materialization, dict):
+            return None
+        handoff_id = str(materialization.get("handoff_id") or "").strip()
+        if not handoff_id:
+            return None
+        handoff = self.handoff_store.get(handoff_id)
+        if handoff is None:
+            raise ProviderRuntimeError(
+                "MCP materialization handoff is missing.",
+                provider=self.provider_name,
+                detail={"failure_code": "mcp_materialization_not_found", "handoff_id": handoff_id},
+            )
+        if str(handoff.get("operation_id") or "") != str(current_context.get("operation_id") or ""):
+            raise ProviderRuntimeError(
+                "MCP materialization operation does not match the current stage.",
+                provider=self.provider_name,
+                detail={"failure_code": "mcp_materialization_operation_mismatch", "handoff_id": handoff_id},
+            )
+        expected_hashes = list(handoff.get("reference_asset_hashes") or [])
+        current_hashes = self.handoff_store._reference_hashes(current_reference_assets)
+        if current_hashes != expected_hashes:
+            raise ProviderRuntimeError(
+                "MCP materialization references do not match the current stage.",
+                provider=self.provider_name,
+                detail={"failure_code": "mcp_materialization_reference_mismatch", "handoff_id": handoff_id},
+            )
+        handoff_contract = dict(handoff.get("rendering_contract") or {})
+        comparable_keys = {"size", "quality", "output_format", "count", "api_operation"}
+        if {key: handoff_contract.get(key) for key in comparable_keys} != {
+            key: current_rendering_contract.get(key) for key in comparable_keys
+        }:
+            raise ProviderRuntimeError(
+                "MCP materialization rendering contract does not match the current stage.",
+                provider=self.provider_name,
+                detail={"failure_code": "mcp_materialization_rendering_contract_mismatch", "handoff_id": handoff_id},
+            )
+        return {
+            "operation_id": handoff["operation_id"],
+            "canonical_prompt": handoff["canonical_prompt"],
+            "prompt_sha256": handoff["prompt_sha256"],
+            "reference_assets": [dict(item or {}) for item in handoff.get("reference_assets", [])],
+            "reference_asset_hashes": expected_hashes,
+            "rendering_contract": handoff_contract,
+            "handoff_id": handoff_id,
+            "resume_from_handoff": True,
+        }
 
     def _run_app_provider_with_timeout_retry(
         self,
@@ -5069,13 +5138,16 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 detail={"failure_code": "mcp_materialization_contract_incomplete"},
             )
         try:
-            handoff = self.handoff_store.ensure_pending(
-                operation_id=str(context.get("operation_id") or ""),
-                prompt=str(context.get("canonical_prompt") or ""),
-                prompt_sha256=str(context.get("prompt_sha256") or ""),
-                reference_assets=list(context.get("reference_assets") or []),
-                rendering_contract=dict(context.get("rendering_contract") or {}),
-            )
+            handoff_id = str(context.get("handoff_id") or "").strip()
+            handoff = self.handoff_store.get(handoff_id) if handoff_id else None
+            if handoff is None:
+                handoff = self.handoff_store.ensure_pending(
+                    operation_id=str(context.get("operation_id") or ""),
+                    prompt=str(context.get("canonical_prompt") or ""),
+                    prompt_sha256=str(context.get("prompt_sha256") or ""),
+                    reference_assets=list(context.get("reference_assets") or []),
+                    rendering_contract=dict(context.get("rendering_contract") or {}),
+                )
             artifact = self.handoff_store.consume(str(handoff["handoff_id"]))
         except McpMaterializationError as exc:
             code = exc.code

@@ -12,6 +12,11 @@ The implementation keeps the existing shared Brain → Provider → Vision →
 bounded retry → winner/history path. It adds no provider, prompt builder,
 reviewer, retry engine, or image store.
 
+Doc186 now governs renderer-prompt shape for later Character Card slots. This
+handoff's "no prompt builder" rule remains unchanged: local code still cannot
+rewrite prompts. The Remote Brain must instead sign reference-led slot-delta
+prompts for later face views, Expression Set and Body Silhouette.
+
 ## Implemented contract
 
 - Face Identity preserves the historical three-view activation contract and

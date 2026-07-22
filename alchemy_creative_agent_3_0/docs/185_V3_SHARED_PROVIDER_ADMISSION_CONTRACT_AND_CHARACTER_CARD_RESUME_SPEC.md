@@ -5,6 +5,12 @@ admission gap exposed by the local Character Card Face Identity resume. It
 extends Docs 178, 183 and 184 without creating a new image channel, reviewer,
 retry budget or storage path.
 
+Doc186 is the current prompt-minimization authority for later Character Card
+slots. Provider-admission normalization remains Brain-owned, but later slots
+must prefer reference-led slot-delta prompts so stable person biology,
+complexion, body and safety-sensitive details are not repeatedly restated in
+renderer prose.
+
 ## 1. Problem and boundary
 
 The Remote Brain correctly received the Character Card face-only capture scope,

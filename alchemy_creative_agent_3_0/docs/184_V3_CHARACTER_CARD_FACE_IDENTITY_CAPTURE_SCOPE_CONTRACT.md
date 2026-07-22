@@ -7,6 +7,22 @@ Character Card Face Identity module. It extends Doc178, Doc180, Doc182 and
 Doc183. It does not replace their lifecycle, UI, bounded-failure, Provider/MCP
 parity, shared Vision, lineage or activation rules.
 
+Doc186 is the current prompt-minimization authority for later Character Card
+slots. This document's face/head capture scope still governs geometric review;
+Doc186 governs how later view slots should be rendered as Brain-signed
+reference-led deltas rather than repeated full person-definition prompts. It
+also governs the post-signing slot-scope gate: a signed Face Identity renderer
+prompt may not leave face/head or upper-shoulder identity capture and become a
+full-body, outdoor, wardrobe, lifestyle, height-estimation or Body Silhouette
+scene.
+
+Doc186 also supersedes any older ambiguity about Face Identity framing or
+front-pose inheritance: every Face Identity slot uses a fixed
+head-and-upper-shoulders reference crop, and `face.front` must normalize a
+slightly angled source portrait into a true straight-on standard front card.
+The source viewpoint is identity evidence only; it is not an owned reusable
+card pose.
+
 The shared execution path remains the same. The capture contract is different:
 
 ```text
@@ -40,8 +56,11 @@ face_view_scope
 
 The browser cannot submit prompt prose or choose this scope. The Remote Brain
 still authors the complete canonical prompt. The scope means a clean
-photographic head or upper-shoulder identity frame for the frozen angle. It
-does not authorize a local prompt suffix or a face-feature recipe.
+photographic head-and-upper-shoulders identity frame for the frozen angle:
+head top margin, full face, neck and upper shoulders visible. It does not
+authorize a local prompt suffix, a face-feature recipe, a big-head crop,
+half-body/waist-up frame, or inherited source pose angle for the standard
+front slot.
 
 ## Review boundary
 
@@ -50,6 +69,13 @@ face localization and the existing identity/materiality/quality dimensions.
 `pose_compliance` is not required for this face-only capture because body
 geometry belongs to Body Silhouette. Ordinary Anchor Pack review continues to
 require the historical pose dimension.
+
+Because Face Identity images are reusable bases for the whole Character Card,
+their commercial cleanliness bar is stricter than ordinary pass/warning
+status. The shared review score card must meet the Doc186 face-card commercial
+clarity floor for visual quality, technical finish and human realism; otherwise
+the candidate remains rejected even when the ordinary shared review result is
+verified.
 
 ## Superseded wording
 
@@ -65,6 +91,9 @@ require the historical pose dimension.
 - Doc183 Provider/MCP equivalence remains unchanged. Both channels carry the
   same capture scope and pass through the same Brain, Provider, Vision, retry,
   winner and storage contracts.
+- Any older wording that treats "head/upper shoulder" as allowing big-head,
+  chest-up, waist-up or half-body framing is superseded by the fixed
+  head-and-upper-shoulders card crop in Doc186.
 
 ## Non-regression rules
 

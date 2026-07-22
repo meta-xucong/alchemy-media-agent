@@ -169,6 +169,24 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
     # explicitly limiting geometric review to the face/head capture scope.
     # Ordinary Anchor Pack records omit this field and retain legacy scope.
     capture_scope: Literal["character_card_face_identity"] | None = None
+    # Required by the adapter for Character Card Face Identity.  It fixes
+    # reusable face-card crop consistency without making a local renderer
+    # prompt recipe or changing ordinary Anchor Pack behavior.
+    framing_standard: Literal["consistent_head_and_upper_shoulders_reference_crop"] | None = None
+    crop_policy: Literal["head_top_margin_full_face_neck_and_upper_shoulders_visible"] | None = None
+    torso_scope: Literal["upper_shoulders_only_no_half_body_or_big_head_crop"] | None = None
+    # Required only for Character Card ``standard_front``.  Source images may
+    # be slightly angled; that angle is identity evidence only, not an owned
+    # front-card viewpoint.
+    source_viewpoint_inheritance: Literal[
+        "identity_only_do_not_inherit_source_pose_angle"
+    ] | None = None
+    front_pose_normalization: Literal[
+        "normalize_to_symmetric_camera_facing_front"
+    ] | None = None
+    face_axis_alignment: Literal[
+        "face_midline_vertical_eyes_level_nose_centered"
+    ] | None = None
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]
 
@@ -185,6 +203,24 @@ class BrainProviderAdmissionDecision(V3BaseModel):
     provider_admission_status: Literal["admitted"]
     prompt_language_mode: Literal["concise_positive_renderer_direction"]
     safety_sensitive_prompt_normalized: Literal["applied"]
+    status: Literal["approved", "rewritten"]
+    owner: Literal["remote_v3_llm_brain"]
+
+
+class BrainReferenceLedSlotDeltaDecision(V3BaseModel):
+    """Receipt that later Character Card slots are reference-led deltas.
+
+    The receipt is schema evidence only.  It proves the Brain intentionally
+    kept stable person facts in approved references and typed contracts rather
+    than restating them as renderer prose for every slot.
+    """
+
+    contract_version: Literal["v3_reference_led_slot_delta_decision_v1"]
+    materialization_mode: Literal["reference_led_slot_delta"]
+    stable_identity_source: Literal["approved_character_card_reference"]
+    prompt_scope: Literal["slot_delta_only"]
+    safety_sensitive_repetition_policy: Literal["avoid_repeating_stable_person_biology"]
+    slot_delta_type: Literal["view_angle", "expression", "body_pose"]
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]
 
@@ -225,6 +261,9 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     # receipt because its age-sensitive reference prompt must be concise and
     # positively authored before either renderer channel can be used.
     provider_admission_decision: BrainProviderAdmissionDecision | None = None
+    # Required for later Character Card slots under Doc186. Historical and
+    # first-front identity-defining prompts remain readable without it.
+    reference_led_slot_delta_decision: BrainReferenceLedSlotDeltaDecision | None = None
 
     @field_validator("prompt")
     @classmethod

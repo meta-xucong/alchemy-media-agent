@@ -163,6 +163,61 @@ class EcommerceRemoteBrainTestProvider:
             if isinstance(anchor_view_requirement, dict)
             else ""
         )
+        anchor_capture_scope = (
+            str(anchor_view_requirement.get("capture_scope") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        anchor_framing_standard = (
+            str(anchor_view_requirement.get("framing_standard") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        anchor_crop_policy = (
+            str(anchor_view_requirement.get("crop_policy") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        anchor_torso_scope = (
+            str(anchor_view_requirement.get("torso_scope") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        anchor_source_viewpoint_inheritance = (
+            str(anchor_view_requirement.get("source_viewpoint_inheritance") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        anchor_front_pose_normalization = (
+            str(anchor_view_requirement.get("front_pose_normalization") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        anchor_face_axis_alignment = (
+            str(anchor_view_requirement.get("face_axis_alignment") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
+        anchor_character_card_framing_valid = (
+            anchor_capture_scope != "character_card_face_identity"
+            or (
+                anchor_framing_standard == "consistent_head_and_upper_shoulders_reference_crop"
+                and anchor_crop_policy == "head_top_margin_full_face_neck_and_upper_shoulders_visible"
+                and anchor_torso_scope == "upper_shoulders_only_no_half_body_or_big_head_crop"
+            )
+        )
+        anchor_front_pose_normalization_valid = (
+            anchor_capture_scope != "character_card_face_identity"
+            or anchor_view_target != "standard_front"
+            or (
+                anchor_source_viewpoint_inheritance
+                == "identity_only_do_not_inherit_source_pose_angle"
+                and anchor_front_pose_normalization
+                == "normalize_to_symmetric_camera_facing_front"
+                and anchor_face_axis_alignment
+                == "face_midline_vertical_eyes_level_nose_centered"
+            )
+        )
         requires_anchor_view_decision = bool(
             isinstance(anchor_view_requirement, dict)
             and anchor_view_requirement.get("required") is True
@@ -172,7 +227,11 @@ class EcommerceRemoteBrainTestProvider:
                 "v3_professional_anchor_view_decision_v3",
             }
             and anchor_view_requirement.get("owner") == "remote_v3_llm_brain"
-            and anchor_view_target in {"standard_front", "three_quarter", "profile"}
+            and anchor_view_target
+            in {"standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"}
+            and anchor_capture_scope in {"", "character_card_face_identity"}
+            and anchor_character_card_framing_valid
+            and anchor_front_pose_normalization_valid
             and (
                 anchor_capture_presentation == "neutral_identity_evidence_capture"
                 and anchor_capture_continuity
@@ -201,12 +260,63 @@ class EcommerceRemoteBrainTestProvider:
             and provider_admission_requirement.get("safety_sensitive_prompt_normalized") == "applied"
             and provider_admission_requirement.get("owner") == "remote_v3_llm_brain"
         )
+        slot_delta_requirement = (
+            context.get("reference_led_slot_delta_decision") if isinstance(context, dict) else None
+        )
+        slot_delta_type = (
+            str(slot_delta_requirement.get("slot_delta_type") or "").strip()
+            if isinstance(slot_delta_requirement, dict)
+            else ""
+        )
+        requires_slot_delta_decision = bool(
+            isinstance(slot_delta_requirement, dict)
+            and slot_delta_requirement.get("required") is True
+            and slot_delta_requirement.get("contract_version")
+            == "v3_reference_led_slot_delta_decision_v1"
+            and slot_delta_requirement.get("materialization_mode") == "reference_led_slot_delta"
+            and slot_delta_requirement.get("stable_identity_source")
+            == "approved_character_card_reference"
+            and slot_delta_requirement.get("prompt_scope") == "slot_delta_only"
+            and slot_delta_requirement.get("safety_sensitive_repetition_policy")
+            == "avoid_repeating_stable_person_biology"
+            and slot_delta_type in {"view_angle", "expression", "body_pose"}
+            and slot_delta_requirement.get("owner") == "remote_v3_llm_brain"
+        )
+        character_card_face_prompt = {
+            "standard_front": (
+                "Clean straight-on front-facing, symmetric, centered face-midline identity reference portrait; "
+                "eyes level and nose centered, consistent head-and-upper-shoulders crop on a plain white studio "
+                "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
+            ),
+            "three_quarter": (
+                "Clean three-quarter head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
+            ),
+            "profile": (
+                "Clean side profile head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
+            ),
+            "reverse_three_quarter": (
+                "Clean reverse three-quarter head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
+            ),
+            "rear_head": (
+                "Clean rear head view head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "background, same person hair and head shape, natural camera-observed human materiality, crisp commercial clean finish."
+            ),
+        }.get(anchor_view_target)
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
                 "prompt": (
-                    f"Remote Brain approved complete product image {index}: preserve the supplied product facts, "
-                    "reference truth, and explicit user constraints in one coherent photographic image."
+                    character_card_face_prompt
+                    if requires_anchor_view_decision
+                    and anchor_capture_scope == "character_card_face_identity"
+                    and character_card_face_prompt
+                    else (
+                        f"Remote Brain approved complete product image {index}: preserve the supplied product facts, "
+                        "reference truth, and explicit user constraints in one coherent photographic image."
+                    )
                 ),
                 "review_status": "approved",
                 **({"semantic_preflight_status": "approved"} if requires_human_preflight else {}),
@@ -277,6 +387,30 @@ class EcommerceRemoteBrainTestProvider:
                                 if anchor_capture_continuity
                                 else {}
                             ),
+                            **(
+                                {"capture_scope": anchor_capture_scope}
+                                if anchor_capture_scope
+                                else {}
+                            ),
+                            **(
+                                {
+                                    "framing_standard": anchor_framing_standard,
+                                    "crop_policy": anchor_crop_policy,
+                                    "torso_scope": anchor_torso_scope,
+                                }
+                                if anchor_capture_scope == "character_card_face_identity"
+                                else {}
+                            ),
+                            **(
+                                {
+                                    "source_viewpoint_inheritance": anchor_source_viewpoint_inheritance,
+                                    "front_pose_normalization": anchor_front_pose_normalization,
+                                    "face_axis_alignment": anchor_face_axis_alignment,
+                                }
+                                if anchor_capture_scope == "character_card_face_identity"
+                                and anchor_view_target == "standard_front"
+                                else {}
+                            ),
                             "status": "approved",
                             "owner": "remote_v3_llm_brain",
                         }
@@ -296,6 +430,22 @@ class EcommerceRemoteBrainTestProvider:
                         }
                     }
                     if requires_provider_admission_decision
+                    else {}
+                ),
+                **(
+                    {
+                        "reference_led_slot_delta_decision": {
+                            "contract_version": "v3_reference_led_slot_delta_decision_v1",
+                            "materialization_mode": "reference_led_slot_delta",
+                            "stable_identity_source": "approved_character_card_reference",
+                            "prompt_scope": "slot_delta_only",
+                            "safety_sensitive_repetition_policy": "avoid_repeating_stable_person_biology",
+                            "slot_delta_type": slot_delta_type,
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_slot_delta_decision
                     else {}
                 ),
             }

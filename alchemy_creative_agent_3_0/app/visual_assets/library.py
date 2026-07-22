@@ -1029,11 +1029,12 @@ class VisualAssetLibraryLifecycleService:
             preparation_intent=asset.preparation_intent,
             status="draft",
         )
+        resume_version = None
         resume_pack = None
         if resume:
-            resume_pack = next(
+            resume_version = next(
                 (
-                    version.anchor_pack
+                    version
                     for version in reversed(asset.versions)
                     if version.lifecycle_status == "failed"
                     and version.anchor_pack is not None
@@ -1041,6 +1042,7 @@ class VisualAssetLibraryLifecycleService:
                 ),
                 None,
             )
+            resume_pack = resume_version.anchor_pack if resume_version is not None else None
             if resume_pack is None:
                 raise ValueError("character_card_face_resume_checkpoint_missing")
         method_kwargs = {
@@ -1052,6 +1054,8 @@ class VisualAssetLibraryLifecycleService:
             method_kwargs["resume_from_pack"] = resume_pack
         if generation_channel == "mcp":
             method_kwargs["generation_channel"] = "mcp"
+            if resume_version is not None:
+                method_kwargs["pending_mcp_handoff_ids"] = list(resume_version.mcp_handoff_ids)
         result = method(
             **method_kwargs,
         )

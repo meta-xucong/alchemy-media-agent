@@ -1368,6 +1368,12 @@ class ScenarioRuntime:
                 quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
                 if isinstance(quality_contract, dict):
                     context["professional_face_identity_quality_contract"] = dict(quality_contract)
+                slot_delta_contract = planning_metadata.get("reference_led_slot_delta_contract")
+                if isinstance(slot_delta_contract, dict):
+                    context["reference_led_slot_delta_decision"] = {
+                        **dict(slot_delta_contract),
+                        "frozen_binding": dict(context.get("frozen_binding") or {}),
+                    }
             if not isinstance(context.get("professional_face_identity_quality_contract"), dict):
                 raise CapabilityActivationError("professional_face_identity_quality_contract_missing")
             if request.metadata.get("professional_anchor_pack_preparation") is True:
@@ -1405,6 +1411,38 @@ class ScenarioRuntime:
                 if capture_scope != "anchor_pack":
                     context["professional_anchor_view_decision"]["capture_scope"] = capture_scope
                 if capture_scope == "character_card_face_identity":
+                    quality_contract = (
+                        planning_metadata.get("professional_face_identity_quality_contract")
+                        if isinstance(planning_metadata, dict)
+                        else {}
+                    )
+                    quality_contract = quality_contract if isinstance(quality_contract, dict) else {}
+                    framing_contract = quality_contract.get("face_identity_framing_contract")
+                    framing_contract = framing_contract if isinstance(framing_contract, dict) else {}
+                    if framing_contract.get("required") is True:
+                        context["professional_anchor_view_decision"].update(
+                            {
+                                "framing_standard": framing_contract.get("framing_standard"),
+                                "crop_policy": framing_contract.get("crop_policy"),
+                                "torso_scope": framing_contract.get("torso_scope"),
+                            }
+                        )
+                    front_pose_contract = quality_contract.get("front_pose_normalization_contract")
+                    front_pose_contract = front_pose_contract if isinstance(front_pose_contract, dict) else {}
+                    if target_view_role == "standard_front" and front_pose_contract.get("required") is True:
+                        context["professional_anchor_view_decision"].update(
+                            {
+                                "source_viewpoint_inheritance": front_pose_contract.get(
+                                    "source_viewpoint_inheritance"
+                                ),
+                                "front_pose_normalization": front_pose_contract.get(
+                                    "front_pose_normalization"
+                                ),
+                                "face_axis_alignment": front_pose_contract.get(
+                                    "face_axis_alignment"
+                                ),
+                            }
+                        )
                     # Face Identity references can describe an age-sensitive
                     # person. The Brain must explicitly normalize the final
                     # renderer direction before either Provider or MCP sees
@@ -1419,6 +1457,18 @@ class ScenarioRuntime:
                         "owner": "remote_v3_llm_brain",
                         "frozen_binding": dict(context.get("frozen_binding") or {}),
                     }
+            elif request.metadata.get("professional_character_card_preparation") is True:
+                if not isinstance(context.get("reference_led_slot_delta_decision"), dict):
+                    raise CapabilityActivationError("reference_led_slot_delta_contract_missing")
+                context["provider_admission_decision"] = {
+                    "required": True,
+                    "contract_version": "v3_provider_admission_decision_v1",
+                    "provider_admission_status": "admitted",
+                    "prompt_language_mode": "concise_positive_renderer_direction",
+                    "safety_sensitive_prompt_normalized": "applied",
+                    "owner": "remote_v3_llm_brain",
+                    "frozen_binding": dict(context.get("frozen_binding") or {}),
+                }
         return context
 
     @staticmethod

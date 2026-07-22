@@ -360,6 +360,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     source_class: BodySourceClass | None = None
     consent_provenance_id: str | None = None
     generation_channel: Literal["provider", "mcp"] = "provider"
+    mcp_handoff_id: str | None = None
     candidate_count: Literal[3] = 3
 
     @field_validator("project_id", "people_asset_id", "card_version_id", "user_intent")

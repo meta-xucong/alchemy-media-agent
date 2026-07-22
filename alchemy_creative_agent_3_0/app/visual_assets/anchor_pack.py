@@ -52,6 +52,7 @@ class AnchorGenerationRequest(V3BaseModel):
     reference_strategy: Literal["serial_anchor_pack_root_reuse_v1"] = "serial_anchor_pack_root_reuse_v1"
     generation_channel: Literal["provider", "mcp"] = "provider"
     mcp_operation_id: str | None = None
+    mcp_handoff_id: str | None = None
     # The shared execution path needs to know which geometric contract owns
     # this capture. Character Card face views are face/head evidence only;
     # the ordinary Anchor Pack keeps its historical whole-person contract.
@@ -115,6 +116,7 @@ class AnchorPackPreparationRequest(V3BaseModel):
     canonical_prompt_hash: str | None = None
     face_view_scope: Literal["base", "character_card"] = "base"
     generation_channel: Literal["provider", "mcp"] = "provider"
+    pending_mcp_handoff_ids: list[str] = Field(default_factory=list)
 
     @field_validator("brain_plan_id", "canonical_prompt_hash", "preparation_intent")
     @classmethod
@@ -504,6 +506,12 @@ class AnchorPackPreparationService:
             mcp_operation_id=(
                 f"{request.asset.people_asset_id}:{view_role}:{candidate_index}"
                 if request.generation_channel == "mcp"
+                else None
+            ),
+            mcp_handoff_id=(
+                request.pending_mcp_handoff_ids[candidate_index - 1]
+                if request.generation_channel == "mcp"
+                and 0 <= candidate_index - 1 < len(request.pending_mcp_handoff_ids)
                 else None
             ),
             capture_scope=(

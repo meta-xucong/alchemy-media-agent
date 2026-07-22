@@ -99,11 +99,12 @@ class _SharedProductService:
         score_card = {
             "same_person_readability": 0.90 + len(self.requests) / 1000,
             "distinctive_feature_readability": 0.91,
-            "human_realism": 0.90,
+            "human_realism": 0.94,
             "pose_compliance": 0.92,
-            "visual_quality": 0.89,
+            "visual_quality": 0.97,
+            "technical_finish": 0.97,
             "ai_overperfection_penalty": 0.04,
-            "overall": 0.90,
+            "overall": 0.94,
         }
         self.jobs[job_id] = SimpleNamespace(
             generation_result=SimpleNamespace(

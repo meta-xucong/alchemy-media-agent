@@ -57,6 +57,11 @@ class ProductApiAnchorPackPreparationHost:
         "visual_quality",
         "ai_overperfection_penalty",
     }
+    _CHARACTER_CARD_FACE_CLARITY_FLOORS = {
+        "visual_quality": 0.96,
+        "technical_finish": 0.96,
+        "human_realism": 0.92,
+    }
 
     def __init__(self, service: V3ProductApiService) -> None:
         self.product_service = service
@@ -97,6 +102,7 @@ class ProductApiAnchorPackPreparationHost:
         root_source_provenance: RootSourceProvenance,
         resume_from_pack: IdentityAnchorPackVersion | None = None,
         generation_channel: str = "provider",
+        pending_mcp_handoff_ids: list[str] | None = None,
     ) -> AnchorPackPreparationResult:
         """Reuse the same host for the two additive Doc178 Face slots."""
 
@@ -108,6 +114,7 @@ class ProductApiAnchorPackPreparationHost:
                 preparation_intent=people_asset.preparation_intent,
                 face_view_scope="character_card",
                 generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
+                pending_mcp_handoff_ids=list(pending_mcp_handoff_ids or []),
             ),
             resume_from_pack=resume_from_pack,
         )
@@ -167,12 +174,27 @@ class ProductApiAnchorPackPreparationHost:
                 generation_channel="mcp",
                 mcp_operation_id=request.mcp_operation_id,
             )
+            if request.mcp_handoff_id:
+                job_request["metadata"]["mcp_materialization"] = {
+                    "handoff_id": request.mcp_handoff_id,
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                    "resume_required": True,
+                }
             job_kwargs.update(
                 generation_channel="mcp",
                 mcp_operation_id=request.mcp_operation_id,
             )
-        status = self.product_service.create_professional_anchor_preparation_job(job_request, **job_kwargs)
-        if status.status != ProductJobStatusValue.PLANNED:
+        resume_record = self._mcp_resume_planned_job_record(request) if request.generation_channel == "mcp" else None
+        if resume_record is None:
+            status = self.product_service.create_professional_anchor_preparation_job(job_request, **job_kwargs)
+            status_job_id = status.job_id
+            status_value = status.status
+        else:
+            status = None
+            status_job_id = resume_record.job_id
+            status_value = ProductJobStatusValue.PLANNED
+        if status_value != ProductJobStatusValue.PLANNED:
             record = self.product_service.get_job_record(status.job_id)
             request_metadata = dict(record.request.metadata) if record is not None else {}
             remote_outcome = request_metadata.get("remote_creative_brain_outcome")
@@ -181,14 +203,14 @@ class ProductApiAnchorPackPreparationHost:
                 if reason_code in {"remote_brain_unavailable", "remote_brain_unauthorized"}:
                     raise AnchorCandidateUnavailable(reason_code)
             raise AnchorCandidateUnavailable("professional_anchor_candidate_planning_blocked")
-        self._stage_plan_source_job_ids.setdefault(stage_key, status.job_id)
+        self._stage_plan_source_job_ids.setdefault(stage_key, status_job_id)
         # The stage owns one shared bounded repair. A Provider failure with no
         # reviewed pixels must not consume it merely because it happened on
         # candidate one; the first candidate that actually executes the
         # shared visual retry consumes the budget for all later candidates.
         retry_available = stage_key not in self._stage_visual_retry_consumed
         generation = self.product_service.generate_job(
-            status.job_id,
+            status_job_id,
             {
                 "quality_mode": "strict",
                 "metadata": (
@@ -198,12 +220,70 @@ class ProductApiAnchorPackPreparationHost:
                 ),
             },
         )
-        self._record_stage_visual_retry_usage(stage_key, status.job_id)
+        self._record_stage_visual_retry_usage(stage_key, status_job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
+            mcp_materialization = self._mcp_materialization_from_generation_failure(generation, status_job_id)
+            handoff_id = (
+                str(mcp_materialization.get("handoff_id") or "").strip()
+                if isinstance(mcp_materialization, dict)
+                else ""
+            )
+            if request.generation_channel == "mcp" and handoff_id:
+                raise AnchorCandidateUnavailable(
+                    "mcp_materialization_pending"
+                    if str(mcp_materialization.get("status") or "").lower() == "pending"
+                    else "mcp_materialization_failed",
+                    mcp_handoff_id=handoff_id,
+                )
             raise AnchorCandidateUnavailable("professional_anchor_candidate_generation_failed")
-        candidate, review = self._candidate_and_review(status.job_id, request)
+        candidate, review = self._candidate_and_review(status_job_id, request)
         self._review_by_candidate_id[candidate.candidate_id] = review
         return candidate
+
+    def _mcp_resume_planned_job_record(self, request: AnchorGenerationRequest) -> Any | None:
+        """Return a prior frozen MCP handoff job instead of re-planning.
+
+        A pending MCP materialization is a durable user-visible checkpoint:
+        Brain already produced the canonical prompt and the handoff store keeps
+        that prompt immutable. Once the user submits an image artifact, resume
+        must consume the same planned job and continue into shared review. It
+        must not ask Brain for a second prompt first, because a transient Brain
+        timeout would strand an otherwise valid submitted image.
+        """
+
+        handoff_id = str(request.mcp_handoff_id or "").strip()
+        operation_id = str(request.mcp_operation_id or "").strip()
+        if not handoff_id or not operation_id:
+            return None
+        job_store = getattr(self.product_service, "job_store", None)
+        list_recent = getattr(job_store, "list_recent", None)
+        if not callable(list_recent):
+            return None
+        try:
+            candidates = list_recent(100)
+        except Exception:
+            return None
+        for record in candidates:
+            if getattr(record, "planning_result", None) is None:
+                continue
+            metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+            materialization = metadata.get("mcp_materialization")
+            if not isinstance(materialization, dict):
+                continue
+            if str(materialization.get("handoff_id") or "").strip() != handoff_id:
+                continue
+            if str(metadata.get("generation_channel") or "").strip().lower() != "mcp":
+                continue
+            if str(metadata.get("mcp_operation_id") or "").strip() != operation_id:
+                continue
+            if metadata.get("professional_anchor_pack_preparation") is not True:
+                continue
+            if str(metadata.get("professional_reference_stage") or "").strip() != request.view_role:
+                continue
+            if str(metadata.get("professional_anchor_capture_scope") or "anchor_pack") != request.capture_scope:
+                continue
+            return record
+        return None
 
     def _record_stage_visual_retry_usage(
         self,
@@ -357,6 +437,19 @@ class ProductApiAnchorPackPreparationHost:
             generation_channel=request.generation_channel,
             mcp_operation_id=f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}",
         )
+        if request.generation_channel == "mcp" and request.mcp_handoff_id:
+            status_record = self.product_service.get_job_record(status.job_id)
+            if status_record is not None:
+                status_record.request.metadata = {
+                    **dict(status_record.request.metadata),
+                    "mcp_materialization": {
+                        "handoff_id": request.mcp_handoff_id,
+                        "status": "pending",
+                        "generation_channel": "mcp",
+                        "resume_required": True,
+                    },
+                }
+                self.product_service.job_store.save(status_record)
         if status.status != ProductJobStatusValue.PLANNED:
             raise AnchorCandidateUnavailable("character_card_candidate_planning_blocked")
         generation = self.product_service.generate_job(
@@ -365,12 +458,7 @@ class ProductApiAnchorPackPreparationHost:
         )
         self._record_character_card_retry_usage(stage_key, status.job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
-            generation_metadata = getattr(generation, "metadata", {})
-            mcp_materialization = (
-                generation_metadata.get("mcp_materialization")
-                if isinstance(generation_metadata, dict)
-                else None
-            )
+            mcp_materialization = self._mcp_materialization_from_generation_failure(generation, status.job_id)
             handoff_id = (
                 str(mcp_materialization.get("handoff_id") or "").strip()
                 if isinstance(mcp_materialization, dict)
@@ -387,6 +475,27 @@ class ProductApiAnchorPackPreparationHost:
         candidate, review = self._character_card_candidate_and_review(status.job_id, request)
         self._character_card_reviews[candidate.candidate_id] = review
         return candidate
+
+    def _mcp_materialization_from_generation_failure(self, generation: Any, job_id: str) -> dict[str, Any] | None:
+        """Recover an opaque MCP handoff from public status or the durable job record."""
+
+        metadata_candidates: list[dict[str, Any]] = []
+        generation_metadata = getattr(generation, "metadata", {})
+        if isinstance(generation_metadata, dict):
+            metadata_candidates.append(generation_metadata)
+        record = self.product_service.get_job_record(job_id)
+        if record is not None:
+            request_metadata = getattr(getattr(record, "request", None), "metadata", None)
+            if isinstance(request_metadata, dict):
+                metadata_candidates.append(request_metadata)
+            result_metadata = getattr(getattr(record, "generation_result", None), "metadata", None)
+            if isinstance(result_metadata, dict):
+                metadata_candidates.append(result_metadata)
+        for metadata in metadata_candidates:
+            materialization = metadata.get("mcp_materialization")
+            if isinstance(materialization, dict) and str(materialization.get("handoff_id") or "").strip():
+                return materialization
+        return None
 
     def _record_character_card_retry_usage(self, stage_key: tuple[str, str, str], job_id: str) -> None:
         record = self.product_service.get_job_record(job_id)
@@ -577,6 +686,14 @@ class ProductApiAnchorPackPreparationHost:
             issue_codes.append("professional_anchor_review_score_incomplete")
         if not face_localization_verified:
             issue_codes.append("professional_anchor_face_localization_unverified")
+        clarity_failures: list[str] = []
+        if request.capture_scope == "character_card_face_identity":
+            for dimension, floor in self._CHARACTER_CARD_FACE_CLARITY_FLOORS.items():
+                if score_card.get(dimension, -1.0) < floor:
+                    clarity_failures.append(dimension)
+            if clarity_failures:
+                issue_codes.append("professional_face_card_commercial_clarity_below_bar")
+        passes = passes and not clarity_failures
         decision = AnchorReviewDecision(
             status="pass" if passes else "fail",
             identity_scores=IdentityScoreSummary(

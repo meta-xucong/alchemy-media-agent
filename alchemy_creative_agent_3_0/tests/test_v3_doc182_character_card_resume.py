@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from pathlib import Path
+import hashlib
 
 import pytest
 
+from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import McpMaterializationHandoffStore
+from alchemy_creative_agent_3_0.app.generation_router.providers import McpMaterializationProvider
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatus, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
@@ -15,6 +19,7 @@ from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateResult,
     AnchorCandidateUnavailable,
+    AnchorGenerationRequest,
     AnchorPackPreparationRequest,
     AnchorPackPreparationService,
     AnchorReviewDecision,
@@ -322,6 +327,177 @@ def test_doc183_anchor_failure_persists_opaque_mcp_handoffs_for_resume() -> None
         "mcp_handoff_front_3",
     ]
     assert all(item.mcp_handoff_id for item in result.generation_failures)
+
+
+def test_doc183_face_anchor_mcp_pending_handoff_survives_status_projection_gap() -> None:
+    class _Service:
+        visual_asset_catalog = None
+
+        def create_professional_anchor_preparation_job(self, *_args, **_kwargs):
+            return ProductJobStatus(
+                job_id="job_doc183_mcp_pending",
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, *_args, **_kwargs):
+            return ProductJobStatus(
+                job_id="job_doc183_mcp_pending",
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):
+            return SimpleNamespace(
+                request=SimpleNamespace(
+                    metadata={
+                        "mcp_materialization": {
+                            "handoff_id": "mcp_handoff_doc183_anchor",
+                            "status": "pending",
+                            "failure_code": "mcp_materialization_pending",
+                        }
+                    }
+                ),
+                generation_result=None,
+            )
+
+    request = AnchorGenerationRequest(
+        project_id="project_doc183",
+        people_asset_id="people_doc183",
+        pack_version_id="pack_doc183",
+        view_role="standard_front",
+        candidate_index=1,
+        preparation_intent="neutral identity evidence capture",
+        root_source_asset_id="root_doc183",
+        reference_evidence_ids=["root_doc183"],
+        generation_channel="mcp",
+        mcp_operation_id="people_doc183:standard_front:1",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        ProductApiAnchorPackPreparationHost(_Service()).generate(request)
+
+    assert exc_info.value.failure_code == "mcp_materialization_pending"
+    assert exc_info.value.mcp_handoff_id == "mcp_handoff_doc183_anchor"
+
+
+def test_doc183_face_anchor_mcp_resume_reuses_planned_handoff_job_before_brain() -> None:
+    request = AnchorGenerationRequest(
+        project_id="project_doc183",
+        people_asset_id="people_doc183",
+        pack_version_id="pack_doc183",
+        view_role="rear_head",
+        candidate_index=1,
+        preparation_intent="neutral identity evidence capture",
+        root_source_asset_id="root_doc183",
+        reference_evidence_ids=["root_doc183", "front", "three_quarter", "profile", "reverse"],
+        generation_channel="mcp",
+        mcp_operation_id="people_doc183:rear_head:1",
+        mcp_handoff_id="mcp_handoff_doc183_rear",
+        capture_scope="character_card_face_identity",
+    )
+    planned_record = SimpleNamespace(
+        job_id="job_doc183_prior_planned",
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "generation_channel": "mcp",
+                "mcp_operation_id": "people_doc183:rear_head:1",
+                "professional_anchor_pack_preparation": True,
+                "professional_reference_stage": "rear_head",
+                "professional_anchor_capture_scope": "character_card_face_identity",
+                "mcp_materialization": {
+                    "handoff_id": "mcp_handoff_doc183_rear",
+                    "status": "pending",
+                    "failure_code": "mcp_materialization_pending",
+                },
+            }
+        ),
+    )
+
+    class _Store:
+        def list_recent(self, _limit):
+            return [planned_record]
+
+    class _Service:
+        visual_asset_catalog = None
+        job_store = _Store()
+        generated_job_ids = []
+
+        def create_professional_anchor_preparation_job(self, *_args, **_kwargs):
+            raise AssertionError("resume must not re-plan or call Brain")
+
+        def generate_job(self, job_id, *_args, **_kwargs):
+            self.generated_job_ids.append(job_id)
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):
+            return planned_record
+
+    service = _Service()
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        ProductApiAnchorPackPreparationHost(service).generate(request)
+
+    assert service.generated_job_ids == ["job_doc183_prior_planned"]
+    assert exc_info.value.failure_code == "mcp_materialization_pending"
+    assert exc_info.value.mcp_handoff_id == "mcp_handoff_doc183_rear"
+
+
+def test_doc183_mcp_resume_uses_existing_frozen_handoff_prompt(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    old_prompt = "frozen rear-head renderer prompt"
+    old_hash = hashlib.sha256(old_prompt.encode("utf-8")).hexdigest()
+    references = [{"asset_id": "ref_1", "sha256": "a" * 64, "role": "portrait_identity"}]
+    contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+    }
+    handoff = store.ensure_pending(
+        operation_id="people_doc183:rear_head:1",
+        prompt=old_prompt,
+        prompt_sha256=old_hash,
+        reference_assets=references,
+        rendering_contract=contract,
+    )
+    provider = McpMaterializationProvider(handoff_store=store)
+
+    context = provider._existing_mcp_handoff_context(
+        SimpleNamespace(
+            metadata={
+                "generation_channel": "mcp",
+                "mcp_operation_id": "people_doc183:rear_head:1",
+                "mcp_materialization": {
+                    "handoff_id": handoff["handoff_id"],
+                    "status": "pending",
+                },
+            }
+        ),
+        current_context={
+            "operation_id": "people_doc183:rear_head:1",
+            "canonical_prompt": "new brain prompt that must not replace the frozen handoff",
+            "prompt_sha256": hashlib.sha256(b"new").hexdigest(),
+        },
+        current_reference_assets=references,
+        current_rendering_contract=contract,
+    )
+
+    assert context is not None
+    assert context["canonical_prompt"] == old_prompt
+    assert context["prompt_sha256"] == old_hash
+    assert context["handoff_id"] == handoff["handoff_id"]
 
 
 def test_doc182_resume_route_is_explicit_and_non_boolean_flag_is_rejected() -> None:
