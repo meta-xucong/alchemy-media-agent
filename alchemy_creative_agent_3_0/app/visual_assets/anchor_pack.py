@@ -14,6 +14,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from .contracts import (
+    AnchorCandidateFailureReceipt,
     AnchorView,
     FaceViewRole,
     FaceIdentityModule,
@@ -182,17 +183,7 @@ class AnchorCandidateAttempt(V3BaseModel):
     review: AnchorReviewDecision
 
 
-class AnchorCandidateFailure(V3BaseModel):
-    model_config = ConfigDict(validate_assignment=True, extra="forbid")
-
-    stage: Literal["front", "supplementary"]
-    view_role: FaceViewRole
-    candidate_index: int = Field(ge=1, le=3)
-    failure_code: str
-    # An MCP handoff is an opaque, resumable receipt.  It is the only
-    # materialization detail allowed to cross this failure boundary; prompts,
-    # paths, provider responses and artifacts remain private to V3.
-    mcp_handoff_id: str | None = None
+AnchorCandidateFailure = AnchorCandidateFailureReceipt
 
 
 class AnchorCandidateUnavailable(RuntimeError):
@@ -283,6 +274,10 @@ class AnchorPackPreparationService:
         generation_failures: list[AnchorCandidateFailure] = []
         passing_fronts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
         prior_views = self._resume_views(request, resume_from_pack)
+        prior_failures_by_key = {
+            (item.view_role, item.candidate_index): item
+            for item in self._resume_failures(request, resume_from_pack)
+        }
         views = list(prior_views)
         selected_evidence_ids = [
             request.root_source_provenance.source_asset_id,
@@ -293,6 +288,17 @@ class AnchorPackPreparationService:
 
         if front_view is None:
             for candidate_index in range(1, self.FRONT_CANDIDATE_COUNT + 1):
+                prior_failure = prior_failures_by_key.get(("standard_front", candidate_index))
+                if prior_failure is not None and prior_failure.failure_code == "shared_visual_review_failed":
+                    generation_failures.append(prior_failure)
+                    continue
+                if (
+                    prior_failure is not None
+                    and prior_failure.failure_code == "mcp_materialization_pending"
+                    and not str(prior_failure.mcp_handoff_id or "").strip()
+                ):
+                    generation_failures.append(prior_failure)
+                    continue
                 generation_request = self._generation_request(
                     request=request,
                     pack_version_id=pack_version_id,
@@ -302,6 +308,13 @@ class AnchorPackPreparationService:
                         request.root_source_provenance.source_asset_id,
                         *request.root_source_provenance.supplementary_source_asset_ids,
                     ],
+                    mcp_handoff_id=(
+                        str(prior_failure.mcp_handoff_id).strip()
+                        if prior_failure is not None
+                        and prior_failure.failure_code == "mcp_materialization_pending"
+                        and str(prior_failure.mcp_handoff_id or "").strip()
+                        else None
+                    ),
                 )
                 try:
                     candidate, review = self._generate_and_review(generation_request)
@@ -332,7 +345,13 @@ class AnchorPackPreparationService:
                     )
 
             if not passing_fronts:
-                pack = self._pack(request, pack_version_id, views, "failed")
+                pack = self._pack(
+                    request,
+                    pack_version_id,
+                    views,
+                    "failed",
+                    candidate_failures=generation_failures,
+                )
                 self._persist(pack, "fail")
                 return AnchorPackPreparationResult(
                     status="blocked",
@@ -358,12 +377,30 @@ class AnchorPackPreparationService:
                 continue
             passing_supplementary: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
             for candidate_index in range(1, self.SUPPLEMENTARY_CANDIDATE_COUNT + 1):
+                prior_failure = prior_failures_by_key.get((role, candidate_index))
+                if prior_failure is not None and prior_failure.failure_code == "shared_visual_review_failed":
+                    generation_failures.append(prior_failure)
+                    continue
+                if (
+                    prior_failure is not None
+                    and prior_failure.failure_code == "mcp_materialization_pending"
+                    and not str(prior_failure.mcp_handoff_id or "").strip()
+                ):
+                    generation_failures.append(prior_failure)
+                    continue
                 generation_request = self._generation_request(
                     request=request,
                     pack_version_id=pack_version_id,
                     view_role=role,
                     candidate_index=candidate_index,
                     reference_evidence_ids=list(selected_evidence_ids),
+                    mcp_handoff_id=(
+                        str(prior_failure.mcp_handoff_id).strip()
+                        if prior_failure is not None
+                        and prior_failure.failure_code == "mcp_materialization_pending"
+                        and str(prior_failure.mcp_handoff_id or "").strip()
+                        else None
+                    ),
                 )
                 try:
                     candidate, review = self._generate_and_review(generation_request)
@@ -396,7 +433,13 @@ class AnchorPackPreparationService:
                     )
 
             if not passing_supplementary:
-                pack = self._pack(request, pack_version_id, views, "failed")
+                pack = self._pack(
+                    request,
+                    pack_version_id,
+                    views,
+                    "failed",
+                    candidate_failures=generation_failures,
+                )
                 self._persist(pack, "fail")
                 return AnchorPackPreparationResult(
                     status="blocked",
@@ -412,7 +455,7 @@ class AnchorPackPreparationService:
             views.append(self._view(supplementary_winner, supplementary_review))
             selected_evidence_ids.append(supplementary_winner.output_id)
 
-        pack = self._pack(request, pack_version_id, views, "review")
+        pack = self._pack(request, pack_version_id, views, "review", candidate_failures=generation_failures)
         self._persist(pack, "review")
         return AnchorPackPreparationResult(
             status="review",
@@ -459,6 +502,39 @@ class AnchorPackPreparationService:
             raise ValueError("character_card_resume_checkpoint_invalid")
         return views
 
+    @staticmethod
+    def _resume_failures(
+        request: AnchorPackPreparationRequest,
+        resume_from_pack: IdentityAnchorPackVersion | None,
+    ) -> list[AnchorCandidateFailure]:
+        if resume_from_pack is None:
+            return []
+        if request.face_view_scope != "character_card":
+            return []
+        if resume_from_pack.status != "failed":
+            return []
+        allowed_roles = {
+            "standard_front",
+            *AnchorPackPreparationService.CHARACTER_CARD_SUPPLEMENTARY_ROLES,
+        }
+        failures: list[AnchorCandidateFailure] = []
+        seen: set[tuple[str, int]] = set()
+        for failure in getattr(resume_from_pack, "candidate_failures", []) or []:
+            role = str(failure.view_role)
+            key = (role, int(failure.candidate_index))
+            if role not in allowed_roles or key in seen:
+                raise ValueError("character_card_resume_failure_checkpoint_invalid")
+            if not str(failure.failure_code or "").strip():
+                raise ValueError("character_card_resume_failure_checkpoint_invalid")
+            if (
+                failure.failure_code == "mcp_materialization_pending"
+                and not str(failure.mcp_handoff_id or "").strip()
+            ):
+                raise ValueError("character_card_resume_failure_checkpoint_invalid")
+            failures.append(failure)
+            seen.add(key)
+        return failures
+
     def activate(self, pack: IdentityAnchorPackVersion, *, confirmed: bool) -> IdentityAnchorPackVersion:
         if pack.status != "review":
             raise ValueError("only a complete reviewed pack can be activated")
@@ -486,6 +562,7 @@ class AnchorPackPreparationService:
         view_role: FaceViewRole,
         candidate_index: int,
         reference_evidence_ids: list[str],
+        mcp_handoff_id: str | None = None,
     ) -> AnchorGenerationRequest:
         return AnchorGenerationRequest(
             project_id=request.project_id,
@@ -509,10 +586,15 @@ class AnchorPackPreparationService:
                 else None
             ),
             mcp_handoff_id=(
-                request.pending_mcp_handoff_ids[candidate_index - 1]
-                if request.generation_channel == "mcp"
-                and 0 <= candidate_index - 1 < len(request.pending_mcp_handoff_ids)
-                else None
+                str(mcp_handoff_id).strip()
+                if request.generation_channel == "mcp" and str(mcp_handoff_id or "").strip()
+                else (
+                    str(request.pending_mcp_handoff_ids[candidate_index - 1]).strip()
+                    if request.generation_channel == "mcp"
+                    and 0 <= candidate_index - 1 < len(request.pending_mcp_handoff_ids)
+                    and str(request.pending_mcp_handoff_ids[candidate_index - 1] or "").strip()
+                    else None
+                )
             ),
             capture_scope=(
                 "character_card_face_identity"
@@ -557,12 +639,15 @@ class AnchorPackPreparationService:
         pack_version_id: str,
         views: list[AnchorView],
         status: Literal["review", "failed"],
+        *,
+        candidate_failures: list[AnchorCandidateFailure] | None = None,
     ) -> IdentityAnchorPackVersion:
         return IdentityAnchorPackVersion(
             pack_version_id=pack_version_id,
             people_asset_id=request.asset.people_asset_id,
             status=status,
             anchor_views=views,
+            candidate_failures=list(candidate_failures or []),
             root_source_provenance=request.root_source_provenance,
             user_activation_confirmed=False,
         )

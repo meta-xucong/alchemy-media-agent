@@ -138,6 +138,21 @@ class AnchorView(_StrictVisualAssetModel):
     active: bool = True
 
 
+class AnchorCandidateFailureReceipt(_StrictVisualAssetModel):
+    """Public-safe failed-candidate checkpoint for resumable preparation.
+
+    This receipt intentionally stores only stage/view/candidate identity plus a
+    safe failure code and optional opaque MCP handoff id. It never contains a
+    prompt, path, provider body, reviewer prose, or pixel evidence.
+    """
+
+    stage: Literal["front", "supplementary"]
+    view_role: FaceViewRole
+    candidate_index: int = Field(ge=1, le=3)
+    failure_code: str
+    mcp_handoff_id: str | None = None
+
+
 class FaceIdentityModule(_StrictVisualAssetModel):
     module_id: str
     people_asset_id: str
@@ -159,6 +174,7 @@ class IdentityAnchorPackVersion(_StrictVisualAssetModel):
     people_asset_id: str
     status: PackStatus = "preparing"
     anchor_views: list[AnchorView] = Field(default_factory=list)
+    candidate_failures: list[AnchorCandidateFailureReceipt] = Field(default_factory=list)
     root_source_provenance: RootSourceProvenance
     user_activation_confirmed: bool = False
 
@@ -167,6 +183,12 @@ class IdentityAnchorPackVersion(_StrictVisualAssetModel):
         view_ids = [item.view_id for item in self.anchor_views]
         if len(view_ids) != len(set(view_ids)):
             raise ValueError("anchor view IDs must be unique")
+        failure_keys = [
+            (item.view_role, item.candidate_index, item.mcp_handoff_id or "")
+            for item in self.candidate_failures
+        ]
+        if len(failure_keys) != len(set(failure_keys)):
+            raise ValueError("anchor candidate failure receipts must be unique")
         if self.status == "active":
             roles = {item.view_role for item in self.anchor_views if item.active}
             missing = REQUIRED_FACE_VIEW_ROLES - roles

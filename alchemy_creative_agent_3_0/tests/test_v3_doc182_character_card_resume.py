@@ -113,6 +113,20 @@ class _PassReviewer:
         )
 
 
+class _FailReviewer:
+    def review(self, candidate):
+        return AnchorReviewDecision(
+            status="fail",
+            identity_scores=IdentityScoreSummary(
+                same_face_score=0.4,
+                distinctive_feature_score=0.4,
+                human_realism_score=0.4,
+                visual_quality_score=0.4,
+            ),
+            issue_codes=["shared_visual_review_failed"],
+        )
+
+
 def test_doc182_three_failures_pause_without_unhandled_exception() -> None:
     service = CharacterCardPreparationService(
         generator=_ExpressionGenerator(failing_slots={"expression.smile"}),
@@ -288,6 +302,46 @@ def _anchor_request() -> AnchorPackPreparationRequest:
     )
 
 
+def _mcp_anchor_request() -> AnchorPackPreparationRequest:
+    return _anchor_request().model_copy(update={"generation_channel": "mcp"})
+
+
+class _McpHandoffGenerator:
+    def __init__(self, *, submitted: set[str] | None = None) -> None:
+        self.submitted = set(submitted or set())
+        self.requests = []
+
+    @staticmethod
+    def _handoff_id(request) -> str:
+        return (
+            str(request.mcp_handoff_id or "").strip()
+            or f"mcp_handoff_{request.view_role}_{request.candidate_index}"
+        )
+
+    def generate(self, request):
+        self.requests.append(request)
+        handoff_id = self._handoff_id(request)
+        if handoff_id not in self.submitted:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_pending",
+                mcp_handoff_id=handoff_id,
+            )
+        token = f"{request.view_role}_{request.candidate_index}"
+        return AnchorCandidateResult(
+            candidate_id=f"candidate_{token}",
+            view_id=f"view_{token}",
+            output_id=f"output_{token}",
+            view_role=request.view_role,
+            candidate_index=request.candidate_index,
+            source_candidate_ids=[f"candidate_{token}"],
+            source_asset_ids=list(request.reference_evidence_ids),
+            brain_plan_id=f"brain_{token}",
+            canonical_prompt_hash=f"sha256:{token}",
+            prompt_compilation_id=f"compile_{token}",
+            prompt_reference_parity_verified=True,
+        )
+
+
 def test_doc182_face_resume_skips_completed_views_and_creates_new_pack() -> None:
     first_generator = _AnchorGenerator(failing_roles={"profile"})
     first_service = AnchorPackPreparationService(generator=first_generator, reviewer=_PassReviewer())
@@ -327,6 +381,87 @@ def test_doc183_anchor_failure_persists_opaque_mcp_handoffs_for_resume() -> None
         "mcp_handoff_front_3",
     ]
     assert all(item.mcp_handoff_id for item in result.generation_failures)
+
+
+def test_doc187_mcp_face_resume_consumes_handoff_by_frozen_candidate_index() -> None:
+    first_generator = _McpHandoffGenerator()
+    first_service = AnchorPackPreparationService(generator=first_generator, reviewer=_PassReviewer())
+    first = first_service.prepare(_mcp_anchor_request())
+
+    assert first.status == "blocked"
+    assert first.mcp_handoff_ids == [
+        "mcp_handoff_standard_front_1",
+        "mcp_handoff_standard_front_2",
+        "mcp_handoff_standard_front_3",
+    ]
+    assert [
+        (item.view_role, item.candidate_index, item.failure_code, item.mcp_handoff_id)
+        for item in first.pack.candidate_failures
+    ] == [
+        ("standard_front", 1, "mcp_materialization_pending", "mcp_handoff_standard_front_1"),
+        ("standard_front", 2, "mcp_materialization_pending", "mcp_handoff_standard_front_2"),
+        ("standard_front", 3, "mcp_materialization_pending", "mcp_handoff_standard_front_3"),
+    ]
+
+    second_generator = _McpHandoffGenerator(submitted={"mcp_handoff_standard_front_2"})
+    second_service = AnchorPackPreparationService(generator=second_generator, reviewer=_FailReviewer())
+    resumed = second_service.prepare(_mcp_anchor_request(), resume_from_pack=first.pack)
+
+    assert resumed.status == "blocked"
+    assert [
+        (request.view_role, request.candidate_index, request.mcp_handoff_id)
+        for request in second_generator.requests
+    ] == [
+        ("standard_front", 1, "mcp_handoff_standard_front_1"),
+        ("standard_front", 2, "mcp_handoff_standard_front_2"),
+        ("standard_front", 3, "mcp_handoff_standard_front_3"),
+    ]
+    assert resumed.mcp_handoff_ids == [
+        "mcp_handoff_standard_front_1",
+        "mcp_handoff_standard_front_3",
+    ]
+    assert [
+        (item.view_role, item.candidate_index, item.failure_code, item.mcp_handoff_id)
+        for item in resumed.pack.candidate_failures
+    ] == [
+        ("standard_front", 1, "mcp_materialization_pending", "mcp_handoff_standard_front_1"),
+        ("standard_front", 2, "shared_visual_review_failed", None),
+        ("standard_front", 3, "mcp_materialization_pending", "mcp_handoff_standard_front_3"),
+    ]
+
+
+def test_doc187_mcp_face_resume_does_not_create_new_handoffs_after_three_review_failures() -> None:
+    first = AnchorPackPreparationService(
+        generator=_McpHandoffGenerator(),
+        reviewer=_PassReviewer(),
+    ).prepare(_mcp_anchor_request())
+    second = AnchorPackPreparationService(
+        generator=_McpHandoffGenerator(
+            submitted={
+                "mcp_handoff_standard_front_1",
+                "mcp_handoff_standard_front_2",
+                "mcp_handoff_standard_front_3",
+            }
+        ),
+        reviewer=_FailReviewer(),
+    ).prepare(_mcp_anchor_request(), resume_from_pack=first.pack)
+
+    third_generator = _McpHandoffGenerator()
+    third = AnchorPackPreparationService(
+        generator=third_generator,
+        reviewer=_PassReviewer(),
+    ).prepare(_mcp_anchor_request(), resume_from_pack=second.pack)
+
+    assert second.status == "blocked"
+    assert second.mcp_handoff_ids == []
+    assert third.status == "blocked"
+    assert third.mcp_handoff_ids == []
+    assert third_generator.requests == []
+    assert [item.failure_code for item in third.pack.candidate_failures] == [
+        "shared_visual_review_failed",
+        "shared_visual_review_failed",
+        "shared_visual_review_failed",
+    ]
 
 
 def test_doc183_face_anchor_mcp_pending_handoff_survives_status_projection_gap() -> None:
