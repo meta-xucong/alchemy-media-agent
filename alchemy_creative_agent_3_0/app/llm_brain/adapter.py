@@ -1241,6 +1241,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
     framing_standard = str(decision.get("framing_standard") or "").strip()
     crop_policy = str(decision.get("crop_policy") or "").strip()
     torso_scope = str(decision.get("torso_scope") or "").strip()
+    aspect_ratio_standard = str(decision.get("aspect_ratio_standard") or "").strip()
     source_viewpoint_inheritance = str(
         decision.get("source_viewpoint_inheritance") or ""
     ).strip()
@@ -1294,6 +1295,8 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
             framing_standard != "consistent_head_and_upper_shoulders_reference_crop"
             or crop_policy != "head_top_margin_full_face_neck_and_upper_shoulders_visible"
             or torso_scope != "upper_shoulders_only_no_half_body_or_big_head_crop"
+            or aspect_ratio_standard
+            != "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
         ):
             raise BrainProfessionalAnchorViewDecisionMissing(
                 "The frozen Character Card Face Identity framing requirement is missing or contradictory."
@@ -1314,6 +1317,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
             framing_standard,
             crop_policy,
             torso_scope,
+            aspect_ratio_standard,
             source_viewpoint_inheritance,
             front_pose_normalization,
             face_axis_alignment,
@@ -1333,6 +1337,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
                 "framing_standard": framing_standard,
                 "crop_policy": crop_policy,
                 "torso_scope": torso_scope,
+                "aspect_ratio_standard": aspect_ratio_standard,
             }
             if capture_scope == "character_card_face_identity"
             else {}
@@ -1370,6 +1375,7 @@ def _matches_professional_anchor_view_receipts(
         "framing_standard",
         "crop_policy",
         "torso_scope",
+        "aspect_ratio_standard",
         "source_viewpoint_inheritance",
         "front_pose_normalization",
         "face_axis_alignment",
@@ -1599,6 +1605,28 @@ def _professional_anchor_prompt_scope_violations(
                 violations.append(f"output_{index}:front_pose_not_straight_on")
             if not any(term in normalized for term in alignment_terms):
                 violations.append(f"output_{index}:front_axis_not_normalized")
+        if (
+            expected_requirement.get("aspect_ratio_standard")
+            == "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
+        ):
+            aspect_terms = (
+                "vertical 2:3",
+                "2:3 vertical",
+                "2:3 card",
+                "1024x1536",
+                "1024×1536",
+                "portrait orientation",
+                "vertical card",
+                "竖版",
+                "竖向",
+                "纵向",
+                "2:3",
+                "2比3",
+                "二比三",
+                "1024 x 1536",
+            )
+            if not any(term in normalized for term in aspect_terms):
+                violations.append(f"output_{index}:aspect_ratio_not_materialized")
     return violations
 
 

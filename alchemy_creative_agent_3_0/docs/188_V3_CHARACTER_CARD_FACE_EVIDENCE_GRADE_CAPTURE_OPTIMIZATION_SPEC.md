@@ -115,6 +115,17 @@ It must avoid turning the renderer prompt into:
 - a list of forbidden anatomy or safety-sensitive negatives;
 - a local repair phrase appended after the prompt.
 
+The `professional_anchor_view_decision` receipt for
+`character_card_face_identity` must also carry:
+
+```text
+aspect_ratio_standard: honor_frozen_rendering_size_as_reference_card_aspect_ratio
+```
+
+The adapter rejects a signed Face Identity prompt that has no visible vertical
+card/aspect-ratio materialization language. This is a scope gate like the
+existing head-and-upper-shoulders gate, not a creative prompt recipe.
+
 ## 5. MCP rendering-size parity
 
 The MCP channel is only a transport outlet. It must not let a local ImageGen

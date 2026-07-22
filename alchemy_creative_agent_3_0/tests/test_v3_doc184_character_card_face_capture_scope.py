@@ -77,6 +77,9 @@ def _anchor_request(*, capture_scope: str | None = None) -> BrainRunRequest:
                 "framing_standard": "consistent_head_and_upper_shoulders_reference_crop",
                 "crop_policy": "head_top_margin_full_face_neck_and_upper_shoulders_visible",
                 "torso_scope": "upper_shoulders_only_no_half_body_or_big_head_crop",
+                "aspect_ratio_standard": (
+                    "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
+                ),
                 "source_viewpoint_inheritance": "identity_only_do_not_inherit_source_pose_angle",
                 "front_pose_normalization": "normalize_to_symmetric_camera_facing_front",
                 "face_axis_alignment": "face_midline_vertical_eyes_level_nose_centered",
@@ -233,6 +236,9 @@ def test_doc184_brain_schema_and_receipt_carry_face_scope_without_prompt_patchin
         schema["professional_anchor_view_decision"]["framing_standard"]
         == "consistent_head_and_upper_shoulders_reference_crop"
     )
+    assert schema["professional_anchor_view_decision"]["aspect_ratio_standard"] == (
+        "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
+    )
     assert (
         schema["professional_anchor_view_decision"]["front_pose_normalization"]
         == "normalize_to_symmetric_camera_facing_front"
@@ -318,6 +324,9 @@ def test_doc184_runtime_and_adapter_preserve_brain_scope_receipt(tmp_path: Path,
         context["professional_anchor_view_decision"]["framing_standard"]
         == "consistent_head_and_upper_shoulders_reference_crop"
     )
+    assert context["professional_anchor_view_decision"]["aspect_ratio_standard"] == (
+        "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
+    )
     assert (
         context["professional_anchor_view_decision"]["face_axis_alignment"]
         == "face_midline_vertical_eyes_level_nose_centered"
@@ -385,6 +394,7 @@ def test_doc184_adapter_accepts_native_chinese_face_identity_scope_terms() -> No
                 item["prompt"] = (
                     "商业级干净通透的标准人物角色卡 Face Identity 正面视觉资产。"
                     "主体真正直面镜头，脸部中线垂直、双眼水平、鼻梁居中；"
+                    "竖版2:3标准参考卡，"
                     "固定为头部、颈部和上肩景别，头顶留有适度边距，完整脸部、颈部和上肩清晰可见。"
                     "明亮洁净白底影棚，真实摄影质感。"
                 )

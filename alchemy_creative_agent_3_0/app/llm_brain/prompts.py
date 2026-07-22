@@ -757,6 +757,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         if isinstance(anchor_view_requirement, dict)
         else ""
     )
+    anchor_aspect_ratio_standard = (
+        str(anchor_view_requirement.get("aspect_ratio_standard") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
     anchor_source_viewpoint_inheritance = (
         str(anchor_view_requirement.get("source_viewpoint_inheritance") or "").strip()
         if isinstance(anchor_view_requirement, dict)
@@ -778,6 +783,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             anchor_framing_standard == "consistent_head_and_upper_shoulders_reference_crop"
             and anchor_crop_policy == "head_top_margin_full_face_neck_and_upper_shoulders_visible"
             and anchor_torso_scope == "upper_shoulders_only_no_half_body_or_big_head_crop"
+            and anchor_aspect_ratio_standard
+            == "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
         )
     )
     anchor_front_pose_normalization_valid = (
@@ -940,6 +947,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                     "framing_standard": anchor_framing_standard,
                     "crop_policy": anchor_crop_policy,
                     "torso_scope": anchor_torso_scope,
+                    "aspect_ratio_standard": anchor_aspect_ratio_standard,
                 }
                 if anchor_capture_scope == "character_card_face_identity"
                 else {}
@@ -1129,7 +1137,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "vertical 2:3 card when the frozen size is 1024x1536, while keeping the same fixed head, neck and upper-shoulder crop. "
                 "Keep the Remote Brain as the sole author of the complete prompt and return capture_scope "
                 "character_card_face_identity plus the exact frozen framing fields in the typed receipt; for standard_front "
-                "also return the exact frozen front-pose-normalization fields. This is a semantic scope boundary, not a local "
+                "also return the exact frozen front-pose-normalization fields. Always return the exact frozen aspect-ratio "
+                "standard field for this Face Identity scope. This is a semantic scope boundary, not a local "
                 "prompt recipe; body geometry is deferred to the Body Silhouette stage."
             )
         elif anchor_capture_presentation:

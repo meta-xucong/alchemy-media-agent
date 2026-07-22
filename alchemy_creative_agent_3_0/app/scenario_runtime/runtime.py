@@ -1427,6 +1427,22 @@ class ScenarioRuntime:
                                 "torso_scope": framing_contract.get("torso_scope"),
                             }
                         )
+                    evidence_capture_contract = quality_contract.get(
+                        "face_card_evidence_capture_contract"
+                    )
+                    evidence_capture_contract = (
+                        evidence_capture_contract
+                        if isinstance(evidence_capture_contract, dict)
+                        else {}
+                    )
+                    if evidence_capture_contract.get("required") is True:
+                        context["professional_anchor_view_decision"].update(
+                            {
+                                "aspect_ratio_standard": evidence_capture_contract.get(
+                                    "aspect_ratio_standard"
+                                )
+                            }
+                        )
                     front_pose_contract = quality_contract.get("front_pose_normalization_contract")
                     front_pose_contract = front_pose_contract if isinstance(front_pose_contract, dict) else {}
                     if target_view_role == "standard_front" and front_pose_contract.get("required") is True:

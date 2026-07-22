@@ -183,6 +183,11 @@ class EcommerceRemoteBrainTestProvider:
             if isinstance(anchor_view_requirement, dict)
             else ""
         )
+        anchor_aspect_ratio_standard = (
+            str(anchor_view_requirement.get("aspect_ratio_standard") or "").strip()
+            if isinstance(anchor_view_requirement, dict)
+            else ""
+        )
         anchor_source_viewpoint_inheritance = (
             str(anchor_view_requirement.get("source_viewpoint_inheritance") or "").strip()
             if isinstance(anchor_view_requirement, dict)
@@ -204,6 +209,8 @@ class EcommerceRemoteBrainTestProvider:
                 anchor_framing_standard == "consistent_head_and_upper_shoulders_reference_crop"
                 and anchor_crop_policy == "head_top_margin_full_face_neck_and_upper_shoulders_visible"
                 and anchor_torso_scope == "upper_shoulders_only_no_half_body_or_big_head_crop"
+                and anchor_aspect_ratio_standard
+                == "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
             )
         )
         anchor_front_pose_normalization_valid = (
@@ -285,23 +292,23 @@ class EcommerceRemoteBrainTestProvider:
         character_card_face_prompt = {
             "standard_front": (
                 "Clean straight-on front-facing, symmetric, centered face-midline identity reference portrait; "
-                "eyes level and nose centered, consistent head-and-upper-shoulders crop on a plain white studio "
+                "eyes level and nose centered, vertical 2:3 card, consistent head-and-upper-shoulders crop on a plain white studio "
                 "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
             ),
             "three_quarter": (
-                "Clean three-quarter head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "Clean three-quarter vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
                 "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
             ),
             "profile": (
-                "Clean side profile head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "Clean side profile vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
                 "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
             ),
             "reverse_three_quarter": (
-                "Clean reverse three-quarter head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "Clean reverse three-quarter vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
                 "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
             ),
             "rear_head": (
-                "Clean rear head view head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "Clean rear head view vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
                 "background, same person hair and head shape, natural camera-observed human materiality, crisp commercial clean finish."
             ),
         }.get(anchor_view_target)
@@ -397,6 +404,7 @@ class EcommerceRemoteBrainTestProvider:
                                     "framing_standard": anchor_framing_standard,
                                     "crop_policy": anchor_crop_policy,
                                     "torso_scope": anchor_torso_scope,
+                                    "aspect_ratio_standard": anchor_aspect_ratio_standard,
                                 }
                                 if anchor_capture_scope == "character_card_face_identity"
                                 else {}
