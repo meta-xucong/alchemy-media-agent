@@ -182,6 +182,13 @@ keyword recipe for good images. It protects the Character Card module boundary
 so that Body Silhouette and later project scenes remain the only places where
 full-body pose, wardrobe, location or lifestyle context may become primary.
 
+The slot gate must be native-language aware. Chinese Brain-authored prompts
+such as "真正直面镜头", "脸部中线垂直", "双眼水平", "鼻梁居中",
+"头部、颈部和上肩" and equivalent phrasing satisfy the same typed contract as
+English terms such as "straight-on" and "head-and-upper-shoulders". The adapter
+must not reject a semantically valid Chinese prompt merely because it does not
+use the English wording from the schema.
+
 ## 4.1 Commercial clarity gate
 
 Controlled validation showed that ordinary shared Vision could score a

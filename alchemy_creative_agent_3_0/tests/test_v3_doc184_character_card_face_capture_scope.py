@@ -347,6 +347,44 @@ def test_doc184_adapter_rejects_nonstandard_face_identity_framing() -> None:
         )
 
 
+def test_doc184_adapter_accepts_native_chinese_face_identity_scope_terms() -> None:
+    class ChineseScopeProvider(_ScopeEchoProvider):
+        def run(self, request):  # noqa: ANN001
+            payload = super().run(request)
+            for item in payload.get("canonical_provider_prompts", []):
+                item["prompt"] = (
+                    "商业级干净通透的标准人物角色卡 Face Identity 正面视觉资产。"
+                    "主体真正直面镜头，脸部中线垂直、双眼水平、鼻梁居中；"
+                    "固定为头部、颈部和上肩景别，头顶留有适度边距，完整脸部、颈部和上肩清晰可见。"
+                    "明亮洁净白底影棚，真实摄影质感。"
+                )
+            return payload
+
+    prompts, audit = V3LLMBrainAdapter(provider=ChineseScopeProvider()).finalize_canonical_provider_prompts(
+        _anchor_request(capture_scope=CAPTURE_SCOPE)
+    )
+
+    assert prompts[0].prompt.startswith("商业级干净通透")
+    assert audit["professional_anchor_prompt_scope_checked"] is True
+
+
+def test_doc184_adapter_rejects_native_chinese_face_identity_scope_leak() -> None:
+    class ChineseHalfBodyProvider(_ScopeEchoProvider):
+        def run(self, request):  # noqa: ANN001
+            payload = super().run(request)
+            for item in payload.get("canonical_provider_prompts", []):
+                item["prompt"] = (
+                    "标准正面角色卡，真正直面镜头，脸部中线垂直、双眼水平、鼻梁居中，"
+                    "但画面是半身照并站在花园户外场景中。"
+                )
+            return payload
+
+    with pytest.raises(BrainProfessionalAnchorViewDecisionMissing):
+        V3LLMBrainAdapter(provider=ChineseHalfBodyProvider()).finalize_canonical_provider_prompts(
+            _anchor_request(capture_scope=CAPTURE_SCOPE)
+        )
+
+
 def test_doc184_face_review_does_not_require_pose_but_ordinary_anchor_still_does() -> None:
     from alchemy_creative_agent_3_0.tests.test_v3_doc162_product_anchor_pack_host import _SharedProductService
 
