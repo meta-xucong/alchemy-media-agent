@@ -154,6 +154,12 @@ def test_doc184_character_card_scope_is_typed_and_ordinary_anchor_scope_is_uncha
     assert evidence_capture["pose_observability"] == (
         "balanced_ears_cheeks_shoulders_no_head_turn_or_tilt"
     )
+    assert evidence_capture["complexion_semantics"] == (
+        "fair_or_cool_white_means_neutral_white_balance_not_skin_whitening"
+    )
+    assert evidence_capture["aspect_ratio_standard"] == (
+        "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
+    )
     assert (
         face["professional_face_identity_quality_contract"]["body_silhouette_contract"]
         == "not_applicable_until_body_silhouette_stage"
@@ -238,6 +244,10 @@ def test_doc184_brain_schema_and_receipt_carry_face_scope_without_prompt_patchin
     assert "rather than a portfolio, fashion" in payload["remote_response_contract"]
     assert "balanced left/right ear and cheek visibility" in payload["remote_response_contract"]
     assert "plain white matte reference field" in payload["remote_response_contract"]
+    assert "neutral white balance, clean exposure and natural fair skin" in payload[
+        "remote_response_contract"
+    ]
+    assert "vertical 2:3 card" in payload["remote_response_contract"]
     assert "full-body portrait" in payload["remote_response_contract"]
     assert "provider_admission_decision" in schema
     assert "concise_positive_renderer_direction" in payload["remote_response_contract"]

@@ -57,6 +57,9 @@ Face Identity must be an evidence-grade standardized capture:
   cheeks, eye line, nose axis and shoulders;
 - stage-appropriate relaxed attention, not a model persona;
 - camera-observed skin, hair and facial materiality with small real variation;
+- fair, cold-white or commercial-clean skin language interpreted as neutral
+  white balance, clean exposure and natural fair complexion, not whitening or
+  beauty-retouch polish;
 - commercial cleanliness, crispness and translucency without dirty noise,
   smear, waxy smoothing, plastic shine or beauty-filter haze.
 
@@ -78,7 +81,9 @@ face_card_evidence_capture_contract
   pose_observability: balanced_ears_cheeks_shoulders_no_head_turn_or_tilt
   expression_standard: stage_appropriate_relaxed_neutral_attention_not_model_performance
   materiality_standard: camera_observed_skin_and_hair_detail_with_minor_real_variation
+  complexion_semantics: fair_or_cool_white_means_neutral_white_balance_not_skin_whitening
   background_standard: plain_white_matte_reference_field_no_vignette_or_glamour_gradient
+  aspect_ratio_standard: honor_frozen_rendering_size_as_reference_card_aspect_ratio
   lens_standard: low_distortion_portrait_lens_no_big_eye_or_beauty_perspective
 ```
 
@@ -98,6 +103,8 @@ straight-on front view with balanced ear and cheek visibility
 plain white matte reference field
 stage-appropriate relaxed neutral attention
 camera-observed skin and hair detail
+vertical 2:3 card when the frozen renderer size is 1024x1536
+neutral white balance and natural fair skin instead of whitening
 ```
 
 It must avoid turning the renderer prompt into:
