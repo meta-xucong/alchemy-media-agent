@@ -175,6 +175,9 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
     framing_standard: Literal["consistent_head_and_upper_shoulders_reference_crop"] | None = None
     crop_policy: Literal["head_top_margin_full_face_neck_and_upper_shoulders_visible"] | None = None
     torso_scope: Literal["upper_shoulders_only_no_half_body_or_big_head_crop"] | None = None
+    aspect_ratio_standard: Literal[
+        "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
+    ] | None = None
     # Required only for Character Card ``standard_front``.  Source images may
     # be slightly angled; that angle is identity evidence only, not an owned
     # front-card viewpoint.
