@@ -1181,6 +1181,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
     version = str(decision.get("contract_version") or "").strip()
     capture = str(decision.get("capture_presentation") or "").strip()
     continuity = str(decision.get("capture_continuity") or "").strip()
+    capture_scope = str(decision.get("capture_scope") or "").strip()
     if not (
         decision.get("required") is True
         and version in {
@@ -1197,6 +1198,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
             "reverse_three_quarter",
             "rear_head",
         }
+        and capture_scope in {"", "character_card_face_identity"}
     ):
         raise BrainProfessionalAnchorViewDecisionMissing(
             "The frozen Professional anchor-view requirement is malformed."
@@ -1228,6 +1230,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
         "target_view_role": target,
         **({"capture_presentation": capture} if capture else {}),
         **({"capture_continuity": continuity} if continuity else {}),
+        **({"capture_scope": capture_scope} if capture_scope else {}),
     }
 
 
@@ -1243,11 +1246,14 @@ def _matches_professional_anchor_view_receipts(
     expected_target_view_role = expected_requirement.get("target_view_role")
     expected_capture = expected_requirement.get("capture_presentation")
     expected_continuity = expected_requirement.get("capture_continuity")
+    expected_scope = expected_requirement.get("capture_scope")
     expected_keys = {"contract_version", "target_view_role", "status", "owner"}
     if expected_capture:
         expected_keys.add("capture_presentation")
     if expected_continuity:
         expected_keys.add("capture_continuity")
+    if expected_scope:
+        expected_keys.add("capture_scope")
     if not isinstance(candidate, list) or len(candidate) != expected_count:
         return False
     return all(
@@ -1269,6 +1275,11 @@ def _matches_professional_anchor_view_receipts(
             == expected_continuity
             if expected_continuity
             else "capture_continuity" not in item["professional_anchor_view_decision"]
+        )
+        and (
+            item["professional_anchor_view_decision"].get("capture_scope") == expected_scope
+            if expected_scope
+            else "capture_scope" not in item["professional_anchor_view_decision"]
         )
         and item["professional_anchor_view_decision"].get("status") in {"approved", "rewritten"}
         and item["professional_anchor_view_decision"].get("owner") == "remote_v3_llm_brain"

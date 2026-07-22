@@ -849,6 +849,7 @@ class V3ProductApiService:
         professional_anchor_view_role: Literal[
             "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
         ] | None = None,
+        professional_anchor_capture_scope: Literal["anchor_pack", "character_card_face_identity"] = "anchor_pack",
         professional_anchor_reference_evidence_ids: list[str] | None = None,
         professional_character_card_stage: Literal["expression_set", "body_silhouette"] | None = None,
         professional_character_card_slot: str | None = None,
@@ -884,7 +885,8 @@ class V3ProductApiService:
             if professional_anchor_view_role is None:
                 raise ValueError("professional_anchor_pack_preparation_stage_invalid")
             planning_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
-                view_role=professional_anchor_view_role
+                view_role=professional_anchor_view_role,
+                capture_scope=professional_anchor_capture_scope,
             )
             anchor_reference_assets = self._professional_anchor_reference_assets(
                 create_request,
@@ -904,6 +906,7 @@ class V3ProductApiService:
                     "professional_identity_reference_strategy"
                 ],
                 "professional_reference_stage": planning_metadata["professional_reference_stage"],
+                "professional_anchor_capture_scope": professional_anchor_capture_scope,
                 "professional_anchor_reference_assets": anchor_reference_assets,
                 # A two-source front is an admitted library contract, not a
                 # user-writable Provider flag.  It applies only to the first
@@ -1043,6 +1046,7 @@ class V3ProductApiService:
         ],
         reference_evidence_ids: list[str] | None = None,
         stage_plan_source_job_id: str | None = None,
+        capture_scope: Literal["anchor_pack", "character_card_face_identity"] = "anchor_pack",
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
     ) -> ProductJobStatus:
@@ -1065,6 +1069,8 @@ class V3ProductApiService:
             if (
                 source_metadata.get("professional_anchor_pack_preparation") is not True
                 or source_metadata.get("professional_reference_stage") != view_role
+                or str(source_metadata.get("professional_anchor_capture_scope") or "anchor_pack")
+                != capture_scope
                 or source.request.user_input != create_request.user_input
             ):
                 raise ValueError("professional_anchor_stage_plan_source_mismatch")
@@ -1084,6 +1090,7 @@ class V3ProductApiService:
             trusted_capability_plan_reuse=trusted_reuse,
             trusted_professional_anchor_preparation=True,
             professional_anchor_view_role=view_role,
+            professional_anchor_capture_scope=capture_scope,
             professional_anchor_reference_evidence_ids=reference_evidence_ids,
             generation_channel=generation_channel,
             mcp_operation_id=mcp_operation_id,
@@ -7973,6 +7980,7 @@ class V3ProductApiService:
             "professional_reference_stage",
             "professional_anchor_reference_assets",
             "professional_anchor_initial_multi_source",
+            "professional_anchor_capture_scope",
             "professional_anchor_stage_plan_reuse",
             "professional_character_card_preparation",
             "professional_character_card_stage",

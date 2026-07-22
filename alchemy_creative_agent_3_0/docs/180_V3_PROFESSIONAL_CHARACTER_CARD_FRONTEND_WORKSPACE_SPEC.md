@@ -102,7 +102,9 @@ continues automatically after the user confirms. Refreshing or closing the
 modal never loses state; reopening reads the asset again.
 
 The Face Identity stage uses the existing shared Character Card face route,
-which reuses the existing Anchor Pack/Brain/Provider/Vision path. Expression
+which reuses the existing Anchor Pack/Brain/Provider/Vision infrastructure
+with the Doc184 face/head capture scope. It does not reuse the ordinary
+whole-person pose contract. Expression
 and Body stages use the existing Character Card routes. No new Provider,
 Brain, review, retry, selector or storage path is introduced.
 

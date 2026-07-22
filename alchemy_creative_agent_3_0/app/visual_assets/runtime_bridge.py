@@ -106,6 +106,7 @@ class ProfessionalModeRuntimeBridge:
         view_role: Literal[
             "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
         ],
+        capture_scope: Literal["anchor_pack", "character_card_face_identity"] = "anchor_pack",
     ) -> dict[str, object]:
         """Return the formal shared-planning context for pack preparation.
 
@@ -115,16 +116,25 @@ class ProfessionalModeRuntimeBridge:
         preparation host and the shared execution path.
         """
 
+        if capture_scope not in {"anchor_pack", "character_card_face_identity"}:
+            raise ValueError("professional anchor capture scope is invalid")
+        quality_contract = ProfessionalModeRuntimeBridge._face_identity_quality_contract(neutral_capture=True)
+        if capture_scope == "character_card_face_identity":
+            quality_contract = {
+                **quality_contract,
+                "scope": "character_card_face_identity",
+                "geometry_scope": "face_and_head_only",
+                "body_silhouette_contract": "not_applicable_until_body_silhouette_stage",
+            }
         return {
             "professional_mode": True,
             "professional_anchor_pack_preparation": True,
             "professional_reference_stage": view_role,
             "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+            "professional_anchor_capture_scope": capture_scope,
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
-            "professional_face_identity_quality_contract": (
-                ProfessionalModeRuntimeBridge._face_identity_quality_contract(neutral_capture=True)
-            ),
+            "professional_face_identity_quality_contract": quality_contract,
         }
 
     @staticmethod

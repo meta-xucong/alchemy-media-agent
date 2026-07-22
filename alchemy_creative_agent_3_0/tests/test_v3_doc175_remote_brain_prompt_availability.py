@@ -36,6 +36,8 @@ def test_doc175_finalizer_uses_smaller_stage_instruction_without_local_prompt_au
     assert len(CANONICAL_FINALIZER_SYSTEM_PROMPT) < len(SYSTEM_PROMPT)
     assert "sole final prompt author" in CANONICAL_FINALIZER_SYSTEM_PROMPT
     assert "local repair phrase" in CANONICAL_FINALIZER_SYSTEM_PROMPT
+    assert "provider-admission safeguard" in CANONICAL_FINALIZER_SYSTEM_PROMPT
+    assert "Do not repeat contrastive safety wording" in CANONICAL_FINALIZER_SYSTEM_PROMPT
 
 
 def test_doc175_provider_shares_one_budget_and_blocks_before_a_late_remote_call(

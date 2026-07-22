@@ -15,6 +15,13 @@ does not replace Doc173's library ownership and project binding, Doc174/177's
 workspace and binding UX, Doc176's Face Identity source admission, or the
 shared Doc93/95/96/97/100/101/121/128/134–140 execution contracts.
 
+Doc184 is the current geometric capture authority for this document's Face
+Identity implementation. Character Card Face Identity shares the existing
+Anchor Pack infrastructure, but it does not inherit the ordinary Anchor Pack's
+whole-person pose or body-proportion review contract. It is a face/head or
+upper-shoulder identity-evidence capture; body geometry is deferred to Body
+Silhouette.
+
 Where an earlier Professional document says that the first release contains
 only Face Identity, or that body and expression dimensions are future work,
 this document is the newer authority for the Character Card extension. The
@@ -130,6 +137,12 @@ root source
 → front_three_quarter: 3 candidates → shared review → winner
 → profile: 3 candidates → shared review → winner
 ```
+
+The Character Card route carries the typed
+`capture_scope=character_card_face_identity` contract through Brain planning,
+canonical prompt finalization and shared Vision review. The ordinary Anchor
+Pack keeps `capture_scope=anchor_pack`. This is a semantic scope boundary,
+not a local prompt suffix or a facial-feature recipe.
 
 Only `face.reverse_three_quarter` and `face.rear_head` may continue the existing
 serial face workflow: approved standard views are used as the next-stage

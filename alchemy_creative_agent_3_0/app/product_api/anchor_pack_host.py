@@ -157,6 +157,8 @@ class ProductApiAnchorPackPreparationHost:
             "reference_evidence_ids": list(request.reference_evidence_ids),
             "stage_plan_source_job_id": self._stage_plan_source_job_ids.get(stage_key),
         }
+        if request.capture_scope != "anchor_pack":
+            job_kwargs["capture_scope"] = request.capture_scope
         # Existing Provider host seams keep their original call contract. The
         # extra fields are needed only when the explicitly selected MCP
         # renderer must recover an opaque handoff after a pending run.
@@ -506,7 +508,12 @@ class ProductApiAnchorPackPreparationHost:
             for key, value in dict(inspection.get("score_card") or {}).items()
             if isinstance(value, (int, float))
         }
-        missing_dimensions = sorted(self._REQUIRED_SCORE_DIMENSIONS - set(score_card))
+        required_dimensions = set(self._REQUIRED_SCORE_DIMENSIONS)
+        if request.capture_scope == "character_card_face_identity":
+            # Face Identity establishes facial evidence. Body proportion and
+            # full-body pose belong to the later Body Silhouette module.
+            required_dimensions.discard("pose_compliance")
+        missing_dimensions = sorted(required_dimensions - set(score_card))
         verified = (
             str(inspection.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
             and str(inspection.get("verification_state") or "").strip().lower() == "verified"
@@ -577,7 +584,10 @@ class ProductApiAnchorPackPreparationHost:
                 visual_quality_score=score_card.get("visual_quality", score_card.get("overall", 0.0)),
                 distinctive_feature_score=score_card.get("distinctive_feature_readability", 0.0),
                 human_realism_score=score_card.get("human_realism", 0.0),
-                pose_compliance_score=score_card.get("pose_compliance", 0.0),
+                pose_compliance_score=score_card.get(
+                    "pose_compliance",
+                    1.0 if request.capture_scope == "character_card_face_identity" else 0.0,
+                ),
                 ai_overperfection_penalty=score_card.get("ai_overperfection_penalty", 1.0),
                 evidence_codes=[
                     "shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified",

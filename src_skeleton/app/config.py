@@ -8,12 +8,55 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, Field
 
 try:
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values, load_dotenv
 except ModuleNotFoundError:
+    dotenv_values = None
     load_dotenv = None
 
-if load_dotenv is not None:
-    load_dotenv()
+
+def _load_runtime_env_files() -> None:
+    """Load operator runtime env files without letting them override shell env.
+
+    Codex/local validation often runs from a git worktree whose ignored
+    ``.env`` is absent even though the operator's real runtime env file exists.
+    A bare ``load_dotenv()`` then falls back to unrelated credentials such as
+    ``~/.codex/auth.json``.  Load the nearest bootstrap ``.env`` first, then
+    honor an explicit runtime env pointer from that file or the process.  The
+    originally supplied process environment remains authoritative.
+    """
+
+    if load_dotenv is None:
+        return
+    process_owned_keys = set(os.environ)
+    load_dotenv(override=False)
+
+    runtime_paths: list[Path] = []
+    for name in (
+        "MEDIA_AGENT_RUNTIME_ENV_FILE",
+        "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+        "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+    ):
+        raw = os.getenv(name)
+        if not raw:
+            continue
+        candidate = Path(os.path.expandvars(raw)).expanduser()
+        if candidate not in runtime_paths:
+            runtime_paths.append(candidate)
+
+    for path in runtime_paths:
+        if not path.exists() or not path.is_file():
+            continue
+        if dotenv_values is None:
+            load_dotenv(path, override=False)
+            continue
+        values = dotenv_values(path)
+        for key, value in values.items():
+            if value is None or key in process_owned_keys:
+                continue
+            os.environ[str(key)] = str(value)
+
+
+_load_runtime_env_files()
 
 
 def _codex_auth_value(name: str) -> str | None:

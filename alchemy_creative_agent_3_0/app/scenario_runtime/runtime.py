@@ -582,8 +582,16 @@ class ScenarioRuntime:
                 "rear_head",
             }:
                 raise CapabilityActivationError("professional_anchor_pack_preparation_stage_invalid")
+            capture_scope = str(
+                (planning_metadata or {}).get("professional_anchor_capture_scope")
+                if isinstance(planning_metadata, dict)
+                else "anchor_pack"
+            ).strip() or "anchor_pack"
+            if capture_scope not in {"anchor_pack", "character_card_face_identity"}:
+                raise CapabilityActivationError("professional_anchor_capture_scope_invalid")
             expected_metadata = self.professional_mode_runtime_bridge.anchor_pack_preparation_metadata(
-                view_role=stage
+                view_role=stage,
+                capture_scope=capture_scope,
             )
             if planning_metadata != expected_metadata:
                 raise CapabilityActivationError("professional_anchor_pack_preparation_contract_invalid")
@@ -1368,6 +1376,11 @@ class ScenarioRuntime:
                     if isinstance(planning_metadata, dict)
                     else ""
                 ).strip()
+                capture_scope = str(
+                    (planning_metadata or {}).get("professional_anchor_capture_scope")
+                    if isinstance(planning_metadata, dict)
+                    else "anchor_pack"
+                ).strip() or "anchor_pack"
                 if target_view_role not in {
                     "standard_front",
                     "three_quarter",
@@ -1389,6 +1402,8 @@ class ScenarioRuntime:
                     ),
                     "frozen_binding": dict(context.get("frozen_binding") or {}),
                 }
+                if capture_scope != "anchor_pack":
+                    context["professional_anchor_view_decision"]["capture_scope"] = capture_scope
         return context
 
     @staticmethod

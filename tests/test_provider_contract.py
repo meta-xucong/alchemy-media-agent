@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,114 @@ from app.config import openai_sdk_client_kwargs, settings
 from app.services.prompting import build_prompt_plan
 from app.services.work_intensity import apply_work_intensity
 from app.storage import media_store
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _run_config_import_probe(tmp_path: Path, env: dict[str, str]) -> dict:
+    script = """
+import hashlib
+import json
+from app.config import settings
+
+def fp(value):
+    if not value:
+        return None
+    value = str(value)
+    return {
+        "prefix": value[:7],
+        "suffix": value[-4:],
+        "sha256_12": hashlib.sha256(value.encode()).hexdigest()[:12],
+    }
+
+print(json.dumps({
+    "openai_key": fp(settings.openai_api_key),
+    "openai_base_url": settings.openai_base_url,
+    "default_image_model": settings.default_image_model,
+    "runtime_env_path": str(settings.runtime_env_path),
+}, ensure_ascii=False))
+"""
+    probe_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "OPENAI_API_BASE",
+            "DEFAULT_IMAGE_MODEL",
+            "MEDIA_AGENT_RUNTIME_ENV_FILE",
+            "ALCHEMY_MEDIA_AGENT_ENV_FILE",
+            "ALCHEMY_MEDIA_RUNTIME_ENV_FILE",
+            "PYTHONPATH",
+        }
+    }
+    probe_env.update(env)
+    probe_env["PYTHONPATH"] = str(ROOT / "src_skeleton")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=probe_env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_runtime_env_file_loads_after_bootstrap_env_and_wins_over_local_dotenv(tmp_path):
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=sk-runtime-provider",
+                "OPENAI_BASE_URL=https://runtime-gateway.example/v1",
+                "DEFAULT_IMAGE_MODEL=gpt-image-2-runtime",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                f"MEDIA_AGENT_RUNTIME_ENV_FILE={runtime}",
+                "OPENAI_API_KEY=sk-bootstrap-wrong",
+                "OPENAI_BASE_URL=https://bootstrap-wrong.example/v1",
+                "DEFAULT_IMAGE_MODEL=gpt-image-2-bootstrap",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    data = _run_config_import_probe(tmp_path, env={})
+
+    assert data["openai_key"]["prefix"] == "sk-runt"
+    assert data["openai_base_url"] == "https://runtime-gateway.example/v1"
+    assert data["default_image_model"] == "gpt-image-2-runtime"
+    assert data["runtime_env_path"] == str(runtime)
+
+
+def test_runtime_env_file_does_not_override_process_supplied_openai_key(tmp_path):
+    runtime = tmp_path / "runtime.env"
+    runtime.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=sk-runtime-provider",
+                "OPENAI_BASE_URL=https://runtime-gateway.example/v1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(f"MEDIA_AGENT_RUNTIME_ENV_FILE={runtime}\n", encoding="utf-8")
+
+    data = _run_config_import_probe(tmp_path, env={"OPENAI_API_KEY": "sk-process-provider"})
+
+    assert data["openai_key"]["prefix"] == "sk-proc"
+    assert data["openai_base_url"] == "https://runtime-gateway.example/v1"
 
 
 def test_openai_image_provider_capabilities():

@@ -165,6 +165,10 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
         "establish_neutral_capture",
         "preserve_approved_prior_capture",
     ] | None = None
+    # Character Card Face Identity keeps the same shared anchor receipt while
+    # explicitly limiting geometric review to the face/head capture scope.
+    # Ordinary Anchor Pack records omit this field and retain legacy scope.
+    capture_scope: Literal["character_card_face_identity"] | None = None
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]
 

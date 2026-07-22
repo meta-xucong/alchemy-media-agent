@@ -48,6 +48,7 @@ CANONICAL_FINALIZER_SYSTEM_PROMPT = """You are the V3 Creative OS final prompt-s
 Author the exact complete natural-language renderer prompt requested by the schema. The frozen render context is authoritative for protected user intent, reference-channel ownership, template/cardinality, capability obligations, and normalized review evidence. Reconcile all of it as one whole image; do not emit IDs, diagnostics, prompt fragments, checklists, local recipes, or markdown.
 The Remote Brain is the sole final prompt author. Do not replace an explicit current-request choice with an inherited reference style, age, camera, hair, wardrobe, expression, complexion, or scene unless the frozen ownership context explicitly assigns it to the reference.
 For a visible real person, resolve identity, current developmental stage, expression, photographic material, and scene together. Keep the person age-appropriate and non-sexual. Do not turn age, expression, complexion, skin, anatomy, or beauty into a feature formula or word stack. Preserve an explicitly user-owned commercial aesthetic while keeping the person materially camera-observed and individual; a pleasant or commercial frame alone does not justify a generic presenter expression.
+For an age-sensitive or otherwise safety-sensitive person reference, keep the renderer direction concise, plainly age-appropriate, fully clothed, and ordinary. Preserve the requested identity, developmental stage, clothing, scene, and factual capture requirements, but express realism as a positive whole-image camera observation such as natural matte skin and an ordinary expression. Do not repeat contrastive safety wording, microscopic skin or anatomy language, body-development descriptions, or lists of forbidden adult traits in the renderer prompt. This is a provider-admission safeguard, not a refusal and not permission to omit a protected user fact.
 Return every required audit receipt in the response schema. A receipt is proof of your semantic decision, never extra renderer wording. On retry, use normalized review evidence to rewrite the whole direction yourself rather than appending a local repair phrase."""
 
 _CANONICAL_FINALIZER_STAGES = frozenset(
@@ -736,6 +737,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         if isinstance(anchor_view_requirement, dict)
         else ""
     )
+    anchor_capture_scope = (
+        str(anchor_view_requirement.get("capture_scope") or "").strip()
+        if isinstance(anchor_view_requirement, dict)
+        else ""
+    )
     anchor_view_decision_required = bool(
         isinstance(anchor_view_requirement, dict)
         and anchor_view_requirement.get("required") is True
@@ -753,6 +759,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "reverse_three_quarter",
             "rear_head",
         }
+        and anchor_capture_scope in {"", "character_card_face_identity"}
         and (
             anchor_capture_presentation == "neutral_identity_evidence_capture"
             and anchor_capture_continuity
@@ -831,6 +838,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             **(
                 {"capture_continuity": anchor_capture_continuity}
                 if anchor_capture_continuity
+                else {}
+            ),
+            **(
+                {"capture_scope": anchor_capture_scope}
+                if anchor_capture_scope
                 else {}
             ),
             "status": "approved|rewritten",
@@ -937,7 +949,17 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             f"contract_version {anchor_view_version}, the exact frozen target_view_role, owner "
             "remote_v3_llm_brain, and status approved or rewritten."
         )
-        if anchor_capture_presentation:
+        if anchor_capture_scope == "character_card_face_identity":
+            response_contract += (
+                " Also reconcile this as a Character Card Face Identity capture: the frozen view role is a face/head "
+                "angle only. Make facial identity, age-stage presence, camera-observed human materiality and the exact "
+                "angle legible in a clean photographic head or upper-shoulder frame. Do not turn this face stage into "
+                "a full-body portrait, body-proportion measurement, height estimate or Body Silhouette pose contract. "
+                "Keep the Remote Brain as the sole author of the complete prompt and return capture_scope "
+                "character_card_face_identity in the typed receipt. This is a semantic scope boundary, not a local "
+                "prompt recipe; body geometry is deferred to the Body Silhouette stage."
+            )
+        elif anchor_capture_presentation:
             response_contract += (
                 " Also reconcile the Professional neutral identity-evidence capture as one complete photographic "
                 "decision: make identity, whole-person developmental stage, and cross-view comparison legible without "
