@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from types import SimpleNamespace
 from pathlib import Path
 import hashlib
 
 import pytest
+from PIL import Image
 
-from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import McpMaterializationHandoffStore
+from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
+    McpMaterializationError,
+    McpMaterializationHandoffStore,
+)
 from alchemy_creative_agent_3_0.app.generation_router.providers import McpMaterializationProvider
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatus, ProductJobStatusValue
@@ -633,6 +638,84 @@ def test_doc183_mcp_resume_uses_existing_frozen_handoff_prompt(tmp_path: Path) -
     assert context["canonical_prompt"] == old_prompt
     assert context["prompt_sha256"] == old_hash
     assert context["handoff_id"] == handoff["handoff_id"]
+
+
+def _png_bytes(size: tuple[int, int], color: tuple[int, int, int] = (240, 240, 240)) -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", size, color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_doc188_mcp_submit_normalizes_artifact_to_frozen_rendering_size(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "frozen face identity prompt"
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    references = [{"asset_id": "ref_doc188", "sha256": "a" * 64, "role": "portrait_identity"}]
+    handoff = store.ensure_pending(
+        operation_id="people_doc188:standard_front:1",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=references,
+        rendering_contract={
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "1024x1536",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_edit",
+            "size_normalization": "white_matte_contain_to_contract_size",
+        },
+    )
+
+    public = store.submit(
+        handoff["handoff_id"],
+        nonce=handoff["nonce"],
+        prompt_sha256=prompt_hash,
+        reference_asset_hashes=["a" * 64],
+        artifact_bytes=_png_bytes((1254, 1254)),
+    )
+    record = store.get(handoff["handoff_id"])
+
+    assert public["status"] == "submitted"
+    assert record is not None
+    assert record["artifact_width"] == 1024
+    assert record["artifact_height"] == 1536
+    assert record["artifact_size_normalization"]["original_width"] == 1254
+    assert record["artifact_size_normalization"]["original_height"] == 1254
+    with Image.open(record["artifact_file"]) as image:
+        assert image.size == (1024, 1536)
+
+
+def test_doc188_mcp_submit_rejects_size_mismatch_without_policy(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "frozen face identity prompt"
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    references = [{"asset_id": "ref_doc188", "sha256": "a" * 64, "role": "portrait_identity"}]
+    handoff = store.ensure_pending(
+        operation_id="people_doc188:standard_front:2",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=references,
+        rendering_contract={
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "1024x1536",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_edit",
+        },
+    )
+
+    with pytest.raises(McpMaterializationError, match="mcp_materialization_output_size_mismatch"):
+        store.submit(
+            handoff["handoff_id"],
+            nonce=handoff["nonce"],
+            prompt_sha256=prompt_hash,
+            reference_asset_hashes=["a" * 64],
+            artifact_bytes=_png_bytes((1254, 1254)),
+        )
 
 
 def test_doc182_resume_route_is_explicit_and_non_boolean_flag_is_rejected() -> None:

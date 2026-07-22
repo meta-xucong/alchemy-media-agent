@@ -108,7 +108,34 @@ It must avoid turning the renderer prompt into:
 - a list of forbidden anatomy or safety-sensitive negatives;
 - a local repair phrase appended after the prompt.
 
-## 5. Conflict resolution with older documents
+## 5. MCP rendering-size parity
+
+The MCP channel is only a transport outlet. It must not let a local ImageGen
+artifact bypass the same rendering contract that Provider would have used.
+
+For concrete handoff sizes such as `1024x1536`, the MCP handoff declares:
+
+```text
+size_normalization: white_matte_contain_to_contract_size
+```
+
+If the submitted artifact already matches the frozen size, it is stored as-is.
+If the artifact is readable and has the correct output format but a different
+size, the MCP store may perform one auditable transport normalization:
+
+- scale the submitted image proportionally;
+- fit it inside the frozen canvas;
+- use a plain white matte field;
+- do not crop, inpaint, retouch, beautify or change the subject;
+- record original width/height, target width/height and result width/height.
+
+If no normalization policy is present, a size mismatch must fail closed with
+`mcp_materialization_output_size_mismatch`.
+
+This makes MCP and Provider equivalent at the stored artifact boundary without
+creating a second creative path.
+
+## 6. Conflict resolution with older documents
 
 - Doc184 still governs face/head capture scope and fixed framing.
 - Doc186 still governs reference-led slot-delta minimization.
@@ -118,7 +145,7 @@ It must avoid turning the renderer prompt into:
 - “Commercial clean” now means technically clean, bright, crisp, translucent
   and reviewable while preserving real camera materiality.
 
-## 6. Acceptance checks
+## 7. Acceptance checks
 
 Implementation is acceptable only when:
 
@@ -129,6 +156,8 @@ Implementation is acceptable only when:
 3. Brain finalization receives explicit evidence-grade capture language;
 4. MCP and Provider still share one canonical prompt, review path, winner path,
    storage path and resume budget;
-5. tests pass without relaxing Vision thresholds or adding private fallbacks;
-6. a fresh validation run is attempted from the authorized source image and
+5. MCP handoff artifacts either match or are normalized to the frozen rendering
+   size through an auditable white-matte contain operation;
+6. tests pass without relaxing Vision thresholds or adding private fallbacks;
+7. a fresh validation run is attempted from the authorized source image and
    either produces accepted slots or stops with bounded review evidence.

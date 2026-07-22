@@ -5031,6 +5031,7 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "api_operation": "image_edit" if reference_assets else "image_generate",
             "input_fidelity": variables.get("input_fidelity"),
             "input_fidelity_required": bool(variables.get("input_fidelity_required")),
+            "size_normalization": "white_matte_contain_to_contract_size",
         }
         context = {
             "operation_id": str(

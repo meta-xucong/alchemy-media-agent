@@ -43,6 +43,57 @@ def _validate_image(content: bytes) -> tuple[int | None, int | None]:
         raise ValueError("MCP artifact is not a valid image") from exc
 
 
+def _parse_size(value: object) -> tuple[int, int] | None:
+    raw = str(value or "").strip().lower()
+    if not raw or raw == "auto" or "x" not in raw:
+        return None
+    left, right = raw.split("x", 1)
+    try:
+        width = int(left)
+        height = int(right)
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _normalize_image_size(
+    content: bytes,
+    *,
+    image_format: str,
+    target_size: tuple[int, int],
+) -> bytes:
+    """Fit an MCP image into the frozen rendering size on a white matte canvas.
+
+    This is a transport parity operation, not a creative edit: it never invents
+    pixels for the subject and never crops the submitted image.  It only scales
+    the submitted artifact down/up to fit inside the Provider-equivalent canvas.
+    """
+
+    try:
+        from PIL import Image
+
+        target_width, target_height = target_size
+        resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+        with Image.open(BytesIO(content)) as image:
+            source = image.convert("RGBA")
+        source.thumbnail((target_width, target_height), resampling)
+        canvas = Image.new("RGBA", (target_width, target_height), (255, 255, 255, 255))
+        offset = ((target_width - source.width) // 2, (target_height - source.height) // 2)
+        canvas.alpha_composite(source, offset)
+        output = BytesIO()
+        if image_format == "jpeg":
+            canvas.convert("RGB").save(output, format="JPEG", quality=95)
+        elif image_format == "webp":
+            canvas.save(output, format="WEBP", quality=95)
+        else:
+            canvas.save(output, format="PNG")
+        return output.getvalue()
+    except Exception as exc:
+        raise ValueError("MCP artifact could not be normalized to the rendering size") from exc
+
+
 def _default_root() -> Path:
     configured = os.getenv("ALCHEMY_V3_MCP_MATERIALIZATION_ROOT")
     if configured:
@@ -179,6 +230,44 @@ class McpMaterializationHandoffStore:
             expected_format = str((payload.get("rendering_contract") or {}).get("output_format") or "png").lower()
             if image_format != expected_format:
                 raise McpMaterializationError("mcp_materialization_output_format_mismatch")
+            contract = dict(payload.get("rendering_contract") or {})
+            expected_size = _parse_size(contract.get("size"))
+            original_width, original_height = width, height
+            original_sha256 = _sha256(content)
+            size_normalization: dict[str, Any] | None = None
+            if expected_size is not None and (width, height) != expected_size:
+                policy = str(contract.get("size_normalization") or "").strip()
+                if policy != "white_matte_contain_to_contract_size":
+                    raise McpMaterializationError(
+                        "mcp_materialization_output_size_mismatch",
+                        detail={
+                            "expected_width": expected_size[0],
+                            "expected_height": expected_size[1],
+                            "artifact_width": width,
+                            "artifact_height": height,
+                        },
+                    )
+                try:
+                    content = _normalize_image_size(
+                        content,
+                        image_format=image_format,
+                        target_size=expected_size,
+                    )
+                    width, height = _validate_image(content)
+                except Exception as exc:
+                    raise McpMaterializationError(
+                        "mcp_materialization_output_size_normalization_failed",
+                        "The submitted artifact could not be normalized to the frozen rendering size.",
+                    ) from exc
+                size_normalization = {
+                    "policy": policy,
+                    "original_width": original_width,
+                    "original_height": original_height,
+                    "target_width": expected_size[0],
+                    "target_height": expected_size[1],
+                    "result_width": width,
+                    "result_height": height,
+                }
             artifact_path = self._artifact_path(str(payload["handoff_id"]), image_format)
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
             artifact_path.write_bytes(content)
@@ -192,6 +281,14 @@ class McpMaterializationHandoffStore:
                 "artifact_mime_type": mime_type,
                 "artifact_width": width,
                 "artifact_height": height,
+                **(
+                    {
+                        "artifact_original_sha256": original_sha256,
+                        "artifact_size_normalization": size_normalization,
+                    }
+                    if size_normalization is not None
+                    else {}
+                ),
             }
             self._write(self._record_path(str(payload["handoff_id"])), updated)
             return self.public_view(handoff_id)
@@ -285,6 +382,7 @@ class McpMaterializationHandoffStore:
             "api_operation",
             "input_fidelity",
             "input_fidelity_required",
+            "size_normalization",
         }
         return {key: value for key, value in dict(contract or {}).items() if key in allowed}
 
