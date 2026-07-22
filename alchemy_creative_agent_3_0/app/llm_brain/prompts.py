@@ -776,6 +776,21 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     )
     if isinstance(anchor_view_requirement, dict) and not anchor_view_decision_required:
         raise ValueError("Professional anchor finalization requires one valid frozen view contract.")
+    provider_admission_requirement = context.get("provider_admission_decision")
+    provider_admission_required = bool(
+        isinstance(provider_admission_requirement, dict)
+        and provider_admission_requirement.get("required") is True
+        and provider_admission_requirement.get("contract_version")
+        == "v3_provider_admission_decision_v1"
+        and provider_admission_requirement.get("provider_admission_status") == "admitted"
+        and provider_admission_requirement.get("prompt_language_mode")
+        == "concise_positive_renderer_direction"
+        and provider_admission_requirement.get("safety_sensitive_prompt_normalized") == "applied"
+        and provider_admission_requirement.get("owner") == "remote_v3_llm_brain"
+        and isinstance(provider_admission_requirement.get("frozen_binding"), dict)
+    )
+    if isinstance(provider_admission_requirement, dict) and not provider_admission_required:
+        raise ValueError("Provider admission requires one valid frozen Brain contract.")
     if decision_required and not (
         isinstance(decision_requirement, dict)
         and decision_requirement.get("required") is True
@@ -848,6 +863,15 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "status": "approved|rewritten",
             "owner": "remote_v3_llm_brain",
         }
+    if provider_admission_required:
+        prompt_schema["provider_admission_decision"] = {
+            "contract_version": "v3_provider_admission_decision_v1",
+            "provider_admission_status": "admitted",
+            "prompt_language_mode": "concise_positive_renderer_direction",
+            "safety_sensitive_prompt_normalized": "applied",
+            "status": "approved|rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
     response_contract = (
         "Return only this schema as strictly valid JSON. Reconcile the "
         "frozen render context without adding a local recipe, internal "
@@ -871,6 +895,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             " For every output, silently complete the required whole-image "
             "semantic preflight before writing the prompt and explicitly set "
             "semantic_preflight_status to approved."
+        )
+    if provider_admission_required:
+        response_contract += (
+            " Before admission, normalize the complete renderer direction as concise, positive, plainly age-appropriate "
+            "and fully clothed. Preserve identity, requested stage, clothing, scene and factual capture requirements, "
+            "but do not repeat contrastive safety wording, microscopic anatomy or skin language, or a list of forbidden "
+            "adult traits. This is a provider-admission normalization performed by you, not a refusal and not permission "
+            "to omit protected user intent. Return the exact provider_admission_decision receipt with provider_admission_status "
+            "admitted, prompt_language_mode concise_positive_renderer_direction, safety_sensitive_prompt_normalized applied, "
+            "and owner remote_v3_llm_brain."
         )
     if decision_required:
         response_contract += (

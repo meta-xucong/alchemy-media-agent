@@ -28,6 +28,7 @@ from .providers import (
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
     BrainProfessionalAnchorViewDecisionMissing,
+    BrainProviderAdmissionDecisionMissing,
     BrainProviderError,
     BrainProviderUnavailable,
     BrainReferenceChannelOwnershipDecisionMissing,
@@ -287,6 +288,15 @@ class V3LLMBrainAdapter:
             raise BrainProfessionalAnchorViewDecisionMissing(
                 "Remote Brain did not return the required frozen Professional anchor-view receipt."
             )
+        provider_admission_requirement = _required_provider_admission_requirement(request)
+        if provider_admission_requirement and not _matches_provider_admission_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+            expected_requirement=provider_admission_requirement,
+        ):
+            raise BrainProviderAdmissionDecisionMissing(
+                "Remote Brain did not return the required provider-admission receipt."
+            )
         try:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
@@ -352,11 +362,24 @@ class V3LLMBrainAdapter:
                 "professional_anchor_view_decision_signed": bool(professional_anchor_view_requirement),
                 "professional_anchor_view_decisions": (
                     [
-                        prompt.professional_anchor_view_decision.model_dump(mode="json")
+                        prompt.professional_anchor_view_decision.model_dump(
+                            mode="json", exclude_none=True
+                        )
                         for prompt in prompts
                         if prompt.professional_anchor_view_decision is not None
                     ]
                     if professional_anchor_view_requirement
+                    else []
+                ),
+                "provider_admission_decision_required": bool(provider_admission_requirement),
+                "provider_admission_decision_signed": bool(provider_admission_requirement),
+                "provider_admission_decisions": (
+                    [
+                        prompt.provider_admission_decision.model_dump(mode="json")
+                        for prompt in prompts
+                        if prompt.provider_admission_decision is not None
+                    ]
+                    if provider_admission_requirement
                     else []
                 ),
             },
@@ -1283,6 +1306,58 @@ def _matches_professional_anchor_view_receipts(
         )
         and item["professional_anchor_view_decision"].get("status") in {"approved", "rewritten"}
         and item["professional_anchor_view_decision"].get("owner") == "remote_v3_llm_brain"
+        for index, item in enumerate(candidate, start=1)
+    )
+
+
+def _required_provider_admission_requirement(request: BrainRunRequest) -> dict[str, str]:
+    """Return the exact provider-admission contract for sensitive card stages."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    decision = context.get("provider_admission_decision")
+    if not isinstance(decision, dict):
+        return {}
+    expected = {
+        "contract_version": "v3_provider_admission_decision_v1",
+        "provider_admission_status": "admitted",
+        "prompt_language_mode": "concise_positive_renderer_direction",
+        "safety_sensitive_prompt_normalized": "applied",
+        "owner": "remote_v3_llm_brain",
+    }
+    if not (
+        decision.get("required") is True
+        and all(decision.get(key) == value for key, value in expected.items())
+        and isinstance(decision.get("frozen_binding"), dict)
+    ):
+        raise BrainProviderAdmissionDecisionMissing(
+            "The frozen provider-admission requirement is malformed."
+        )
+    return expected
+
+
+def _matches_provider_admission_receipts(
+    candidate: Any,
+    *,
+    expected_count: int,
+    expected_requirement: dict[str, str],
+) -> bool:
+    """Validate admission parity without inspecting or rewriting prompt text."""
+
+    expected_keys = {*expected_requirement, "status"}
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    return all(
+        isinstance(item, dict)
+        and int(item.get("output_index") or 0) == index
+        and isinstance(item.get("provider_admission_decision"), dict)
+        and set(item["provider_admission_decision"]) == expected_keys
+        and all(
+            item["provider_admission_decision"].get(key) == value
+            for key, value in expected_requirement.items()
+        )
+        and item["provider_admission_decision"].get("status") in {"approved", "rewritten"}
         for index, item in enumerate(candidate, start=1)
     )
 

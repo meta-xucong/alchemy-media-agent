@@ -187,6 +187,20 @@ class EcommerceRemoteBrainTestProvider:
                 else not anchor_capture_presentation
             )
         )
+        provider_admission_requirement = (
+            context.get("provider_admission_decision") if isinstance(context, dict) else None
+        )
+        requires_provider_admission_decision = bool(
+            isinstance(provider_admission_requirement, dict)
+            and provider_admission_requirement.get("required") is True
+            and provider_admission_requirement.get("contract_version")
+            == "v3_provider_admission_decision_v1"
+            and provider_admission_requirement.get("provider_admission_status") == "admitted"
+            and provider_admission_requirement.get("prompt_language_mode")
+            == "concise_positive_renderer_direction"
+            and provider_admission_requirement.get("safety_sensitive_prompt_normalized") == "applied"
+            and provider_admission_requirement.get("owner") == "remote_v3_llm_brain"
+        )
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -268,6 +282,20 @@ class EcommerceRemoteBrainTestProvider:
                         }
                     }
                     if requires_anchor_view_decision
+                    else {}
+                ),
+                **(
+                    {
+                        "provider_admission_decision": {
+                            "contract_version": "v3_provider_admission_decision_v1",
+                            "provider_admission_status": "admitted",
+                            "prompt_language_mode": "concise_positive_renderer_direction",
+                            "safety_sensitive_prompt_normalized": "applied",
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if requires_provider_admission_decision
                     else {}
                 ),
             }

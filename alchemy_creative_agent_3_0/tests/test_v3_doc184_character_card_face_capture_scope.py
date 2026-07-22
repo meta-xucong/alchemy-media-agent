@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
+from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainProviderAdmissionDecisionMissing
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
@@ -67,6 +69,15 @@ def _anchor_request(*, capture_scope: str | None = None) -> BrainRunRequest:
     }
     if capture_scope:
         decision["capture_scope"] = capture_scope
+    provider_admission = {
+        "required": True,
+        "contract_version": "v3_provider_admission_decision_v1",
+        "provider_admission_status": "admitted",
+        "prompt_language_mode": "concise_positive_renderer_direction",
+        "safety_sensitive_prompt_normalized": "applied",
+        "owner": "remote_v3_llm_brain",
+        "frozen_binding": decision["frozen_binding"],
+    } if capture_scope else None
     return BrainRunRequest(
         user_input="Prepare the frozen Professional identity evidence view.",
         stage="provider_prompt_finalize",
@@ -80,6 +91,11 @@ def _anchor_request(*, capture_scope: str | None = None) -> BrainRunRequest:
                     "professional_face_identity_quality_contract"
                 ],
                 "frozen_binding": decision["frozen_binding"],
+                **(
+                    {"provider_admission_decision": provider_admission}
+                    if provider_admission is not None
+                    else {}
+                ),
             }
         },
     )
@@ -139,11 +155,14 @@ def test_doc184_brain_schema_and_receipt_carry_face_scope_without_prompt_patchin
     assert schema["professional_anchor_view_decision"]["capture_scope"] == CAPTURE_SCOPE
     assert "face/head angle only" in payload["remote_response_contract"]
     assert "full-body portrait" in payload["remote_response_contract"]
+    assert "provider_admission_decision" in schema
+    assert "concise_positive_renderer_direction" in payload["remote_response_contract"]
     assert "prompt suffix" not in payload["remote_response_contract"].lower()
 
     ordinary_payload = json.loads(build_remote_payload(_anchor_request()))
     ordinary_schema = ordinary_payload["return_schema"]["canonical_provider_prompts"][0]
     assert "capture_scope" not in ordinary_schema["professional_anchor_view_decision"]
+    assert "provider_admission_decision" not in ordinary_schema
 
 
 class _ScopeEchoProvider(EcommerceRemoteBrainTestProvider):
@@ -198,7 +217,25 @@ def test_doc184_runtime_and_adapter_preserve_brain_scope_receipt(tmp_path: Path,
     finalizer = [item for item in brain.requests if item["stage"] == "provider_prompt_finalize"][-1]
     context = finalizer["metadata"]["canonical_prompt_context"]
     assert context["professional_anchor_view_decision"]["capture_scope"] == CAPTURE_SCOPE
+    assert context["provider_admission_decision"]["prompt_language_mode"] == (
+        "concise_positive_renderer_direction"
+    )
     assert result.metadata["llm_brain"]["audit"]["professional_anchor_view_decisions"][0]["capture_scope"] == CAPTURE_SCOPE
+    assert result.metadata["llm_brain"]["audit"]["provider_admission_decision_signed"] is True
+
+
+def test_doc184_adapter_fail_closes_when_provider_admission_receipt_is_missing() -> None:
+    class MissingAdmissionProvider(_ScopeEchoProvider):
+        def run(self, request):  # noqa: ANN001
+            payload = super().run(request)
+            for item in payload.get("canonical_provider_prompts", []):
+                item.pop("provider_admission_decision", None)
+            return payload
+
+    with pytest.raises(BrainProviderAdmissionDecisionMissing):
+        V3LLMBrainAdapter(provider=MissingAdmissionProvider()).finalize_canonical_provider_prompts(
+            _anchor_request(capture_scope=CAPTURE_SCOPE)
+        )
 
 
 def test_doc184_face_review_does_not_require_pose_but_ordinary_anchor_still_does() -> None:

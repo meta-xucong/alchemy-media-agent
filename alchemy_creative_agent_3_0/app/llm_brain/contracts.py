@@ -173,6 +173,22 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
     owner: Literal["remote_v3_llm_brain"]
 
 
+class BrainProviderAdmissionDecision(V3BaseModel):
+    """Receipt that the Brain authored provider-safe renderer language.
+
+    This is an admission receipt, not a local prompt filter.  The remote
+    Brain remains the only component allowed to normalize safety-sensitive
+    person language or rewrite the complete prompt.
+    """
+
+    contract_version: Literal["v3_provider_admission_decision_v1"]
+    provider_admission_status: Literal["admitted"]
+    prompt_language_mode: Literal["concise_positive_renderer_direction"]
+    safety_sensitive_prompt_normalized: Literal["applied"]
+    status: Literal["approved", "rewritten"]
+    owner: Literal["remote_v3_llm_brain"]
+
+
 class BrainCanonicalProviderPrompt(V3BaseModel):
     """One Brain-signed, renderer-ready prompt for a frozen output.
 
@@ -205,6 +221,10 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     # Historical and non-anchor records remain readable without this field.
     # Formal Professional anchor preparation requires the exact frozen role.
     professional_anchor_view_decision: BrainProfessionalAnchorViewDecision | None = None
+    # Character Card Face Identity requires an explicit provider-admission
+    # receipt because its age-sensitive reference prompt must be concise and
+    # positively authored before either renderer channel can be used.
+    provider_admission_decision: BrainProviderAdmissionDecision | None = None
 
     @field_validator("prompt")
     @classmethod

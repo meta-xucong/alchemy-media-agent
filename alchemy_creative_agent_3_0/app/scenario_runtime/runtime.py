@@ -1404,6 +1404,21 @@ class ScenarioRuntime:
                 }
                 if capture_scope != "anchor_pack":
                     context["professional_anchor_view_decision"]["capture_scope"] = capture_scope
+                if capture_scope == "character_card_face_identity":
+                    # Face Identity references can describe an age-sensitive
+                    # person. The Brain must explicitly normalize the final
+                    # renderer direction before either Provider or MCP sees
+                    # it; this is a typed admission contract, not a local
+                    # prompt rewrite or a child-specific recipe.
+                    context["provider_admission_decision"] = {
+                        "required": True,
+                        "contract_version": "v3_provider_admission_decision_v1",
+                        "provider_admission_status": "admitted",
+                        "prompt_language_mode": "concise_positive_renderer_direction",
+                        "safety_sensitive_prompt_normalized": "applied",
+                        "owner": "remote_v3_llm_brain",
+                        "frozen_binding": dict(context.get("frozen_binding") or {}),
+                    }
         return context
 
     @staticmethod
@@ -1605,6 +1620,17 @@ class ScenarioRuntime:
                 expected_image_count=expected,
                 actual_canonical_prompt_count=len(prompts),
             )
+        if (
+            bool(brain_result.audit.get("provider_admission_decision_required"))
+            and not bool(brain_result.audit.get("frozen_execution_reuse"))
+            and not bool(brain_result.audit.get("provider_admission_decision_signed"))
+        ):
+            raise self._remote_creative_brain_block(
+                "provider_admission_decision_missing",
+                brain_result,
+                expected_image_count=expected,
+                actual_canonical_prompt_count=len(prompts),
+            )
 
     @staticmethod
     def _requires_remote_creative_brain_for_real_images(request: ScenarioRuntimeRequest) -> bool:
@@ -1682,6 +1708,7 @@ class ScenarioRuntime:
             "professional_face_identity_quality_contract_missing",
             "professional_anchor_view_contract_missing",
             "professional_anchor_view_decision_missing",
+            "provider_admission_decision_missing",
         }:
             outcome_class = "remote_prompt_signoff_unavailable"
         elif brain_result.skipped:

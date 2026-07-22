@@ -58,6 +58,10 @@ class BrainProfessionalAnchorViewDecisionMissing(BrainProviderError):
     """The final Brain sign-off omitted or changed the frozen anchor view."""
 
 
+class BrainProviderAdmissionDecisionMissing(BrainProviderError):
+    """The final Brain sign-off omitted the provider-admission receipt."""
+
+
 @dataclass(frozen=True)
 class _BrainExecutionBudget:
     """Ephemeral deadline shared by all remote calls in one V3 preparation.
