@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION = "v3_affective_laugh_intent_v2"
+LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION = "v3_affective_laugh_intent_v3"
 
 LAUGH_EXPRESSION_INTENT_CONTRACT: dict[str, Any] = {
     "contract_version": LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION,
@@ -27,6 +27,7 @@ LAUGH_EXPRESSION_INTENT_CONTRACT: dict[str, Any] = {
     "participation_channels": [
         "mouth_eye_coherence",
         "engaged_lively_gaze",
+        "visible_eye_cheek_coupling",
         "lower_lid_periocular_participation",
         "upper_cheek_lift",
         "relaxed_jaw_opening",
@@ -131,8 +132,10 @@ def laugh_expression_materialization_directive(contract: Any | None = None) -> s
     return (
         "Render a clearly readable joyful laugh keyframe, not merely a polite open-mouth smile. "
         f"Use {intensity} expression energy in a {phase}: engaged, lively gaze as expression evidence "
-        "only, visible lower-lid/periocular participation, upper-cheek lift, relaxed jaw opening, "
-        "natural age-appropriate teeth visibility, and slight spontaneous asymmetry. "
+        "only, clearly visible eye-cheek coupling where the upper cheeks lift into the lower eyelids, "
+        "eyes stay open but become slightly narrower joyful crescent arcs, relaxed jaw opening, "
+        "natural age-appropriate teeth visibility, and slight spontaneous asymmetry. The mouth opening "
+        "must synchronize with cheek lift and periocular affect instead of reading as mouth-only. "
         "The still image should feel like a captured laugh keyframe, not a neutral portrait with parted lips."
     )
 

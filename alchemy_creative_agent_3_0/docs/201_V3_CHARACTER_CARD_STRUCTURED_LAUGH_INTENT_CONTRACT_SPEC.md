@@ -2,6 +2,11 @@
 
 Date: 2026-07-24
 
+Superseded note: Doc204 keeps this document's ownership model and structured
+intent design, but updates the materializer projection from the weaker
+lower-lid wording to explicit eye-cheek coupling
+(`v3_affective_laugh_intent_v3`). Use Doc204 for current renderer wording.
+
 ## 1. Why Doc200 was not enough
 
 Doc200 correctly identified that the `expression.laugh` candidates were failing

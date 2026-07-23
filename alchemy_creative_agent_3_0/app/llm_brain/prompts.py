@@ -1058,7 +1058,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 participation_terms = (
                     ", ".join(str(item) for item in participation if str(item).strip())
                     if isinstance(participation, list)
-                    else "mouth_eye_coherence, lower_lid_periocular_participation, upper_cheek_lift, relaxed_jaw_opening"
+                    else "mouth_eye_coherence, visible_eye_cheek_coupling, lower_lid_periocular_participation, relaxed_jaw_opening"
                 )
                 response_contract += (
                     " For the Professional positive slot, use the shared structured laugh intent contract "

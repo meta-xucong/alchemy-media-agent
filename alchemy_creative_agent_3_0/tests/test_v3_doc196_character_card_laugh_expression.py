@@ -457,6 +457,7 @@ def test_doc196_character_card_expression_context_carries_framing_and_laugh_cont
         "inherit_prompt_owned_face_front_channels_without_lighting_or_complexion_override"
     )
     assert "lower_lid_periocular_participation" in laugh_contract["participation_channels"]
+    assert "visible_eye_cheek_coupling" in laugh_contract["participation_channels"]
     assert "upper_cheek_lift" in laugh_contract["participation_channels"]
     assert laugh_contract["video_motion_hint"]
     assert "laugh_intent_contract" not in body_metadata["professional_face_identity_quality_contract"]
@@ -527,6 +528,7 @@ def test_doc196_brain_prompt_contract_receives_laugh_and_framing_only_for_charac
     assert "arousal_band=medium_to_medium_high" in payload["remote_response_contract"]
     assert "phase=onset_to_peak_static_keyframe" in payload["remote_response_contract"]
     assert "lower_lid_periocular_participation" in payload["remote_response_contract"]
+    assert "visible_eye_cheek_coupling" in payload["remote_response_contract"]
     assert "engaged/lively gaze as facial affect evidence only" in payload["remote_response_contract"]
     assert "medium-arousal amused keyframe" not in payload["remote_response_contract"]
     assert "bright lighting" not in payload["remote_response_contract"]
@@ -1005,8 +1007,10 @@ def test_doc197_laugh_brain_timeout_uses_bounded_expression_slot_delta_recovery(
     assert "clearly readable joyful laugh keyframe" in canonical.prompt
     assert "not merely a polite open-mouth smile" in canonical.prompt
     assert "engaged, lively gaze as expression evidence only" in canonical.prompt
-    assert "visible lower-lid/periocular participation" in canonical.prompt
-    assert "upper-cheek lift" in canonical.prompt
+    assert "clearly visible eye-cheek coupling" in canonical.prompt
+    assert "upper cheeks lift into the lower eyelids" in canonical.prompt
+    assert "slightly narrower joyful crescent arcs" in canonical.prompt
+    assert "must synchronize with cheek lift and periocular affect" in canonical.prompt
     assert "onset to peak static keyframe" in canonical.prompt
     assert "bright engaged gaze" not in canonical.prompt
     assert "bright lighting" not in canonical.prompt
