@@ -893,7 +893,7 @@ class ProductApiAnchorPackPreparationHost:
         operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
         if request.attempt_round > 1:
             operation_id = f"{operation_id}:round{request.attempt_round}"
-        if request.generation_channel == "mcp" and not str(request.mcp_handoff_id or "").strip():
+        if request.generation_channel == "mcp":
             orphan_handoff_id = self._recover_unconsumed_character_card_mcp_handoff_id(
                 request,
                 operation_id,
@@ -1116,6 +1116,7 @@ class ProductApiAnchorPackPreparationHost:
             current.append(payload)
         if not current:
             return None
+        requested_handoff = str(request.mcp_handoff_id or "").strip()
         submitted = [
             item
             for item in current
@@ -1126,6 +1127,10 @@ class ProductApiAnchorPackPreparationHost:
                 raise AnchorCandidateUnavailable("mcp_materialization_operation_ambiguous")
             handoff_id = str(submitted[0].get("handoff_id") or "").strip()
             return handoff_id or None
+        if requested_handoff:
+            for payload in current:
+                if str(payload.get("handoff_id") or "").strip() == requested_handoff:
+                    return requested_handoff
         if len(current) > 1:
             raise AnchorCandidateUnavailable("mcp_materialization_operation_ambiguous")
         handoff_id = str(current[0].get("handoff_id") or "").strip()
