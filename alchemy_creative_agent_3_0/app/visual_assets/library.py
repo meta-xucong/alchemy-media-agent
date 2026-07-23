@@ -954,6 +954,14 @@ class VisualAssetLibraryLifecycleService:
         if retry_failed_slot:
             if expression is not None:
                 raise ValueError("character_card_failed_slot_retry_uses_persisted_slot")
+            recover_receipt = getattr(
+                self.character_card_stage_host,
+                "recover_character_card_blocked_stage_receipt",
+                None,
+            )
+            if stage == "expression_set" and callable(recover_receipt):
+                card = recover_receipt(asset=asset, card=card, stage=stage)
+                asset = asset.model_copy(update={"character_card": card})
             card = card.begin_failed_slot_retry(module=stage, confirmed=confirm_retry)
         method_name = "prepare_expression_slot" if stage == "expression_set" and expression is not None else f"prepare_{stage}"
         method = getattr(self.character_card_stage_host, method_name, None)

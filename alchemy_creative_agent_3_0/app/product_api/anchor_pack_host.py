@@ -30,8 +30,10 @@ from ..visual_assets.anchor_pack import (
 )
 from ..visual_assets.character_card import (
     BodyPreparationRequest,
+    CharacterCardCandidateAttempt,
     CharacterCardCandidateRequest,
     CharacterCardCandidateResult,
+    CharacterCardFailureEvent,
     CharacterCardPreparationService,
     CharacterCardSharedRuntimeReceipt,
     CharacterCardSharedRuntimeFailureReceipt,
@@ -896,6 +898,92 @@ class ProductApiAnchorPackPreparationHost:
                 seen.add(identity)
                 receipts.append(dict(receipt))
         return receipts
+
+    def recover_character_card_blocked_stage_receipt(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        stage: str,
+    ) -> CharacterCardState:
+        """Re-project existing reviewed pixels into a blocked-stage receipt.
+
+        This is a read-only reconciliation path for checkpoints created before
+        Doc211 persisted ``last_shared_runtime_failure``.  It does not create a
+        job, call Brain, materialize MCP, or select a winner.  It only scans
+        existing official job records for the failed stage/slot/round and
+        rebuilds the same sanitized failure receipt that a fresh blocked stage
+        would have carried.
+        """
+
+        if stage != "expression_set":
+            return card
+        if isinstance(getattr(card, "last_shared_runtime_failure", None), dict):
+            return card
+        if card.last_failure_code != "mcp_materialization_operation_ambiguous":
+            return card
+        if card.last_failed_module != "expression_set" or not card.last_failed_slot_key:
+            return card
+        slot_key = str(card.last_failed_slot_key)
+        if slot_key not in {"expression.laugh", "expression.smile", "expression.anger", "expression.sad"}:
+            return card
+        front_slot = card.face_slots.get("face.front")
+        front_output_id = str(getattr(front_slot, "output_id", None) or "").strip()
+        if not front_output_id:
+            return card
+        try:
+            attempt_round = int((card.slot_retry_rounds or {}).get(slot_key, 1) or 1)
+        except (TypeError, ValueError):
+            attempt_round = 1
+        failure_index = max(1, min(3, int(card.last_failure_attempt_count or 1)))
+        attempts: list[CharacterCardCandidateAttempt] = []
+        for candidate_index in range(1, failure_index):
+            request = CharacterCardCandidateRequest(
+                project_id=f"visual_asset_{asset.visual_asset_id}",
+                people_asset_id=str(asset.visual_asset_id),
+                card_version_id=card.card_version_id,
+                module="expression_set",
+                slot_key=slot_key,  # type: ignore[arg-type]
+                candidate_index=candidate_index,
+                attempt_round=attempt_round,
+                reference_output_ids=[front_output_id],
+                user_intent="blocked Character Card stage receipt recovery",
+                generation_channel="mcp",
+            )
+            operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
+            if request.attempt_round > 1:
+                operation_id = f"{operation_id}:round{request.attempt_round}"
+            record = self._mcp_resume_character_card_stage_job_record(request, operation_id)
+            if record is None or getattr(record, "generation_result", None) is None:
+                continue
+            try:
+                candidate, review = self._character_card_candidate_and_review(record.job_id, request)
+            except (AnchorCandidateUnavailable, RuntimeError):
+                continue
+            attempts.append(CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review))
+        if not attempts:
+            return card
+        result = CharacterCardStageResult(
+            status="blocked",
+            card=card,
+            attempts=attempts,
+            failures=[
+                CharacterCardFailureEvent(
+                    module="expression_set",
+                    slot_key=slot_key,  # type: ignore[arg-type]
+                    candidate_index=failure_index,
+                    attempt_round=attempt_round,
+                    failure_code=card.last_failure_code,
+                )
+            ],
+            failure_codes=[card.last_failure_code],
+        )
+        attached = self._attach_character_card_receipt(result, asset=asset, stage=stage)
+        if attached.shared_runtime_failure is None or attached.shared_runtime_failure.reviewed_attempt_count <= 0:
+            return card
+        return attached.card.model_copy(
+            update={"last_shared_runtime_failure": attached.shared_runtime_failure.model_dump(mode="json")}
+        )
 
     def _generate_character_card_candidate(
         self,

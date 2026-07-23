@@ -51,6 +51,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardCandidateResult,
     CharacterCardFailureEvent,
     CharacterCardPreparationService,
+    CharacterCardSharedRuntimeFailureReceipt,
     CharacterCardSharedRuntimeReceipt,
     CharacterCardStageResult,
     CharacterCardSlot,
@@ -624,7 +625,15 @@ class _OutputStore:
 class _ReviewService:
     visual_asset_catalog = None
 
-    def __init__(self, inspection: dict[str, object], *, reference_count: int = 3) -> None:
+    def __init__(
+        self,
+        inspection: dict[str, object],
+        *,
+        reference_count: int = 3,
+        operation_id: str = "people_doc196:expression_set:expression.laugh:1",
+        reference_output_ids: list[str] | None = None,
+    ) -> None:
+        reference_output_ids = list(reference_output_ids or ["front_winner"])
         self.output = SimpleNamespace(
             output_id="output_laugh",
             candidate_id="candidate_laugh",
@@ -650,11 +659,24 @@ class _ReviewService:
         )
         self.output_store = _OutputStore(self.output)
         self.record = SimpleNamespace(
+            job_id="job_laugh",
+            planning_result=object(),
+            request=SimpleNamespace(
+                metadata={
+                    "professional_character_card_preparation": True,
+                    "professional_character_card_stage": "expression_set",
+                    "professional_character_card_slot": "expression.laugh",
+                    "professional_character_card_reference_output_ids": reference_output_ids,
+                    "generation_channel": "mcp",
+                    "mcp_operation_id": operation_id,
+                }
+            ),
             planning_result_id="planning_laugh",
             generation_result=SimpleNamespace(
                 metadata={"post_generation_review_package": {"inspections": [inspection]}}
             ),
         )
+        self.job_store = SimpleNamespace(list_recent=lambda _limit: [self.record])
 
     def get_job_record(self, _job_id: str) -> SimpleNamespace:
         return self.record
@@ -847,6 +869,124 @@ def test_doc211_blocked_expression_stage_preserves_reviewed_laugh_receipt() -> N
     assert "expression_age_coherence" in receipt["score_dimensions"]
     assert "expression_identity_preservation" in receipt["score_dimensions"]
     assert "eye_line_delta_from_front" in receipt["framing_delta_dimensions"]
+
+
+def test_doc212_host_reprojects_existing_reviewed_candidate_into_blocked_stage_receipt() -> None:
+    operation_id = "people_doc196:expression_set:expression.laugh:1:round3"
+    host = ProductApiAnchorPackPreparationHost(
+        _ReviewService(_laugh_inspection(), operation_id=operation_id)  # type: ignore[arg-type]
+    )
+    blocked_card = _face_ready_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_operation_ambiguous",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "slot_retry_rounds": {"expression.laugh": 3},
+            "last_shared_runtime_failure": None,
+        }
+    )
+
+    recovered = host.recover_character_card_blocked_stage_receipt(
+        asset=SimpleNamespace(visual_asset_id="people_doc196"),
+        card=blocked_card,
+        stage="expression_set",
+    )
+
+    receipt = recovered.last_shared_runtime_failure
+    assert isinstance(receipt, dict)
+    assert receipt["reviewed_attempt_count"] == 1
+    assert receipt["prompt_reference_parity_verified"] is True
+    assert receipt["shared_review_receipts"][0]["owner"] == "v3_shared_visual_cluster"
+    assert receipt["shared_review_receipts"][0]["status"] == "pass"
+    assert "mouth_eye_coherence" in receipt["shared_review_receipts"][0]["score_dimensions"]
+
+
+class _Doc212RecoverBeforeRetryHost:
+    production_shared_runtime = True
+
+    def __init__(self) -> None:
+        self.recover_called = False
+        self.received_retry_card: CharacterCardState | None = None
+
+    def recover_character_card_blocked_stage_receipt(self, *, asset, card, stage):  # noqa: ANN001, ANN201
+        self.recover_called = True
+        receipt = CharacterCardSharedRuntimeFailureReceipt(
+            failure_count=2,
+            reviewed_attempt_count=1,
+            prompt_reference_parity_verified=True,
+            shared_review_receipts=[
+                project_laugh_expression_review_receipt(
+                    score_card=_laugh_inspection()["score_card"],
+                    issue_codes=[],
+                ).to_public_dict()
+            ],
+        )
+        return card.model_copy(update={"last_shared_runtime_failure": receipt.model_dump(mode="json")})
+
+    def prepare_expression_set(self, *, asset, card, generation_channel="provider"):  # noqa: ANN001, ANN201
+        self.received_retry_card = card
+        blocked = card.model_copy(
+            update={
+                "expression_set_status": "blocked",
+                "last_failed_module": "expression_set",
+                "last_failed_slot_key": "expression.laugh",
+                "last_failure_code": "mcp_materialization_pending",
+                "last_failure_attempt_count": 1,
+                "resume_available": True,
+            }
+        )
+        return CharacterCardStageResult(
+            status="blocked",
+            card=blocked,
+            failures=[
+                CharacterCardFailureEvent(
+                    module="expression_set",
+                    slot_key="expression.laugh",
+                    candidate_index=1,
+                    attempt_round=4,
+                    failure_code="mcp_materialization_pending",
+                )
+            ],
+            shared_runtime_failure=CharacterCardSharedRuntimeFailureReceipt(failure_count=1),
+        )
+
+
+def test_doc212_lifecycle_reprojects_missing_receipt_before_confirmed_ambiguous_retry() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    blocked_card = _face_ready_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_operation_ambiguous",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "slot_retry_rounds": {"expression.laugh": 3},
+            "last_shared_runtime_failure": None,
+        }
+    )
+    catalog.save(asset.model_copy(update={"character_card": blocked_card}))
+    host = _Doc212RecoverBeforeRetryHost()
+    lifecycle = VisualAssetLibraryLifecycleService(catalog, character_card_stage_host=host)
+
+    updated = lifecycle.prepare_character_card_stage(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        stage="expression_set",
+        generation_channel="mcp",
+        retry_failed_slot=True,
+        confirm_retry=True,
+    )
+
+    assert host.recover_called is True
+    assert host.received_retry_card is not None
+    assert host.received_retry_card.slot_retry_rounds["expression.laugh"] == 4
+    assert host.received_retry_card.last_shared_runtime_failure is None
+    assert updated.character_card.last_failure_code == "mcp_materialization_pending"
 
 
 def test_doc211_public_character_card_projects_blocked_stage_review_receipt() -> None:
