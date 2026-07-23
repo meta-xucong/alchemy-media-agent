@@ -30,6 +30,10 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expressio
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
     project_laugh_expression_review_receipt,
 )
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    _inspection_prompt,
+    active_review_contract,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateUnavailable,
     AnchorReviewDecision,
@@ -505,6 +509,77 @@ def test_doc196_brain_prompt_contract_receives_laugh_and_framing_only_for_charac
     assert "front-card head/neck/upper-shoulder" in payload["remote_response_contract"]
     assert "expression.laugh" not in ordinary["remote_response_contract"]
     assert "front-card head/neck/upper-shoulder" not in ordinary["remote_response_contract"]
+
+
+def _expression_review_metadata_for_vision() -> dict[str, object]:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="expression_set",
+        slot_key="expression.laugh",
+    )
+    return {
+        "project_id": "project_doc199_expression_review",
+        "capability_execution_envelope": {
+            "activation_plan": {
+                "plan_id": "plan_doc199_expression_review",
+                "activation_mode": "enforced",
+                "active_capability_ids": ["human_realism"],
+                "dependency_order": ["human_realism"],
+                "metadata": {
+                    "professional_face_identity_quality_contract": stage_metadata[
+                        "professional_face_identity_quality_contract"
+                    ],
+                },
+            },
+            "resolved_constraint_ledger": {
+                "hard_semantic_contract": True,
+                "review_contracts": [],
+                "provider_projection": {},
+            },
+        },
+        "professional_planning_metadata": stage_metadata,
+    }
+
+
+def test_doc199_active_review_contract_exposes_laugh_expression_dimensions_to_shared_vision() -> None:
+    contract = active_review_contract(_expression_review_metadata_for_vision())
+
+    assert contract["professional_identity_quality"]["expression_review"]["applies"] is True
+    scores = set(contract["score_dimensions"])
+    issues = set(contract["issue_codes"])
+    assert {
+        "mouth_eye_coherence",
+        "gaze_engagement",
+        "periocular_affect",
+        "cheek_jaw_coupling",
+        "jaw_relaxation",
+        "arousal_intensity_coherence",
+        "spontaneity_asymmetry",
+        "expression_age_coherence",
+        "expression_identity_preservation",
+        "expression_framing_parity",
+        "face_area_delta_from_front",
+        "eye_line_delta_from_front",
+    }.issubset(scores)
+    assert {
+        "mouth_only_smile",
+        "detached_gaze",
+        "frozen_periocular_region",
+        "neutral_expression_collapse",
+        "shared_affective_laugh_evidence_below_bar",
+        "shared_affective_expression_framing_receipt_missing",
+    }.issubset(issues)
+
+
+def test_doc199_enforced_inspection_prompt_distinguishes_laugh_affect_from_pose_failure() -> None:
+    prompt = _inspection_prompt(_expression_review_metadata_for_vision())
+
+    assert "Character Card expression review" in prompt
+    assert "mouth_eye_coherence" in prompt
+    assert "periocular_affect" in prompt
+    assert "cheek_jaw_coupling" in prompt
+    assert "natural mouth opening" in prompt
+    assert "do not mark them as pose failure" in prompt
+    assert "face.front scale" in prompt
 
 
 class _OutputStore:

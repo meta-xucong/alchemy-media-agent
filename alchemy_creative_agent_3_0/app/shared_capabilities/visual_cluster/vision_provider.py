@@ -11,6 +11,11 @@ from typing import Any, Protocol
 
 from ..apparel_construction import apparel_construction_review_contract
 from .contracts import GeneratedOutputResolution
+from .expression_review import (
+    EXPRESSION_FRAMING_DELTA_MAX,
+    EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES,
+    LAUGH_EXPRESSION_SCORE_FLOORS,
+)
 
 
 _HUMAN_AUTHENTICITY_CONTRACT_KEYS = {
@@ -475,6 +480,23 @@ def _enforced_inspection_prompt(
                 "soft feathered vignettes, faded hair boundaries, or any slot whose crop/scale is not comparable with the approved front/left45 cards. Keep judging the "
                 "fixed vertical reference-card crop and white background separately from body posture."
             )
+        expression_review = professional_quality.get("expression_review")
+        if isinstance(expression_review, dict) and expression_review.get("applies"):
+            lines.append(
+                "Character Card expression review: this is an expression-slot card derived from the approved face.front "
+                "baseline. Judge the requested affect as a static expression keyframe while preserving identity and the "
+                "front-card visual skeleton. Return the expression score dimensions listed in the frozen contract, including "
+                "mouth_eye_coherence, gaze_engagement, periocular_affect, cheek_jaw_coupling, jaw_relaxation, "
+                "arousal_intensity_coherence, spontaneity_asymmetry, expression_age_coherence, "
+                "expression_identity_preservation, expression_framing_parity, and the face.front framing deltas. "
+                "For this slot, natural mouth opening, age-coherent teeth visibility, cheek lift, and tiny head/shoulder "
+                "energy can be correct expression evidence; do not mark them as pose failure merely because the neutral "
+                "front face changed. Here pose/framing compliance means the card keeps comparable face.front scale, crop, "
+                "head-top margin, eye-line, shoulder span, background treatment, lighting/white-balance continuity, and "
+                "identity readability. Fail or warn mouth-only smiles, neutral-collapse, detached gaze, frozen periocular "
+                "regions, plastic expression symmetry, expression/framing drift, or age/identity incoherence using only "
+                "the allowed frozen issue codes."
+            )
     if serial_anchor_review:
         lines.append(
             "Professional serial-anchor reference authority: Image 2 is the immutable root portrait and remains "
@@ -724,18 +746,73 @@ def _professional_identity_quality_contract(
         preparation = metadata.get("professional_planning_metadata")
         if isinstance(preparation, dict):
             contract = preparation.get("professional_face_identity_quality_contract")
+    if not isinstance(contract, dict):
+        contract = {}
+    scope = str(contract.get("scope") or "").strip()
+    expression_review_applies = bool(
+        scope == "character_card_expression_set"
+        and isinstance(contract.get("laugh_intent_contract"), dict)
+    )
+    capture_presentation = contract.get("capture_presentation")
     applies = bool(
         isinstance(contract, dict)
         and contract.get("contract_version") == "professional_face_identity_quality_v2"
         and contract.get("developmental_age_coherence") == "whole_person_when_age_owned"
-        and contract.get("capture_presentation") in {None, "neutral_identity_evidence_capture"}
+        and (
+            capture_presentation in {None, "neutral_identity_evidence_capture"}
+            or expression_review_applies
+        )
         and contract.get("owner") == "remote_v3_llm_brain"
         and contract.get("review_owner") == "v3_shared_vision"
     )
+    base_score_dimensions = [
+        "same_person_readability",
+        "distinctive_feature_readability",
+        "age_identity_direction",
+        "developmental_age_coherence",
+        "developmental_facial_presence",
+        "human_realism",
+        "prompt_owned_channel_obedience",
+        "pose_compliance",
+        "visual_quality",
+        "ai_overperfection_penalty",
+        *(
+            ["neutral_capture_compliance"]
+            if contract.get("capture_presentation") == "neutral_identity_evidence_capture"
+            else []
+        ),
+    ]
+    base_issue_codes = [
+        "professional_identity_mismatch",
+        "professional_distinctive_features_lost",
+        "professional_age_identity_drift",
+        "professional_developmental_age_drift",
+        "professional_developmental_presence_drift",
+        "professional_prompt_owned_channel_ignored",
+        "professional_pose_noncompliance",
+        "professional_ai_overperfection",
+        *(
+            ["professional_neutral_capture_mismatch"]
+            if contract.get("capture_presentation") == "neutral_identity_evidence_capture"
+            else []
+        ),
+    ]
+    expression_score_dimensions = [
+        *LAUGH_EXPRESSION_SCORE_FLOORS.keys(),
+        "expression_framing_parity",
+        *EXPRESSION_FRAMING_DELTA_MAX.keys(),
+    ]
+    expression_issue_codes = [
+        *sorted(EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES),
+        "shared_affective_laugh_expression_blocked",
+        "shared_affective_laugh_evidence_below_bar",
+        "shared_affective_expression_framing_drift",
+        "shared_affective_expression_framing_receipt_missing",
+    ]
     return {
         "applies": applies,
         "contract_version": contract.get("contract_version") if applies else None,
-        "capture_scope": contract.get("scope") if applies else None,
+        "capture_scope": scope if applies else None,
         "commercial_refinement_policy": (
             (
                 contract.get("face_card_image_clarity_contract", {})
@@ -791,38 +868,35 @@ def _professional_identity_quality_contract(
             if applies
             else None
         ),
-        "score_dimensions": [
-            "same_person_readability",
-            "distinctive_feature_readability",
-            "age_identity_direction",
-            "developmental_age_coherence",
-            "developmental_facial_presence",
-            "human_realism",
-            "prompt_owned_channel_obedience",
-            "pose_compliance",
-            "visual_quality",
-            "ai_overperfection_penalty",
-            *(
-                ["neutral_capture_compliance"]
-                if contract.get("capture_presentation") == "neutral_identity_evidence_capture"
-                else []
-            ),
-        ] if applies else [],
-        "issue_codes": [
-            "professional_identity_mismatch",
-            "professional_distinctive_features_lost",
-            "professional_age_identity_drift",
-            "professional_developmental_age_drift",
-            "professional_developmental_presence_drift",
-            "professional_prompt_owned_channel_ignored",
-            "professional_pose_noncompliance",
-            "professional_ai_overperfection",
-            *(
-                ["professional_neutral_capture_mismatch"]
-                if contract.get("capture_presentation") == "neutral_identity_evidence_capture"
-                else []
-            ),
-        ] if applies else [],
+        "score_dimensions": list(
+            dict.fromkeys(
+                [
+                    *base_score_dimensions,
+                    *(expression_score_dimensions if expression_review_applies else []),
+                ]
+            )
+        ) if applies else [],
+        "issue_codes": list(
+            dict.fromkeys(
+                [
+                    *base_issue_codes,
+                    *(expression_issue_codes if expression_review_applies else []),
+                ]
+            )
+        ) if applies else [],
+        "expression_review": (
+            {
+                "applies": True,
+                "expression": "laugh",
+                "source": "professional_face_identity_quality_contract.laugh_intent_contract",
+                "score_dimensions": list(dict.fromkeys(expression_score_dimensions)),
+                "issue_codes": list(dict.fromkeys(expression_issue_codes)),
+                "framing_baseline": "face.front",
+                "framing_delta_dimensions": list(EXPRESSION_FRAMING_DELTA_MAX.keys()),
+            }
+            if applies and expression_review_applies
+            else {"applies": False}
+        ),
     }
 
 
