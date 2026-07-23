@@ -623,6 +623,93 @@ def test_doc202_mcp_character_card_operation_id_is_round_scoped_after_confirmed_
     assert service.created_kwargs["attempt_round"] == 2
 
 
+def test_doc203_character_card_mcp_pending_records_candidate_index_not_failure_length() -> None:
+    class _CandidateTwoPendingGenerator:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request):  # noqa: ANN001, ANN201
+            self.requests.append(request)
+            if request.slot_key == "expression.laugh" and request.candidate_index == 2:
+                raise AnchorCandidateUnavailable(
+                    "mcp_materialization_pending",
+                    mcp_handoff_id="mcp_handoff_expression_laugh_candidate2",
+                )
+            return _character_candidate(request)
+
+    class _FailLaughCandidateOneReviewer:
+        def review(self, candidate):  # noqa: ANN001, ANN201
+            if candidate.slot_key == "expression.laugh" and candidate.candidate_index == 1:
+                return AnchorReviewDecision(
+                    status="fail",
+                    identity_scores=IdentityScoreSummary(
+                        same_face_score=0.9,
+                        distinctive_feature_score=0.9,
+                        human_realism_score=0.9,
+                        visual_quality_score=0.9,
+                    ),
+                    issue_codes=["mouth_only_smile"],
+                )
+            return _PassReviewer().review(candidate)
+
+    generator = _CandidateTwoPendingGenerator()
+    result = CharacterCardPreparationService(
+        generator=generator,
+        reviewer=_FailLaughCandidateOneReviewer(),
+    ).prepare_expression_set(
+        _face_card(),
+        front_output_id="front_winner",
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
+        generation_channel="mcp",
+    )
+
+    assert result.status == "blocked"
+    assert result.card.last_failed_slot_key == "expression.laugh"
+    assert result.card.last_failure_attempt_count == 2
+    assert result.card.pending_mcp_handoff_ids == ["mcp_handoff_expression_laugh_candidate2"]
+
+
+def test_doc203_character_card_mcp_resume_passes_pending_handoff_only_to_matching_candidate() -> None:
+    class _RecordingGenerator:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request):  # noqa: ANN001, ANN201
+            self.requests.append(request)
+            return _character_candidate(request)
+
+    card = _face_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_pending",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": ["mcp_handoff_expression_laugh_candidate2"],
+        }
+    )
+    generator = _RecordingGenerator()
+
+    result = CharacterCardPreparationService(generator=generator, reviewer=_PassReviewer()).prepare_expression_set(
+        card,
+        front_output_id="front_winner",
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
+        generation_channel="mcp",
+    )
+
+    laugh_requests = [request for request in generator.requests if request.slot_key == "expression.laugh"]
+    assert result.status == "review"
+    assert [
+        (request.candidate_index, request.mcp_handoff_id)
+        for request in laugh_requests
+    ] == [
+        (1, None),
+        (2, "mcp_handoff_expression_laugh_candidate2"),
+        (3, None),
+    ]
+
+
 class _AnchorGenerator:
     def __init__(self, *, failing_roles: set[str] | None = None, handoff_ids: dict[tuple[str, int], str] | None = None) -> None:
         self.failing_roles = set(failing_roles or set())

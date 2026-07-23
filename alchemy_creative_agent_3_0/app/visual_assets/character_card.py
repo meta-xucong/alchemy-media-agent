@@ -812,7 +812,7 @@ class CharacterCardPreparationService:
                     module="expression_set",
                     slot_key=slot_key,
                     failure_code=failure_code,
-                    failure_attempt_count=max(1, len(slot_failures)),
+                    failure_attempt_count=self._failure_attempt_count(slot_failures),
                     slots=slots,
                     status_field="expression_set_status",
                 )
@@ -903,7 +903,7 @@ class CharacterCardPreparationService:
                         "last_failed_module": "expression_set",
                         "last_failed_slot_key": slot_key,
                         "last_failure_code": failure_code,
-                        "last_failure_attempt_count": min(3, max(1, len(slot_failures))),
+                        "last_failure_attempt_count": self._failure_attempt_count(slot_failures),
                         "resume_available": True,
                         "append_only_revision": card.append_only_revision + 1,
                     }
@@ -914,7 +914,7 @@ class CharacterCardPreparationService:
                     module="expression_set",
                     slot_key=slot_key,
                     failure_code=failure_code,
-                    failure_attempt_count=max(1, len(slot_failures)),
+                    failure_attempt_count=self._failure_attempt_count(slot_failures),
                     slots=slots,
                     status_field="expression_set_status",
                 )
@@ -1016,7 +1016,7 @@ class CharacterCardPreparationService:
                         module="body_silhouette",
                         slot_key=slot_key,
                         failure_code=failure_code,
-                        failure_attempt_count=max(1, len(slot_failures)),
+                        failure_attempt_count=self._failure_attempt_count(slot_failures),
                         slots=slots,
                         status_field="body_silhouette_status",
                     ).model_copy(
@@ -1092,6 +1092,12 @@ class CharacterCardPreparationService:
                 source_class=source_class,
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
+                mcp_handoff_id=self._resumable_mcp_handoff_id(
+                    card,
+                    module=module,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                ),
             )
             try:
                 candidate = self.generator.generate(request)
@@ -1143,6 +1149,31 @@ class CharacterCardPreparationService:
                 if str(item.mcp_handoff_id or "").strip()
             )
         )
+
+    @staticmethod
+    def _failure_attempt_count(failures: list[CharacterCardFailureEvent]) -> int:
+        if not failures:
+            return 1
+        return min(3, max(1, max(int(item.candidate_index or 1) for item in failures)))
+
+    @staticmethod
+    def _resumable_mcp_handoff_id(
+        card: CharacterCardState,
+        *,
+        module: CharacterCardModule,
+        slot_key: str,
+        candidate_index: int,
+    ) -> str | None:
+        if card.last_failed_module != module or card.last_failed_slot_key != slot_key:
+            return None
+        if card.last_failure_code not in {"mcp_materialization_pending", "mcp_review_pending"}:
+            return None
+        if int(card.last_failure_attempt_count or 0) != int(candidate_index):
+            return None
+        handoff_ids = [str(item).strip() for item in card.pending_mcp_handoff_ids if str(item).strip()]
+        if len(handoff_ids) != 1:
+            return None
+        return handoff_ids[0]
 
     @staticmethod
     def _blocked_card(
