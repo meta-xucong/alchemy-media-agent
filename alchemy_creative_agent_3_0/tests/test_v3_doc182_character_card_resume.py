@@ -709,6 +709,51 @@ def test_doc203_character_card_mcp_resume_passes_pending_handoff_only_to_matchin
     ]
 
 
+def test_doc206_character_card_mcp_ambiguous_operation_pauses_without_next_candidate() -> None:
+    class _AmbiguousCandidateTwoGenerator:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request):  # noqa: ANN001, ANN201
+            self.requests.append(request)
+            if request.slot_key == "expression.laugh" and request.candidate_index == 2:
+                raise AnchorCandidateUnavailable(
+                    "mcp_materialization_operation_ambiguous",
+                )
+            return _character_candidate(request)
+
+    card = _face_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_pending",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": ["mcp_handoff_expression_laugh_candidate2"],
+        }
+    )
+    generator = _AmbiguousCandidateTwoGenerator()
+
+    result = CharacterCardPreparationService(generator=generator, reviewer=_PassReviewer()).prepare_expression_set(
+        card,
+        front_output_id="front_winner",
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
+        generation_channel="mcp",
+    )
+
+    laugh_requests = [request for request in generator.requests if request.slot_key == "expression.laugh"]
+    assert result.status == "blocked"
+    assert result.card.last_failure_code == "mcp_materialization_operation_ambiguous"
+    assert result.card.last_failure_attempt_count == 2
+    assert [
+        (request.candidate_index, request.mcp_handoff_id)
+        for request in laugh_requests
+    ] == [
+        (2, "mcp_handoff_expression_laugh_candidate2"),
+    ]
+
+
 class _AnchorGenerator:
     def __init__(self, *, failing_roles: set[str] | None = None, handoff_ids: dict[tuple[str, int], str] | None = None) -> None:
         self.failing_roles = set(failing_roles or set())

@@ -1124,11 +1124,11 @@ class CharacterCardPreparationService:
                         mcp_handoff_id=exc.mcp_handoff_id,
                     )
                 )
-                if (
-                    generation_channel == "mcp"
-                    and exc.mcp_handoff_id
-                    and exc.failure_code in {"mcp_materialization_pending", "mcp_review_pending"}
-                ):
+                if generation_channel == "mcp" and exc.failure_code in {
+                    "mcp_materialization_pending",
+                    "mcp_review_pending",
+                    "mcp_materialization_operation_ambiguous",
+                }:
                     return None, slot_attempts, slot_failures
                 continue
             review = self.reviewer.review(candidate)
