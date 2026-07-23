@@ -186,6 +186,7 @@ def build_provider_generation_request(
             "provider_strategy": generation_plan.provider_strategy.value,
             "generation_channel": metadata.get("generation_channel", "provider"),
             "mcp_operation_id": metadata.get("mcp_operation_id"),
+            "mcp_materialization": metadata.get("mcp_materialization"),
         },
     )
 

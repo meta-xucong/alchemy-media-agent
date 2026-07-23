@@ -18,6 +18,13 @@ count could point to the wrong candidate. The result was a repeated pending
 handoff loop: submitted MCP artifacts stayed append-only, but the stage opened a
 new handoff instead of consuming the submitted one.
 
+A second provider-boundary issue can appear after repeated same-operation
+handoffs already exist: the generation request carried `generation_channel` and
+`mcp_operation_id`, but not the explicit `mcp_materialization` receipt. In that
+case the MCP provider can fall back to operation/prompt based lookup and consume
+a stale submitted handoff for the same operation. The explicit handoff receipt
+must therefore cross the canonical Provider request boundary.
+
 ## Contract
 
 1. A submitted MCP artifact is never promoted locally. It must be consumed by
@@ -37,6 +44,10 @@ new handoff instead of consuming the submitted one.
    stores and receipts.
 5. This does not change candidate budget, shared review thresholds, retry
    limits, Provider/MCP parity, or Expression/Body slot semantics.
+6. Provider request construction must preserve an explicit
+   `mcp_materialization` receipt. When present, the MCP provider consumes that
+   handoff only; it must not choose a stale submitted handoff with the same
+   operation ID.
 
 ## Acceptance
 
@@ -45,6 +56,9 @@ new handoff instead of consuming the submitted one.
 - Candidate 1 and candidate 3 do not inherit that handoff.
 - Existing Doc202 failed-slot retry rules still reject superseding any pending
   MCP handoff.
+- Provider request projection preserves explicit `mcp_materialization`.
+- The MCP provider consumes the explicit handoff and leaves stale same-operation
+  submissions untouched.
 - Real MCP validation may continue after commit by submitting the pending
   handoff artifact and verifying that it becomes a normal reviewed candidate or
   a structured review failure.
