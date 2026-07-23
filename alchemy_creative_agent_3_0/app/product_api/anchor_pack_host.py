@@ -1116,6 +1116,16 @@ class ProductApiAnchorPackPreparationHost:
             current.append(payload)
         if not current:
             return None
+        submitted = [
+            item
+            for item in current
+            if str(item.get("status") or "").strip().lower() == "submitted"
+        ]
+        if submitted:
+            if len(submitted) > 1:
+                raise AnchorCandidateUnavailable("mcp_materialization_operation_ambiguous")
+            handoff_id = str(submitted[0].get("handoff_id") or "").strip()
+            return handoff_id or None
         if len(current) > 1:
             raise AnchorCandidateUnavailable("mcp_materialization_operation_ambiguous")
         handoff_id = str(current[0].get("handoff_id") or "").strip()

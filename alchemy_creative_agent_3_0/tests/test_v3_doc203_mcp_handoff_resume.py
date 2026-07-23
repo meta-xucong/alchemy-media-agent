@@ -430,3 +430,109 @@ def test_doc205_character_card_orphan_handoff_recovery_fails_closed_when_ambiguo
 
     with pytest.raises(AnchorCandidateUnavailable, match="mcp_materialization_operation_ambiguous"):
         ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+
+def test_doc207_character_card_orphan_recovery_prefers_submitted_artifact_over_pending(tmp_path: Path) -> None:
+    operation_id = "people_doc207:expression_set:expression.laugh:1:round3"
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    pending = handoffs.ensure_pending(
+        operation_id=operation_id,
+        prompt="same face reference with a joyful laugh expression pending draft",
+        prompt_sha256=hashlib.sha256(b"pending").hexdigest(),
+        reference_assets=[],
+        rendering_contract={
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "32x48",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_edit",
+        },
+    )
+    submitted = handoffs.ensure_pending(
+        operation_id=operation_id,
+        prompt="same face reference with a delighted laugh expression submitted artifact",
+        prompt_sha256=hashlib.sha256(b"submitted").hexdigest(),
+        reference_assets=[],
+        rendering_contract={
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "32x48",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_edit",
+        },
+    )
+    handoffs.submit(
+        submitted["handoff_id"],
+        nonce=submitted["nonce"],
+        prompt_sha256=submitted["prompt_sha256"],
+        reference_asset_hashes=submitted["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+
+    class _Store:
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return []
+
+        def save(self, _record) -> None:  # noqa: ANN001
+            return None
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created_payloads = []
+            self.job_store = _Store()
+            self.mcp_materialization_store = handoffs
+            self.record = None
+
+        def create_professional_character_card_stage_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.created_payloads.append(payload)
+            self.record = SimpleNamespace(
+                job_id="job_doc207_submitted_priority",
+                planning_result=object(),
+                generation_result=None,
+                request=SimpleNamespace(metadata=dict(payload.get("metadata") or {})),
+            )
+            return ProductJobStatus(
+                job_id=self.record.job_id,
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, job_id, *_args, **_kwargs):  # noqa: ANN001, ANN201
+            assert job_id == "job_doc207_submitted_priority"
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):  # noqa: ANN001, ANN201
+            return self.record
+
+    service = _Service()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc207",
+        people_asset_id="people_doc207",
+        card_version_id="card_doc207",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=1,
+        attempt_round=3,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="mcp_materialization_pending"):
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    selected = service.created_payloads[0]["metadata"]["mcp_materialization"]
+    assert selected["handoff_id"] == submitted["handoff_id"]
+    assert selected["handoff_id"] != pending["handoff_id"]
