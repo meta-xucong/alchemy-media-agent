@@ -4287,6 +4287,13 @@ class ScenarioRuntime:
         operation_id = str(request.metadata.get("mcp_operation_id") or "").strip()
         if channel == "mcp" and operation_id:
             payload["mcp_operation_id"] = operation_id
+        materialization = request.metadata.get("mcp_materialization")
+        if (
+            channel == "mcp"
+            and isinstance(materialization, dict)
+            and str(materialization.get("handoff_id") or "").strip()
+        ):
+            payload["mcp_materialization"] = dict(materialization)
         return payload
 
     def _specialized_metadata(self, preparation: CapabilityPreparationResult) -> dict[str, Any]:

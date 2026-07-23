@@ -33,6 +33,12 @@ explicit `mcp_materialization` receipt must be present in the initial trusted
 stage-job creation payload so Brain/runtime planning, Provider request
 construction, and MCP consumption all see the same opaque handoff.
 
+The final Provider boundary is the Scenario Runtime generation metadata used to
+build `GenerationPlan`. Carrying the receipt only on the Product job request is
+not enough if `_renderer_channel_metadata()` drops it. The renderer-channel
+projection must therefore preserve the explicit handoff receipt together with
+`generation_channel` and `mcp_operation_id`.
+
 ## Contract
 
 1. A submitted MCP artifact is never promoted locally. It must be consumed by
@@ -60,6 +66,9 @@ construction, and MCP consumption all see the same opaque handoff.
    `mcp_materialization` receipt before planning. Post-hoc request metadata is
    not sufficient acceptance evidence because the frozen generation plan is the
    Provider boundary of record.
+8. Scenario Runtime renderer-channel metadata must project the explicit
+   `mcp_materialization` receipt into the frozen generation metadata consumed by
+   `GenerationPlan`.
 
 ## Acceptance
 
@@ -74,6 +83,8 @@ construction, and MCP consumption all see the same opaque handoff.
 - Character Card Host passes an explicit resumed handoff in the initial trusted
   stage-job metadata; a regression fails if the handoff exists only as a
   post-creation patch.
+- Scenario Runtime projects explicit `mcp_materialization` into generation
+  metadata, so the Provider request can consume the intended handoff.
 - Real MCP validation may continue after commit by submitting the pending
   handoff artifact and verifying that it becomes a normal reviewed candidate or
   a structured review failure.

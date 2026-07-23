@@ -18,6 +18,7 @@ from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatus, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -266,3 +267,26 @@ def test_doc203_character_card_stage_creation_receives_explicit_mcp_handoff() ->
 
     materialization = service.created_payloads[0]["metadata"]["mcp_materialization"]
     assert materialization["handoff_id"] == "mcp_handoff_doc203_current"
+
+
+def test_doc203_scenario_runtime_projects_explicit_mcp_handoff_to_generation_metadata() -> None:
+    materialization = {
+        "handoff_id": "mcp_handoff_doc203_runtime",
+        "status": "pending",
+        "generation_channel": "mcp",
+        "resume_required": True,
+    }
+
+    metadata = ScenarioRuntime._renderer_channel_metadata(
+        SimpleNamespace(
+            metadata={
+                "generation_channel": "mcp",
+                "mcp_operation_id": "doc203-runtime-operation",
+                "mcp_materialization": materialization,
+            }
+        )
+    )
+
+    assert metadata["generation_channel"] == "mcp"
+    assert metadata["mcp_operation_id"] == "doc203-runtime-operation"
+    assert metadata["mcp_materialization"] == materialization
