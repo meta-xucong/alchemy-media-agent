@@ -24,6 +24,9 @@ from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductR
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
 from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
+    LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateResult,
     AnchorCandidateFailure,
@@ -142,6 +145,9 @@ class _PassReviewer:
                 distinctive_feature_score=0.9,
                 human_realism_score=0.9,
                 visual_quality_score=0.9,
+                evidence_codes=sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
+                if getattr(candidate, "slot_key", "") == "expression.laugh"
+                else [],
             ),
         )
 
@@ -183,22 +189,22 @@ def test_doc193_anchor_pack_failure_receipt_prefers_specific_review_gate_code() 
 
 def test_doc182_three_failures_pause_without_unhandled_exception() -> None:
     service = CharacterCardPreparationService(
-        generator=_ExpressionGenerator(failing_slots={"expression.smile"}),
+        generator=_ExpressionGenerator(failing_slots={"expression.laugh"}),
         reviewer=_PassReviewer(),
     )
     result = service.prepare_expression_set(
         _face_card(),
         front_output_id="front_winner",
-        user_intents={"smile": "natural smile", "anger": "quietly serious", "sad": "subtle sadness"},
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
     )
 
     assert result.status == "blocked"
     assert result.card.expression_set_status == "blocked"
     assert result.card.resume_available is True
-    assert result.card.last_failed_slot_key == "expression.smile"
+    assert result.card.last_failed_slot_key == "expression.laugh"
     assert result.card.last_failure_attempt_count == 3
     assert len(result.failures) == 3
-    assert result.card.expression_slots["expression.smile"].state == "empty"
+    assert result.card.expression_slots["expression.laugh"].state == "empty"
 
     receipt = CharacterCardSharedRuntimeFailureReceipt(failure_count=len(result.failures))
     assert receipt.resume_available is True
@@ -208,22 +214,22 @@ def test_doc182_three_failures_pause_without_unhandled_exception() -> None:
 def test_doc183_character_card_failure_exposes_only_resumable_mcp_handoff() -> None:
     service = CharacterCardPreparationService(
         generator=_ExpressionGenerator(
-            failing_slots={"expression.smile"},
-            handoff_ids={"expression.smile": "mcp_handoff_expression_smile"},
+            failing_slots={"expression.laugh"},
+            handoff_ids={"expression.laugh": "mcp_handoff_expression_laugh"},
         ),
         reviewer=_PassReviewer(),
     )
     result = service.prepare_expression_set(
         _face_card(),
         front_output_id="front_winner",
-        user_intents={"smile": "natural smile", "anger": "quietly serious", "sad": "subtle sadness"},
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
         generation_channel="mcp",
     )
 
     assert result.status == "blocked"
-    assert result.mcp_handoff_ids == ["mcp_handoff_expression_smile"]
-    assert result.card.pending_mcp_handoff_ids == ["mcp_handoff_expression_smile"]
-    assert result.failures[0].mcp_handoff_id == "mcp_handoff_expression_smile"
+    assert result.mcp_handoff_ids == ["mcp_handoff_expression_laugh"]
+    assert result.card.pending_mcp_handoff_ids == ["mcp_handoff_expression_laugh"]
+    assert result.failures[0].mcp_handoff_id == "mcp_handoff_expression_laugh"
     public_card = result.card.model_dump_json()
     assert "provider_id" not in public_card
     assert "canonical_prompt" not in public_card
@@ -250,16 +256,16 @@ def test_doc195_mcp_stage_pauses_after_first_pending_handoff() -> None:
     result = service.prepare_expression_set(
         _face_card(),
         front_output_id="front_winner",
-        user_intents={"smile": "natural smile", "anger": "quietly serious", "sad": "subtle sadness"},
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
         generation_channel="mcp",
     )
 
     assert result.status == "blocked"
     assert [request.candidate_index for request in generator.requests] == [1]
-    assert result.card.last_failed_slot_key == "expression.smile"
+    assert result.card.last_failed_slot_key == "expression.laugh"
     assert result.card.last_failure_attempt_count == 1
-    assert result.mcp_handoff_ids == ["mcp_handoff_expression.smile_1"]
-    assert result.card.pending_mcp_handoff_ids == ["mcp_handoff_expression.smile_1"]
+    assert result.mcp_handoff_ids == ["mcp_handoff_expression.laugh_1"]
+    assert result.card.pending_mcp_handoff_ids == ["mcp_handoff_expression.laugh_1"]
     assert result.card.resume_available is True
 
 
@@ -468,14 +474,14 @@ def test_doc182_resume_keeps_winner_and_starts_at_failed_slot() -> None:
     first = service.prepare_expression_set(
         _face_card(),
         front_output_id="front_winner",
-        user_intents={"smile": "natural smile", "anger": "quietly serious", "sad": "subtle sadness"},
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
     )
     assert first.status == "blocked"
-    assert first.card.expression_slots["expression.smile"].output_id
+    assert first.card.expression_slots["expression.laugh"].output_id
     assert [request.slot_key for request in first_generator.requests] == [
-        "expression.smile",
-        "expression.smile",
-        "expression.smile",
+        "expression.laugh",
+        "expression.laugh",
+        "expression.laugh",
         "expression.anger",
         "expression.anger",
         "expression.anger",
@@ -485,7 +491,7 @@ def test_doc182_resume_keeps_winner_and_starts_at_failed_slot() -> None:
     resumed = CharacterCardPreparationService(generator=second_generator, reviewer=_PassReviewer()).prepare_expression_set(
         first.card,
         front_output_id="front_winner",
-        user_intents={"smile": "natural smile", "anger": "quietly serious", "sad": "subtle sadness"},
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
     )
     assert resumed.status == "review"
     assert [request.slot_key for request in second_generator.requests] == [
@@ -496,7 +502,7 @@ def test_doc182_resume_keeps_winner_and_starts_at_failed_slot() -> None:
         "expression.sad",
         "expression.sad",
     ]
-    assert resumed.card.expression_slots["expression.smile"].output_id == first.card.expression_slots["expression.smile"].output_id
+    assert resumed.card.expression_slots["expression.laugh"].output_id == first.card.expression_slots["expression.laugh"].output_id
 
 
 class _AnchorGenerator:
@@ -2049,7 +2055,7 @@ def test_doc182_host_attaches_shared_failure_receipt() -> None:
             update={
                 "expression_set_status": "blocked",
                 "last_failed_module": "expression_set",
-                "last_failed_slot_key": "expression.smile",
+                "last_failed_slot_key": "expression.laugh",
                 "last_failure_code": "character_card_candidate_provider_failed",
                 "last_failure_attempt_count": 3,
                 "resume_available": True,

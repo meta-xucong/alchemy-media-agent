@@ -215,6 +215,7 @@ class V3ProductRouteHandlers:
         if generation_channel not in {"provider", "mcp"}:
             raise ValueError("character_card_generation_channel_invalid")
         body_request = None
+        expression = None
         if stage == "body_silhouette":
             allowed = {
                 "stage",
@@ -229,6 +230,12 @@ class V3ProductRouteHandlers:
             body_request = BodySilhouettePublicRequest.model_validate(
                 {key: value for key, value in payload.items() if key not in {"stage", "resume", "generation_channel"}}
             )
+        elif stage == "expression_set" and "expression" in payload:
+            if set(payload) - {"stage", "resume", "generation_channel", "expression"}:
+                raise ValueError("character_card_stage_payload_invalid")
+            expression = payload.get("expression")
+            if expression != "smile":
+                raise ValueError("character_card_expression_slot_not_explicitly_supported")
         elif set(payload) - {"stage", "resume", "generation_channel"}:
             # Expression intent remains Brain/host-owned.  A browser may not
             # inject a local expression dictionary or prompt fragment.
@@ -245,6 +252,7 @@ class V3ProductRouteHandlers:
                 owner_scope=self._visual_asset_owner_scope(owner_scope),
                 visual_asset_id=visual_asset_id,
                 stage=stage,
+                expression=expression,
                 body_request=body_request,
                 generation_channel=generation_channel,
             )

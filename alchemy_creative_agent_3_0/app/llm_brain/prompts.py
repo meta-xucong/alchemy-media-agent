@@ -1047,6 +1047,13 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "while keeping the approved front identity, card framing, white studio field and age-appropriate real-camera material. "
                 "Do not output a neutral-expression prompt for a non-neutral expression slot."
             )
+            if expression == "laugh":
+                response_contract += (
+                    " For the Professional positive slot, laugh means a medium-arousal amused keyframe useful for later motion work, "
+                    "not a polite smile and not an exaggerated performance laugh. Keep the same 2:3 front-card head/neck/upper-shoulder "
+                    "framing, camera distance, white background, lighting and white balance from the approved neutral front card; vary only "
+                    "the facial affect and a tiny amount of natural head-shoulder energy."
+                )
         if slot_delta_type == "body_pose" and slot_delta_target.get("body_slot"):
             body_slot = str(slot_delta_target.get("body_slot") or "").strip()
             response_contract += (

@@ -14,6 +14,7 @@ from typing import Any
 
 from PIL import Image
 
+from ..shared_capabilities.visual_cluster.expression_review import project_laugh_expression_review_receipt
 from ..shared_capabilities.visual_cluster.identity_metric import create_default_identity_metric_provider
 from ..visual_assets.anchor_pack import (
     AnchorCandidateResult,
@@ -716,6 +717,34 @@ class ProductApiAnchorPackPreparationHost:
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="expression_set")
 
+    def prepare_expression_slot(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        expression: str,
+        generation_channel: str = "provider",
+    ) -> CharacterCardStageResult:
+        front_output_id = str(card.face_slots["face.front"].output_id or "").strip()
+        if not front_output_id:
+            raise ValueError("character_card_expression_front_winner_missing")
+        if expression != "smile":
+            raise ValueError("character_card_expression_slot_not_explicitly_supported")
+        preparation = CharacterCardPreparationService(generator=self, reviewer=self)
+        base_intent = str(getattr(asset, "preparation_intent", "") or "").strip()
+        if not base_intent:
+            raise ValueError("character_card_expression_intent_missing")
+        result = preparation.prepare_expression_slot(
+            card,
+            expression="smile",
+            front_output_id=front_output_id,
+            project_id=f"visual_asset_{asset.visual_asset_id}",
+            people_asset_id=asset.visual_asset_id,
+            user_intent=self._character_card_single_expression_intent(base_intent, "smile"),
+            generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
+        )
+        return self._attach_character_card_receipt(result, asset=asset, stage="expression_set")
+
     @staticmethod
     def _character_card_expression_slot_intents(base_intent: str) -> dict[str, str]:
         """Attach the minimal slot-owned expression target to the asset intent.
@@ -727,10 +756,11 @@ class ProductApiAnchorPackPreparationHost:
 
         base = base_intent.strip()
         return {
-            "smile": (
-                f"{base}\nExpression slot target: expression.smile. "
-                "Render the same person with a gentle, genuine, age-appropriate smile; "
-                "avoid a forced presenter grin or repeated template teeth."
+            "laugh": (
+                f"{base}\nExpression slot target: expression.laugh. "
+                "Render the same person in a medium-arousal naturally amused laugh keyframe, "
+                "with engaged gaze, periocular affect, cheek and jaw participation, appropriate teeth or lip state, "
+                "and a small amount of natural head-shoulder energy while preserving the approved front-card framing."
             ),
             "anger": (
                 f"{base}\nExpression slot target: expression.anger. "
@@ -743,6 +773,18 @@ class ProductApiAnchorPackPreparationHost:
                 "avoid tears, drama, or a distressed scene."
             ),
         }
+
+    @staticmethod
+    def _character_card_single_expression_intent(base_intent: str, expression: str) -> str:
+        base = base_intent.strip()
+        if expression == "smile":
+            return (
+                f"{base}\nExpression slot target: expression.smile. "
+                "Render the same person in an explicitly requested low-intensity natural smile, "
+                "preserving the approved front-card framing, identity, lighting, white background, and crop. "
+                "This is an optional extension expression and must not replace the default expression.laugh slot."
+            )
+        raise ValueError("character_card_expression_slot_not_explicitly_supported")
 
     def prepare_body_silhouette(
         self,
@@ -817,9 +859,29 @@ class ProductApiAnchorPackPreparationHost:
                         attempt.candidate.prompt_reference_parity_verified
                         for attempt in result.attempts
                     ),
+                    shared_review_receipts=self._character_card_stage_review_receipts(result),
                 )
             }
         )
+
+    @staticmethod
+    def _character_card_stage_review_receipts(result: CharacterCardStageResult) -> list[dict[str, Any]]:
+        receipts: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for attempt in result.attempts:
+            review = getattr(attempt, "review", None)
+            for receipt in getattr(review, "shared_review_receipts", []) or []:
+                if not isinstance(receipt, dict):
+                    continue
+                identity = "|".join(
+                    str(receipt.get(key) or "")
+                    for key in ("owner", "contract_version", "expression", "status")
+                )
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                receipts.append(dict(receipt))
+        return receipts
 
     def _generate_character_card_candidate(
         self,
@@ -1102,8 +1164,27 @@ class ProductApiAnchorPackPreparationHost:
                 output_id=selected.output_id,
                 candidate_id=selected.candidate_id,
             )
+        evidence_codes = ["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"]
+        expression_gate_issues: list[str] = []
+        shared_review_receipts: list[dict[str, Any]] = []
+        if request.module == "expression_set" and request.slot_key == "expression.laugh":
+            expression_receipt = project_laugh_expression_review_receipt(
+                score_card=score_card,
+                issue_codes=issue_codes,
+            )
+            evidence_codes.extend(expression_receipt.evidence_codes)
+            expression_gate_issues.extend(expression_receipt.issue_codes)
+            issue_codes.extend(expression_receipt.issue_codes)
+            shared_review_receipts.append(expression_receipt.to_public_dict())
         review = AnchorReviewDecision(
-            status="pass" if verified and raw_status in {"pass", "warning"} and parity else "fail",
+            status=(
+                "pass"
+                if verified
+                and raw_status in {"pass", "warning"}
+                and parity
+                and not expression_gate_issues
+                else "fail"
+            ),
             identity_scores=IdentityScoreSummary(
                 same_face_score=score_card.get("same_person_readability", score_card.get("identity", 0.0)),
                 visual_quality_score=score_card.get("visual_quality", score_card.get("overall", 0.0)),
@@ -1111,9 +1192,10 @@ class ProductApiAnchorPackPreparationHost:
                 human_realism_score=score_card.get("human_realism", 0.0),
                 pose_compliance_score=score_card.get("pose_compliance", 0.0),
                 ai_overperfection_penalty=score_card.get("ai_overperfection_penalty", 1.0),
-                evidence_codes=["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"],
+                evidence_codes=list(dict.fromkeys(evidence_codes)),
             ),
             issue_codes=list(dict.fromkeys(issue_codes)),
+            shared_review_receipts=shared_review_receipts,
         )
         return candidate, review
 
@@ -1940,6 +2022,7 @@ def _character_card_stage_mcp_prompt_current(slot_key: str, prompt: str) -> bool
     if not normalized:
         return False
     expression_terms = {
+        "expression.laugh": ("laugh", "laughing", "amused", "delighted", "joyful"),
         "expression.smile": ("smile", "smiling", "happy", "joyful", "cheerful"),
         "expression.anger": ("angry", "anger", "annoyed", "serious", "stern", "upset", "frown"),
         "expression.sad": ("sad", "sadness", "pensive", "downcast", "melancholy", "somber", "unhappy"),

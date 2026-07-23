@@ -5308,10 +5308,10 @@ const v3CharacterCardModuleMeta = {
   },
   expression_set: {
     title: "表情组",
-    detail: "在同一个人物基础上准备中性、微笑、愤怒和悲伤等常用表情。",
+    detail: "在同一个人物基础上准备中性、开心笑、愤怒和悲伤等常用表情。",
     slots: [
       ["expression.neutral", "中性"],
-      ["expression.smile", "微笑"],
+      ["expression.laugh", "开心笑"],
       ["expression.anger", "愤怒"],
       ["expression.sad", "悲伤"],
     ],

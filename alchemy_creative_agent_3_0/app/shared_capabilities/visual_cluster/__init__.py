@@ -81,6 +81,16 @@ from .doc66_closure import (
     ModeQualityProfileBuilder,
     StrongReferenceClosureBuilder,
 )
+from .expression_review import (
+    AffectiveExpressionReviewReceipt,
+    EXPRESSION_FRAMING_DELTA_MAX,
+    EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES,
+    LAUGH_EXPRESSION_EVIDENCE_CODES,
+    LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+    laugh_expression_receipt_allows_slot,
+    normalize_affective_expression_score_card,
+    project_laugh_expression_review_receipt,
+)
 from .general_suite_director import GeneralSuiteDirector
 from .human_photorealism import HumanPhotorealismLayer
 from .identity_anchor import ProjectIdentityAnchorBuilder
@@ -118,6 +128,7 @@ __all__ = [
     "ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID",
     "AdaptiveReferenceRetriever",
     "AdaptiveReferenceSelectionPlan",
+    "AffectiveExpressionReviewReceipt",
     "AntiAIFaceReviewResult",
     "AutoRetryDecision",
     "BatchIdentityDiversityReview",
@@ -146,6 +157,8 @@ __all__ = [
     "IdentityRepairStrategyPlan",
     "IdentityRepairStrategyRouter",
     "IdentityReviewFusion",
+    "LAUGH_EXPRESSION_EVIDENCE_CODES",
+    "LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES",
     "VISUAL_CASEBOOK_RECIPE_LIBRARY_ID",
     "VISUAL_HUMAN_ATTRACTIVE_REALISM_BALANCE_ID",
     "VISUAL_HUMAN_EAST_ASIAN_FAIR_COMPLEXION_GUARD_ID",
@@ -175,11 +188,14 @@ __all__ = [
     "ProjectIdentityAnchorBuilder",
     "SFaceIdentityMetricProvider",
     "ProjectVisualGrammarSnapshot",
+    "project_laugh_expression_review_receipt",
     "REFERENCE_CHANNEL_ISSUE_CODES",
     "REFERENCE_CHANNEL_POLICY_MODULE_ID",
     "ReferenceChannelPolicy",
     "ReferenceChannelPolicyModule",
     "reference_channel_retry_patch",
+    "laugh_expression_receipt_allows_slot",
+    "normalize_affective_expression_score_card",
     "ReferenceOverinheritanceRetryPatch",
     "apply_role_recipe_casebook_overlay",
     "human_photorealism_casebook",
@@ -206,6 +222,8 @@ __all__ = [
     "DOC86_IDENTITY_ISSUE_CODES",
     "DOC87_REFERENCE_BOUNDARY_ISSUE_CODES",
     "DOC88_REFERENCE_BALANCE_ISSUE_CODES",
+    "EXPRESSION_FRAMING_DELTA_MAX",
+    "EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES",
     "VISUAL_CAPABILITY_CLUSTER_ID",
     "VISUAL_CLUSTER_CHILD_MODULE_IDS",
     "VisualCapabilityClusterModule",

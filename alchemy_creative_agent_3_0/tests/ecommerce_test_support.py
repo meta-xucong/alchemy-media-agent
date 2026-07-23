@@ -336,9 +336,9 @@ class EcommerceRemoteBrainTestProvider:
             ),
         }.get(anchor_view_target)
         expression_slot_prompt = {
-            "smile": (
-                "Reference-led Character Card expression.smile portrait of the same person, "
-                "gentle genuine age-appropriate smile, clean white reference-card framing."
+            "laugh": (
+                "Reference-led Character Card expression.laugh portrait of the same person, "
+                "medium-arousal naturally amused laugh keyframe, clean white reference-card framing."
             ),
             "anger": (
                 "Reference-led Character Card expression.anger portrait of the same person, "

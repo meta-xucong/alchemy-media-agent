@@ -320,7 +320,34 @@ class ProfessionalModeRuntimeBridge:
             "module_continuity": "derive_from_active_character_card_identity",
         }
         if stage == "expression_set":
-            quality_contract["expression_contract"] = "preserve_identity_while_varying_expression_only"
+            quality_contract["expression_contract"] = "preserve_identity_and_front_card_framing_while_varying_expression_only"
+            quality_contract["positive_expression_default"] = "laugh"
+            quality_contract["expression_framing_contract"] = {
+                "baseline": "active_face_front_winner",
+                "format": "1024x1536_vertical_2_3",
+                "background": "clean_white_studio",
+                "camera_distance": "inherit_face_front_modeling_card",
+                "crop": "head_neck_upper_shoulders",
+                "subject_scale": "inherit_face_front_modeling_card",
+                "eye_line_centering": "inherit_face_front_modeling_card",
+                "lighting_white_balance": "inherit_face_front_modeling_card",
+                "allowed_delta": "facial_affect_and_small_natural_head_shoulder_energy",
+                "forbidden_delta": "full_body_side_body_different_scene_reference_example_composition",
+            }
+            quality_contract["laugh_intent_contract"] = {
+                "intensity": "medium",
+                "arousal": "medium",
+                "phase": "static_positive_keyframe",
+                "evidence_required": [
+                    "mouth_eye_coherence",
+                    "periocular_gaze_affect",
+                    "cheek_jaw_coupling",
+                    "spontaneity_asymmetry",
+                    "age_coherence",
+                    "identity_preservation",
+                ],
+                "video_motion_hint": "positive_affect_keyframe_not_time_sequence_proof",
+            }
         else:
             quality_contract["body_silhouette_contract"] = "preserve_identity_scale_and_age_appropriate_body_proportion"
         return {

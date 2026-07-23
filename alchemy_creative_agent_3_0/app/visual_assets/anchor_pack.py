@@ -7,7 +7,7 @@ already be backed by the shared Brain-owned canonical-prompt path.
 
 from __future__ import annotations
 
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -178,6 +178,7 @@ class AnchorReviewDecision(V3BaseModel):
     status: Literal["pass", "fail"]
     identity_scores: IdentityScoreSummary
     issue_codes: list[str] = Field(default_factory=list)
+    shared_review_receipts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnchorCandidateAttempt(V3BaseModel):

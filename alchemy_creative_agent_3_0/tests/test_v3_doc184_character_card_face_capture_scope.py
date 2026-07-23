@@ -202,7 +202,7 @@ def test_doc184_character_card_scope_is_typed_and_ordinary_anchor_scope_is_uncha
 def test_doc184_character_card_later_stages_keep_professional_quality_contract() -> None:
     expression = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="expression_set",
-        slot_key="expression.smile",
+        slot_key="expression.laugh",
     )
     body = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="body_silhouette",
@@ -213,7 +213,12 @@ def test_doc184_character_card_later_stages_keep_professional_quality_contract()
     assert expression["professional_face_identity_quality_contract"]["scope"] == "character_card_expression_set"
     assert (
         expression["professional_face_identity_quality_contract"]["expression_contract"]
-        == "preserve_identity_while_varying_expression_only"
+        == "preserve_identity_and_front_card_framing_while_varying_expression_only"
+    )
+    assert expression["professional_face_identity_quality_contract"]["positive_expression_default"] == "laugh"
+    assert (
+        expression["professional_face_identity_quality_contract"]["expression_framing_contract"]["baseline"]
+        == "active_face_front_winner"
     )
     assert body["professional_face_identity_quality_contract"]["scope"] == "character_card_body_silhouette"
     assert (

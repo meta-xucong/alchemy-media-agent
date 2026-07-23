@@ -1913,6 +1913,7 @@ def _character_card_stage_prompt_scope_violations(
         return []
     expression = str(target.get("expression") or slot_key.split(".", 1)[1]).strip()
     expression_terms = {
+        "laugh": ("laugh", "laughing", "amused", "delighted", "joyful"),
         "smile": ("smile", "smiling", "happy", "joyful", "cheerful"),
         "anger": ("angry", "anger", "annoyed", "serious", "stern", "upset", "frown"),
         "sad": ("sad", "sadness", "pensive", "downcast", "melancholy", "somber", "unhappy"),

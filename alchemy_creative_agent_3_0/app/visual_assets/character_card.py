@@ -15,6 +15,7 @@ from uuid import uuid4
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
+from ..shared_capabilities.visual_cluster.expression_review import laugh_expression_receipt_allows_slot
 
 
 FACE_SLOT_KEYS = (
@@ -28,14 +29,19 @@ FACE_SLOT_KEYS = (
     "face.reverse_three_quarter",
     "face.rear_head",
 )
-EXPRESSION_SLOT_KEYS = ("expression.neutral", "expression.smile", "expression.anger", "expression.sad")
+EXPRESSION_SLOT_KEYS = ("expression.neutral", "expression.laugh", "expression.anger", "expression.sad")
+LEGACY_EXPRESSION_SLOT_KEYS = ("expression.smile",)
+ALL_EXPRESSION_SLOT_KEYS = (*EXPRESSION_SLOT_KEYS, *LEGACY_EXPRESSION_SLOT_KEYS)
+POSITIVE_EXPRESSION_SLOT_KEY = "expression.laugh"
+DEFAULT_EXPRESSION_KEYS = ("laugh", "anger", "sad")
 BODY_SLOT_KEYS = ("body.front_full", "body.side_full", "body.rear_full")
 BODY_SOURCE_CLASSES = ("observed", "user_described", "brain_inferred")
 EXPRESSION_LABELS = {
     "expression.neutral": "中性",
-    "expression.smile": "微笑",
+    "expression.laugh": "开心笑",
     "expression.anger": "愤怒",
     "expression.sad": "悲伤",
+    "expression.smile": "微笑（旧版）",
 }
 
 CharacterCardSlotKey = Literal[
@@ -47,6 +53,7 @@ CharacterCardSlotKey = Literal[
     "face.reverse_three_quarter",
     "face.rear_head",
     "expression.neutral",
+    "expression.laugh",
     "expression.smile",
     "expression.anger",
     "expression.sad",
@@ -74,7 +81,7 @@ CharacterCardModuleStatus = Literal[
     "blocked",
 ]
 BodySourceClass = Literal["observed", "user_described", "brain_inferred"]
-ExpressionKey = Literal["smile", "anger", "sad"]
+ExpressionKey = Literal["laugh", "smile", "anger", "sad"]
 BodySlotKey = Literal["body.front_full", "body.side_full", "body.rear_full"]
 
 
@@ -264,8 +271,8 @@ class CharacterCardState(_CharacterCardModel):
 
     @model_validator(mode="before")
     @classmethod
-    def hydrate_new_face_bridge_slots(cls, data: Any) -> Any:
-        """Keep historical cards readable after adding 25° bridge slots."""
+    def hydrate_new_slots_and_legacy_expression_slots(cls, data: Any) -> Any:
+        """Keep historical cards readable after slot-map migrations."""
 
         if not isinstance(data, dict):
             return data
@@ -280,13 +287,34 @@ class CharacterCardState(_CharacterCardModel):
                     ),
                 )
             data = {**data, "face_slots": hydrated}
+        expression_slots = data.get("expression_slots")
+        if isinstance(expression_slots, dict):
+            hydrated = dict(expression_slots)
+            for slot_key in EXPRESSION_SLOT_KEYS:
+                hydrated.setdefault(
+                    slot_key,
+                    CharacterCardSlot(slot_key=slot_key, module="expression_set").model_dump(
+                        mode="python"
+                    ),
+                )
+            legacy = hydrated.get("expression.smile")
+            if legacy is not None:
+                if isinstance(legacy, CharacterCardSlot):
+                    if legacy.state != "empty":
+                        hydrated["expression.smile"] = legacy.model_copy(update={"state": "stale"})
+                elif isinstance(legacy, dict) and str(legacy.get("state") or "empty") != "empty":
+                    hydrated["expression.smile"] = {**legacy, "state": "stale"}
+            data = {**data, "expression_slots": hydrated}
         return data
 
     @model_validator(mode="after")
     def validate_slots_and_order(self) -> "CharacterCardState":
         if set(self.face_slots) != set(FACE_SLOT_KEYS):
             raise ValueError("Character Card must expose all five Face Identity slots")
-        if set(self.expression_slots) != set(EXPRESSION_SLOT_KEYS):
+        expression_keys = set(self.expression_slots)
+        if not set(EXPRESSION_SLOT_KEYS).issubset(expression_keys) or not expression_keys.issubset(
+            set(ALL_EXPRESSION_SLOT_KEYS)
+        ):
             raise ValueError("Character Card must expose all Expression Set slots")
         if set(self.body_slots) != set(BODY_SLOT_KEYS):
             raise ValueError("Character Card must expose all Body Silhouette slots")
@@ -373,6 +401,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     card_version_id: str
     module: Literal["expression_set", "body_silhouette"]
     slot_key: Literal[
+        "expression.laugh",
         "expression.smile",
         "expression.anger",
         "expression.sad",
@@ -408,7 +437,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     @model_validator(mode="after")
     def enforce_module_slot(self) -> "CharacterCardCandidateRequest":
         if self.module == "expression_set":
-            if self.slot_key not in {"expression.smile", "expression.anger", "expression.sad"}:
+            if self.slot_key not in {"expression.laugh", "expression.smile", "expression.anger", "expression.sad"}:
                 raise ValueError("Expression Set request has an invalid slot")
             if len(self.reference_output_ids) != 1:
                 raise ValueError("Expression Set requests must use only face.front winner")
@@ -486,11 +515,15 @@ class CharacterCardSharedRuntimeReceipt(_CharacterCardModel):
     retry_count: int = Field(default=0, ge=0, le=1)
     final_winner_selection_verified: bool = False
     prompt_reference_parity_verified: bool = False
+    shared_review_receipts: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def require_shared_acceptance(self) -> "CharacterCardSharedRuntimeReceipt":
         if not self.final_winner_selection_verified or not self.prompt_reference_parity_verified:
             raise ValueError("shared Character Card runtime receipt is incomplete")
+        for receipt in self.shared_review_receipts:
+            if not isinstance(receipt, dict) or str(receipt.get("owner") or "") != "v3_shared_visual_cluster":
+                raise ValueError("shared Character Card runtime receipt contains an invalid review receipt")
         return self
 
 
@@ -584,6 +617,11 @@ class CharacterCardStageHost(Protocol):
     ) -> CharacterCardStageResult:
         ...
 
+    def prepare_expression_slot(
+        self, *, asset: Any, card: CharacterCardState, expression: ExpressionKey, generation_channel: str = "provider"
+    ) -> CharacterCardStageResult:
+        ...
+
     def prepare_body_silhouette(
         self, *, asset: Any, card: CharacterCardState,
         request: BodySilhouettePublicRequest | None = None,
@@ -649,7 +687,7 @@ class CharacterCardPreparationService:
         self._require_face_active(card, front_output_id)
         if self.generator is None or self.reviewer is None:
             raise RuntimeError("shared Character Card candidate/review seam is unavailable")
-        if not user_intents or any(not str(user_intents.get(key) or "").strip() for key in ("smile", "anger", "sad")):
+        if not user_intents or any(not str(user_intents.get(key) or "").strip() for key in DEFAULT_EXPRESSION_KEYS):
             raise ValueError("Expression Set requires Brain/user-owned expression intent for every slot")
         intents = user_intents
         attempts: list[CharacterCardCandidateAttempt] = []
@@ -666,7 +704,7 @@ class CharacterCardPreparationService:
             prompt_reference_parity_verified=True,
         )
         slots["expression.neutral"] = neutral
-        for expression in ("smile", "anger", "sad"):
+        for expression in DEFAULT_EXPRESSION_KEYS:
             slot_key = f"expression.{expression}"
             existing = slots[slot_key]
             if existing.state in {"winner_selected", "active"} and existing.output_id:
@@ -733,6 +771,114 @@ class CharacterCardPreparationService:
             }
         )
         return CharacterCardStageResult(status="review", card=updated, attempts=attempts, winner_output_ids=winners, failures=failures)
+
+    def prepare_expression_slot(
+        self,
+        card: CharacterCardState,
+        *,
+        expression: ExpressionKey,
+        front_output_id: str,
+        user_intent: str,
+        project_id: str = "project",
+        people_asset_id: str = "people_asset",
+        generation_channel: Literal["provider", "mcp"] = "provider",
+    ) -> CharacterCardStageResult:
+        """Prepare one explicit expression slot outside the default set.
+
+        This preserves Doc196 compatibility: a user may explicitly request a
+        lower-intensity ``expression.smile`` card, but the default Professional
+        positive deliverable remains ``expression.laugh`` and activation still
+        depends on the current required slots only.
+        """
+
+        self._require_face_active(card, front_output_id)
+        if self.generator is None or self.reviewer is None:
+            raise RuntimeError("shared Character Card candidate/review seam is unavailable")
+        request = ExpressionPreparationRequest(
+            expression=expression,
+            front_output_id=front_output_id,
+            user_intent=user_intent,
+        )
+        slot_key = f"expression.{expression}"
+        slots = dict(card.expression_slots)
+        slots.setdefault(slot_key, CharacterCardSlot(slot_key=slot_key, module="expression_set"))  # type: ignore[arg-type]
+        attempts: list[CharacterCardCandidateAttempt] = []
+        winner, expression_attempts, slot_failures = self._prepare_slot(
+            card=card,
+            module="expression_set",
+            slot_key=slot_key,
+            project_id=project_id,
+            people_asset_id=people_asset_id,
+            reference_output_ids=request.reference_output_ids,
+            user_intent=request.user_intent,
+            source_class=None,
+            generation_channel=generation_channel,
+            attempts=attempts,
+        )
+        attempts.extend(expression_attempts)
+        if winner is None:
+            failure_code = slot_failures[-1].failure_code if slot_failures else f"{slot_key}_review_failed"
+            if slot_key not in EXPRESSION_SLOT_KEYS:
+                slots[slot_key] = CharacterCardSlot(slot_key=slot_key, module="expression_set", state="blocked")  # type: ignore[arg-type]
+                failed_card = card.model_copy(
+                    update={
+                        "expression_slots": slots,
+                        "expression_set_status": card.expression_set_status if card.expression_set_status == "active" else "partial",
+                        "last_failed_module": "expression_set",
+                        "last_failed_slot_key": slot_key,
+                        "last_failure_code": failure_code,
+                        "last_failure_attempt_count": min(3, max(1, len(slot_failures))),
+                        "resume_available": True,
+                        "append_only_revision": card.append_only_revision + 1,
+                    }
+                )
+            else:
+                failed_card = self._blocked_card(
+                    card,
+                    module="expression_set",
+                    slot_key=slot_key,
+                    failure_code=failure_code,
+                    failure_attempt_count=max(1, len(slot_failures)),
+                    slots=slots,
+                    status_field="expression_set_status",
+                )
+            return CharacterCardStageResult(
+                status="blocked",
+                card=failed_card.model_copy(
+                    update={"pending_mcp_handoff_ids": self._mcp_handoff_ids(slot_failures)}
+                ),
+                attempts=attempts,
+                winner_output_ids={},
+                failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
+                failures=slot_failures,
+                mcp_handoff_ids=self._mcp_handoff_ids(slot_failures),
+            )
+        slots[slot_key] = self._winner_slot(
+            module="expression_set",
+            slot_key=slot_key,
+            winner=winner,
+        )
+        next_status = card.expression_set_status if card.expression_set_status == "active" else "partial"
+        updated = card.model_copy(
+            update={
+                "expression_slots": slots,
+                "expression_set_status": next_status,
+                "append_only_revision": card.append_only_revision + 1,
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_attempt_count": 0,
+                "resume_available": False,
+                "pending_mcp_handoff_ids": [],
+            }
+        )
+        return CharacterCardStageResult(
+            status="review",
+            card=updated,
+            attempts=attempts,
+            winner_output_ids={slot_key: winner.output_id},
+            failures=slot_failures,
+        )
 
     def prepare_body_silhouette(
         self,
@@ -891,7 +1037,7 @@ class CharacterCardPreparationService:
             review = self.reviewer.review(candidate)
             attempt = CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
             slot_attempts.append(attempt)
-            if getattr(review, "status", None) == "pass":
+            if getattr(review, "status", None) == "pass" and self._review_allows_slot(slot_key, review):
                 passing.append((candidate, review))
         if not passing:
             if not slot_failures:
@@ -950,6 +1096,16 @@ class CharacterCardPreparationService:
         return (0,)
 
     @staticmethod
+    def _review_allows_slot(slot_key: str, review: Any) -> bool:
+        if slot_key != POSITIVE_EXPRESSION_SLOT_KEY:
+            return True
+        scores = getattr(review, "identity_scores", None)
+        return laugh_expression_receipt_allows_slot(
+            evidence_codes=getattr(scores, "evidence_codes", []) or [],
+            issue_codes=getattr(review, "issue_codes", []) or [],
+        )
+
+    @staticmethod
     def _winner_slot(
         *,
         module: CharacterCardModule,
@@ -999,7 +1155,7 @@ class CharacterCardPreparationService:
             if any(
                 slot.state not in {"winner_selected", "active"}
                 for key, slot in slots.items()
-                if key != "expression.neutral"
+                if key in EXPRESSION_SLOT_KEYS and key != "expression.neutral"
             ):
                 raise ValueError("Expression Set contains an unreviewed slot")
             slots = {

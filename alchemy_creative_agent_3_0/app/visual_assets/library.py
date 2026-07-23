@@ -27,6 +27,7 @@ from .character_card import (
     CharacterCardRuntimeUnavailable,
     CharacterCardStageHost,
     CharacterCardState,
+    ExpressionKey,
     apply_face_identity_pack_to_card,
 )
 from .contracts import (
@@ -923,6 +924,7 @@ class VisualAssetLibraryLifecycleService:
         owner_scope: str,
         visual_asset_id: str,
         stage: Literal["expression_set", "body_silhouette"],
+        expression: ExpressionKey | None = None,
         body_request: BodySilhouettePublicRequest | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
     ) -> VisualAsset:
@@ -945,7 +947,10 @@ class VisualAssetLibraryLifecycleService:
                 raise ValueError("character_card_body_source_required")
             if body_request.source_class == "observed":
                 self._require_authorized_body_reference(body_request)
-        method = getattr(self.character_card_stage_host, f"prepare_{stage}", None)
+        if stage == "expression_set" and expression is not None and expression != "smile":
+            raise ValueError("character_card_expression_slot_not_explicitly_supported")
+        method_name = "prepare_expression_slot" if stage == "expression_set" and expression is not None else f"prepare_{stage}"
+        method = getattr(self.character_card_stage_host, method_name, None)
         if not callable(method):
             raise CharacterCardRuntimeUnavailable("character_card_stage_prepare_unavailable")
         if stage == "body_silhouette":
@@ -958,6 +963,8 @@ class VisualAssetLibraryLifecycleService:
             # intentionally no browser-side expression dictionary or local
             # default wording to pass here.
             method_kwargs = {"asset": asset, "card": card}
+            if expression is not None:
+                method_kwargs["expression"] = expression
             if generation_channel == "mcp":
                 method_kwargs["generation_channel"] = "mcp"
             result = method(**method_kwargs)

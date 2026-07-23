@@ -2018,6 +2018,35 @@ class ScenarioRuntime:
                             else {}
                         ),
                     }
+                    if stage == "expression_set":
+                        context["character_card_slot_framing_contract"] = {
+                            "baseline": "active_face_front_winner",
+                            "format": "1024x1536_vertical_2_3",
+                            "background": "clean_white_studio",
+                            "camera_distance": "inherit_face_front_modeling_card",
+                            "crop": "head_neck_upper_shoulders",
+                            "subject_scale": "inherit_face_front_modeling_card",
+                            "eye_line_centering": "inherit_face_front_modeling_card",
+                            "lighting_white_balance": "inherit_face_front_modeling_card",
+                            "allowed_delta": "facial_affect_and_small_natural_head_shoulder_energy",
+                        }
+                    if stage == "expression_set" and slot_key == "expression.laugh":
+                        context["character_card_laugh_intent_contract"] = {
+                            "emotion": "laugh",
+                            "intensity": "medium",
+                            "arousal": "medium",
+                            "phase": "positive_static_keyframe",
+                            "evidence_required": [
+                                "mouth_eye_coherence",
+                                "periocular_gaze_affect",
+                                "cheek_jaw_coupling",
+                                "jaw_relaxation",
+                                "spontaneity_asymmetry",
+                                "age_coherence",
+                                "identity_preservation",
+                            ],
+                            "video_motion_hint": "useful_positive_keyframe_without_claiming_time_sequence",
+                        }
                 context["provider_admission_decision"] = {
                     "required": True,
                     "contract_version": "v3_provider_admission_decision_v1",

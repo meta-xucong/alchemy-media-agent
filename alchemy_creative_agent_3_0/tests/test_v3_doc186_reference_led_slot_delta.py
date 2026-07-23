@@ -126,7 +126,7 @@ def test_doc186_bridge_marks_only_later_character_card_slots_as_reference_led() 
     )
     expression = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="expression_set",
-        slot_key="expression.smile",
+        slot_key="expression.laugh",
     )
     body = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="body_silhouette",
@@ -200,7 +200,7 @@ def test_doc186_scenario_runtime_projects_delta_contract_for_character_card_stag
     runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain))
     planning = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="expression_set",
-        slot_key="expression.smile",
+        slot_key="expression.laugh",
     )
     result = runtime.plan_job(
         {
@@ -222,13 +222,13 @@ def test_doc186_scenario_runtime_projects_delta_contract_for_character_card_stag
                 "professional_mode": True,
                 "professional_character_card_preparation": True,
                 "professional_character_card_stage": "expression_set",
-                "professional_character_card_slot": "expression.smile",
+                "professional_character_card_slot": "expression.laugh",
                 "professional_anchor_reference_assets": [
                     {"asset_id": "front_winner", "role": "portrait_identity"}
                 ],
                 "professional_planning_metadata": planning,
                 "generation_channel": "mcp",
-                "mcp_operation_id": "asset_doc186:expression_set:expression.smile:1",
+                "mcp_operation_id": "asset_doc186:expression_set:expression.laugh:1",
             },
         }
     )

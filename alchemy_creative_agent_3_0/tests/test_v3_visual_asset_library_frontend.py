@@ -259,7 +259,7 @@ def test_doc180_character_card_is_the_single_professional_preparation_surface() 
         "face.reverse_three_quarter",
         "face.rear_head",
         "expression.neutral",
-        "expression.smile",
+        "expression.laugh",
         "expression.anger",
         "expression.sad",
         "body.front_full",

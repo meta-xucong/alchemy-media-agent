@@ -1,5 +1,66 @@
 # AlchemyOS Agent Development Principles
 
+## Parallel Development and Main Integration Policy
+
+This repository uses Git worktrees for concurrent development. Treat the
+`main` branch as the stable integration line and assign it a single active
+writer at a time.
+
+Roles:
+
+1. The mainline integrator owns the current `main` checkout and is the only
+   agent allowed to make direct feature commits to `main`.
+2. Parallel feature work must use its own worktree and its own feature branch.
+   A parallel agent must never develop directly on `main` or reuse the
+   mainline integrator's working directory.
+3. The branch used by one active worktree must not be checked out for editing
+   in another worktree.
+
+Mainline integrator rules:
+
+1. Before starting a task, inspect `git status` and synchronize with
+   `origin/main` when it can be fast-forwarded safely.
+2. At every small, independently verifiable milestone: run the relevant tests,
+   review the diff for unrelated files and temporary artifacts, commit the
+   change, and push it to `origin/main`.
+3. Keep `main` runnable and avoid leaving completed foundation work only as
+   uncommitted local changes.
+4. Do not create, switch to, reset, clean, delete, or otherwise alter another
+   active worktree or its feature branch.
+
+Parallel feature rules:
+
+1. Create the feature worktree from the current `origin/main`, use a clearly
+   scoped branch name, and confine changes to the assigned subsystem whenever
+   possible.
+2. Before beginning a new milestone and again before integration, fetch and
+   rebase the feature branch onto the latest `origin/main`.
+3. Run feature-relevant tests before requesting integration. Resolve conflicts
+   on the feature branch, then merge only after the resulting integrated state
+   is verified.
+4. Coordinate before changing shared contracts: request/response schemas,
+   generation routing, public component interfaces, shared dependencies, lock
+   files, or cross-cutting documentation.
+
+Safety rules:
+
+1. Never use destructive Git commands such as `git reset --hard`, `git clean`,
+   or a file-overwriting checkout unless the user explicitly authorizes that
+   exact operation.
+2. Do not commit logs, caches, evaluation scratch directories, generated
+   contact sheets, or other temporary artifacts unless they are intentional
+   repository assets.
+3. Completion reports must state: affected scope, tests run and results,
+   commit hash, push status, and any remaining integration dependency.
+
+Short form:
+
+```text
+One writer owns main.
+Each parallel task owns one worktree and one branch.
+Sync early, test before integrating, and protect other worktrees.
+```
+
 ## Theory-First Correction Principle
 
 When a development task produces behavior that differs from the expected
@@ -33,6 +94,16 @@ Think the system through first.
 Then patch once at the right layer.
 Then test.
 ```
+
+## Workspace Encoding Rules
+
+- Treat all source, config, markdown, JSON, YAML, CSV, and text files as UTF-8 unless a file clearly uses another encoding.
+- When reading or writing text in PowerShell, prefer explicit UTF-8 encoding options such as `-Encoding utf8`.
+- Before running commands that pipe or display Chinese text in PowerShell, ensure the session uses UTF-8:
+  `[Console]::InputEncoding = [System.Text.UTF8Encoding]::new(); [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [System.Text.UTF8Encoding]::new(); chcp 65001 > $null`
+- Do not put Chinese literals directly inside `shell_command` command strings. If a command must create or compare Chinese text, put the text in a UTF-8 file, use `apply_patch`, or construct it with Unicode escapes.
+- For Python scripts, open files with `encoding="utf-8"` when reading or writing text.
+- Avoid ad hoc byte/string conversions for Chinese text; use structured parsers and explicit encodings.
 
 ## V3 Foundation vs Specialized Template Principle
 

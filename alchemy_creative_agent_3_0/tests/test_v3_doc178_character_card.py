@@ -10,6 +10,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
+    LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BODY_SOURCE_CLASSES,
     BODY_SLOT_KEYS,
@@ -93,7 +96,7 @@ def test_doc178_neutral_is_an_alias_and_never_a_generation_slot() -> None:
 def test_doc178_rejects_unreviewed_winner_and_wrong_module_slot() -> None:
     with pytest.raises(ValidationError, match="review"):
         CharacterCardSlot(
-            slot_key="expression.smile",
+            slot_key="expression.laugh",
             module="expression_set",
             state="winner_selected",
             output_id="output_1",
@@ -131,7 +134,7 @@ def test_doc178_expression_requests_all_use_front_and_never_previous_expression(
             front_output_id="front_winner",
             user_intent=f"user intent for {expression}",
         )
-        for expression in ("smile", "anger", "sad")
+        for expression in ("laugh", "anger", "sad")
     ]
     assert all(request.reference_output_ids == ["front_winner"] for request in requests)
     assert all(request.candidate_count == 3 for request in requests)
@@ -139,7 +142,7 @@ def test_doc178_expression_requests_all_use_front_and_never_previous_expression(
         ExpressionPreparationRequest(
             expression="anger",
             front_output_id="front_winner",
-            reference_output_ids=["smile_winner"],
+            reference_output_ids=["laugh_winner"],
             user_intent="anger",
         )
 
@@ -230,6 +233,9 @@ class _Doc178FaceReviewer:
                 distinctive_feature_score=0.9,
                 human_realism_score=0.9,
                 visual_quality_score=0.9,
+                evidence_codes=sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
+                if getattr(candidate, "slot_key", "") == "expression.laugh"
+                else [],
             ),
         )
 
@@ -336,6 +342,9 @@ class _Doc178ExpressionBodyReviewer:
                 distinctive_feature_score=0.9,
                 human_realism_score=0.9,
                 visual_quality_score=0.9,
+                evidence_codes=sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
+                if getattr(candidate, "slot_key", "") == "expression.laugh"
+                else [],
             ),
         )
 
@@ -349,7 +358,7 @@ def test_doc178_expression_and_body_are_independent_three_candidate_stages() -> 
     expression = service.prepare_expression_set(
         _doc178_face_ready_card(),
         front_output_id="front_winner",
-        user_intents={"smile": "smile intent", "anger": "anger intent", "sad": "sad intent"},
+        user_intents={"laugh": "laugh intent", "anger": "anger intent", "sad": "sad intent"},
     )
     assert expression.status == "review"
     assert expression.card.expression_slots["expression.neutral"].is_alias is True
