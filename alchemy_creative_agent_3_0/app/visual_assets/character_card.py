@@ -1078,7 +1078,19 @@ class CharacterCardPreparationService:
         slot_failures: list[CharacterCardFailureEvent] = []
         passing: list[tuple[CharacterCardCandidateResult, Any]] = []
         attempt_round = int(card.slot_retry_rounds.get(slot_key, 1))
-        for candidate_index in range(1, self.CANDIDATE_COUNT + 1):
+        start_candidate_index = 1
+        if (
+            generation_channel == "mcp"
+            and card.last_failed_module == module
+            and card.last_failed_slot_key == slot_key
+            and card.last_failure_code in {"mcp_materialization_pending", "mcp_review_pending"}
+            and int(card.last_failure_attempt_count or 0) >= 1
+        ):
+            start_candidate_index = min(
+                self.CANDIDATE_COUNT,
+                max(1, int(card.last_failure_attempt_count or 1)),
+            )
+        for candidate_index in range(start_candidate_index, self.CANDIDATE_COUNT + 1):
             request = CharacterCardCandidateRequest(
                 project_id=project_id,
                 people_asset_id=people_asset_id,

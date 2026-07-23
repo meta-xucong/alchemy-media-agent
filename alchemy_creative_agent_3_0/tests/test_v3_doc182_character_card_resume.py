@@ -704,7 +704,6 @@ def test_doc203_character_card_mcp_resume_passes_pending_handoff_only_to_matchin
         (request.candidate_index, request.mcp_handoff_id)
         for request in laugh_requests
     ] == [
-        (1, None),
         (2, "mcp_handoff_expression_laugh_candidate2"),
         (3, None),
     ]
