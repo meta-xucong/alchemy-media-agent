@@ -214,6 +214,12 @@ class V3ProductRouteHandlers:
         generation_channel = payload.get("generation_channel", "provider")
         if generation_channel not in {"provider", "mcp"}:
             raise ValueError("character_card_generation_channel_invalid")
+        retry_failed_slot = payload.get("retry_failed_slot", False)
+        confirm_retry = payload.get("confirm_retry", False)
+        if not isinstance(retry_failed_slot, bool) or not isinstance(confirm_retry, bool):
+            raise ValueError("character_card_failed_slot_retry_flag_invalid")
+        if confirm_retry and not retry_failed_slot:
+            raise ValueError("character_card_failed_slot_retry_flag_invalid")
         body_request = None
         expression = None
         if stage == "body_silhouette":
@@ -231,15 +237,19 @@ class V3ProductRouteHandlers:
                 {key: value for key, value in payload.items() if key not in {"stage", "resume", "generation_channel"}}
             )
         elif stage == "expression_set" and "expression" in payload:
+            if retry_failed_slot:
+                raise ValueError("character_card_failed_slot_retry_uses_persisted_slot")
             if set(payload) - {"stage", "resume", "generation_channel", "expression"}:
                 raise ValueError("character_card_stage_payload_invalid")
             expression = payload.get("expression")
             if expression != "smile":
                 raise ValueError("character_card_expression_slot_not_explicitly_supported")
-        elif set(payload) - {"stage", "resume", "generation_channel"}:
+        elif set(payload) - {"stage", "resume", "generation_channel", "retry_failed_slot", "confirm_retry"}:
             # Expression intent remains Brain/host-owned.  A browser may not
             # inject a local expression dictionary or prompt fragment.
             raise ValueError("character_card_stage_payload_invalid")
+        if stage != "expression_set" and retry_failed_slot:
+            raise ValueError("character_card_failed_slot_retry_stage_invalid")
         if stage == "face_identity":
             asset = self.visual_asset_library_service.prepare_character_card_face(
                 owner_scope=self._visual_asset_owner_scope(owner_scope),
@@ -255,6 +265,8 @@ class V3ProductRouteHandlers:
                 expression=expression,
                 body_request=body_request,
                 generation_channel=generation_channel,
+                retry_failed_slot=retry_failed_slot,
+                confirm_retry=confirm_retry,
             )
         return {"visual_asset": self._visual_asset_public_record(asset)}
 

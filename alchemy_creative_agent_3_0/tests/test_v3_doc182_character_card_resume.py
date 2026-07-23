@@ -505,6 +505,124 @@ def test_doc182_resume_keeps_winner_and_starts_at_failed_slot() -> None:
     assert resumed.card.expression_slots["expression.laugh"].output_id == first.card.expression_slots["expression.laugh"].output_id
 
 
+def test_doc202_confirmed_failed_expression_slot_retry_starts_new_round_without_losing_winners() -> None:
+    first_generator = _ExpressionGenerator(failing_slots={"expression.anger"})
+    service = CharacterCardPreparationService(generator=first_generator, reviewer=_PassReviewer())
+    first = service.prepare_expression_set(
+        _face_card(),
+        front_output_id="front_winner",
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
+    )
+
+    assert first.status == "blocked"
+    assert first.card.last_failed_slot_key == "expression.anger"
+    assert first.card.last_failure_attempt_count == 3
+
+    with pytest.raises(ValueError, match="confirmation"):
+        first.card.begin_failed_slot_retry(module="expression_set", confirmed=False)
+
+    retry_card = first.card.begin_failed_slot_retry(module="expression_set", confirmed=True)
+    assert retry_card.slot_retry_rounds["expression.anger"] == 2
+    assert retry_card.expression_slots["expression.laugh"].output_id == first.card.expression_slots["expression.laugh"].output_id
+    assert retry_card.resume_available is False
+    assert retry_card.pending_mcp_handoff_ids == []
+
+    second_generator = _ExpressionGenerator()
+    resumed = CharacterCardPreparationService(generator=second_generator, reviewer=_PassReviewer()).prepare_expression_set(
+        retry_card,
+        front_output_id="front_winner",
+        user_intents={"laugh": "natural laugh", "anger": "quietly serious", "sad": "subtle sadness"},
+    )
+
+    assert resumed.status == "review"
+    assert resumed.card.expression_slots["expression.laugh"].output_id == first.card.expression_slots["expression.laugh"].output_id
+    assert [
+        (request.slot_key, request.candidate_index, request.attempt_round)
+        for request in second_generator.requests
+    ] == [
+        ("expression.anger", 1, 2),
+        ("expression.anger", 2, 2),
+        ("expression.anger", 3, 2),
+        ("expression.sad", 1, 1),
+        ("expression.sad", 2, 1),
+        ("expression.sad", 3, 1),
+    ]
+
+
+def test_doc202_failed_slot_retry_cannot_supersede_pending_mcp_handoff() -> None:
+    card = _face_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_pending",
+            "last_failure_attempt_count": 1,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": ["mcp_handoff_expression_laugh_1"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="pending MCP handoff"):
+        card.begin_failed_slot_retry(module="expression_set", confirmed=True)
+
+
+def test_doc202_mcp_character_card_operation_id_is_round_scoped_after_confirmed_retry() -> None:
+    class _RoundService:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created_kwargs = None
+
+        def create_professional_character_card_stage_job(self, *_args, **kwargs):
+            self.created_kwargs = dict(kwargs)
+            return ProductJobStatus(
+                job_id="job_doc202_round2",
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, job_id, _request):  # noqa: ANN001, ANN201
+            assert job_id == "job_doc202_round2"
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+                metadata={
+                    "mcp_materialization": {
+                        "handoff_id": "mcp_handoff_expression_laugh_round2_1",
+                        "status": "pending",
+                        "canonical_prompt": "Same person in a clearly readable joyful laugh keyframe.",
+                    }
+                },
+            )
+
+        def get_job_record(self, _job_id):  # noqa: ANN001, ANN201
+            return None
+
+    service = _RoundService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc202",
+        people_asset_id="people_doc202",
+        card_version_id="card_doc202",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=1,
+        attempt_round=2,
+        reference_output_ids=["front_winner"],
+        user_intent="authorized expression-set intent",
+        generation_channel="mcp",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="mcp_materialization_pending"):
+        host.generate(request)
+
+    assert service.created_kwargs["mcp_operation_id"] == "people_doc202:expression_set:expression.laugh:1:round2"
+    assert service.created_kwargs["attempt_round"] == 2
+
+
 class _AnchorGenerator:
     def __init__(self, *, failing_roles: set[str] | None = None, handoff_ids: dict[tuple[str, int], str] | None = None) -> None:
         self.failing_roles = set(failing_roles or set())

@@ -927,6 +927,8 @@ class VisualAssetLibraryLifecycleService:
         expression: ExpressionKey | None = None,
         body_request: BodySilhouettePublicRequest | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
+        retry_failed_slot: bool = False,
+        confirm_retry: bool = False,
     ) -> VisualAsset:
         """Resume one Character Card stage through a shared-runtime host."""
 
@@ -949,6 +951,10 @@ class VisualAssetLibraryLifecycleService:
                 self._require_authorized_body_reference(body_request)
         if stage == "expression_set" and expression is not None and expression != "smile":
             raise ValueError("character_card_expression_slot_not_explicitly_supported")
+        if retry_failed_slot:
+            if expression is not None:
+                raise ValueError("character_card_failed_slot_retry_uses_persisted_slot")
+            card = card.begin_failed_slot_retry(module=stage, confirmed=confirm_retry)
         method_name = "prepare_expression_slot" if stage == "expression_set" and expression is not None else f"prepare_{stage}"
         method = getattr(self.character_card_stage_host, method_name, None)
         if not callable(method):

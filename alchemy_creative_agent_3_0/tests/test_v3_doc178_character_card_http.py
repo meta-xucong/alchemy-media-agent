@@ -199,6 +199,64 @@ def test_doc178_route_handler_rejects_expression_payload_and_no_host_is_safe() -
         handlers.post_visual_asset_character_card_prepare("asset_1", {"stage": "face_identity"})
 
 
+def test_doc202_route_accepts_only_confirmed_failed_slot_retry_without_prompt_injection() -> None:
+    captured = {}
+
+    class _Lifecycle:
+        def prepare_character_card_stage(self, **kwargs):
+            captured.update(kwargs)
+            return _catalog_asset(VisualAssetLibraryCatalog())
+
+    handlers = V3ProductRouteHandlers(service=V3ProductApiService())
+    handlers.visual_asset_library_service = _Lifecycle()
+
+    with pytest.raises(ValueError, match="failed_slot_retry_flag"):
+        handlers.post_visual_asset_character_card_prepare(
+            "asset_retry",
+            {"stage": "expression_set", "generation_channel": "mcp", "confirm_retry": True},
+        )
+    with pytest.raises(ValueError, match="stage_payload"):
+        handlers.post_visual_asset_character_card_prepare(
+            "asset_retry",
+            {
+                "stage": "expression_set",
+                "generation_channel": "mcp",
+                "retry_failed_slot": True,
+                "confirm_retry": True,
+                "expression_prompt": "force this candidate through",
+            },
+        )
+    with pytest.raises(ValueError, match="uses_persisted_slot"):
+        handlers.post_visual_asset_character_card_prepare(
+            "asset_retry",
+            {
+                "stage": "expression_set",
+                "generation_channel": "mcp",
+                "expression": "smile",
+                "retry_failed_slot": True,
+                "confirm_retry": True,
+            },
+        )
+
+    payload = handlers.post_visual_asset_character_card_prepare(
+        "asset_retry",
+        {
+            "stage": "expression_set",
+            "generation_channel": "mcp",
+            "retry_failed_slot": True,
+            "confirm_retry": True,
+        },
+    )
+
+    assert captured["visual_asset_id"] == "asset_retry"
+    assert captured["stage"] == "expression_set"
+    assert captured["generation_channel"] == "mcp"
+    assert captured["retry_failed_slot"] is True
+    assert captured["confirm_retry"] is True
+    assert "expression" not in captured or captured["expression"] is None
+    assert payload["visual_asset"]["visual_asset_id"]
+
+
 def test_doc180_character_card_activate_route_accepts_face_identity_module() -> None:
     catalog = VisualAssetLibraryCatalog()
     asset = _catalog_asset(catalog)

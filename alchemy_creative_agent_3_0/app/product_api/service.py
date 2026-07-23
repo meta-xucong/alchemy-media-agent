@@ -861,6 +861,7 @@ class V3ProductApiService:
         professional_character_card_slot: str | None = None,
         professional_character_card_reference_output_ids: list[str] | None = None,
         professional_character_card_source_class: str | None = None,
+        professional_character_card_attempt_round: int = 1,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
@@ -950,6 +951,9 @@ class V3ProductApiService:
                 "professional_character_card_stage": professional_character_card_stage,
                 "professional_character_card_slot": str(professional_character_card_slot),
                 "professional_character_card_source_class": professional_character_card_source_class,
+                "professional_character_card_attempt_round": max(
+                    1, int(professional_character_card_attempt_round)
+                ),
                 "professional_character_card_reference_output_ids": reference_ids,
                 "professional_planning_metadata": planning_metadata,
                 "professional_identity_reference_strategy": "character_card_shared_identity_v1",
@@ -1119,6 +1123,7 @@ class V3ProductApiService:
         source_class: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
+        attempt_round: int = 1,
     ) -> ProductJobStatus:
         """Create one Character Card candidate through shared V3 execution."""
 
@@ -1130,6 +1135,7 @@ class V3ProductApiService:
             professional_character_card_slot=slot_key,
             professional_character_card_reference_output_ids=list(reference_output_ids),
             professional_character_card_source_class=source_class,
+            professional_character_card_attempt_round=attempt_round,
             generation_channel=generation_channel,
             mcp_operation_id=mcp_operation_id,
         )

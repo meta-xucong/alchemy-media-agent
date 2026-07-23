@@ -245,6 +245,11 @@ class CharacterCardState(_CharacterCardModel):
     # Opaque local-MCP receipts for a blocked stage.  They are cleared by a
     # successful stage and never carry prompt, path, provider or artifact data.
     pending_mcp_handoff_ids: list[str] = Field(default_factory=list)
+    # Per-slot retry round for user-confirmed continuations after the current
+    # three-candidate budget is exhausted.  Round one is the implicit default;
+    # later rounds only isolate durable operation ids and never increase the
+    # per-round candidate budget.
+    slot_retry_rounds: dict[str, int] = Field(default_factory=dict)
 
     @field_validator("pending_mcp_handoff_ids")
     @classmethod
@@ -252,6 +257,21 @@ class CharacterCardState(_CharacterCardModel):
         cleaned = [str(item).strip() for item in value if str(item).strip()]
         if len(cleaned) != len(set(cleaned)):
             raise ValueError("Character Card MCP handoff IDs must be unique")
+        return cleaned
+
+    @field_validator("slot_retry_rounds")
+    @classmethod
+    def validate_slot_retry_rounds(cls, value: dict[str, int]) -> dict[str, int]:
+        cleaned: dict[str, int] = {}
+        allowed = {*ALL_EXPRESSION_SLOT_KEYS, *BODY_SLOT_KEYS}
+        for key, round_value in dict(value or {}).items():
+            slot_key = str(key).strip()
+            if slot_key not in allowed:
+                raise ValueError("Character Card retry round slot is invalid")
+            parsed = int(round_value)
+            if parsed < 1:
+                raise ValueError("Character Card retry round must be positive")
+            cleaned[slot_key] = parsed
         return cleaned
 
     @classmethod
@@ -361,6 +381,60 @@ class CharacterCardState(_CharacterCardModel):
                 return slot
         raise KeyError("character_card_slot_not_found")
 
+    def begin_failed_slot_retry(
+        self,
+        *,
+        module: Literal["expression_set", "body_silhouette"],
+        confirmed: bool,
+    ) -> "CharacterCardState":
+        """Start a new user-confirmed retry round for the failed slot.
+
+        This is deliberately not an automatic retry.  It only advances the
+        durable slot round after the previous three-candidate budget has been
+        exhausted and no MCP handoff is still waiting for materialization.
+        """
+
+        if not confirmed:
+            raise ValueError("explicit Character Card failed-slot retry confirmation is required")
+        if not self.resume_available or self.last_failed_module != module or self.last_failed_slot_key is None:
+            raise ValueError("Character Card failed-slot retry requires the matching failed checkpoint")
+        if self.pending_mcp_handoff_ids:
+            raise ValueError("Character Card failed-slot retry cannot supersede a pending MCP handoff")
+        if self.last_failure_attempt_count < 3:
+            raise ValueError("Character Card failed-slot retry requires exhausted candidate budget")
+
+        slot_key = str(self.last_failed_slot_key)
+        if module == "expression_set":
+            slots = dict(self.expression_slots)
+            status_field = "expression_set_status"
+            slots_field = "expression_slots"
+        else:
+            slots = dict(self.body_slots)
+            status_field = "body_silhouette_status"
+            slots_field = "body_slots"
+        if slot_key not in slots:
+            raise ValueError("Character Card failed-slot retry slot is missing")
+        slot = slots[slot_key]
+        if slot.state in {"winner_selected", "active"}:
+            raise ValueError("Character Card failed-slot retry cannot replace a reviewed winner")
+        slots[slot_key] = CharacterCardSlot(slot_key=slot.slot_key, module=slot.module)
+        retry_rounds = dict(self.slot_retry_rounds)
+        retry_rounds[slot_key] = int(retry_rounds.get(slot_key, 1)) + 1
+        return self.model_copy(
+            update={
+                status_field: "partial",
+                slots_field: slots,
+                "slot_retry_rounds": retry_rounds,
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_attempt_count": 0,
+                "resume_available": False,
+                "pending_mcp_handoff_ids": [],
+                "append_only_revision": self.append_only_revision + 1,
+            }
+        )
+
     def mark_face_version_stale(self, *, new_face_version_id: str) -> "CharacterCardState":
         """Create an append-only state revision without deleting old evidence."""
 
@@ -410,6 +484,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
         "body.rear_full",
     ]
     candidate_index: int = Field(ge=1, le=3)
+    attempt_round: int = Field(default=1, ge=1)
     reference_output_ids: list[str] = Field(min_length=1)
     user_intent: str
     source_class: BodySourceClass | None = None
@@ -486,6 +561,7 @@ class CharacterCardFailureEvent(_CharacterCardModel):
     module: CharacterCardModule
     slot_key: CharacterCardSlotKey
     candidate_index: int = Field(ge=1, le=3)
+    attempt_round: int = Field(default=1, ge=1)
     failure_code: str
     mcp_handoff_id: str | None = None
 
@@ -1001,6 +1077,7 @@ class CharacterCardPreparationService:
         slot_attempts: list[CharacterCardCandidateAttempt] = []
         slot_failures: list[CharacterCardFailureEvent] = []
         passing: list[tuple[CharacterCardCandidateResult, Any]] = []
+        attempt_round = int(card.slot_retry_rounds.get(slot_key, 1))
         for candidate_index in range(1, self.CANDIDATE_COUNT + 1):
             request = CharacterCardCandidateRequest(
                 project_id=project_id,
@@ -1009,6 +1086,7 @@ class CharacterCardPreparationService:
                 module=module,
                 slot_key=slot_key,  # type: ignore[arg-type]
                 candidate_index=candidate_index,
+                attempt_round=attempt_round,
                 reference_output_ids=list(reference_output_ids),
                 user_intent=user_intent,
                 source_class=source_class,
@@ -1023,6 +1101,7 @@ class CharacterCardPreparationService:
                         module=module,
                         slot_key=slot_key,  # type: ignore[arg-type]
                         candidate_index=candidate_index,
+                        attempt_round=attempt_round,
                         failure_code=exc.failure_code,
                         mcp_handoff_id=exc.mcp_handoff_id,
                     )
@@ -1046,6 +1125,7 @@ class CharacterCardPreparationService:
                         module=module,
                         slot_key=slot_key,  # type: ignore[arg-type]
                         candidate_index=index,
+                        attempt_round=attempt_round,
                         failure_code="character_card_shared_review_failed",
                     )
                     for index in range(1, self.CANDIDATE_COUNT + 1)

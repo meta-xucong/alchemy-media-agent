@@ -891,6 +891,8 @@ class ProductApiAnchorPackPreparationHost:
     ) -> CharacterCardCandidateResult:
         stage_key = (request.people_asset_id, request.module, request.slot_key)
         operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
+        if request.attempt_round > 1:
+            operation_id = f"{operation_id}:round{request.attempt_round}"
         resume_record = (
             self._mcp_resume_character_card_stage_job_record(request, operation_id)
             if request.generation_channel == "mcp"
@@ -913,6 +915,7 @@ class ProductApiAnchorPackPreparationHost:
                 source_class=request.source_class,
                 generation_channel=request.generation_channel,
                 mcp_operation_id=operation_id,
+                attempt_round=request.attempt_round,
             )
             status_job_id = status.job_id
             status_value = status.status
