@@ -413,10 +413,14 @@ def test_doc196_host_default_intents_and_mcp_prompt_contract_use_laugh_not_smile
 
     assert set(intents) == {"laugh", "anger", "sad"}
     assert "Expression slot target: expression.laugh." in intents["laugh"]
+    assert "clearly readable joyful laugh keyframe" in intents["laugh"]
+    assert "rather than a polite open-mouth smile" in intents["laugh"]
+    assert "visible lower-lid/periocular participation" in intents["laugh"]
+    assert "upper-cheek lift" in intents["laugh"]
     assert "expression.smile" not in "\n".join(intents.values())
     assert _character_card_stage_mcp_prompt_current(
         "expression.laugh",
-        "Same person in a medium-arousal amused laugh keyframe.",
+        "Same person in a clearly readable joyful laugh keyframe.",
     )
     assert not _character_card_stage_mcp_prompt_current(
         "expression.laugh",
@@ -977,7 +981,11 @@ def test_doc197_laugh_brain_timeout_uses_bounded_expression_slot_delta_recovery(
 
     assert recovered.canonical_provider_prompts
     canonical = recovered.canonical_provider_prompts[0]
-    assert "medium-arousal naturally amused laugh keyframe" in canonical.prompt
+    assert "clearly readable joyful laugh keyframe" in canonical.prompt
+    assert "not merely a polite open-mouth smile" in canonical.prompt
+    assert "visible lower-lid/periocular participation" in canonical.prompt
+    assert "upper-cheek lift" in canonical.prompt
+    assert "captured laugh phase from onset toward peak" in canonical.prompt
     assert "inheriting the face.front card framing" in canonical.prompt
     assert canonical.reference_led_slot_delta_decision is not None
     assert canonical.reference_led_slot_delta_decision.slot_delta_type == "expression"
@@ -1023,7 +1031,8 @@ def test_doc197_explicit_smile_can_recover_but_does_not_become_laugh() -> None:
     assert recovered.canonical_provider_prompts
     prompt = recovered.canonical_provider_prompts[0].prompt
     assert "lower-intensity natural smile" in prompt
-    assert "medium-arousal naturally amused laugh keyframe" not in prompt
+    assert "clearly readable joyful laugh keyframe" not in prompt
+    assert "captured laugh phase from onset toward peak" not in prompt
     assert recovered.audit["character_card_slot_delta_recovery_slot_key"] == "expression.smile"
     assert recovered.audit["character_card_slot_delta_recovery_expression"] == "smile"
 

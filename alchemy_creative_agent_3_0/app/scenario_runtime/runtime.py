@@ -1508,9 +1508,11 @@ class ScenarioRuntime:
         )
         endings = {
             "laugh": (
-                "Render a medium-arousal naturally amused laugh keyframe: engaged gaze, visible periocular affect, "
-                "cheek lift, relaxed jaw, natural mouth opening or age-appropriate teeth visibility, and slight spontaneous asymmetry. "
-                "It must read clearly as a real laugh, not a polite smile or neutral face."
+                "Render a clearly readable joyful laugh keyframe, not merely a polite open-mouth smile. "
+                "Use medium-to-medium-high expression energy while staying inside the same front-card crop: bright engaged gaze, "
+                "visible lower-lid/periocular participation, upper-cheek lift, relaxed jaw opening, natural age-appropriate teeth visibility, "
+                "and slight spontaneous asymmetry. The still image should feel like a captured laugh phase from onset toward peak, "
+                "not a neutral portrait with parted lips."
             ),
             "smile": (
                 "Render a lower-intensity natural smile: gentle mouth-corner lift, engaged gaze, light cheek participation, "

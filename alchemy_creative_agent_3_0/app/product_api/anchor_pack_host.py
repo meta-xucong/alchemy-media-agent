@@ -758,9 +758,10 @@ class ProductApiAnchorPackPreparationHost:
         return {
             "laugh": (
                 f"{base}\nExpression slot target: expression.laugh. "
-                "Render the same person in a medium-arousal naturally amused laugh keyframe, "
-                "with engaged gaze, periocular affect, cheek and jaw participation, appropriate teeth or lip state, "
-                "and a small amount of natural head-shoulder energy while preserving the approved front-card framing."
+                "Render the same person in a clearly readable joyful laugh keyframe rather than a polite open-mouth smile, "
+                "with bright engaged gaze, visible lower-lid/periocular participation, upper-cheek lift, relaxed jaw opening, "
+                "natural age-appropriate teeth visibility, slight spontaneous asymmetry, and only a small amount of natural "
+                "head-shoulder energy while preserving the approved front-card framing."
             ),
             "anger": (
                 f"{base}\nExpression slot target: expression.anger. "

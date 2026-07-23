@@ -338,7 +338,7 @@ class EcommerceRemoteBrainTestProvider:
         expression_slot_prompt = {
             "laugh": (
                 "Reference-led Character Card expression.laugh portrait of the same person, "
-                "medium-arousal naturally amused laugh keyframe, clean white reference-card framing."
+                "clearly readable joyful laugh keyframe with eye-cheek-jaw participation, clean white reference-card framing."
             ),
             "anger": (
                 "Reference-led Character Card expression.anger portrait of the same person, "
