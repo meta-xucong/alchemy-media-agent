@@ -877,6 +877,15 @@ class ScenarioRuntime:
         if not force_after_finalizer_failure and str(brain_result.provider or "") != "remote_required":
             return brain_result
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        expression_slot = self._character_card_expression_slot_delta_target(metadata)
+        if expression_slot is not None:
+            return self._recover_character_card_expression_slot_delta_brain_result(
+                request,
+                brain_result,
+                slot_key=expression_slot[0],
+                expression=expression_slot[1],
+                recovery_reason=recovery_reason,
+            )
         if metadata.get("professional_anchor_pack_preparation") is not True:
             return brain_result
         planning_metadata = metadata.get("professional_planning_metadata")
@@ -1158,6 +1167,304 @@ class ScenarioRuntime:
             }
         )
 
+    def _recover_character_card_expression_slot_delta_brain_result(
+        self,
+        request: ScenarioRuntimeRequest,
+        brain_result: BrainRunResult,
+        *,
+        slot_key: str,
+        expression: str,
+        recovery_reason: str,
+    ) -> BrainRunResult:
+        """Bounded prompt recovery for reference-led Character Card expression slots.
+
+        This mirrors the non-front Face Identity recovery contract: it is
+        allowed only after the approved ``face.front`` winner and typed
+        expression/framing contracts already exist.  The recovered text is a
+        compact slot delta for MCP/Provider materialization; pixel acceptance
+        still belongs to shared Vision/expression review receipts.
+        """
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        planning_metadata = metadata.get("professional_planning_metadata")
+        if not isinstance(planning_metadata, dict):
+            return brain_result
+        if (
+            planning_metadata.get("stage") != "expression_set"
+            or planning_metadata.get("slot_key") != slot_key
+            or planning_metadata.get("creative_direction_owner") != "remote_v3_llm_brain"
+        ):
+            return brain_result
+        slot_delta_contract = planning_metadata.get("reference_led_slot_delta_contract")
+        if not isinstance(slot_delta_contract, dict) or slot_delta_contract.get("slot_delta_type") != "expression":
+            return brain_result
+        reference_assets = metadata.get("professional_anchor_reference_assets")
+        if not isinstance(reference_assets, list):
+            return brain_result
+        source_asset_ids = self._character_card_slot_delta_recovery_source_asset_ids(
+            request,
+            reference_assets,
+        )
+        if len(source_asset_ids) < 1:
+            return brain_result
+        expected = self._requested_image_count_for_brain(request)
+        if expected != 1:
+            return brain_result
+
+        prompt = self._character_card_expression_slot_delta_recovery_prompt(expression)
+        project_id = str(metadata.get("project_id") or "").strip() or None
+        profile_id = stable_id(
+            "character_card_expression_slot_delta_recovery_profile",
+            project_id or "",
+            slot_key,
+            *source_asset_ids,
+        )
+        evidence_id = stable_id("character_card_expression_slot_delta_recovery_evidence", profile_id)
+        task_profile = VisualTaskProfile(
+            profile_id=profile_id,
+            project_id=project_id,
+            job_id=stable_id("character_card_expression_slot_delta_recovery_job", profile_id),
+            template_id="general_template",
+            scenario_id="general_creative",
+            rendering_intent=RenderingIntent(
+                rendering_mode="photoreal",
+                stylization_scope="none",
+                decision_owner="remote_brain",
+                evidence_ids=[evidence_id],
+            ),
+            developmental_age_intent="current_request_assigns_stage",
+            reference_channel_ownership_intent=ReferenceChannelOwnershipIntent(
+                applicability="applicable",
+                decision_owner="remote_brain",
+                reference_owned_channels=[
+                    "identity_geometry",
+                    "natural_complexion_direction",
+                    "lighting_color",
+                    "camera_composition",
+                ],
+                current_request_owned_channels=["mood_art_direction"],
+                evidence_ids=[evidence_id],
+                confidence=0.9,
+            ),
+            subject_entities=[
+                VisualSubjectEntity(
+                    entity_id="character_card_expression_subject",
+                    entity_type="person",
+                    role="expression_subject",
+                    source_asset_ids=source_asset_ids,
+                    visible_in_target=True,
+                    preservation_level="strong",
+                    confidence=0.95,
+                    attributes={
+                        "capture_scope": "character_card_expression_set",
+                        "slot_key": slot_key,
+                        "expression": expression,
+                        "baseline": "active_face_front_winner",
+                    },
+                )
+            ],
+            allowed_changes=["facial_expression_only", "small_natural_head_shoulder_energy"],
+            visual_intent_tags=[
+                "character_card_expression_set",
+                "reference_led_slot_delta",
+                expression,
+            ],
+            commercial_goal_tags=["commercial_clean_reference_card"],
+            confidence=0.92,
+            evidence=[
+                ActivationEvidence(
+                    evidence_id=evidence_id,
+                    evidence_type="professional_character_card_expression_reference",
+                    source="bounded_slot_delta_recovery",
+                    value={
+                        "slot_key": slot_key,
+                        "expression": expression,
+                        "reference_count": len(source_asset_ids),
+                    },
+                    confidence=0.95,
+                )
+            ],
+        )
+        activation_intent = CapabilityActivationIntent(
+            intent_id=stable_id("character_card_expression_slot_delta_recovery_capabilities", profile_id),
+            task_profile_id=profile_id,
+            requested_capabilities=[
+                RequestedCapability(
+                    capability_id="portrait_identity",
+                    activation_mode="required",
+                    reason_codes=["approved_character_card_front_identity"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="strong",
+                    confidence=0.95,
+                ),
+                RequestedCapability(
+                    capability_id="reference_channel_policy",
+                    activation_mode="required",
+                    reason_codes=["reference_led_expression_delta_identity_boundary"],
+                    evidence_ids=[evidence_id],
+                    confidence=0.95,
+                ),
+                RequestedCapability(
+                    capability_id="human_realism",
+                    activation_mode="required",
+                    reason_codes=["real_person_character_card_expression"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="strict",
+                    confidence=0.9,
+                ),
+                RequestedCapability(
+                    capability_id="commercial_quality",
+                    activation_mode="recommended",
+                    reason_codes=["commercial_clean_reference_card"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="commercial_strict",
+                    confidence=0.85,
+                ),
+            ],
+            confidence=0.92,
+        )
+        requested_size = str(metadata.get("requested_image_size") or "1024x1536").strip() or "1024x1536"
+        canonical = BrainCanonicalProviderPrompt(
+            output_index=1,
+            prompt=prompt,
+            review_status="approved",
+            semantic_preflight_status="approved",
+            human_naturalness_decision={
+                "contract_version": "v3_human_naturalness_decision_v1",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            reference_channel_ownership_decision={
+                "contract_version": "v3_reference_channel_ownership_decision_v1",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            human_developmental_age_decision={
+                "contract_version": "v3_human_developmental_age_decision_v2",
+                "age_fidelity": "follow_explicit_prompt",
+                "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+                "developmental_age_coherence": "whole_person_requested_stage",
+                "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            human_developmental_presence_decision={
+                "contract_version": "v3_human_developmental_presence_decision_v2",
+                "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                "resolution_mode": "holistic_person_and_situation_resolution",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            provider_admission_decision={
+                "contract_version": "v3_provider_admission_decision_v1",
+                "provider_admission_status": "admitted",
+                "prompt_language_mode": "concise_positive_renderer_direction",
+                "safety_sensitive_prompt_normalized": "applied",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            reference_led_slot_delta_decision={
+                "contract_version": "v3_reference_led_slot_delta_decision_v1",
+                "materialization_mode": "reference_led_slot_delta",
+                "stable_identity_source": "approved_character_card_reference",
+                "prompt_scope": "slot_delta_only",
+                "safety_sensitive_repetition_policy": "avoid_repeating_stable_person_biology",
+                "slot_delta_type": "expression",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+        )
+        return brain_result.model_copy(
+            update={
+                "canonical_provider_prompts": [canonical],
+                "image_set_plan": brain_result.image_set_plan.model_copy(
+                    update={
+                        "set_goal": f"character_card_{expression}_expression_slot_delta_recovery",
+                        "image_count": 1,
+                        "size": requested_size,
+                        "shot_plan": [prompt],
+                        "composition_rules": [
+                            "inherit the active face.front 2:3 reference-card framing",
+                            "plain white studio background",
+                            "single complete image frame",
+                        ],
+                        "quality_bar": [
+                            "commercial clean image",
+                            "same-person likeness from the approved front card",
+                            "expression must be visually legible through shared affective review",
+                        ],
+                    }
+                ),
+                "prompt_guidance": brain_result.prompt_guidance.model_copy(
+                    update={
+                        "optimized_direction": prompt,
+                        "visual_direction_addons": [prompt],
+                        "layout_notes": ["inherit active face.front vertical 2:3 reference-card crop"],
+                        "hard_constraints": [
+                            "Use the approved front card as the identity, lighting, white-background and framing baseline.",
+                            "Change only facial expression and a very small amount of natural head-shoulder energy.",
+                            "No new scene, wardrobe change, full-body crop, half-body crop, or big-head crop.",
+                        ],
+                        "negative_prompt_addons": [
+                            "avoid mouth-only expression",
+                            "avoid detached gaze",
+                            "avoid plastic skin",
+                            "avoid dirty noise or smeared texture",
+                        ],
+                        "consistency_strategy": "reference_led_character_card_expression_slot_delta_recovery",
+                    }
+                ),
+                "visual_task_profile": task_profile,
+                "capability_activation_intent": activation_intent,
+                "prompt_review": brain_result.prompt_review.model_copy(
+                    update={
+                        "status": "passed",
+                        "checks": [
+                            "character_card_front_reference_present",
+                            "expression_slot_delta_prompt_recovered_after_remote_timeout",
+                        ],
+                    }
+                ),
+                "warnings": [
+                    *list(brain_result.warnings or []),
+                    "Remote Brain timed out; Character Card used bounded reference-led expression slot-delta recovery.",
+                ],
+                "audit": {
+                    **dict(brain_result.audit or {}),
+                    "character_card_slot_delta_recovery_used": True,
+                    "character_card_slot_delta_recovery_prompts_received": True,
+                    "character_card_slot_delta_recovery_reason": recovery_reason,
+                    "character_card_slot_delta_recovery_scope": "professional_character_card_expression_set",
+                    "character_card_slot_delta_recovery_slot_key": slot_key,
+                    "character_card_slot_delta_recovery_expression": expression,
+                    "remote_canonical_provider_prompts_received": False,
+                    "human_realism_semantic_preflight_signed": True,
+                    "human_realism_natural_presence_resigned": True,
+                    "human_realism_natural_presence_decision_signed": True,
+                    "reference_channel_ownership_decision_required": True,
+                    "reference_channel_ownership_decision_signed": True,
+                    "provider_admission_decision_required": True,
+                    "provider_admission_decision_signed": True,
+                    "reference_led_slot_delta_decision_required": True,
+                    "reference_led_slot_delta_decision_signed": True,
+                    "canonical_provider_prompt_stage": "character_card_expression_slot_delta_recovery",
+                    "canonical_provider_prompt_stages": ["character_card_expression_slot_delta_recovery"],
+                },
+            }
+        )
+
+    @staticmethod
+    def _character_card_expression_slot_delta_target(metadata: dict[str, Any]) -> tuple[str, str] | None:
+        if metadata.get("professional_character_card_preparation") is not True:
+            return None
+        if str(metadata.get("professional_character_card_stage") or "").strip() != "expression_set":
+            return None
+        slot_key = str(metadata.get("professional_character_card_slot") or "").strip()
+        expression = slot_key.split(".", 1)[1] if slot_key.startswith("expression.") else ""
+        if expression not in {"laugh", "smile", "anger", "sad"}:
+            return None
+        return slot_key, expression
+
     @staticmethod
     def _character_card_slot_delta_recovery_source_asset_ids(
         request: ScenarioRuntimeRequest,
@@ -1190,6 +1497,40 @@ class ScenarioRuntime:
         return bool(audit.get("character_card_slot_delta_recovery_prompts_received"))
 
     @staticmethod
+    def _character_card_expression_slot_delta_recovery_prompt(expression: str) -> str:
+        base = (
+            "Same person as the approved face.front Character Card winner, same face.front card framing, "
+            "same camera distance, same head size, same head-top margin, same eye-line placement, same white studio "
+            "background, same bright clean lighting and white balance, same head-neck-upper-shoulders crop in a vertical 2:3 reference-card frame. "
+            "Preserve identity, age coherence, cool fair real skin texture and commercial clean photo finish. "
+            "Change only the facial expression and a very small amount of natural head-shoulder energy. "
+        )
+        endings = {
+            "laugh": (
+                "Render a medium-arousal naturally amused laugh keyframe: engaged gaze, visible periocular affect, "
+                "cheek lift, relaxed jaw, natural mouth opening or age-appropriate teeth visibility, and slight spontaneous asymmetry. "
+                "It must read clearly as a real laugh, not a polite smile or neutral face."
+            ),
+            "smile": (
+                "Render a lower-intensity natural smile: gentle mouth-corner lift, engaged gaze, light cheek participation, "
+                "relaxed jaw and small spontaneous asymmetry. It must read as a real smile, not neutral or plastic."
+            ),
+            "anger": (
+                "Render a controlled angry expression suitable for a reference card: focused gaze, mild brow tension, "
+                "closed or lightly pressed lips and age-coherent facial affect without theatrical exaggeration."
+            ),
+            "sad": (
+                "Render a subdued sad expression suitable for a reference card: softened gaze, slight downward mouth energy, "
+                "relaxed facial tension and age-coherent affect without tears, props, or melodrama."
+            ),
+        }
+        avoid = (
+            " No new scene, no wardrobe change, no full-body or half-body crop, no big-head close-up, no props, no branding, "
+            "no adult styling, no mouth-only expression, no detached gaze, no plastic skin, no oily shine, no dirty noise or smeared texture."
+        )
+        return base + endings.get(expression, endings["laugh"]) + avoid
+
+    @staticmethod
     def _character_card_slot_delta_transport_timeout_seconds(
         request: ScenarioRuntimeRequest,
     ) -> float | None:
@@ -1202,6 +1543,12 @@ class ScenarioRuntime:
         """
 
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if ScenarioRuntime._character_card_expression_slot_delta_target(metadata) is not None:
+            try:
+                raw = float(os.getenv("V3_CHARACTER_CARD_SLOT_DELTA_BRAIN_TIMEOUT_SECONDS", "28"))
+            except ValueError:
+                raw = 28.0
+            return max(8.0, min(60.0, raw))
         if metadata.get("professional_anchor_pack_preparation") is not True:
             return None
         planning_metadata = metadata.get("professional_planning_metadata")

@@ -13,10 +13,17 @@ from types import SimpleNamespace
 import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
     ProductApiAnchorPackPreparationHost,
     _character_card_stage_mcp_prompt_current,
+)
+from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
+    CapabilityActivationPlan,
+    TemplateCapabilityPolicy,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     LAUGH_EXPRESSION_EVIDENCE_CODES,
@@ -795,3 +802,149 @@ def test_doc196_frontend_uses_laugh_as_current_positive_slot_and_keeps_smile_out
     expression_meta_end = source.index("body_silhouette: {", expression_meta_start)
     expression_meta = source[expression_meta_start:expression_meta_end]
     assert "expression.smile" not in expression_meta
+
+
+def _expression_slot_delta_runtime_request(slot_key: str = "expression.laugh") -> ScenarioRuntimeRequest:
+    return ScenarioRuntimeRequest(
+        user_input="Prepare one Character Card expression slot from the approved face.front winner.",
+        scenario_selection={"scenario_id": "general_creative"},
+        metadata={
+            "project_id": "project_doc197_expression_recovery",
+            "requested_image_count": 1,
+            "require_real_images": True,
+            "professional_mode": True,
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "expression_set",
+            "professional_character_card_slot": slot_key,
+            "professional_planning_metadata": ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+                stage="expression_set",
+                slot_key=slot_key,
+            ),
+            "professional_anchor_reference_assets": [
+                {
+                    "asset_id": "front_winner_output",
+                    "output_id": "front_winner_output",
+                    "role": "face_reference",
+                    "source_type": "selected_output",
+                    "use_policy": "identity",
+                    "strength": "hard",
+                    "provider_input_required": True,
+                }
+            ],
+            "generation_channel": "mcp",
+            "mcp_operation_id": f"asset_doc197:expression_set:{slot_key}:1",
+        },
+    )
+
+
+def _remote_required_expression_brain_result(slot_key: str = "expression.laugh"):
+    return build_remote_required_result(
+        BrainRunRequest(
+            user_input=f"Prepare one Character Card {slot_key} slot.",
+            stage="scenario_runtime",
+            scenario_id="general_creative",
+            template_id="general_template",
+            requested_image_count=1,
+            requested_image_size="1024x1536",
+            metadata=_expression_slot_delta_runtime_request(slot_key).metadata,
+        ),
+        "Remote Brain timed out before the Character Card expression slot prompt.",
+    )
+
+
+def test_doc197_laugh_brain_timeout_uses_bounded_expression_slot_delta_recovery() -> None:
+    runtime = ScenarioRuntime()
+    request = _expression_slot_delta_runtime_request("expression.laugh")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_expression_brain_result("expression.laugh"),
+    )
+
+    assert recovered.canonical_provider_prompts
+    canonical = recovered.canonical_provider_prompts[0]
+    assert "medium-arousal naturally amused laugh keyframe" in canonical.prompt
+    assert "same face.front card framing" in canonical.prompt
+    assert canonical.reference_led_slot_delta_decision is not None
+    assert canonical.reference_led_slot_delta_decision.slot_delta_type == "expression"
+    assert canonical.provider_admission_decision is not None
+    assert canonical.provider_admission_decision.provider_admission_status == "admitted"
+    assert recovered.audit["character_card_slot_delta_recovery_prompts_received"] is True
+    assert recovered.audit["character_card_slot_delta_recovery_scope"] == "professional_character_card_expression_set"
+    assert recovered.audit["character_card_slot_delta_recovery_slot_key"] == "expression.laugh"
+    assert recovered.visual_task_profile is not None
+    assert recovered.visual_task_profile.allowed_changes == [
+        "facial_expression_only",
+        "small_natural_head_shoulder_energy",
+    ]
+
+    runtime._require_remote_creative_brain(  # noqa: SLF001
+        request,
+        TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+        recovered,
+    )
+    runtime._require_brain_signed_provider_prompts(  # noqa: SLF001
+        request,
+        TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+        recovered,
+        CapabilityActivationPlan(
+            plan_id="plan_doc197_expression_recovery",
+            fingerprint="fp_doc197_expression_recovery",
+            job_id="job_doc197_expression_recovery",
+            task_profile_id="profile_doc197_expression_recovery",
+            template_id="general_template",
+            scenario_id="general_creative",
+        ),
+    )
+
+
+def test_doc197_explicit_smile_can_recover_but_does_not_become_laugh() -> None:
+    runtime = ScenarioRuntime()
+    request = _expression_slot_delta_runtime_request("expression.smile")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_expression_brain_result("expression.smile"),
+    )
+
+    assert recovered.canonical_provider_prompts
+    prompt = recovered.canonical_provider_prompts[0].prompt
+    assert "lower-intensity natural smile" in prompt
+    assert "medium-arousal naturally amused laugh keyframe" not in prompt
+    assert recovered.audit["character_card_slot_delta_recovery_slot_key"] == "expression.smile"
+    assert recovered.audit["character_card_slot_delta_recovery_expression"] == "smile"
+
+
+def test_doc197_expression_slot_delta_transport_timeout_is_character_card_only() -> None:
+    runtime = ScenarioRuntime()
+
+    assert runtime._character_card_slot_delta_transport_timeout_seconds(  # noqa: SLF001
+        _expression_slot_delta_runtime_request("expression.laugh")
+    ) == 28.0
+    assert runtime._character_card_slot_delta_transport_timeout_seconds(  # noqa: SLF001
+        ScenarioRuntimeRequest(
+            user_input="ordinary image",
+            scenario_selection={"scenario_id": "general_creative"},
+            metadata={"requested_image_count": 1},
+        )
+    ) is None
+
+
+def test_doc197_expression_recovery_requires_one_front_reference() -> None:
+    runtime = ScenarioRuntime()
+    request = _expression_slot_delta_runtime_request("expression.laugh")
+    request = request.model_copy(
+        update={
+            "metadata": {
+                **request.metadata,
+                "professional_anchor_reference_assets": [],
+            }
+        },
+        deep=True,
+    )
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_expression_brain_result("expression.laugh"),
+    )
+
+    assert not recovered.canonical_provider_prompts
+    assert "character_card_slot_delta_recovery_prompts_received" not in recovered.audit
