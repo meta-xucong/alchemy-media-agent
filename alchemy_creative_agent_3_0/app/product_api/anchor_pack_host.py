@@ -899,15 +899,23 @@ class ProductApiAnchorPackPreparationHost:
             else None
         )
         if resume_record is None:
+            request_metadata: dict[str, Any] = {
+                "project_id": request.project_id,
+                "requested_image_count": 1,
+                "require_real_images": True,
+            }
+            if request.generation_channel == "mcp" and request.mcp_handoff_id:
+                request_metadata["mcp_materialization"] = {
+                    "handoff_id": request.mcp_handoff_id,
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                    "resume_required": True,
+                }
             status = self.product_service.create_professional_character_card_stage_job(
                 {
                     "user_input": request.user_intent,
                     "scenario_selection": {"scenario_id": "general_creative"},
-                    "metadata": {
-                        "project_id": request.project_id,
-                        "requested_image_count": 1,
-                        "require_real_images": True,
-                    },
+                    "metadata": request_metadata,
                 },
                 stage=request.module,
                 slot_key=request.slot_key,

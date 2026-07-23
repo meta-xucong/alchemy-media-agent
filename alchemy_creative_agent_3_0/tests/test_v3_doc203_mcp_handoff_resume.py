@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.generation_router import (
@@ -13,6 +15,8 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
     McpMaterializationHandoffStore,
 )
+from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatus, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
@@ -26,6 +30,8 @@ from alchemy_creative_agent_3_0.app.schemas import (
     ProviderStrategy,
     TextRenderingMode,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorCandidateUnavailable
+from alchemy_creative_agent_3_0.app.visual_assets.character_card import CharacterCardCandidateRequest
 
 
 def _png_bytes() -> bytes:
@@ -184,3 +190,79 @@ def test_doc203_mcp_provider_consumes_explicit_handoff_not_stale_same_operation(
     assert record.metadata["provider_raw_summary"]["mcp_handoff_id"] == current["handoff_id"]
     assert handoffs.get(current["handoff_id"])["status"] == "consumed"
     assert handoffs.get(stale["handoff_id"])["status"] == "submitted"
+
+
+def test_doc203_character_card_stage_creation_receives_explicit_mcp_handoff() -> None:
+    class _Store:
+        def __init__(self) -> None:
+            self.record = None
+
+        def list_recent(self, _limit):
+            return []
+
+        def save(self, record) -> None:
+            self.record = record
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created_payloads = []
+            self.job_store = _Store()
+            self.record = None
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "pending",
+                    "canonical_prompt": "same person with a joyful laugh expression",
+                }
+            )
+
+        def create_professional_character_card_stage_job(self, payload, **_kwargs):
+            self.created_payloads.append(payload)
+            self.record = SimpleNamespace(
+                job_id="job_doc203_character_card_resume",
+                planning_result=object(),
+                generation_result=None,
+                request=SimpleNamespace(metadata=dict(payload.get("metadata") or {})),
+            )
+            self.job_store.record = self.record
+            return ProductJobStatus(
+                job_id=self.record.job_id,
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, job_id, *_args, **_kwargs):
+            assert job_id == "job_doc203_character_card_resume"
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):
+            return self.record
+
+    service = _Service()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc203",
+        people_asset_id="people_doc203",
+        card_version_id="card_doc203",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=2,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id="mcp_handoff_doc203_current",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="mcp_materialization_pending"):
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    materialization = service.created_payloads[0]["metadata"]["mcp_materialization"]
+    assert materialization["handoff_id"] == "mcp_handoff_doc203_current"

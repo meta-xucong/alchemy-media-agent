@@ -25,6 +25,14 @@ case the MCP provider can fall back to operation/prompt based lookup and consume
 a stale submitted handoff for the same operation. The explicit handoff receipt
 must therefore cross the canonical Provider request boundary.
 
+A third stage-creation issue can appear after the Provider request boundary is
+fixed: Character Card Host can attach the explicit handoff to the persisted job
+request after the planning job is created, but the frozen generation plan may
+already have been compiled without it. For Character Card MCP resume, the
+explicit `mcp_materialization` receipt must be present in the initial trusted
+stage-job creation payload so Brain/runtime planning, Provider request
+construction, and MCP consumption all see the same opaque handoff.
+
 ## Contract
 
 1. A submitted MCP artifact is never promoted locally. It must be consumed by
@@ -48,6 +56,10 @@ must therefore cross the canonical Provider request boundary.
    `mcp_materialization` receipt. When present, the MCP provider consumes that
    handoff only; it must not choose a stale submitted handoff with the same
    operation ID.
+7. Character Card stage job creation must receive the explicit
+   `mcp_materialization` receipt before planning. Post-hoc request metadata is
+   not sufficient acceptance evidence because the frozen generation plan is the
+   Provider boundary of record.
 
 ## Acceptance
 
@@ -59,6 +71,9 @@ must therefore cross the canonical Provider request boundary.
 - Provider request projection preserves explicit `mcp_materialization`.
 - The MCP provider consumes the explicit handoff and leaves stale same-operation
   submissions untouched.
+- Character Card Host passes an explicit resumed handoff in the initial trusted
+  stage-job metadata; a regression fails if the handoff exists only as a
+  post-creation patch.
 - Real MCP validation may continue after commit by submitting the pending
   handoff artifact and verifying that it becomes a normal reviewed candidate or
   a structured review failure.
