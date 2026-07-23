@@ -465,6 +465,9 @@ class V3ProductRouteHandlers:
                 "last_failed_slot_key": card.last_failed_slot_key,
                 "last_failure_code": card.last_failure_code,
                 "last_failure_attempt_count": card.last_failure_attempt_count,
+                "last_shared_runtime_failure": dict(card.last_shared_runtime_failure)
+                if isinstance(card.last_shared_runtime_failure, dict)
+                else None,
                 "slots": {
                     **{
                         key: _character_card_slot_public(slot)

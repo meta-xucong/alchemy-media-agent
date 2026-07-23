@@ -34,6 +34,10 @@ operation ids for the next three candidates.
 - A retry round requires explicit confirmation.
 - A retry round is only valid when the failed slot has no pending MCP handoff
   and has exhausted the current three-candidate budget.
+- Doc210 supersedes this exhausted-budget requirement only for
+  `mcp_materialization_operation_ambiguous`: a confirmed new round may be
+  opened early because the current operation is transport-ambiguous and cannot
+  safely continue to later candidates.
 - Old failed candidates remain append-only history and must not become winners.
 - Candidate budget remains three candidates plus at most one shared bounded
   repair per round.

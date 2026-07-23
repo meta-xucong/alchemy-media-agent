@@ -19,6 +19,7 @@ from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
     ProductApiAnchorPackPreparationHost,
     _character_card_stage_mcp_prompt_current,
 )
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
@@ -48,6 +49,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardCandidateAttempt,
     CharacterCardCandidateRequest,
     CharacterCardCandidateResult,
+    CharacterCardFailureEvent,
     CharacterCardPreparationService,
     CharacterCardSharedRuntimeReceipt,
     CharacterCardStageResult,
@@ -662,6 +664,7 @@ def _laugh_request(
     *,
     project_id: str = "project_doc196",
     people_asset_id: str = "people_doc196",
+    candidate_index: int = 1,
     user_intent: str = "medium amused laugh keyframe",
     generation_channel: str = "provider",
     mcp_handoff_id: str | None = None,
@@ -672,7 +675,7 @@ def _laugh_request(
         card_version_id="card_doc196",
         module="expression_set",
         slot_key="expression.laugh",
-        candidate_index=1,
+        candidate_index=candidate_index,
         reference_output_ids=["front_winner"],
         user_intent=user_intent,
         generation_channel=generation_channel,  # type: ignore[arg-type]
@@ -791,6 +794,110 @@ def test_doc196_structured_expression_receipt_round_trips_from_review_to_stage_r
     assert receipt["status"] == "pass"
     assert receipt["score_dimensions"]
     assert receipt["framing_delta_dimensions"]
+
+
+def test_doc211_blocked_expression_stage_preserves_reviewed_laugh_receipt() -> None:
+    host = ProductApiAnchorPackPreparationHost(_ReviewService(_laugh_inspection()))  # type: ignore[arg-type]
+    candidate, review = host._character_card_candidate_and_review("job_laugh", _laugh_request())  # noqa: SLF001
+    result = CharacterCardStageResult(
+        status="blocked",
+        card=_face_ready_card().model_copy(
+            update={
+                "expression_set_status": "blocked",
+                "last_failed_module": "expression_set",
+                "last_failed_slot_key": "expression.laugh",
+                "last_failure_code": "mcp_materialization_operation_ambiguous",
+                "last_failure_attempt_count": 2,
+                "resume_available": True,
+            }
+        ),
+        attempts=[
+            CharacterCardCandidateAttempt(
+                request=_laugh_request(candidate_index=1),
+                candidate=candidate,
+                review=review,
+            )
+        ],
+        failures=[
+            CharacterCardFailureEvent(
+                module="expression_set",
+                slot_key="expression.laugh",
+                candidate_index=2,
+                attempt_round=3,
+                failure_code="mcp_materialization_operation_ambiguous",
+            )
+        ],
+    )
+
+    attached = host._attach_character_card_receipt(
+        result,
+        asset=type("Asset", (), {"visual_asset_id": "asset_doc211"})(),
+        stage="expression_set",
+    )  # noqa: SLF001
+
+    assert attached.shared_runtime_failure is not None
+    assert attached.shared_runtime_failure.reviewed_attempt_count == 1
+    assert attached.shared_runtime_failure.prompt_reference_parity_verified is True
+    receipt = attached.shared_runtime_failure.shared_review_receipts[0]
+    assert receipt == review.shared_review_receipts[0]
+    assert receipt["status"] == "pass"
+    assert "mouth_eye_coherence" in receipt["score_dimensions"]
+    assert "periocular_affect" in receipt["score_dimensions"]
+    assert "cheek_jaw_coupling" in receipt["score_dimensions"]
+    assert "expression_age_coherence" in receipt["score_dimensions"]
+    assert "expression_identity_preservation" in receipt["score_dimensions"]
+    assert "eye_line_delta_from_front" in receipt["framing_delta_dimensions"]
+
+
+def test_doc211_public_character_card_projects_blocked_stage_review_receipt() -> None:
+    inspection = _laugh_inspection()
+    receipt = project_laugh_expression_review_receipt(
+        score_card=inspection["score_card"],
+        issue_codes=[],
+    )
+    catalog = VisualAssetLibraryCatalog()
+    asset = catalog.create(
+        owner_scope="local_default",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Doc211 public failure receipt asset",
+            root_source_asset_id="root_doc211",
+            consent_reference="consent_doc211",
+            preparation_intent="neutral identity evidence capture",
+        ),
+    )
+    card = _face_ready_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_operation_ambiguous",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "last_shared_runtime_failure": {
+                "review_owner": "v3_shared_vision",
+                "retry_owner": "v3_shared_visual_retry",
+                "candidate_count": 3,
+                "failure_count": 1,
+                "resume_available": True,
+                "reviewed_attempt_count": 1,
+                "prompt_reference_parity_verified": True,
+                "shared_review_receipts": [receipt.to_public_dict()],
+            },
+        }
+    )
+
+    public = V3ProductRouteHandlers._visual_asset_public_record(asset.model_copy(update={"character_card": card}))
+
+    projected = public["character_card"]["last_shared_runtime_failure"]
+    assert projected["reviewed_attempt_count"] == 1
+    assert projected["prompt_reference_parity_verified"] is True
+    assert projected["shared_review_receipts"][0]["status"] == "pass"
+    assert "mouth_eye_coherence" in projected["shared_review_receipts"][0]["score_dimensions"]
+    public_text = json.dumps(projected, ensure_ascii=False).lower()
+    assert "canonical_prompt" not in public_text
+    assert "final_provider_prompt" not in public_text
+    assert "file_path" not in public_text
+    assert "raw_response" not in public_text
 
 
 def test_doc196_host_rejects_neutral_collapse_even_when_prompt_review_was_approved() -> None:

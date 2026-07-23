@@ -984,8 +984,19 @@ class VisualAssetLibraryLifecycleService:
                 raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_failure_receipt_required")
         else:
             raise CharacterCardRuntimeUnavailable("character_card_stage_status_invalid")
+        persisted_card = result.card
+        if getattr(result, "status", None) == "blocked":
+            persisted_card = persisted_card.model_copy(
+                update={
+                    "last_shared_runtime_failure": result.shared_runtime_failure.model_dump(mode="json")
+                    if result.shared_runtime_failure is not None
+                    else None
+                }
+            )
+        elif getattr(result, "status", None) == "review":
+            persisted_card = persisted_card.model_copy(update={"last_shared_runtime_failure": None})
         return self.catalog.save(
-            asset.model_copy(update={"character_card": result.card, "updated_at": _utc_now()})
+            asset.model_copy(update={"character_card": persisted_card, "updated_at": _utc_now()})
         )
 
     def _require_authorized_body_reference(self, request: BodySilhouettePublicRequest) -> Any:

@@ -836,6 +836,11 @@ class ProductApiAnchorPackPreparationHost:
         stage_key = (asset.visual_asset_id, stage)
         retry_count = self._character_card_retry_counts.get(stage_key, 0)
         if result.status != "review":
+            reviewed_attempts = [
+                attempt
+                for attempt in result.attempts
+                if getattr(attempt, "candidate", None) is not None
+            ]
             return result.model_copy(
                 update={
                     "shared_runtime_failure": CharacterCardSharedRuntimeFailureReceipt(
@@ -849,6 +854,13 @@ class ProductApiAnchorPackPreparationHost:
                                 or 3,
                             ),
                         ),
+                        reviewed_attempt_count=min(3, len(reviewed_attempts)),
+                        prompt_reference_parity_verified=bool(reviewed_attempts)
+                        and all(
+                            attempt.candidate.prompt_reference_parity_verified
+                            for attempt in reviewed_attempts
+                        ),
+                        shared_review_receipts=self._character_card_stage_review_receipts(result),
                     )
                 }
             )

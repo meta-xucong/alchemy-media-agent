@@ -242,6 +242,12 @@ class CharacterCardState(_CharacterCardModel):
     last_failure_code: str | None = None
     last_failure_attempt_count: int = Field(default=0, ge=0, le=3)
     resume_available: bool = False
+    # Sanitized proof from the shared runtime when a stage pauses after one or
+    # more reviewed candidates.  It never contains prompts, provider paths,
+    # raw responses, or local artifacts; it only preserves review ownership,
+    # parity and public receipt dimensions so a later resume cannot erase
+    # already-reviewed pixels.
+    last_shared_runtime_failure: dict[str, Any] | None = None
     # Opaque local-MCP receipts for a blocked stage.  They are cleared by a
     # successful stage and never carry prompt, path, provider or artifact data.
     pending_mcp_handoff_ids: list[str] = Field(default_factory=list)
@@ -400,7 +406,15 @@ class CharacterCardState(_CharacterCardModel):
             raise ValueError("Character Card failed-slot retry requires the matching failed checkpoint")
         if self.pending_mcp_handoff_ids:
             raise ValueError("Character Card failed-slot retry cannot supersede a pending MCP handoff")
-        if self.last_failure_attempt_count < 3:
+        transport_ambiguity = self.last_failure_code == "mcp_materialization_operation_ambiguous"
+        if transport_ambiguity:
+            failure_receipt = self.last_shared_runtime_failure
+            if not isinstance(failure_receipt, dict) or not failure_receipt.get("resume_available"):
+                raise ValueError("Character Card ambiguous MCP retry requires shared runtime failure receipt")
+            reviewed_attempt_count = int(failure_receipt.get("reviewed_attempt_count") or 0)
+            if reviewed_attempt_count > 0 and not failure_receipt.get("shared_review_receipts"):
+                raise ValueError("Character Card ambiguous MCP retry requires reviewed candidate receipt")
+        if self.last_failure_attempt_count < 3 and not transport_ambiguity:
             raise ValueError("Character Card failed-slot retry requires exhausted candidate budget")
 
         slot_key = str(self.last_failed_slot_key)
@@ -429,6 +443,7 @@ class CharacterCardState(_CharacterCardModel):
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
+                "last_shared_runtime_failure": None,
                 "resume_available": False,
                 "pending_mcp_handoff_ids": [],
                 "append_only_revision": self.append_only_revision + 1,
@@ -611,6 +626,16 @@ class CharacterCardSharedRuntimeFailureReceipt(_CharacterCardModel):
     candidate_count: Literal[3] = 3
     failure_count: int = Field(ge=1, le=3)
     resume_available: Literal[True] = True
+    reviewed_attempt_count: int = Field(default=0, ge=0, le=3)
+    prompt_reference_parity_verified: bool = False
+    shared_review_receipts: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_public_review_receipts(self) -> "CharacterCardSharedRuntimeFailureReceipt":
+        for receipt in self.shared_review_receipts:
+            if not isinstance(receipt, dict) or str(receipt.get("owner") or "") != "v3_shared_visual_cluster":
+                raise ValueError("shared Character Card failure receipt contains an invalid review receipt")
+        return self
 
 
 class ExpressionPreparationRequest(_CharacterCardModel):
@@ -842,6 +867,7 @@ class CharacterCardPreparationService:
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
+                "last_shared_runtime_failure": None,
                 "resume_available": False,
                 "pending_mcp_handoff_ids": [],
             }
@@ -944,6 +970,7 @@ class CharacterCardPreparationService:
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
+                "last_shared_runtime_failure": None,
                 "resume_available": False,
                 "pending_mcp_handoff_ids": [],
             }
@@ -1047,6 +1074,7 @@ class CharacterCardPreparationService:
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
+                "last_shared_runtime_failure": None,
                 "resume_available": False,
                 "pending_mcp_handoff_ids": [],
             }

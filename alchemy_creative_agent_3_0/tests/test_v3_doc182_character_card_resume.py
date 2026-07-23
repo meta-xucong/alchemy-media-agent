@@ -566,6 +566,83 @@ def test_doc202_failed_slot_retry_cannot_supersede_pending_mcp_handoff() -> None
         card.begin_failed_slot_retry(module="expression_set", confirmed=True)
 
 
+def test_doc210_confirmed_retry_can_supersede_ambiguous_mcp_operation_without_exhausted_budget() -> None:
+    card = _face_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_operation_ambiguous",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": [],
+            "last_shared_runtime_failure": {
+                "review_owner": "v3_shared_vision",
+                "retry_owner": "v3_shared_visual_retry",
+                "candidate_count": 3,
+                "failure_count": 1,
+                "resume_available": True,
+                "reviewed_attempt_count": 1,
+                "prompt_reference_parity_verified": True,
+                "shared_review_receipts": [
+                    {
+                        "owner": "v3_shared_visual_cluster",
+                        "contract_version": "v3_affective_expression_review_receipt_v1",
+                        "expression": "laugh",
+                        "framing_baseline": "face.front",
+                        "status": "pass",
+                        "evidence_codes": ["shared_affective_expression_review_receipt_verified"],
+                        "issue_codes": [],
+                        "score_dimensions": ["mouth_eye_coherence"],
+                        "framing_delta_dimensions": ["eye_line_delta_from_front"],
+                    }
+                ],
+            },
+        }
+    )
+
+    retry_card = card.begin_failed_slot_retry(module="expression_set", confirmed=True)
+
+    assert retry_card.slot_retry_rounds["expression.laugh"] == 2
+    assert retry_card.expression_slots["expression.laugh"].state == "empty"
+    assert retry_card.resume_available is False
+    assert retry_card.pending_mcp_handoff_ids == []
+
+
+def test_doc211_ambiguous_mcp_retry_requires_shared_runtime_failure_receipt() -> None:
+    card = _face_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_operation_ambiguous",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": [],
+        }
+    )
+
+    with pytest.raises(ValueError, match="shared runtime failure receipt"):
+        card.begin_failed_slot_retry(module="expression_set", confirmed=True)
+
+
+def test_doc210_ambiguous_mcp_retry_still_cannot_supersede_pending_handoff() -> None:
+    card = _face_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_operation_ambiguous",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": ["mcp_handoff_doc210_pending"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="pending MCP handoff"):
+        card.begin_failed_slot_retry(module="expression_set", confirmed=True)
+
+
 def test_doc202_mcp_character_card_operation_id_is_round_scoped_after_confirmed_retry() -> None:
     class _RoundService:
         visual_asset_catalog = None
