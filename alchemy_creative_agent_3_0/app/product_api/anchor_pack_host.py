@@ -1139,12 +1139,18 @@ class ProductApiAnchorPackPreparationHost:
             and str(inspection.get("verification_state") or "").strip().lower() == "verified"
         )
         output_metadata = dict(selected.metadata or {})
-        expected_refs = 2 if request.module == "expression_set" else 3
-        parity = bool(
-            str(output_metadata.get("provider_prompt_sha256") or "").strip()
-            and str(output_metadata.get("prompt_compilation_id") or "").strip()
-            and int(output_metadata.get("provider_reference_image_count") or 0) == expected_refs
+        parity = self._character_card_prompt_reference_parity_verified(
+            output_metadata,
+            fallback_expected_reference_count=(
+                2 if request.module == "expression_set" else 3
+            ),
         )
+        if not parity:
+            raise AnchorCandidateUnavailable(
+                "professional_character_card_prompt_reference_parity_unverified",
+                output_id=selected.output_id,
+                candidate_id=selected.candidate_id,
+            )
         candidate = CharacterCardCandidateResult(
             candidate_id=selected.candidate_id,
             output_id=selected.output_id,
@@ -1198,6 +1204,64 @@ class ProductApiAnchorPackPreparationHost:
             shared_review_receipts=shared_review_receipts,
         )
         return candidate, review
+
+    @staticmethod
+    def _character_card_prompt_reference_parity_verified(
+        output_metadata: dict[str, Any],
+        *,
+        fallback_expected_reference_count: int,
+    ) -> bool:
+        """Verify the renderer-facing prompt/reference package is self-consistent.
+
+        Character Card stages can pass one logical slot reference that expands
+        into multiple renderer images, for example a face.front winner yielding
+        feature-detail, geometry and full-frame card evidence.  Host acceptance
+        must therefore consume the shared materialization receipt instead of
+        guessing a fixed count by module.
+        """
+
+        if not str(output_metadata.get("provider_prompt_sha256") or "").strip():
+            return False
+        if not str(output_metadata.get("prompt_compilation_id") or "").strip():
+            return False
+
+        def _positive_int(value: Any) -> int | None:
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                return None
+            return count if count > 0 else None
+
+        provider_count = _positive_int(output_metadata.get("provider_reference_image_count"))
+        if provider_count is None:
+            return False
+
+        declared_counts: list[int] = []
+        reference_asset_count = output_metadata.get("reference_asset_count")
+        if reference_asset_count is not None:
+            count = _positive_int(reference_asset_count)
+            if count is None:
+                return False
+            declared_counts.append(count)
+
+        provider_reference_assets = output_metadata.get("provider_reference_assets")
+        if isinstance(provider_reference_assets, list):
+            declared_counts.append(len(provider_reference_assets))
+
+        reference_asset_ids = output_metadata.get("reference_asset_ids")
+        if isinstance(reference_asset_ids, list):
+            declared_counts.append(len(reference_asset_ids))
+
+        reference_input_execution = output_metadata.get("reference_input_execution")
+        if isinstance(reference_input_execution, dict) and reference_input_execution.get("reference_count") is not None:
+            count = _positive_int(reference_input_execution.get("reference_count"))
+            if count is None:
+                return False
+            declared_counts.append(count)
+
+        if declared_counts:
+            return all(count == provider_count for count in declared_counts)
+        return provider_count == fallback_expected_reference_count
 
     def _candidate_and_review(
         self,

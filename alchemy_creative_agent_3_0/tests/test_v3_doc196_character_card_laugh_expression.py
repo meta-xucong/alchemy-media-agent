@@ -30,7 +30,10 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expressio
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
     project_laugh_expression_review_receipt,
 )
-from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorReviewDecision
+from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
+    AnchorCandidateUnavailable,
+    AnchorReviewDecision,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     DEFAULT_EXPRESSION_KEYS,
     EXPRESSION_SLOT_KEYS,
@@ -518,7 +521,7 @@ class _OutputStore:
 class _ReviewService:
     visual_asset_catalog = None
 
-    def __init__(self, inspection: dict[str, object]) -> None:
+    def __init__(self, inspection: dict[str, object], *, reference_count: int = 3) -> None:
         self.output = SimpleNamespace(
             output_id="output_laugh",
             candidate_id="candidate_laugh",
@@ -526,7 +529,20 @@ class _ReviewService:
             metadata={
                 "provider_prompt_sha256": "sha256:laugh",
                 "prompt_compilation_id": "compile_laugh",
-                "provider_reference_image_count": 2,
+                "provider_reference_image_count": reference_count,
+                "reference_asset_count": reference_count,
+                "provider_reference_assets": [
+                    {"asset_id": f"front_reference_{index}", "role": "portrait_identity"}
+                    for index in range(1, reference_count + 1)
+                ],
+                "reference_asset_ids": [
+                    f"front_reference_{index}" for index in range(1, reference_count + 1)
+                ],
+                "reference_input_execution": {
+                    "schema_version": "v3_reference_input_execution_v1",
+                    "reference_count": reference_count,
+                    "operation_outcome": "pixels_received",
+                },
             },
         )
         self.output_store = _OutputStore(self.output)
@@ -620,6 +636,30 @@ def test_doc196_host_projects_laugh_score_dimensions_into_shared_evidence_codes(
     assert review.shared_review_receipts[0]["framing_baseline"] == "face.front"
     assert "mouth_eye_coherence" in review.shared_review_receipts[0]["score_dimensions"]
     assert "eye_line_delta_from_front" in review.shared_review_receipts[0]["framing_delta_dimensions"]
+
+
+def test_doc198_expression_candidate_parity_accepts_front_crop_geometry_and_full_frame_package() -> None:
+    host = ProductApiAnchorPackPreparationHost(
+        _ReviewService(_laugh_inspection(), reference_count=3)  # type: ignore[arg-type]
+    )
+
+    candidate, review = host._character_card_candidate_and_review("job_laugh", _laugh_request())  # noqa: SLF001
+
+    assert candidate.prompt_reference_parity_verified is True
+    assert review.status == "pass"
+
+
+def test_doc198_expression_candidate_parity_mismatch_fails_closed_without_candidate_validation_crash() -> None:
+    service = _ReviewService(_laugh_inspection(), reference_count=3)
+    service.output.metadata["reference_asset_count"] = 2
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        host._character_card_candidate_and_review("job_laugh", _laugh_request())  # noqa: SLF001
+
+    assert getattr(exc_info.value, "failure_code", "") == (
+        "professional_character_card_prompt_reference_parity_unverified"
+    )
 
 
 def test_doc196_structured_expression_receipt_round_trips_from_review_to_stage_receipt() -> None:
