@@ -2,6 +2,12 @@
 
 Date: 2026-07-24
 
+Status: superseded as implementation authority by Doc201. This document remains
+the evidence record for the three failed MCP candidates and the discovery that
+the previous laugh materialization language was too weak. The durable contract
+source is Doc201's structured foundation laugh intent; prompt wording is only a
+projection of that typed contract.
+
 ## 1. Problem
 
 After Doc199 exposed expression-specific dimensions to shared Vision, fresh MCP
@@ -36,7 +42,7 @@ The generation contract must clarify that `expression.laugh` means:
 - a clearly readable joyful laugh keyframe;
 - not merely a polite open-mouth smile;
 - medium-to-medium-high expression energy;
-- bright engaged gaze;
+- engaged, lively gaze as expression evidence only;
 - visible lower-lid/periocular participation;
 - upper-cheek lift;
 - relaxed jaw opening;

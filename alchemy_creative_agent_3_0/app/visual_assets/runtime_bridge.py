@@ -11,6 +11,7 @@ from ..shared_capabilities.activation.contracts import (
     CapabilityActivationPlan,
     VisualTaskProfile,
 )
+from ..shared_capabilities.visual_cluster.expression_review import laugh_expression_intent_contract
 from ..schemas.models import V3BaseModel
 from .authority import (
     ReferenceAdmissionResolver,
@@ -335,18 +336,17 @@ class ProfessionalModeRuntimeBridge:
                 "forbidden_delta": "full_body_side_body_different_scene_reference_example_composition",
             }
             quality_contract["laugh_intent_contract"] = {
-                "intensity": "medium",
-                "arousal": "medium",
-                "phase": "static_positive_keyframe",
+                **laugh_expression_intent_contract(),
                 "evidence_required": [
                     "mouth_eye_coherence",
-                    "periocular_gaze_affect",
+                    "periocular_affect",
                     "cheek_jaw_coupling",
+                    "jaw_relaxation",
+                    "arousal_intensity_coherence",
                     "spontaneity_asymmetry",
-                    "age_coherence",
-                    "identity_preservation",
+                    "expression_age_coherence",
+                    "expression_identity_preservation",
                 ],
-                "video_motion_hint": "positive_affect_keyframe_not_time_sequence_proof",
             }
         else:
             quality_contract["body_silhouette_contract"] = "preserve_identity_scale_and_age_appropriate_body_proportion"

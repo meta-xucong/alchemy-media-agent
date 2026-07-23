@@ -12,6 +12,40 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
+LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION = "v3_affective_laugh_intent_v2"
+
+LAUGH_EXPRESSION_INTENT_CONTRACT: dict[str, Any] = {
+    "contract_version": LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION,
+    "owner": "v3_shared_visual_cluster",
+    "emotion": "laugh",
+    "intensity_band": "medium_to_medium_high",
+    "arousal_band": "medium_to_medium_high",
+    "phase": "onset_to_peak_static_keyframe",
+    "static_keyframe_policy": "single_still_may_hint_motion_but_must_not_claim_time_sequence",
+    "style_channel_policy": "inherit_prompt_owned_face_front_channels_without_lighting_or_complexion_override",
+    "framing_policy": "inherit_face_front_visual_skeleton",
+    "participation_channels": [
+        "mouth_eye_coherence",
+        "engaged_lively_gaze",
+        "lower_lid_periocular_participation",
+        "upper_cheek_lift",
+        "relaxed_jaw_opening",
+        "natural_age_appropriate_teeth_visibility",
+        "spontaneous_asymmetry",
+        "identity_preservation",
+        "age_coherence",
+    ],
+    "collapse_risks": [
+        "polite_open_mouth_smile",
+        "neutral_portrait_with_parted_lips",
+        "mouth_only_expression",
+        "detached_gaze",
+        "frozen_periocular_region",
+        "plastic_expression_symmetry",
+    ],
+    "video_motion_hint": "positive_laugh_keyframe_without_time_sequence_claim",
+}
+
 EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES = frozenset(
     {
         "mouth_only_smile",
@@ -69,6 +103,38 @@ EXPRESSION_FRAMING_DELTA_MAX = {
     "head_pitch_delta_from_front": 0.06,
 }
 EXPRESSION_SCORE_FLOOR_EPSILON = 0.005
+
+
+def laugh_expression_intent_contract() -> dict[str, Any]:
+    """Return the shared structured laugh intent contract.
+
+    The contract is the source of truth for Professional Character Card's
+    default positive expression.  Renderer prompt text is only a projection of
+    these typed fields, so Provider and MCP can share the same intent without
+    each module inventing its own wording.
+    """
+
+    return {
+        key: list(value) if isinstance(value, list) else value
+        for key, value in LAUGH_EXPRESSION_INTENT_CONTRACT.items()
+    }
+
+
+def laugh_expression_materialization_directive(contract: Any | None = None) -> str:
+    """Project the shared laugh intent into concise renderer language."""
+
+    data = contract if isinstance(contract, dict) else laugh_expression_intent_contract()
+    if data.get("emotion") != "laugh":
+        raise ValueError("laugh expression materialization requires a laugh intent contract")
+    intensity = str(data.get("intensity_band") or "medium_to_medium_high").replace("_", "-")
+    phase = str(data.get("phase") or "onset_to_peak_static_keyframe").replace("_", " ")
+    return (
+        "Render a clearly readable joyful laugh keyframe, not merely a polite open-mouth smile. "
+        f"Use {intensity} expression energy in a {phase}: engaged, lively gaze as expression evidence "
+        "only, visible lower-lid/periocular participation, upper-cheek lift, relaxed jaw opening, "
+        "natural age-appropriate teeth visibility, and slight spontaneous asymmetry. "
+        "The still image should feel like a captured laugh keyframe, not a neutral portrait with parted lips."
+    )
 
 
 @dataclass(frozen=True)
@@ -251,8 +317,11 @@ __all__ = [
     "AffectiveExpressionReviewReceipt",
     "EXPRESSION_FRAMING_DELTA_MAX",
     "EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES",
+    "LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION",
     "LAUGH_EXPRESSION_EVIDENCE_CODES",
     "LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES",
+    "laugh_expression_intent_contract",
+    "laugh_expression_materialization_directive",
     "laugh_expression_receipt_allows_slot",
     "normalize_affective_expression_score_card",
     "project_laugh_expression_review_receipt",

@@ -6,6 +6,7 @@ import json
 
 from .contracts import BrainRunRequest
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS
+from ..shared_capabilities.visual_cluster.expression_review import LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION
 
 
 SYSTEM_PROMPT = """You are the V3 Creative OS planning brain. Return JSON only.
@@ -1048,11 +1049,25 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "Do not output a neutral-expression prompt for a non-neutral expression slot."
             )
             if expression == "laugh":
+                laugh_contract = context.get("character_card_laugh_intent_contract")
+                laugh_contract = laugh_contract if isinstance(laugh_contract, dict) else {}
+                intensity = str(laugh_contract.get("intensity_band") or "medium_to_medium_high")
+                arousal = str(laugh_contract.get("arousal_band") or "medium_to_medium_high")
+                phase = str(laugh_contract.get("phase") or "onset_to_peak_static_keyframe")
+                participation = laugh_contract.get("participation_channels")
+                participation_terms = (
+                    ", ".join(str(item) for item in participation if str(item).strip())
+                    if isinstance(participation, list)
+                    else "mouth_eye_coherence, lower_lid_periocular_participation, upper_cheek_lift, relaxed_jaw_opening"
+                )
                 response_contract += (
-                    " For the Professional positive slot, laugh means a medium-arousal amused keyframe useful for later motion work, "
-                    "not a polite smile and not an exaggerated performance laugh. Keep the same 2:3 front-card head/neck/upper-shoulder "
-                    "framing, camera distance, white background, lighting and white balance from the approved neutral front card; vary only "
-                    "the facial affect and a tiny amount of natural head-shoulder energy."
+                    " For the Professional positive slot, use the shared structured laugh intent contract "
+                    f"{laugh_contract.get('contract_version') or LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION}: "
+                    f"intensity_band={intensity}, arousal_band={arousal}, phase={phase}, participation_channels={participation_terms}. "
+                    "This is a laugh keyframe contract, not a polite smile recipe and not an exaggerated performance laugh. "
+                    "Interpret engaged/lively gaze as facial affect evidence only; do not change lighting, complexion, or style from it. "
+                    "Keep the same 2:3 front-card head/neck/upper-shoulder framing, camera distance, white background, lighting and white balance "
+                    "from the approved neutral front card; vary only the facial affect and a tiny amount of natural head-shoulder energy."
                 )
         if slot_delta_type == "body_pose" and slot_delta_target.get("body_slot"):
             body_slot = str(slot_delta_target.get("body_slot") or "").strip()

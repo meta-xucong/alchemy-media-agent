@@ -61,6 +61,10 @@ from ..shared_capabilities.visual_cluster.human_photorealism import (
     HUMAN_REALISM_REVIEW_DIMENSIONS,
     normalize_human_realism_issue_code,
 )
+from ..shared_capabilities.visual_cluster.expression_review import (
+    laugh_expression_intent_contract,
+    laugh_expression_materialization_directive,
+)
 from ..visual_assets import (
     CanonicalProviderPromptReceipt,
     FrozenVisualAssetBindingSet,
@@ -1508,11 +1512,7 @@ class ScenarioRuntime:
         )
         endings = {
             "laugh": (
-                "Render a clearly readable joyful laugh keyframe, not merely a polite open-mouth smile. "
-                "Use medium-to-medium-high expression energy while staying inside the same front-card crop: bright engaged gaze, "
-                "visible lower-lid/periocular participation, upper-cheek lift, relaxed jaw opening, natural age-appropriate teeth visibility, "
-                "and slight spontaneous asymmetry. The still image should feel like a captured laugh phase from onset toward peak, "
-                "not a neutral portrait with parted lips."
+                laugh_expression_materialization_directive()
             ),
             "smile": (
                 "Render a lower-intensity natural smile: gentle mouth-corner lift, engaged gaze, light cheek participation, "
@@ -2385,20 +2385,17 @@ class ScenarioRuntime:
                         }
                     if stage == "expression_set" and slot_key == "expression.laugh":
                         context["character_card_laugh_intent_contract"] = {
-                            "emotion": "laugh",
-                            "intensity": "medium",
-                            "arousal": "medium",
-                            "phase": "positive_static_keyframe",
+                            **laugh_expression_intent_contract(),
                             "evidence_required": [
                                 "mouth_eye_coherence",
-                                "periocular_gaze_affect",
+                                "periocular_affect",
                                 "cheek_jaw_coupling",
                                 "jaw_relaxation",
+                                "arousal_intensity_coherence",
                                 "spontaneity_asymmetry",
-                                "age_coherence",
-                                "identity_preservation",
+                                "expression_age_coherence",
+                                "expression_identity_preservation",
                             ],
-                            "video_motion_hint": "useful_positive_keyframe_without_claiming_time_sequence",
                         }
                 context["provider_admission_decision"] = {
                     "required": True,

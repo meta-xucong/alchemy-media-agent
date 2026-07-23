@@ -27,7 +27,10 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     LAUGH_EXPRESSION_EVIDENCE_CODES,
+    LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION,
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+    laugh_expression_intent_contract,
+    laugh_expression_materialization_directive,
     project_laugh_expression_review_receipt,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
@@ -410,13 +413,15 @@ def test_doc196_host_default_intents_and_mcp_prompt_contract_use_laugh_not_smile
     intents = ProductApiAnchorPackPreparationHost._character_card_expression_slot_intents(
         "authorized identity preparation intent"
     )
+    directive = laugh_expression_materialization_directive(laugh_expression_intent_contract())
 
     assert set(intents) == {"laugh", "anger", "sad"}
     assert "Expression slot target: expression.laugh." in intents["laugh"]
+    assert directive in intents["laugh"]
     assert "clearly readable joyful laugh keyframe" in intents["laugh"]
-    assert "rather than a polite open-mouth smile" in intents["laugh"]
-    assert "visible lower-lid/periocular participation" in intents["laugh"]
-    assert "upper-cheek lift" in intents["laugh"]
+    assert "not merely a polite open-mouth smile" in intents["laugh"]
+    assert "engaged, lively gaze as expression evidence only" in intents["laugh"]
+    assert "bright engaged gaze" not in intents["laugh"]
     assert "expression.smile" not in "\n".join(intents.values())
     assert _character_card_stage_mcp_prompt_current(
         "expression.laugh",
@@ -442,7 +447,18 @@ def test_doc196_character_card_expression_context_carries_framing_and_laugh_cont
 
     assert expression_contract["positive_expression_default"] == "laugh"
     assert expression_contract["expression_framing_contract"]["baseline"] == "active_face_front_winner"
-    assert expression_contract["laugh_intent_contract"]["video_motion_hint"]
+    laugh_contract = expression_contract["laugh_intent_contract"]
+    assert laugh_contract["contract_version"] == LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION
+    assert laugh_contract["owner"] == "v3_shared_visual_cluster"
+    assert laugh_contract["intensity_band"] == "medium_to_medium_high"
+    assert laugh_contract["arousal_band"] == "medium_to_medium_high"
+    assert laugh_contract["phase"] == "onset_to_peak_static_keyframe"
+    assert laugh_contract["style_channel_policy"] == (
+        "inherit_prompt_owned_face_front_channels_without_lighting_or_complexion_override"
+    )
+    assert "lower_lid_periocular_participation" in laugh_contract["participation_channels"]
+    assert "upper_cheek_lift" in laugh_contract["participation_channels"]
+    assert laugh_contract["video_motion_hint"]
     assert "laugh_intent_contract" not in body_metadata["professional_face_identity_quality_contract"]
 
 
@@ -469,10 +485,7 @@ def test_doc196_brain_prompt_contract_receives_laugh_and_framing_only_for_charac
             "baseline": "active_face_front_winner",
             "format": "1024x1536_vertical_2_3",
         },
-        "character_card_laugh_intent_contract": {
-            "emotion": "laugh",
-            "video_motion_hint": "positive keyframe",
-        },
+        "character_card_laugh_intent_contract": laugh_expression_intent_contract(),
         "provider_admission_decision": {
             "required": True,
             "contract_version": "v3_provider_admission_decision_v1",
@@ -509,7 +522,14 @@ def test_doc196_brain_prompt_contract_receives_laugh_and_framing_only_for_charac
     )
 
     assert "expression.laugh" in payload["remote_response_contract"]
-    assert "medium-arousal amused keyframe" in payload["remote_response_contract"]
+    assert LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION in payload["remote_response_contract"]
+    assert "intensity_band=medium_to_medium_high" in payload["remote_response_contract"]
+    assert "arousal_band=medium_to_medium_high" in payload["remote_response_contract"]
+    assert "phase=onset_to_peak_static_keyframe" in payload["remote_response_contract"]
+    assert "lower_lid_periocular_participation" in payload["remote_response_contract"]
+    assert "engaged/lively gaze as facial affect evidence only" in payload["remote_response_contract"]
+    assert "medium-arousal amused keyframe" not in payload["remote_response_contract"]
+    assert "bright lighting" not in payload["remote_response_contract"]
     assert "front-card head/neck/upper-shoulder" in payload["remote_response_contract"]
     assert "expression.laugh" not in ordinary["remote_response_contract"]
     assert "front-card head/neck/upper-shoulder" not in ordinary["remote_response_contract"]
@@ -981,11 +1001,15 @@ def test_doc197_laugh_brain_timeout_uses_bounded_expression_slot_delta_recovery(
 
     assert recovered.canonical_provider_prompts
     canonical = recovered.canonical_provider_prompts[0]
+    assert laugh_expression_materialization_directive(laugh_expression_intent_contract()) in canonical.prompt
     assert "clearly readable joyful laugh keyframe" in canonical.prompt
     assert "not merely a polite open-mouth smile" in canonical.prompt
+    assert "engaged, lively gaze as expression evidence only" in canonical.prompt
     assert "visible lower-lid/periocular participation" in canonical.prompt
     assert "upper-cheek lift" in canonical.prompt
-    assert "captured laugh phase from onset toward peak" in canonical.prompt
+    assert "onset to peak static keyframe" in canonical.prompt
+    assert "bright engaged gaze" not in canonical.prompt
+    assert "bright lighting" not in canonical.prompt
     assert "inheriting the face.front card framing" in canonical.prompt
     assert canonical.reference_led_slot_delta_decision is not None
     assert canonical.reference_led_slot_delta_decision.slot_delta_type == "expression"
@@ -1018,6 +1042,34 @@ def test_doc197_laugh_brain_timeout_uses_bounded_expression_slot_delta_recovery(
             scenario_id="general_creative",
         ),
     )
+
+
+def test_doc201_provider_and_mcp_recovery_prompts_project_the_same_structured_laugh_contract() -> None:
+    runtime = ScenarioRuntime()
+    prompts: dict[str, str] = {}
+    for channel in ("provider", "mcp"):
+        request = _expression_slot_delta_runtime_request("expression.laugh")
+        request = request.model_copy(
+            update={
+                "metadata": {
+                    **request.metadata,
+                    "generation_channel": channel,
+                    **({"mcp_operation_id": "asset_doc201:expression_set:expression.laugh:1"} if channel == "mcp" else {}),
+                }
+            }
+        )
+        recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+            request,
+            _remote_required_expression_brain_result("expression.laugh"),
+        )
+        prompts[channel] = recovered.canonical_provider_prompts[0].prompt
+
+    directive = laugh_expression_materialization_directive(laugh_expression_intent_contract())
+    assert prompts["provider"] == prompts["mcp"]
+    assert directive in prompts["provider"]
+    assert "engaged, lively gaze as expression evidence only" in prompts["provider"]
+    assert "bright engaged gaze" not in prompts["provider"]
+    assert "bright lighting" not in prompts["provider"]
 
 
 def test_doc197_explicit_smile_can_recover_but_does_not_become_laugh() -> None:

@@ -14,7 +14,10 @@ from typing import Any
 
 from PIL import Image
 
-from ..shared_capabilities.visual_cluster.expression_review import project_laugh_expression_review_receipt
+from ..shared_capabilities.visual_cluster.expression_review import (
+    laugh_expression_materialization_directive,
+    project_laugh_expression_review_receipt,
+)
 from ..shared_capabilities.visual_cluster.identity_metric import create_default_identity_metric_provider
 from ..visual_assets.anchor_pack import (
     AnchorCandidateResult,
@@ -758,10 +761,8 @@ class ProductApiAnchorPackPreparationHost:
         return {
             "laugh": (
                 f"{base}\nExpression slot target: expression.laugh. "
-                "Render the same person in a clearly readable joyful laugh keyframe rather than a polite open-mouth smile, "
-                "with bright engaged gaze, visible lower-lid/periocular participation, upper-cheek lift, relaxed jaw opening, "
-                "natural age-appropriate teeth visibility, slight spontaneous asymmetry, and only a small amount of natural "
-                "head-shoulder energy while preserving the approved front-card framing."
+                f"{laugh_expression_materialization_directive()} "
+                "Preserve the approved front-card framing and allow only a small amount of natural head-shoulder energy."
             ),
             "anger": (
                 f"{base}\nExpression slot target: expression.anger. "
