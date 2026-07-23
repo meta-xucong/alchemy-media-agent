@@ -133,6 +133,7 @@ class CentralCreativeBrain:
                 # as an ordinary Provider result.
                 "generation_channel": context.metadata.get("generation_channel", "provider"),
                 "mcp_operation_id": context.metadata.get("mcp_operation_id"),
+                "mcp_materialization": context.metadata.get("mcp_materialization"),
                 # These values were already validated against the immutable
                 # activation-plan metadata by ScenarioRuntime.  Preserve them
                 # when CentralCreativeBrain creates the per-output plan;
@@ -330,6 +331,7 @@ class CentralCreativeBrain:
                 # bytes or from a post-generation fallback.
                 "generation_channel": context.metadata.get("generation_channel", "provider"),
                 "mcp_operation_id": context.metadata.get("mcp_operation_id"),
+                "mcp_materialization": context.metadata.get("mcp_materialization"),
                 "professional_identity_reference_strategy": context.metadata.get(
                     "professional_identity_reference_strategy"
                 ),

@@ -292,6 +292,35 @@ def test_doc203_scenario_runtime_projects_explicit_mcp_handoff_to_generation_met
     assert metadata["mcp_materialization"] == materialization
 
 
+def test_doc209_scenario_runtime_preserves_explicit_mcp_handoff_in_frozen_generation_plan() -> None:
+    materialization = {
+        "handoff_id": "mcp_handoff_doc209_submitted",
+        "status": "submitted",
+        "generation_channel": "mcp",
+        "resume_required": True,
+    }
+
+    result = ScenarioRuntime().plan_job(
+        {
+            "user_input": "Create one character-card laugh validation portrait.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {
+                "requested_image_count": 1,
+                "require_real_images": True,
+                "generation_channel": "mcp",
+                "mcp_operation_id": "people_doc209:expression_set:expression.laugh:1:round3",
+                "mcp_materialization": materialization,
+            },
+        }
+    )
+
+    assert result.planning_result is not None
+    generation_metadata = result.planning_result.generation_plans[0].metadata
+    assert generation_metadata["generation_channel"] == "mcp"
+    assert generation_metadata["mcp_operation_id"] == "people_doc209:expression_set:expression.laugh:1:round3"
+    assert generation_metadata["mcp_materialization"] == materialization
+
+
 def test_doc205_character_card_recovers_orphan_submitted_handoff_without_replanning(tmp_path: Path) -> None:
     operation_id = "people_doc205:expression_set:expression.laugh:2:round3"
     handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
