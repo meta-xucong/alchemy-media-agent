@@ -290,3 +290,143 @@ def test_doc203_scenario_runtime_projects_explicit_mcp_handoff_to_generation_met
     assert metadata["generation_channel"] == "mcp"
     assert metadata["mcp_operation_id"] == "doc203-runtime-operation"
     assert metadata["mcp_materialization"] == materialization
+
+
+def test_doc205_character_card_recovers_orphan_submitted_handoff_without_replanning(tmp_path: Path) -> None:
+    operation_id = "people_doc205:expression_set:expression.laugh:2:round3"
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    prompt = "same face reference with a joyful laugh expression"
+    handoff = handoffs.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        reference_assets=[],
+        rendering_contract={
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "32x48",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_edit",
+        },
+    )
+    handoffs.submit(
+        handoff["handoff_id"],
+        nonce=handoff["nonce"],
+        prompt_sha256=handoff["prompt_sha256"],
+        reference_asset_hashes=handoff["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+
+    class _Store:
+        def __init__(self) -> None:
+            self.record = None
+
+        def list_recent(self, _limit):
+            return []
+
+        def save(self, record) -> None:
+            self.record = record
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created_payloads = []
+            self.job_store = _Store()
+            self.record = None
+            self.mcp_materialization_store = handoffs
+
+        def create_professional_character_card_stage_job(self, payload, **_kwargs):
+            self.created_payloads.append(payload)
+            self.record = SimpleNamespace(
+                job_id="job_doc205_orphan_resume",
+                planning_result=object(),
+                generation_result=None,
+                request=SimpleNamespace(metadata=dict(payload.get("metadata") or {})),
+            )
+            self.job_store.record = self.record
+            return ProductJobStatus(
+                job_id=self.record.job_id,
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, job_id, *_args, **_kwargs):
+            assert job_id == "job_doc205_orphan_resume"
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):
+            return self.record
+
+    service = _Service()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc205",
+        people_asset_id="people_doc205",
+        card_version_id="card_doc205",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=3,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="mcp_materialization_pending"):
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    materialization = service.created_payloads[0]["metadata"]["mcp_materialization"]
+    assert materialization["handoff_id"] == handoff["handoff_id"]
+    assert [item["handoff_id"] for item in handoffs.list_unconsumed_by_operation(operation_id)] == [
+        handoff["handoff_id"]
+    ]
+
+
+def test_doc205_character_card_orphan_handoff_recovery_fails_closed_when_ambiguous(tmp_path: Path) -> None:
+    operation_id = "people_doc205:expression_set:expression.laugh:2:round3"
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    for prompt in ("same face reference with joyful laugh expression", "same face reference with delighted laugh expression"):
+        handoffs.ensure_pending(
+            operation_id=operation_id,
+            prompt=prompt,
+            prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            reference_assets=[],
+            rendering_contract={
+                "renderer": "codex_builtin_imagegen",
+                "model": "gpt-image-2",
+                "size": "1024x1536",
+                "quality": "high",
+                "output_format": "png",
+                "count": 1,
+                "api_operation": "image_edit",
+            },
+        )
+
+    service = SimpleNamespace(
+        visual_asset_catalog=None,
+        mcp_materialization_store=handoffs,
+        job_store=SimpleNamespace(list_recent=lambda _limit: []),
+    )
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc205",
+        people_asset_id="people_doc205",
+        card_version_id="card_doc205",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=3,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="mcp_materialization_operation_ambiguous"):
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]

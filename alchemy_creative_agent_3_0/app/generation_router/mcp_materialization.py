@@ -184,6 +184,43 @@ class McpMaterializationHandoffStore:
         with self._lock:
             return self._read(handoff_id)
 
+    def list_unconsumed_by_operation(self, operation_id: str) -> list[dict[str, Any]]:
+        """Return pending/submitted handoffs for one frozen operation.
+
+        This is an internal recovery seam for interrupted MCP materialization
+        flows.  The operation id is already scoped by the caller to a specific
+        asset/module/slot/candidate/round; callers must still decide whether a
+        returned handoff is safe to consume for their stage.
+        """
+
+        operation = str(operation_id or "").strip()
+        if not operation:
+            return []
+        with self._lock:
+            if not self.storage_root.is_dir():
+                return []
+            matches: list[dict[str, Any]] = []
+            for path in self.storage_root.glob("mcp_handoff_*.json"):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if not isinstance(payload, dict) or payload.get("schema_version") != self.schema_version:
+                    continue
+                if str(payload.get("operation_id") or "").strip() != operation:
+                    continue
+                if str(payload.get("status") or "").strip().lower() not in {"pending", "submitted"}:
+                    continue
+                matches.append(payload)
+            return sorted(
+                matches,
+                key=lambda item: (
+                    int(item.get("revision") or 0),
+                    str(item.get("created_at") or ""),
+                    str(item.get("handoff_id") or ""),
+                ),
+            )
+
     def public_view(self, handoff_id: str) -> dict[str, Any]:
         payload = self.get(handoff_id)
         if payload is None:

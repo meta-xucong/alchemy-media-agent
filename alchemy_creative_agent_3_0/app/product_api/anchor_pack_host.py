@@ -893,6 +893,13 @@ class ProductApiAnchorPackPreparationHost:
         operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
         if request.attempt_round > 1:
             operation_id = f"{operation_id}:round{request.attempt_round}"
+        if request.generation_channel == "mcp" and not str(request.mcp_handoff_id or "").strip():
+            orphan_handoff_id = self._recover_unconsumed_character_card_mcp_handoff_id(
+                request,
+                operation_id,
+            )
+            if orphan_handoff_id:
+                request = request.model_copy(update={"mcp_handoff_id": orphan_handoff_id})
         resume_record = (
             self._mcp_resume_character_card_stage_job_record(request, operation_id)
             if request.generation_channel == "mcp"
@@ -1075,6 +1082,44 @@ class ProductApiAnchorPackPreparationHost:
                 continue
             return record
         return None
+
+    def _recover_unconsumed_character_card_mcp_handoff_id(
+        self,
+        request: CharacterCardCandidateRequest,
+        operation_id: str,
+    ) -> str | None:
+        """Recover a unique orphan MCP handoff without asking Brain again.
+
+        A process interruption can leave the durable MCP handoff file submitted
+        while the corresponding planned job record is absent or the card-level
+        pending id was not projected back into the next service call.  The
+        handoff itself is the frozen prompt/reference contract for this exact
+        asset/module/slot/candidate/round, so the safe behavior is to reuse one
+        unique current handoff or fail closed if the operation is ambiguous.
+        """
+
+        store = getattr(self.product_service, "mcp_materialization_store", None)
+        finder = getattr(store, "list_unconsumed_by_operation", None)
+        if not callable(finder):
+            return None
+        try:
+            candidates = list(finder(operation_id))
+        except Exception:
+            return None
+        current: list[dict[str, Any]] = []
+        for payload in candidates:
+            if not isinstance(payload, dict):
+                continue
+            prompt = str(payload.get("canonical_prompt") or "")
+            if not _character_card_stage_mcp_prompt_current(request.slot_key, prompt):
+                continue
+            current.append(payload)
+        if not current:
+            return None
+        if len(current) > 1:
+            raise AnchorCandidateUnavailable("mcp_materialization_operation_ambiguous")
+        handoff_id = str(current[0].get("handoff_id") or "").strip()
+        return handoff_id or None
 
     def _mcp_materialization_from_generation_failure(self, generation: Any, job_id: str) -> dict[str, Any] | None:
         """Recover an opaque MCP handoff from public status or the durable job record."""
