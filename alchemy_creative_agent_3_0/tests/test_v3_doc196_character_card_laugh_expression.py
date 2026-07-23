@@ -863,7 +863,7 @@ def test_doc197_laugh_brain_timeout_uses_bounded_expression_slot_delta_recovery(
     assert recovered.canonical_provider_prompts
     canonical = recovered.canonical_provider_prompts[0]
     assert "medium-arousal naturally amused laugh keyframe" in canonical.prompt
-    assert "same face.front card framing" in canonical.prompt
+    assert "inheriting the face.front card framing" in canonical.prompt
     assert canonical.reference_led_slot_delta_decision is not None
     assert canonical.reference_led_slot_delta_decision.slot_delta_type == "expression"
     assert canonical.provider_admission_decision is not None
@@ -948,3 +948,89 @@ def test_doc197_expression_recovery_requires_one_front_reference() -> None:
 
     assert not recovered.canonical_provider_prompts
     assert "character_card_slot_delta_recovery_prompts_received" not in recovered.audit
+
+
+@pytest.mark.parametrize(
+    "case_label,user_input",
+    [
+        (
+            "adult_male_low_key",
+            "Prepare a restrained laugh slot for an adult male card whose approved front card is low-key and warm-toned.",
+        ),
+        (
+            "adult_female_editorial",
+            "Prepare a joyful laugh slot for an adult female card whose approved front card is editorial and soft-matte.",
+        ),
+        (
+            "child_clean_reference",
+            "Prepare a medium laugh slot for a child card whose approved front card is clean and high-key.",
+        ),
+    ],
+)
+def test_doc197_expression_recovery_inherits_style_channels_without_case_specific_skin_or_lighting(
+    case_label: str,
+    user_input: str,
+) -> None:
+    runtime = ScenarioRuntime()
+    request = _expression_slot_delta_runtime_request("expression.laugh").model_copy(
+        update={
+            "user_input": user_input,
+            "metadata": {
+                **_expression_slot_delta_runtime_request("expression.laugh").metadata,
+                "doc197_style_fixture": case_label,
+            },
+        },
+        deep=True,
+    )
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_expression_brain_result("expression.laugh"),
+    )
+
+    assert recovered.canonical_provider_prompts
+    prompt = recovered.canonical_provider_prompts[0].prompt
+    assert "complexion channel" in prompt
+    assert "lighting direction" in prompt
+    assert "wardrobe/style channel" in prompt
+    assert "camera-observed skin/material texture" in prompt
+    forbidden = (
+        "cool fair",
+        "fair skin",
+        "same bright clean lighting",
+        "bright clean lighting",
+        "bright even lighting",
+        "adult styling",
+        "same child",
+        "child head proportions",
+        "commercial clean photo finish",
+    )
+    assert not any(fragment in prompt for fragment in forbidden)
+
+
+def test_doc197_face_slot_delta_recovery_prompts_are_style_neutral_and_person_generic() -> None:
+    forbidden = (
+        "cool fair",
+        "fair skin",
+        "bright clean lighting",
+        "bright even lighting",
+        "same child",
+        "child head proportions",
+        "commercial clean finish",
+        "commercial clean photo finish",
+    )
+    for view_role in (
+        "left_front_25",
+        "three_quarter",
+        "profile",
+        "right_front_25",
+        "reverse_three_quarter",
+        "rear_head",
+    ):
+        prompt = ScenarioRuntime._character_card_slot_delta_recovery_prompt(view_role)  # noqa: SLF001
+        assert "same person" in prompt
+        assert "background treatment" in prompt
+        assert "lighting direction" in prompt
+        assert "wardrobe/style channel" in prompt
+        assert "visual finish" in prompt
+        assert not any(fragment in prompt for fragment in forbidden)

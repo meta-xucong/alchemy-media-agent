@@ -1121,7 +1121,7 @@ class ScenarioRuntime:
                             "No props, branding, scene marketing, half-body crop, or big-head crop.",
                         ],
                         "negative_prompt_addons": [
-                            "avoid adult styling",
+                            "avoid unrequested wardrobe, style, or scene changes",
                             "avoid plastic skin",
                             "avoid dirty noise or smeared texture",
                         ],
@@ -1499,10 +1499,11 @@ class ScenarioRuntime:
     @staticmethod
     def _character_card_expression_slot_delta_recovery_prompt(expression: str) -> str:
         base = (
-            "Same person as the approved face.front Character Card winner, same face.front card framing, "
-            "same camera distance, same head size, same head-top margin, same eye-line placement, same white studio "
-            "background, same bright clean lighting and white balance, same head-neck-upper-shoulders crop in a vertical 2:3 reference-card frame. "
-            "Preserve identity, age coherence, cool fair real skin texture and commercial clean photo finish. "
+            "Same person as the approved face.front Character Card winner, inheriting the face.front card framing, "
+            "camera distance, head size, head-top margin, eye-line placement, background treatment, lighting direction, "
+            "white balance, complexion channel, wardrobe/style channel, visual finish, and head-neck-upper-shoulders crop "
+            "in the existing vertical 2:3 reference-card frame. "
+            "Preserve identity, age coherence, camera-observed skin/material texture, and the approved card's style channels. "
             "Change only the facial expression and a very small amount of natural head-shoulder energy. "
         )
         endings = {
@@ -1526,7 +1527,8 @@ class ScenarioRuntime:
         }
         avoid = (
             " No new scene, no wardrobe change, no full-body or half-body crop, no big-head close-up, no props, no branding, "
-            "no adult styling, no mouth-only expression, no detached gaze, no plastic skin, no oily shine, no dirty noise or smeared texture."
+            "no unrequested wardrobe/style/scene change, no mouth-only expression, no detached gaze, no plastic skin, "
+            "no oily shine, no dirty noise or smeared texture."
         )
         return base + endings.get(expression, endings["laugh"]) + avoid
 
@@ -1576,25 +1578,25 @@ class ScenarioRuntime:
     def _character_card_slot_delta_recovery_prompt(view_role: str) -> str:
         visible_face_framing = (
             "Match the approved front card framing: same camera distance, head size, head-top margin, "
-            "upper-shoulders cutoff, collar line and white padding. Keep a vertical 2:3 head-neck-upper-shoulders "
+            "upper-shoulders cutoff, collar line and background padding. Keep a vertical 2:3 head-neck-upper-shoulders "
             "modeling card with the full head and hair boundary cleanly inside the frame; do not turn it into a "
             "tight face close-up, half-body crop or torso portrait. "
         )
         profile_framing = (
             "Match the approved front card framing: same camera distance, head size, head-top margin, "
-            "upper-shoulders cutoff, collar line and white padding. Keep a vertical 2:3 head-neck-upper-shoulders "
+            "upper-shoulders cutoff, collar line and background padding. Keep a vertical 2:3 head-neck-upper-shoulders "
             "modeling card with the full head and hair boundary cleanly inside the frame; do not turn it into a "
             "tight face close-up, half-body crop or torso portrait. "
         )
         rear_framing = (
             "Match the approved card framing: same camera distance, head size, head-top margin, "
-            "upper-shoulders cutoff, back collar line and white padding. Keep a vertical 2:3 head-neck-upper-shoulders "
+            "upper-shoulders cutoff, back collar line and background padding. Keep a vertical 2:3 head-neck-upper-shoulders "
             "modeling card with the full back-of-head hair boundary cleanly inside the frame; do not turn it into a "
             "tight head close-up, half-body crop or torso portrait. "
         )
         prompts = {
             "left_front_25": (
-                "Left-front shallow three-quarter transition portrait of the same child from the approved front card, "
+                "Left-front shallow three-quarter transition portrait of the same person from the approved front card, "
                 "head, neck and upper shoulders only, a natural left-front transition target around 25 to 30 degrees toward image-right, "
                 "visually shallower than the later 45-degree card while clearly no longer a straight front portrait. "
                 "Show measurable but moderate face depth, with the facial centerline slightly off-center, "
@@ -1603,31 +1605,32 @@ class ScenarioRuntime:
                 "Turn the head itself, not only the eyes; the gaze should follow the nose direction rather than looking straight into the camera. "
                 "The result should sit between a straight front portrait and a full 45-degree view; allow natural renderer variation as long as it remains a usable transition bridge. "
                 f"{visible_face_framing}"
-                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, "
-                "cool fair real skin texture, commercial clean finish, natural calm expression. "
+                "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
+                "wardrobe/style channel, and visual finish; keep a natural neutral expression suitable for a reference card. "
                 "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
             ),
             "three_quarter": (
-                "Left-front three-quarter view portrait of the same child from the approved references, "
+                "Left-front three-quarter view portrait of the same person from the approved references, "
                 "Reference role map: approved front card for identity and framing; approved left_front_25 only as the same-side identity bridge, not the target yaw. "
                 "Create an independent left-front 40-to-50-degree card toward image-right, visibly deeper than the 25-degree bridge but not a pure profile. "
                 "Turn head, neck and shoulders together; show the left ear on image-left, nose and gaze angled toward image-right, front-side facial depth, and a smaller far eye while both eyes remain visible. "
                 "Do not reuse the bridge pose with only the pupils looking sideways; avoid straight-front, side-profile, rear/back, or opposite-side results. "
                 f"{visible_face_framing}"
-                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, "
-                "cool fair real skin texture, commercial clean finish, natural calm expression. "
+                "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
+                "wardrobe/style channel, and visual finish; keep a natural neutral expression suitable for a reference card. "
                 "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
             ),
             "profile": (
-                "Strict 90-degree side profile portrait of the same child from the approved references, "
+                "Strict 90-degree side profile portrait of the same person from the approved references, "
                 "head, neck and upper shoulders only, face turned fully to the left with one eye contour, "
-                "nose bridge, lips and ear visible in side profile. Plain white studio background, bright even lighting, "
+                "nose bridge, lips and ear visible in side profile. "
                 f"{profile_framing}"
-                "vertical 2:3 reference-card crop, cool fair real skin texture, commercial clean finish, natural calm expression. "
+                "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
+                "wardrobe/style channel, and visual finish; keep a natural neutral expression suitable for a reference card. "
                 "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
             ),
             "right_front_25": (
-                "Right-front shallow three-quarter transition portrait of the same child from the approved front card, "
+                "Right-front shallow three-quarter transition portrait of the same person from the approved front card, "
                 "head, neck and upper shoulders only, a natural right-front transition target around 25 to 30 degrees toward image-left, "
                 "visually shallower than the later 45-degree card while clearly no longer a straight front portrait. "
                 "Show measurable but moderate face depth, with the facial centerline slightly off-center toward image-left, "
@@ -1637,28 +1640,29 @@ class ScenarioRuntime:
                 "The result should sit between a straight front portrait and a full 45-degree view; allow natural renderer variation as long as it remains a usable transition bridge. "
                 "This is an independent right-side transition view, not a horizontal flip or copied left-side face; preserve natural left/right facial and hair asymmetry. "
                 f"{visible_face_framing}"
-                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, "
-                "cool fair real skin texture, commercial clean finish, natural calm expression. "
+                "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
+                "wardrobe/style channel, and visual finish; keep a natural neutral expression suitable for a reference card. "
                 "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
             ),
             "reverse_three_quarter": (
-                "Right-front three-quarter opposite front-side 45-degree view portrait of the same child from the approved references, "
+                "Right-front three-quarter opposite front-side 45-degree view portrait of the same person from the approved references, "
                 "Reference role map: input 1 is root identity geometry, input 2 is front identity detail, input 3 is front full-frame card framing, input 4 is the approved 90-degree side profile and is the primary pose-depth guide, input 5 is the approved right-front 25-degree transition and is only the right-side identity/framing bridge. "
                 "Let input 4 control pose depth and input 5 preserve same-side identity/asymmetry; do not let the 25-degree bridge become the target yaw. "
                 "Create an independent right-front 40-to-50-degree card toward image-left, closer to the profile depth than to the bridge but not a pure profile. "
                 "Turn head, neck and shoulders together; show the right ear on image-right, nose and gaze angled toward image-left, front-side facial depth, and a smaller far eye while both eyes remain visible. "
                 "Do not mirror or copy the left-front card; avoid straight-front, side-profile, rear/back, or same-side results. "
                 f"{visible_face_framing}"
-                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, "
-                "commercial clean finish with natural hair and skin texture. "
+                "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
+                "wardrobe/style channel, and visual finish with natural hair and skin texture. "
                 "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
             ),
             "rear_head": (
-                "Back-of-head reference portrait of the same child from the approved references, "
+                "Back-of-head reference portrait of the same person from the approved references, "
                 "head, neck and upper shoulders only, rear view of the head, no visible face and no eyes visible, "
-                "natural hair shape and child head proportions. "
+                "natural hair shape and age-coherent head proportions. "
                 f"{rear_framing}"
-                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, commercial clean finish. "
+                "Inherit the approved front card's background treatment, lighting direction, white balance, "
+                "wardrobe/style channel, and visual finish. "
                 "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
             ),
         }

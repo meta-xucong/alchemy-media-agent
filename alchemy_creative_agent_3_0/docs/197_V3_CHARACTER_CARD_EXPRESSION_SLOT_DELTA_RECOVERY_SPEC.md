@@ -74,9 +74,19 @@ The recovered prompt is intentionally short. It inherits the approved
 - card framing;
 - camera distance;
 - crop;
-- white background;
-- lighting and white balance;
+- background treatment;
+- lighting direction and white balance;
+- complexion channel;
+- wardrobe/style channel;
+- visual finish;
 - skin/material continuity.
+
+The recovery layer must not write case-specific aesthetic language such as
+cool/fair complexion, bright commercial lighting, child-only styling bans, or
+any fixed mood. Those channels are owned by the approved `face.front` winner
+and the current request. This keeps Doc197 compatible with adult, teen, child,
+warm-toned, low-key, editorial, and commercial-clean cards without turning the
+current six-year-old validation case into a shared default recipe.
 
 It changes only:
 
@@ -125,4 +135,6 @@ Doc197 adds regression coverage for:
 - explicit smile recovery without becoming laugh;
 - Character Card-only transport timeout;
 - fail-closed behavior when the approved front reference is missing.
-
+- cross-age / cross-style leakage prevention for recovered expression prompts;
+- face-slot recovery prompts inheriting front-card style channels instead of
+  hard-coding child, cool-fair, bright-light, or commercial-clean wording.

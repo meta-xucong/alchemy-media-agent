@@ -459,7 +459,7 @@ def test_doc190_reverse_three_quarter_timeout_recovery_is_opposite_front_45_not_
     assert "right ear on image-right" in prompt
     assert "nose and gaze angled toward image-left" in prompt
     assert "upper-shoulders cutoff" in prompt
-    assert "white padding" in prompt
+    assert "background padding" in prompt
     assert "torso portrait" in prompt
     assert "back of head dominant" not in prompt
     assert "mostly away" not in prompt
