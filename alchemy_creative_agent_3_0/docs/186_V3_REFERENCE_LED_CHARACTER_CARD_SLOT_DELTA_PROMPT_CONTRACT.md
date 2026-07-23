@@ -82,9 +82,19 @@ level and nose centered. This is a reusable card standard, not an aesthetic
 preference.
 
 For every Face Identity view, the framing is fixed as a clean
-head-and-upper-shoulders reference crop: head top margin, full face, neck and
-upper shoulders visible. Big-head close-ups, half-body, chest-up, waist-up and
-torso frames are out of slot.
+head-and-upper-shoulders reference crop: comparable camera distance, head size,
+head-top margin, complete head-adjacent hair silhouette around the cranium,
+visible neck/upper shoulders/collar line, subject top margin, foreground card
+scale and plain card padding. The crop ends just below the upper shoulders and
+preserves clean white padding below the shoulder line, so chest/torso panels
+and waist-up reads are always out of slot. Long hair may crop naturally below
+the upper shoulders; it must never force the card into a looser half-body read.
+Visible front-side 25°/45° face cards keep the full face readable for identity
+comparison, but natural face-box size and position changes from head rotation
+are expected. Official acceptance uses full-card foreground framing, not a hard
+cross-angle face-box-area match. Profile and rear-head cards preserve
+comparable head/hair silhouette scale instead of face-area wording. Big-head
+close-ups, half-body, chest-up, waist-up and torso frames are out of slot.
 
 ### 2.2 Slot Delta Prompt
 
@@ -172,8 +182,27 @@ narrow post-signing slot-scope check before Provider or MCP materialization:
 - Face Identity prompts must remain face/head or upper-shoulder identity
   evidence captures;
 - Face Identity prompts must use the fixed head-and-upper-shoulders framing;
+- Face Identity prompts must preserve comparable card scale across slots:
+  same camera distance, head size, complete hair outline, similar head-top
+  margin, visible neck/upper shoulders/collar line, no tight face/head close-up,
+  no zoomed-in variant, no soft feathered vignette or faded hair boundary, and
+  no half-body crop;
+- visible front-side 25°/45° cards must keep the full face readable while
+  allowing natural face-box projection changes from head rotation; face-box
+  area is diagnostic only and must not be a hard cross-angle acceptance gate;
+- `profile` and `rear_head` must preserve comparable head/hair silhouette scale
+  without requiring face-area proportion; `rear_head` must explicitly keep the
+  face and eyes hidden;
+- `rear_head` review must use non-face continuity evidence such as hair mass,
+  crown area, neck, shoulders and back collar line after shared Vision verifies
+  the view; missing output facial landmarks are expected and must not be treated
+  as a face-card failure by themselves;
 - `standard_front`, `three_quarter`, `profile`, `reverse_three_quarter` and
   `rear_head` must materially express the frozen view role;
+- per Doc190, `three_quarter` means the left/front-side 45° card and must not
+  randomly flip to the opposite side;
+- per Doc190, the historical `reverse_three_quarter` key means the opposite
+  front-side 45° modeling-card view, not a rear/back-of-head view;
 - `standard_front` must materially express straight-on pose normalization and
   face-axis alignment rather than merely saying "front-facing";
 - prompts must not turn the slot into full-body, head-to-toe, wardrobe,
@@ -196,26 +225,35 @@ use the English wording from the schema.
 
 ## 4.1 Commercial clarity gate
 
+Doc189 supersedes the original numeric interpretation of this section. The
+gate still requires commercial-grade cleanliness, but it must not treat clean
+high-key commercial retouch or fair/cool-white complexion as a failure by
+default, and it must not force documentary roughness in the name of realism.
+
 Controlled validation showed that ordinary shared Vision could score a
 Face Identity result highly while human inspection still saw slight smear,
 dirty softness or AI over-smoothing. For reusable character-card bases, that is
 not acceptable: the base image becomes the source for later views, expressions,
 body silhouette and project scenes.
 
-Therefore `character_card_face_identity` review adds a stricter commercial
-clarity floor after shared Vision verification:
+Therefore `character_card_face_identity` review adds a balanced commercial
+clarity floor after shared Vision verification. Current Doc189 floors are:
 
 ```text
-visual_quality >= 0.96
-technical_finish >= 0.96
-human_realism >= 0.92
+same_person_readability >= 0.88
+distinctive_feature_readability >= 0.78
+visual_quality >= 0.90
+technical_finish >= 0.88
+human_realism >= 0.82
+prompt_owned_channel_obedience >= 0.78
 ```
 
 Missing or lower scores fail the candidate with
 `professional_face_card_commercial_clarity_below_bar`. This does not replace
 shared Vision, loosen identity review or create a private reviewer. It is an
 extra Character Card Face Identity acceptance floor on top of the same shared
-review package.
+review package. If future text in this document appears to require near-perfect
+0.96-style thresholds, read Doc189 as the newer authority.
 
 ## 5. Provider and MCP behavior
 

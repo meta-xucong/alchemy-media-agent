@@ -144,6 +144,13 @@ class CentralCreativeBrain:
                 "professional_reference_stage": context.metadata.get(
                     "professional_reference_stage"
                 ),
+                "professional_anchor_capture_scope": context.metadata.get("professional_anchor_capture_scope"),
+                "professional_anchor_reference_assets": context.metadata.get(
+                    "professional_anchor_reference_assets"
+                ),
+                "professional_anchor_initial_multi_source": context.metadata.get(
+                    "professional_anchor_initial_multi_source"
+                ),
                 "visual_auto_retry_active": context.metadata.get("visual_auto_retry_active", False),
                 "visual_auto_retry_attempt": context.metadata.get("visual_auto_retry_attempt"),
                 "retry_attempt": context.metadata.get("retry_attempt"),
@@ -328,6 +335,13 @@ class CentralCreativeBrain:
                 ),
                 "professional_reference_stage": context.metadata.get(
                     "professional_reference_stage"
+                ),
+                "professional_anchor_capture_scope": context.metadata.get("professional_anchor_capture_scope"),
+                "professional_anchor_reference_assets": context.metadata.get(
+                    "professional_anchor_reference_assets"
+                ),
+                "professional_anchor_initial_multi_source": context.metadata.get(
+                    "professional_anchor_initial_multi_source"
                 ),
                 "visual_auto_retry_active": context.metadata.get("visual_auto_retry_active", False),
                 "visual_auto_retry_attempt": context.metadata.get("visual_auto_retry_attempt"),

@@ -1062,6 +1062,28 @@ class VisualAssetLibraryLifecycleService:
         pack = result.pack
         if pack.people_asset_id != asset.visual_asset_id or pack.root_source_provenance.source_asset_id != asset.root_source_provenance.source_asset_id:
             raise ValueError("character_card_face_prepare_binding_mismatch")
+        mcp_handoff_ids = list(getattr(result, "mcp_handoff_ids", []) or [])
+        mcp_checkpoint_failure_code = next(
+            (
+                str(code).strip()
+                for code in getattr(result, "failure_codes", []) or []
+                if str(code or "").strip() in {"mcp_materialization_pending", "mcp_review_pending"}
+            ),
+            None,
+        )
+        generation_failure_code = next(
+            (
+                str(item.failure_code).strip()
+                for item in result.generation_failures
+                if str(item.failure_code or "").strip()
+            ),
+            None,
+        )
+        result_failure_code = (
+            str(result.failure_codes[0]).strip()
+            if pack.status != "review" and result.failure_codes and str(result.failure_codes[0]).strip()
+            else None
+        )
         version = VisualAssetVersion(
             version_id=pack.pack_version_id,
             visual_asset_id=asset.visual_asset_id,
@@ -1071,19 +1093,9 @@ class VisualAssetLibraryLifecycleService:
             immutable_source_provenance=asset.root_source_provenance,
             anchor_pack=pack,
             failure_code=(
-                next(
-                    (
-                        str(item.failure_code).strip()
-                        for item in result.generation_failures
-                        if str(item.failure_code or "").strip()
-                    ),
-                    None,
-                )
-                or (
-                    str(result.failure_codes[0]).strip()
-                    if pack.status != "review" and result.failure_codes
-                    else None
-                )
+                mcp_checkpoint_failure_code
+                if mcp_handoff_ids and mcp_checkpoint_failure_code
+                else generation_failure_code or result_failure_code
             ),
             failure_attempt_count=(
                 min(3, max(1, len(result.generation_failures) or len(result.failure_codes) or 3))
@@ -1091,14 +1103,19 @@ class VisualAssetLibraryLifecycleService:
                 else 0
             ),
             generation_channel=generation_channel,
-            mcp_handoff_ids=list(getattr(result, "mcp_handoff_ids", []) or []),
+            mcp_handoff_ids=mcp_handoff_ids,
         )
         existing_versions = [item for item in asset.versions if item.version_id != version.version_id]
         card = asset.character_card
         if pack.status in {"review", "failed"}:
             card = apply_face_identity_pack_to_card(card, pack)
             if pack.status == "review":
-                card = card.model_copy(update={"face_identity_status": "reviewing"})
+                card = card.model_copy(
+                    update={
+                        "face_identity_status": "reviewing",
+                        "pending_mcp_handoff_ids": [],
+                    }
+                )
             else:
                 failure_code = version.failure_code or "character_card_face_prepare_paused"
                 active_view_count = sum(1 for item in pack.anchor_views if item.active)
@@ -1106,8 +1123,9 @@ class VisualAssetLibraryLifecycleService:
                     update={
                         "face_identity_status": "partial" if active_view_count else "blocked",
                         "last_failure_code": failure_code,
-                        "last_failure_attempt_count": 3,
+                        "last_failure_attempt_count": version.failure_attempt_count,
                         "resume_available": True,
+                        "pending_mcp_handoff_ids": mcp_handoff_ids,
                     }
                 )
         updated = asset.model_copy(

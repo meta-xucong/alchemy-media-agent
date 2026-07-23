@@ -17,8 +17,12 @@ from .character_card import CharacterCardState
 
 FaceViewRole = Literal[
     "standard_front",
+    "left_front_25",
     "three_quarter",
     "profile",
+    "right_front_25",
+    # Historical serialized key.  In Character Card Face Identity this means
+    # the opposite front-side 45-degree card, not a rear/back-of-head view.
     "reverse_three_quarter",
     "rear_head",
 ]
@@ -32,7 +36,15 @@ FACE_IDENTITY_CHANNELS = (
 )
 REQUIRED_FACE_VIEW_ROLES = frozenset({"standard_front", "three_quarter", "profile"})
 CHARACTER_CARD_FACE_VIEW_ROLES = frozenset(
-    {"standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"}
+    {
+        "standard_front",
+        "left_front_25",
+        "three_quarter",
+        "profile",
+        "right_front_25",
+        "reverse_three_quarter",
+        "rear_head",
+    }
 )
 
 
@@ -151,6 +163,8 @@ class AnchorCandidateFailureReceipt(_StrictVisualAssetModel):
     candidate_index: int = Field(ge=1, le=3)
     failure_code: str
     mcp_handoff_id: str | None = None
+    output_id: str | None = None
+    candidate_id: str | None = None
 
 
 class FaceIdentityModule(_StrictVisualAssetModel):

@@ -263,18 +263,28 @@ def test_doc178_face_extension_reuses_existing_serial_host_for_two_new_slots() -
     result = CharacterCardPreparationService.prepare_face_identity_extension(service, _doc178_face_request())
 
     assert result.status == "review"
-    assert len(result.attempts) == 15
+    assert len(result.attempts) == 21
     assert [view.view_role for view in result.pack.anchor_views] == [
         "standard_front",
+        "left_front_25",
         "three_quarter",
         "profile",
+        "right_front_25",
         "reverse_three_quarter",
         "rear_head",
+    ]
+    reverse_request = next(
+        request for request in generator.requests if request.view_role == "reverse_three_quarter"
+    )
+    assert reverse_request.reference_evidence_ids == [
+        "root_1",
+        "output_standard_front_3",
+        "output_profile_3",
+        "output_right_front_25_3",
     ]
     assert generator.requests[-1].reference_evidence_ids == [
         "root_1",
         "output_standard_front_3",
-        "output_three_quarter_3",
         "output_profile_3",
         "output_reverse_three_quarter_3",
     ]

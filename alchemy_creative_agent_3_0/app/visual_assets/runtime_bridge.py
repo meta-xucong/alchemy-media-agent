@@ -157,10 +157,19 @@ class ProfessionalModeRuntimeBridge:
             "required": True,
             "clarity_standard": "commercial_clean_translucent_no_smear_no_dirty_noise",
             "skin_materiality_boundary": "real_skin_texture_without_plastic_or_waxy_smoothing",
+            "commercial_refinement_policy": (
+                "clean_high_key_commercial_retouch_allowed_without_identity_or_materiality_loss"
+            ),
+            "beauty_realism_balance": (
+                "preserve_commercial_beauty_without_generic_ai_face_or_rough_documentary_skin"
+            ),
             "minimum_review_scores": {
-                "visual_quality": 0.96,
-                "technical_finish": 0.96,
-                "human_realism": 0.92,
+                "same_person_readability": 0.88,
+                "distinctive_feature_readability": 0.78,
+                "visual_quality": 0.90,
+                "technical_finish": 0.88,
+                "human_realism": 0.82,
+                "prompt_owned_channel_obedience": 0.78,
             },
             "owner": "shared_v3_visual_review",
         }
@@ -182,7 +191,37 @@ class ProfessionalModeRuntimeBridge:
             "pose_observability": "balanced_ears_cheeks_shoulders_no_head_turn_or_tilt",
             "expression_standard": "stage_appropriate_relaxed_neutral_attention_not_model_performance",
             "materiality_standard": "camera_observed_skin_and_hair_detail_with_minor_real_variation",
-            "complexion_semantics": "fair_or_cool_white_means_neutral_white_balance_not_skin_whitening",
+            "commercial_refinement_policy": (
+                "clean_high_key_commercial_retouch_allowed_without_identity_or_materiality_loss"
+            ),
+            "beauty_realism_balance": (
+                "preserve_commercial_beauty_without_generic_ai_face_or_rough_documentary_skin"
+            ),
+            "complexion_semantics": (
+                "cool_white_or_fair_means_neutral_white_balance_luminous_clean_exposure_not_bleaching"
+            ),
+            "source_channel_tolerance": (
+                "plain_hair_and_neutral_wardrobe_continuity_allowed_when_it_supports_identity_comparison"
+            ),
+            "front_pose_tolerance": "minor_natural_asymmetry_allowed_but_not_nonfront_view",
+            "face_view_pose_compliance": (
+                "pose_compliance_means_requested_face_view_angle_for_character_card_not_full_body_pose"
+            ),
+            "face_view_slot_semantics": {
+                "standard_front": "straight_on_front_head_and_upper_shoulders_card",
+                "left_front_25": "left_front_25_degree_transition_card_for_left_45_bridge",
+                "three_quarter": "left_front_45_degree_head_and_upper_shoulders_card",
+                "profile": "side_profile_90_degree_head_and_upper_shoulders_card",
+                "right_front_25": "right_front_25_degree_transition_card_for_right_45_bridge",
+                "reverse_three_quarter": (
+                    "legacy_key_for_opposite_right_front_45_degree_card_not_rear_view"
+                ),
+                "rear_head": "rear_head_back_of_head_card",
+            },
+            "face_view_framing_parity": (
+                "all_face_view_cards_match_approved_front_card_camera_distance_head_size_"
+                "hair_outline_head_top_margin_neck_upper_shoulders_and_collar_line"
+            ),
             "background_standard": "plain_white_matte_reference_field_no_vignette_or_glamour_gradient",
             "aspect_ratio_standard": "honor_frozen_rendering_size_as_reference_card_aspect_ratio",
             "lens_standard": "low_distortion_portrait_lens_no_big_eye_or_beauty_perspective",
@@ -194,7 +233,13 @@ class ProfessionalModeRuntimeBridge:
     def anchor_pack_preparation_metadata(
         *,
         view_role: Literal[
-            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+            "standard_front",
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
         ],
         capture_scope: Literal["anchor_pack", "character_card_face_identity"] = "anchor_pack",
     ) -> dict[str, object]:

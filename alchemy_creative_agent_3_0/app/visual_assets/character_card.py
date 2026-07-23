@@ -19,8 +19,12 @@ from ..schemas.models import V3BaseModel
 
 FACE_SLOT_KEYS = (
     "face.front",
+    "face.left_front_25",
     "face.front_three_quarter",
     "face.profile",
+    "face.right_front_25",
+    # Historical key kept for persisted cards.  User-facing meaning is the
+    # opposite front-side 45-degree face view, not a rear/back-of-head view.
     "face.reverse_three_quarter",
     "face.rear_head",
 )
@@ -36,8 +40,10 @@ EXPRESSION_LABELS = {
 
 CharacterCardSlotKey = Literal[
     "face.front",
+    "face.left_front_25",
     "face.front_three_quarter",
     "face.profile",
+    "face.right_front_25",
     "face.reverse_three_quarter",
     "face.rear_head",
     "expression.neutral",
@@ -255,6 +261,26 @@ class CharacterCardState(_CharacterCardModel):
                 key: CharacterCardSlot(slot_key=key, module="body_silhouette") for key in BODY_SLOT_KEYS
             },
         )
+
+    @model_validator(mode="before")
+    @classmethod
+    def hydrate_new_face_bridge_slots(cls, data: Any) -> Any:
+        """Keep historical cards readable after adding 25° bridge slots."""
+
+        if not isinstance(data, dict):
+            return data
+        face_slots = data.get("face_slots")
+        if isinstance(face_slots, dict):
+            hydrated = dict(face_slots)
+            for slot_key in FACE_SLOT_KEYS:
+                hydrated.setdefault(
+                    slot_key,
+                    CharacterCardSlot(slot_key=slot_key, module="face_identity").model_dump(
+                        mode="python"
+                    ),
+                )
+            data = {**data, "face_slots": hydrated}
+        return data
 
     @model_validator(mode="after")
     def validate_slots_and_order(self) -> "CharacterCardState":
@@ -1017,8 +1043,10 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
 
     role_to_slot = {
         "standard_front": "face.front",
+        "left_front_25": "face.left_front_25",
         "three_quarter": "face.front_three_quarter",
         "profile": "face.profile",
+        "right_front_25": "face.right_front_25",
         "reverse_three_quarter": "face.reverse_three_quarter",
         "rear_head": "face.rear_head",
     }
@@ -1026,7 +1054,10 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
     slot_state: Literal["winner_selected", "active"] = (
         "active" if pack_status == "active" else "winner_selected"
     )
-    face_slots = dict(card.face_slots)
+    face_slots = {
+        slot_key: CharacterCardSlot(slot_key=slot_key, module="face_identity")
+        for slot_key in FACE_SLOT_KEYS
+    }
     for view in getattr(pack, "anchor_views", []):
         slot_key = role_to_slot.get(str(getattr(view, "view_role", "")))
         if slot_key is None or not getattr(view, "active", False):

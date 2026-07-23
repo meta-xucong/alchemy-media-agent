@@ -25,6 +25,9 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     SubjectContinuityAssetPackBuilder,
     VisualCapabilityClusterModule,
 )
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.adaptive_reference import (
+    infer_target_framing,
+)
 
 
 class _StaticReferenceProfiler:
@@ -303,6 +306,21 @@ def test_doc97_provider_applies_ranked_sources_and_keeps_non_identity_reference(
     audit = ordered[0]["metadata"]["doc97_adaptive_reference_selection"]
     assert audit["applied_source_ids"] == ["selected_profile", "uploaded_root"]
     assert audit["target_view"] == "right_profile"
+
+
+def test_doc190_character_card_upper_shoulders_framing_overrides_negative_half_body_terms() -> None:
+    assert (
+        infer_target_framing(
+            "head, neck and upper shoulders only; not a half-body crop; not zoomed in"
+        )
+        == "head_shoulders"
+    )
+    assert infer_target_framing("头部、颈部和上肩景别，禁止大头照、半身照") == "head_shoulders"
+
+
+def test_doc190_negative_half_body_terms_do_not_request_half_body_framing() -> None:
+    assert infer_target_framing("plain white card, no half-body crop") == "unknown"
+    assert infer_target_framing("白底建模，禁止半身照") == "unknown"
 
 
 def test_doc97_generic_provider_blocks_face_local_repair_but_legacy_result_remains_compatible() -> None:

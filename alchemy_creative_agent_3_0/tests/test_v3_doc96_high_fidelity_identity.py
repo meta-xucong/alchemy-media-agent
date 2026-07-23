@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import base64
 from io import BytesIO
+import time
 from types import SimpleNamespace
 
 from PIL import Image
@@ -157,6 +158,19 @@ class _FlakyVisionProvider(_StaticVisionProvider):
         }
 
 
+class _DummyIdentityImage:
+    shape = (512, 512, 3)
+
+
+class _HangingDetector:
+    def setInputSize(self, _size) -> None:
+        return None
+
+    def detect(self, _image):
+        time.sleep(2)
+        return 1, None
+
+
 def _identity_review_metadata(reference_path: Path) -> dict:
     return {
         "enable_real_vision_inspection": True,
@@ -185,6 +199,40 @@ def _resolution(path: Path) -> GeneratedOutputResolution:
         height=512,
         status="ready",
     )
+
+
+def test_doc190_identity_reference_profile_detector_timeout_is_bounded(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("V3_IDENTITY_METRIC_OPERATION_TIMEOUT_SECONDS", "0.05")
+    provider = SFaceIdentityMetricProvider(model_dir=tmp_path)
+    provider._detector = _HangingDetector()  # noqa: SLF001
+    monkeypatch.setattr(provider, "available", lambda: True)
+    monkeypatch.setattr(provider, "_read_image", lambda _path: _DummyIdentityImage())
+
+    started = time.monotonic()
+    profile = provider.profile_reference(tmp_path / "reference.png")
+
+    assert time.monotonic() - started < 0.6
+    assert profile["status"] == "timeout"
+    assert profile["view_hint"] == "unknown"
+    assert profile["framing_hint"] == "unknown"
+    assert "identity_metric_timeout" in profile["reason_codes"]
+    assert profile["embedding_persisted"] is False
+
+
+def test_doc190_identity_metric_evaluate_detector_timeout_is_fail_closed(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("V3_IDENTITY_METRIC_OPERATION_TIMEOUT_SECONDS", "0.05")
+    provider = SFaceIdentityMetricProvider(model_dir=tmp_path)
+    provider._detector = _HangingDetector()  # noqa: SLF001
+    monkeypatch.setattr(provider, "available", lambda: True)
+    monkeypatch.setattr(provider, "_read_image", lambda _path: _DummyIdentityImage())
+
+    started = time.monotonic()
+    result = provider.evaluate(tmp_path / "output.png", [tmp_path / "reference.png"])
+
+    assert time.monotonic() - started < 0.6
+    assert result.status == "unavailable"
+    assert result.reason_codes == ["identity_metric_timeout"]
+    assert result.metadata["embedding_persisted"] is False
 
 
 def test_doc96_fused_metric_can_clear_subjective_same_type_identity_issue(tmp_path) -> None:

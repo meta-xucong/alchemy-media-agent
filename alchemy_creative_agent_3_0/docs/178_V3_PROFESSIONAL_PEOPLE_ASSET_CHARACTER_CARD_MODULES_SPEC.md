@@ -95,11 +95,16 @@ have been generated:
 
 ```text
 face.front
-face.front_three_quarter       # approximately 45°
-face.profile                   # approximately 90°
-face.reverse_three_quarter     # approximately 135°
-face.rear_head                 # approximately 180°
+face.front_three_quarter       # left/front-side approximately 45°
+face.profile                   # strict side profile approximately 90°
+face.reverse_three_quarter     # historical key; opposite right/front-side approximately 45°, not rear
+face.rear_head                 # back/rear head view
 ```
+
+Doc190 supersedes the earlier "reverse three-quarter = approximately 135°"
+interpretation. The user-facing Character Card has two front-side 45° face
+cards, left and right. A rear or back-of-head angle belongs only to
+`face.rear_head`.
 
 ### 3.2 Expression Set slots
 

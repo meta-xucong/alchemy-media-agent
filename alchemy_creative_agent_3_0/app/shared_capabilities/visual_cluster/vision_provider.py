@@ -446,6 +446,35 @@ def _enforced_inspection_prompt(
             "pose_compliance, and visual_quality, higher is better. "
             "ai_overperfection_penalty is the exception: 0 means no visible AI/beauty-filter overperfection and 1 means severe overperfection."
         )
+        if professional_quality.get("commercial_refinement_policy"):
+            lines.append(
+                "Character Card commercial-refined realism calibration: a clean high-key studio finish, cool-white or fair "
+                "commercial complexion, subtle professional retouch, and plain hair/neutral wardrobe continuity are allowed "
+                "when identity, developmental-age coherence, materiality, fixed crop and prompt-owned view/background remain "
+                "intact. Do not fail merely because skin is clean, bright, fair, or commercially refined. Fail or warn only "
+                "when the pixels show a different person, distinctive-feature loss, child/adult stage drift, waxy/plastic/"
+                "poreless/smeared skin, doll-like child rendering, wrong card crop, wrong background, non-front pose for a "
+                "front slot, or actual prompt-owned channel violation. Minor natural asymmetry in an otherwise front-facing "
+                "Face Identity card is acceptable."
+            )
+            lines.append(
+                "Character Card Face Identity view-angle calibration: for this module, pose_compliance means head-view "
+                "slot geometry, not full-body pose, and angle labels are visual modeling targets rather than exact protractor measurements. Score it low and fail or warn when the requested slot view is not "
+                "pixel-observable: standard_front must read as front; left_front_25 and right_front_25 must read as shallow "
+                "front-side transition cards, visibly beyond front but not yet full 45; three_quarter should read "
+                "as a usable left/front-side three-quarter head view around the 45-degree family, profile as a clear approximately 90-degree side profile, "
+                "reverse_three_quarter as the opposite right/front-side three-quarter head view around the 45-degree family with the face "
+                "still visible as an independent opposite-side view, not a horizontal flip or literal mirror of the approved three_quarter card, and rear_head as a clear back/rear head view. "
+                "Do not fail a commercially clean, identity-faithful three-quarter card merely because the yaw is a little softer or deeper than an ideal 45 degrees; fail the slot only when it is effectively straight-front, pure profile, rear/back, same-side/opposite-side wrong, mirrored, or materially inconsistent in crop/scale. "
+                "Every Face Identity card must keep comparable modeling-card scale with the approved card family: same camera "
+                "distance and head size, complete hair outline inside the frame, similar head-top margin, neck, "
+                "upper shoulders and collar line visible. Visible front-side bridge and 45-degree cards must keep the full face "
+                "readable for identity comparison, but natural face-box size and position changes from head rotation are acceptable; "
+                "judge card-scale continuity by head top, foreground scale, neckline/collar-line height, shoulder cutoff and white padding. rear_head must instead keep a clear "
+                "back-of-head hair outline with no visible face or eyes. Fail or warn tight face/head close-ups, big-head crops, half-body crops, "
+                "soft feathered vignettes, faded hair boundaries, or any slot whose crop/scale is not comparable with the approved front/left45 cards. Keep judging the "
+                "fixed vertical reference-card crop and white background separately from body posture."
+            )
     if serial_anchor_review:
         lines.append(
             "Professional serial-anchor reference authority: Image 2 is the immutable root portrait and remains "
@@ -506,10 +535,12 @@ def _professional_serial_anchor_review_context(
     stage = str(metadata.get("professional_reference_stage") or "").strip()
     previous_winner_count = {
         "standard_front": 0,
-        "three_quarter": 1,
-        "profile": 2,
-        "reverse_three_quarter": 3,
-        "rear_head": 4,
+        "left_front_25": 1,
+        "three_quarter": 2,
+        "profile": 3,
+        "right_front_25": 4,
+        "reverse_three_quarter": 5,
+        "rear_head": 6,
     }.get(stage)
     if (
         not isinstance(professional, dict)
@@ -704,6 +735,62 @@ def _professional_identity_quality_contract(
     return {
         "applies": applies,
         "contract_version": contract.get("contract_version") if applies else None,
+        "capture_scope": contract.get("scope") if applies else None,
+        "commercial_refinement_policy": (
+            (
+                contract.get("face_card_image_clarity_contract", {})
+                if isinstance(contract.get("face_card_image_clarity_contract"), dict)
+                else {}
+            ).get("commercial_refinement_policy")
+            or (
+                contract.get("face_card_evidence_capture_contract", {})
+                if isinstance(contract.get("face_card_evidence_capture_contract"), dict)
+                else {}
+            ).get("commercial_refinement_policy")
+            if applies
+            else None
+        ),
+        "beauty_realism_balance": (
+            (
+                contract.get("face_card_image_clarity_contract", {})
+                if isinstance(contract.get("face_card_image_clarity_contract"), dict)
+                else {}
+            ).get("beauty_realism_balance")
+            or (
+                contract.get("face_card_evidence_capture_contract", {})
+                if isinstance(contract.get("face_card_evidence_capture_contract"), dict)
+                else {}
+            ).get("beauty_realism_balance")
+            if applies
+            else None
+        ),
+        "source_channel_tolerance": (
+            (
+                contract.get("face_card_evidence_capture_contract", {})
+                if isinstance(contract.get("face_card_evidence_capture_contract"), dict)
+                else {}
+            ).get("source_channel_tolerance")
+            if applies
+            else None
+        ),
+        "front_pose_tolerance": (
+            (
+                contract.get("face_card_evidence_capture_contract", {})
+                if isinstance(contract.get("face_card_evidence_capture_contract"), dict)
+                else {}
+            ).get("front_pose_tolerance")
+            if applies
+            else None
+        ),
+        "face_view_pose_compliance": (
+            (
+                contract.get("face_card_evidence_capture_contract", {})
+                if isinstance(contract.get("face_card_evidence_capture_contract"), dict)
+                else {}
+            ).get("face_view_pose_compliance")
+            if applies
+            else None
+        ),
         "score_dimensions": [
             "same_person_readability",
             "distinctive_feature_readability",
@@ -918,8 +1005,10 @@ def _inspection_reference_limit(metadata: dict[str, Any]) -> int:
         and strategy == "serial_anchor_pack_root_reuse_v1"
         and stage in {
             "standard_front",
+            "left_front_25",
             "three_quarter",
             "profile",
+            "right_front_25",
             "reverse_three_quarter",
             "rear_head",
         }

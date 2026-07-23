@@ -167,6 +167,9 @@ def build_provider_generation_request(
             # the ordinary two-derivative pair.
             "professional_identity_reference_strategy": metadata.get("professional_identity_reference_strategy"),
             "professional_reference_stage": metadata.get("professional_reference_stage"),
+            "professional_anchor_capture_scope": metadata.get("professional_anchor_capture_scope"),
+            "professional_anchor_reference_assets": metadata.get("professional_anchor_reference_assets"),
+            "professional_anchor_initial_multi_source": metadata.get("professional_anchor_initial_multi_source"),
             "visual_auto_retry_active": metadata.get("visual_auto_retry_active", False),
             "visual_auto_retry_attempt": metadata.get("visual_auto_retry_attempt"),
             "retry_attempt": metadata.get("retry_attempt"),
@@ -2482,34 +2485,85 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "applies": True,
                     "reason_codes": ["professional_root_identity_anchor_reused"],
                 }
-            if not reference_sanitization.get("applies") and self._should_include_original_reference(
+            character_card_full_frame_framing = self._professional_character_card_full_frame_framing_source(
+                request,
+                asset,
+            )
+            professional_reference_stage = str(
+                (request.metadata if isinstance(request.metadata, dict) else {}).get(
+                    "professional_reference_stage"
+                )
+                or ""
+            ).strip()
+            if (character_card_full_frame_framing or not reference_sanitization.get("applies")) and self._should_include_original_reference(
+                request=request,
+                asset=asset,
                 truth_layers=truth_layers,
                 derivatives=derivatives,
                 reference_policy=reference_policy,
             ):
+                framing_path = str(asset.get("file_path") or "")
+                framing_derivative_kind = "character_card_full_frame_framing_reference"
+                original_constraint = (
+                    (
+                        "Use as an approved Character Card full-frame framing reference only: match the card-family camera distance, "
+                        "head size, head-top margin, upper-shoulders crop, shoulder-line white padding, plain white field and clean card boundaries; "
+                        + (
+                            "for the opposite 45-degree slot, keep this as scale/framing evidence only and generate an independent opposite-side view "
+                            "from the approved front identity rather than a horizontal flip or copied left-side face; "
+                            if professional_reference_stage == "reverse_three_quarter"
+                            else ""
+                        )
+                        +
+                        "do not copy it as a broader scene, wardrobe, lighting or beauty-template anchor."
+                    )
+                    if character_card_full_frame_framing
+                    else reference_constraint
+                )
                 assets.append(
                     {
                         "asset_id": asset["asset_id"],
+                        "source_asset_id": asset["asset_id"],
                         "role": _v1_reference_role(asset.get("role")),
-                        "priority": self._original_reference_priority(asset, truth_layers, index),
+                        "priority": (
+                            self._original_reference_priority(asset, truth_layers, index) + 16
+                            if character_card_full_frame_framing
+                            else self._original_reference_priority(asset, truth_layers, index)
+                        ),
                         "provider_input_mode": "reference_image",
-                        "storage_path": asset["file_path"],
+                        "storage_path": framing_path,
                         "filename": asset.get("filename"),
                         "mime_type": asset.get("mime_type"),
-                        "prompt_constraints": [reference_constraint],
+                        "prompt_constraints": [original_constraint],
                         "negative_constraints": closure_negative_rules[:8],
                         "strength": asset.get("strength"),
                         "use_policy": asset.get("use_policy"),
                         "source_type": asset.get("source_type"),
                         "reference_truth_layer": (
-                            "style_context_truth"
-                            if "style_context_truth" in truth_layers
-                            else truth_layers[0]
-                            if truth_layers
+                            "character_card_framing_truth"
+                            if character_card_full_frame_framing
+                            else (
+                                "style_context_truth"
+                                if "style_context_truth" in truth_layers
+                                else truth_layers[0]
+                                if truth_layers
+                                else None
+                            )
+                        ),
+                        "truth_layers": (
+                            _dedupe([*truth_layers, "character_card_framing_truth"])
+                            if character_card_full_frame_framing
+                            else truth_layers
+                        ),
+                        "provider_reference_derivative": False,
+                        "derivative_kind": framing_derivative_kind if character_card_full_frame_framing else None,
+                        "identity_evidence_scope": "card_framing" if character_card_full_frame_framing else None,
+                        "character_card_framing_mirrored": False,
+                        "character_card_framing_reference_mode": (
+                            "independent_original_card_framing"
+                            if character_card_full_frame_framing
                             else None
                         ),
-                        "truth_layers": truth_layers,
-                        "provider_reference_derivative": False,
                     }
                 )
             else:
@@ -2656,10 +2710,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _should_include_original_reference(
         self,
         *,
+        request: GenerationRequest | None = None,
+        asset: dict[str, Any] | None = None,
         truth_layers: list[str],
         derivatives: list[dict[str, Any]],
         reference_policy: dict[str, Any],
     ) -> bool:
+        if request is not None and asset is not None and self._professional_character_card_full_frame_framing_source(
+            request,
+            asset,
+        ):
+            return True
         if not derivatives or not reference_policy:
             return True
         if set(truth_layers) != {"portrait_identity_truth"}:
@@ -2832,6 +2893,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
         sources: dict[str, dict[str, Any]] = {}
         source_order: list[str] = []
         truth_source_ids: list[str] = []
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        professional_server_owned_identity_chain = metadata.get(
+            "professional_identity_reference_strategy"
+        ) in {
+            "serial_anchor_pack_root_reuse_v1",
+            "character_card_shared_identity_v1",
+        }
         for index, asset in enumerate(reference_assets):
             asset_id = str(asset.get("asset_id") or f"reference_{index + 1}")
             source_order.append(asset_id)
@@ -2846,7 +2914,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
             layers: list[str] = []
             priority_note = "style_or_context_reference"
             channel_policy = self._reference_channel_policy_for_asset(request, asset)
-            if is_nonhuman:
+            if professional_server_owned_identity_chain and (
+                self._is_uploaded_truth_source(asset) or is_selected
+            ):
+                layers = ["portrait_identity_truth"]
+                priority_note = "professional_server_owned_identity_anchor_truth"
+            elif is_nonhuman:
                 layers = ["nonhuman_subject_identity_truth"]
                 priority_note = (
                     "selected_nonhuman_identity_truth_source"
@@ -2984,11 +3057,33 @@ class ProductionImageGenerationProvider(GenerationProvider):
             # it does not author prompt text, infer a face, or carry the
             # supplementary image into later serial views.
             return ("portrait_identity_stage_flexible_feature_crop",)
-        if stage not in {"three_quarter", "profile", "reverse_three_quarter", "rear_head"}:
+        if stage not in {
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
+        }:
             return None
         if self._is_uploaded_truth_source(asset) and not asset.get("output_id"):
             return ("portrait_identity_pose_geometry_crop",)
         if self._is_selected_generated_source(asset):
+            if stage == "reverse_three_quarter":
+                source_id = str(asset.get("output_id") or asset.get("asset_id") or "").strip()
+                if self._professional_character_card_full_frame_framing_source(request, asset):
+                    return ("portrait_identity_crop",)
+                if source_id == self._professional_character_card_reverse_45_bridge_source_id(request):
+                    return ("portrait_identity_crop",)
+                # The opposite 45° card uses one pose-depth authority only:
+                # the approved 90° profile.  The right_front_25 bridge keeps
+                # same-side identity/asymmetry but must not compete as a pose
+                # target.  Keep the native 5-input budget: root pose + front
+                # feature + front full-frame framing + profile pose + right25
+                # feature.
+                return ("portrait_identity_pose_geometry_crop",)
+            if self._professional_character_card_full_frame_framing_source(request, asset):
+                return ("portrait_identity_crop",)
             return ("portrait_identity_crop", "portrait_identity_pose_geometry_crop")
         return None
 
@@ -3071,8 +3166,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
         stage = str(metadata.get("professional_reference_stage") or "").strip()
         if stage not in {
             "standard_front",
+            "left_front_25",
             "three_quarter",
             "profile",
+            "right_front_25",
             "reverse_three_quarter",
             "rear_head",
         }:
@@ -3096,6 +3193,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 record["derivative_kinds"].append(derivative_kind)
         expected: dict[str, list[str]] = {}
         raw_reference_assets = reference_assets or metadata.get("uploaded_assets") or []
+        reverse_45_bridge_source_id = self._professional_character_card_reverse_45_bridge_source_id(request)
+        framing_source_id = self._professional_character_card_framing_source_id(request)
         for raw_asset in raw_reference_assets:
             if not isinstance(raw_asset, dict):
                 continue
@@ -3105,12 +3204,39 @@ class ProductionImageGenerationProvider(GenerationProvider):
             raw_metadata = raw_asset.get("metadata") if isinstance(raw_asset.get("metadata"), dict) else {}
             generated = self._is_selected_generated_source({**raw_asset, **raw_metadata})
             expected[source_id] = (
-                ["feature_detail", "pose_geometry"]
+                ["feature_detail"]
+                if (
+                    generated
+                    and stage == "reverse_three_quarter"
+                    and source_id == reverse_45_bridge_source_id
+                )
+                else
+                ["pose_geometry"]
+                if (
+                    generated
+                    and stage == "reverse_three_quarter"
+                    and source_id != framing_source_id
+                )
+                else ["feature_detail", "pose_geometry"]
                 if generated
                 else ["pose_geometry"]
-                if stage in {"three_quarter", "profile", "reverse_three_quarter", "rear_head"}
+                if stage in {
+                    "left_front_25",
+                    "three_quarter",
+                    "profile",
+                    "right_front_25",
+                    "reverse_three_quarter",
+                    "rear_head",
+                }
                 else ["feature_detail", "head_geometry"]
             )
+        if framing_source_id and framing_source_id in expected and "feature_detail" in expected[framing_source_id]:
+            # Character Card later views need one approved full-frame card as
+            # a camera-distance/crop reference. It replaces the generated
+            # source's second pose crop, keeping the 2/3/5 native budget while
+            # making the card-family framing explicit for both Provider and
+            # MCP materialization.
+            expected[framing_source_id] = ["feature_detail", "card_framing"]
         missing: list[dict[str, Any]] = []
         for source_id, required_scopes in expected.items():
             present = set(sources.get(source_id, {}).get("scopes") or [])
@@ -3123,8 +3249,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "stage": stage,
             "reference_budget": {
                 "standard_front": 2,
-                "three_quarter": 3,
+                "left_front_25": 3,
+                "three_quarter": 5,
                 "profile": 5,
+                "right_front_25": 5,
                 "reverse_three_quarter": 5,
                 "rear_head": 5,
             }[stage],
@@ -3149,6 +3277,64 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return True
         asset_id = str(asset.get("asset_id") or "").lower()
         return bool(asset.get("output_id")) or asset_id.startswith("v3_output")
+
+    def _professional_character_card_full_frame_framing_source(
+        self,
+        request: GenerationRequest,
+        asset: dict[str, Any],
+    ) -> bool:
+        if not self._is_selected_generated_source(asset):
+            return False
+        framing_source_id = self._professional_character_card_framing_source_id(request)
+        if not framing_source_id:
+            return False
+        source_id = str(asset.get("output_id") or asset.get("asset_id") or "").strip()
+        return bool(source_id and source_id == framing_source_id)
+
+    def _professional_character_card_ordered_generated_reference_ids(self, request: GenerationRequest) -> list[str]:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
+            return []
+        if metadata.get("professional_anchor_capture_scope") != "character_card_face_identity":
+            return []
+        reference_assets = metadata.get("professional_anchor_reference_assets")
+        if not isinstance(reference_assets, list):
+            reference_assets = metadata.get("uploaded_assets") if isinstance(metadata.get("uploaded_assets"), list) else []
+        ordered_ids: list[str] = []
+        for item in reference_assets:
+            if not isinstance(item, dict):
+                continue
+            raw_metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            if not self._is_selected_generated_source({**item, **raw_metadata}):
+                continue
+            source_id = str(item.get("output_id") or item.get("asset_id") or "").strip()
+            if source_id and source_id not in ordered_ids:
+                ordered_ids.append(source_id)
+        return ordered_ids
+
+    def _professional_character_card_framing_source_id(self, request: GenerationRequest) -> str:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        stage = str(metadata.get("professional_reference_stage") or "").strip()
+        if stage not in {
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
+        }:
+            return ""
+        ordered_ids = self._professional_character_card_ordered_generated_reference_ids(request)
+        if not ordered_ids:
+            return ""
+        return ordered_ids[-1] if stage == "rear_head" else ordered_ids[0]
+
+    def _professional_character_card_reverse_45_bridge_source_id(self, request: GenerationRequest) -> str:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if str(metadata.get("professional_reference_stage") or "").strip() != "reverse_three_quarter":
+            return ""
+        ordered_ids = self._professional_character_card_ordered_generated_reference_ids(request)
+        return ordered_ids[-1] if len(ordered_ids) >= 3 else ""
 
     def _is_product_truth_reference(self, asset: dict[str, Any], *, allow_product_language: bool) -> bool:
         text = self._asset_reference_text(asset)

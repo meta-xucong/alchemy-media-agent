@@ -779,6 +779,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     )
     anchor_character_card_framing_valid = (
         anchor_capture_scope != "character_card_face_identity"
+        or anchor_view_target != "standard_front"
         or (
             anchor_framing_standard == "consistent_head_and_upper_shoulders_reference_crop"
             and anchor_crop_policy == "head_top_margin_full_face_neck_and_upper_shoulders_visible"
@@ -811,8 +812,10 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         and isinstance(anchor_view_requirement.get("frozen_binding"), dict)
         and anchor_view_target in {
             "standard_front",
+            "left_front_25",
             "three_quarter",
             "profile",
+            "right_front_25",
             "reverse_three_quarter",
             "rear_head",
         }
@@ -856,6 +859,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         if isinstance(slot_delta_requirement, dict)
         else ""
     )
+    slot_delta_target = context.get("character_card_slot_delta_target")
+    slot_delta_target = slot_delta_target if isinstance(slot_delta_target, dict) else {}
     slot_delta_required = bool(
         isinstance(slot_delta_requirement, dict)
         and slot_delta_requirement.get("required") is True
@@ -950,6 +955,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                     "aspect_ratio_standard": anchor_aspect_ratio_standard,
                 }
                 if anchor_capture_scope == "character_card_face_identity"
+                and anchor_view_target == "standard_front"
                 else {}
             ),
             **(
@@ -1034,6 +1040,19 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "safety_sensitive_repetition_policy avoid_repeating_stable_person_biology, the exact slot_delta_type, "
             "owner remote_v3_llm_brain, and status approved or rewritten."
         )
+        if slot_delta_type == "expression" and slot_delta_target.get("expression"):
+            expression = str(slot_delta_target.get("expression") or "").strip()
+            response_contract += (
+                f" The current expression slot is expression.{expression}. Align the visible facial affect with that slot "
+                "while keeping the approved front identity, card framing, white studio field and age-appropriate real-camera material. "
+                "Do not output a neutral-expression prompt for a non-neutral expression slot."
+            )
+        if slot_delta_type == "body_pose" and slot_delta_target.get("body_slot"):
+            body_slot = str(slot_delta_target.get("body_slot") or "").strip()
+            response_contract += (
+                f" The current Body Silhouette slot is body.{body_slot}. Align the whole-body orientation with that slot "
+                "while using the approved Face Identity references only for identity continuity."
+            )
     if decision_required:
         response_contract += (
             " Independently review the complete Brain-authored direction for every output before final approval. "
@@ -1114,33 +1133,69 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         if anchor_capture_scope == "character_card_face_identity":
             response_contract += (
                 " Also reconcile this as a Character Card Face Identity capture: the frozen view role is a face/head "
-                "angle only. Make facial identity, age-stage presence, camera-observed human materiality and the exact "
-                "angle legible in a clean photographic head-and-upper-shoulders reference frame with a fixed reusable "
-                "crop: head top margin, full face, neck and upper shoulders visible, never a big-head crop, half-body "
-                "crop, torso portrait or waist-up frame. Do not turn this face stage into "
-                "a full-body portrait, body-proportion measurement, height estimate or Body Silhouette pose contract. "
-                "For the standard_front slot, preserve the person's identity but do not inherit a slightly angled source "
-                "viewpoint as the final card pose; normalize it into a straight-on, symmetric, camera-facing front capture "
-                "with the face midline vertical, eyes level and nose centered. Keep the image commercially clean and "
-                "translucent: crisp photographic detail, clean white/high-key neutrality, no dirty cast, no smear, no "
-                "waxy smoothing, no beauty-filter haze, and real skin texture at the visible scale. "
-                "Treat the result as an evidence-grade standardized identity capture rather than a portfolio, fashion, "
-                "social-media, pageant or beauty portrait. For the standard_front slot, make the frontality observable "
-                "through balanced left/right ear and cheek visibility, level shoulders and a calm camera axis instead of "
-                "a flattering head turn. Use stage-appropriate relaxed attention and a natural neutral mouth unless the "
-                "current slot explicitly owns another expression; do not create a model-performance gaze or an adult-like "
-                "camera persona. Let small real facial asymmetry, fine hair edges and camera-observed skin variation remain "
-                "visible inside the clean result, with a plain white matte reference field rather than a glamour gradient or "
-                "beauty-studio vignette. Treat fair, cold-white or commercial-clean complexion language as neutral white "
-                "balance, clean exposure and natural fair skin in camera light; do not turn it into whitening, smoothing or "
-                "beauty-retouch language. Honor the frozen renderer size as the reference-card aspect ratio, for example a "
-                "vertical 2:3 card when the frozen size is 1024x1536, while keeping the same fixed head, neck and upper-shoulder crop. "
-                "Keep the Remote Brain as the sole author of the complete prompt and return capture_scope "
-                "character_card_face_identity plus the exact frozen framing fields in the typed receipt; for standard_front "
-                "also return the exact frozen front-pose-normalization fields. Always return the exact frozen aspect-ratio "
-                "standard field for this Face Identity scope. This is a semantic scope boundary, not a local "
-                "prompt recipe; body geometry is deferred to the Body Silhouette stage."
+                "angle only. Keep the result inside a clean photographic head-and-upper-shoulders reference-card frame, "
+                "never a full-body portrait, wardrobe, location, height-estimation or Body Silhouette pose contract. Keep the "
+                "Remote Brain as the sole author of the complete prompt; this is a semantic scope boundary, not a local "
+                "prompt recipe."
             )
+            if anchor_view_target == "standard_front":
+                response_contract += (
+                    " For the standard_front slot, preserve the person's identity but do not inherit a slightly angled "
+                    "source viewpoint as the final card pose; normalize it into a straight-on, symmetric, camera-facing "
+                    "front capture with the face midline vertical, eyes level and nose centered. Keep the image commercially "
+                    "clean and translucent: crisp photographic detail, clean white/high-key neutrality, no dirty cast, no "
+                    "smear, no waxy smoothing, no beauty-filter haze, and real skin texture at the visible scale. Treat the "
+                    "result as an evidence-grade standardized identity capture rather than a portfolio, fashion, social-media, "
+                    "pageant or beauty portrait. Make the frontality observable through balanced left/right ear and cheek "
+                    "visibility, level shoulders and a calm camera axis instead of a flattering head turn. Use stage-appropriate "
+                    "relaxed attention and a natural neutral mouth unless the current slot explicitly owns another expression. "
+                    "Let small real facial asymmetry, fine hair edges and camera-observed skin variation remain visible inside "
+                    "the clean vertical 2:3 card result, with a plain white matte reference field. Treat fair, cold-white or commercial-clean "
+                    "complexion language as neutral white balance, clean exposure and natural fair skin in camera light, not "
+                    "whitening or smoothing. Return capture_scope "
+                    "character_card_face_identity plus the exact frozen framing, aspect-ratio and front-pose-normalization "
+                    "fields in the typed receipt."
+                )
+            else:
+                response_contract += (
+                    " For non-front Character Card Face Identity slots, keep the serial evidence chain intact, but use "
+                    "approved prior winner evidence as the commercial reference-card continuity source and make only the "
+                    "frozen view-angle delta renderer-facing; change only the frozen view angle. Do not restate straight-on "
+                    "symmetry, stable person biology or standard_front symmetry as if this were another first identity-definition prompt. Use only a short positive "
+                    f"photographic phrase that makes the target view {anchor_view_target} unambiguous while the references "
+                    "carry identity, developmental stage, complexion balance and material finish. Keep one compact "
+                    "modeling-card framing rule: match the approved front/card-family vertical 2:3 head-neck-upper-shoulders crop; avoid close-up, "
+                    "half-body or torso framing. For visible turning slots, allow natural face-box changes caused by head rotation and "
+                    "judge continuity by the full card framing, not by matching another angle's face rectangle. Do not turn this into a checklist of eye, ear, nose or chin-line tokens; let the shared visual review judge the image. The typed "
+                    "professional_anchor_view_decision for non-front Character Card slots should stay compact: return "
+                    "the exact target_view_role, capture_presentation, capture_continuity and capture_scope; do not "
+                    "repeat the standard_front-only framing/aspect/front-axis receipt fields."
+                )
+                if anchor_view_target == "left_front_25":
+                    response_contract += (
+                        " For left_front_25, produce a shallow left-front transition card, visibly beyond straight front but clearly shallower than the final left-front 45 card."
+                    )
+                if anchor_view_target == "three_quarter":
+                    response_contract += (
+                        " For three_quarter, produce the left-front 45-family face card from the approved left_front_25 bridge; keep it deeper than the bridge but not a pure profile."
+                    )
+                if anchor_view_target == "right_front_25":
+                    response_contract += (
+                        " For right_front_25, produce a shallow right-front transition card, independently derived from the approved front identity rather than a mirrored left-side copy."
+                    )
+                if anchor_view_target == "reverse_three_quarter":
+                    response_contract += (
+                        " For reverse_three_quarter, preserve the historical slot key but interpret it as the opposite "
+                        "front-side 45-family face card: an independent right-front three-quarter modeling reference using the approved "
+                        "front identity, profile depth evidence and right_front_25 bridge. It is not a rear/back view and not a horizontal mirror of the left-front card."
+                    )
+                if anchor_view_target == "rear_head":
+                    response_contract += (
+                        " For rear_head, disambiguate the view as a back-of-head reference: "
+                        "rear head view only, no visible face and no visible eyes. Preserve the same head-and-upper-shoulders "
+                        "reference-card scale through the back-of-head hair outline, neck, upper shoulders and back collar line, "
+                        "not through face-area or full-face wording."
+                    )
         elif anchor_capture_presentation:
             response_contract += (
                 " Also reconcile the Professional neutral identity-evidence capture as one complete photographic "
@@ -1203,7 +1258,13 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "owns an age direction, resolve the whole-person developmental stage coherently rather than altering only "
             "facial scale or polish. For Character Card Face Identity captures, commercial cleanliness is part of the "
             "quality contract: the face-card pixels must read clean, bright, crisp and translucent without dirty noise, "
-            "blurred/smeared skin, waxy smoothing or plastic shine, while still preserving real camera-observed skin material."
+            "blurred/smeared skin, waxy smoothing or plastic shine, while still preserving real camera-observed skin material. "
+            "Do not make the subject rough, dull, tired, darker, or documentary-looking merely to prove realism. A refined "
+            "high-key commercial studio finish, cool-white or fair complexion through neutral white balance, and subtle "
+            "professional retouch are acceptable when distinctive identity relationships, developmental age and materiality "
+            "remain intact. For Character Card Face Identity, avoid a generic model archetype: keep the source person's "
+            "eye spacing, brow-eye relationship, nose-mouth relationship, cheek/lower-face direction, hairline/ear balance, "
+            "and age-stage facial presence before generic prettiness."
         )
     payload: dict[str, object] = {
         "task": "finalize_canonical_image_provider_prompts",

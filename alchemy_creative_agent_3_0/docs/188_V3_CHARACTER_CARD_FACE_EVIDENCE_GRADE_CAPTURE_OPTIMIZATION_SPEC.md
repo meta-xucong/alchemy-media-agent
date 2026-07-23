@@ -13,6 +13,10 @@ NO_VISION_GATE_RELAXATION
 This document extends Docs178, 180, 182, 183, 184, 185, 186 and 187. It
 supersedes only wording that could be read as telling Face Identity to produce
 a polished portfolio, fashion, social-media, pageant or beauty portrait.
+Doc189 supersedes any narrow reading of this document that treats commercial
+refinement itself as a failure: a clean, cool-white, commercially retouched
+studio finish is allowed when identity, developmental age, materiality,
+fixed crop and prompt-owned channels remain intact.
 
 The new interpretation is:
 

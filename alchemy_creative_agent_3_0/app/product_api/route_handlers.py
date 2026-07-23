@@ -341,7 +341,7 @@ class V3ProductRouteHandlers:
                 "available": state in {"winner_selected", "active"},
             }
             # Media URLs are safe, server-owned projections.  They expose no
-            # prompt, provider, source path, candidate history or review body.
+            # prompt, provider, source path or review body.
             # Empty/preparing/blocked/stale slots deliberately remain empty.
             if output_id and public["available"]:
                 encoded = quote(output_id, safe="")
@@ -353,41 +353,84 @@ class V3ProductRouteHandlers:
                 )
             return public
 
-        active_version = asset.active_version()
-        latest_version = asset.versions[-1] if asset.versions else None
-        latest_pack = getattr(latest_version, "anchor_pack", None) if latest_version is not None else None
-        latest_preparation = None
-        if latest_version is not None:
-            latest_preparation = {
-                "status": latest_version.lifecycle_status,
-                "version_id": latest_version.version_id,
-                "user_activation_confirmed": latest_version.activation_confirmed,
+        def _anchor_candidate_history_public(candidate: Any) -> dict[str, Any]:
+            output_id = str(getattr(candidate, "output_id", "") or "").strip()
+            public = {
+                "stage": str(getattr(candidate, "stage", "") or ""),
+                "view_role": str(getattr(candidate, "view_role", "") or ""),
+                "candidate_index": int(getattr(candidate, "candidate_index", 0) or 0),
+                "failure_code": str(getattr(candidate, "failure_code", "") or ""),
+            }
+            candidate_id = str(getattr(candidate, "candidate_id", "") or "").strip()
+            handoff_id = str(getattr(candidate, "mcp_handoff_id", "") or "").strip()
+            if output_id:
+                encoded = quote(output_id, safe="")
+                public.update(
+                    {
+                        "output_id": output_id,
+                        "preview_url": f"/api/v3/creative-agent/outputs/{encoded}/preview",
+                        "download_url": f"/api/v3/creative-agent/outputs/{encoded}/download",
+                    }
+                )
+            if candidate_id:
+                public["candidate_id"] = candidate_id
+            if handoff_id:
+                public["mcp_handoff_id"] = handoff_id
+            return public
+
+        def _preparation_public(version: Any, *, include_resume: bool = False) -> dict[str, Any]:
+            pack = getattr(version, "anchor_pack", None)
+            public = {
+                "status": version.lifecycle_status,
+                "version_id": version.version_id,
+                "user_activation_confirmed": version.activation_confirmed,
                 "anchor_views": [
                     {
                         "view_role": view.view_role,
                         "active": bool(view.active),
                     }
-                    for view in getattr(latest_pack, "anchor_views", [])
+                    for view in getattr(pack, "anchor_views", [])
                 ],
             }
-            generation_channel = str(getattr(latest_version, "generation_channel", "") or "")
-            handoff_ids = list(getattr(latest_version, "mcp_handoff_ids", []) or [])
+            candidate_history = [
+                _anchor_candidate_history_public(item)
+                for item in getattr(pack, "candidate_failures", [])
+            ]
+            if candidate_history:
+                public["candidate_history"] = candidate_history
+            generation_channel = str(getattr(version, "generation_channel", "") or "")
+            handoff_ids = list(getattr(version, "mcp_handoff_ids", []) or [])
             if generation_channel == "mcp":
-                latest_preparation["generation_channel"] = generation_channel
+                public["generation_channel"] = generation_channel
             if handoff_ids:
-                latest_preparation["mcp_handoff_ids"] = handoff_ids
-        if latest_preparation is not None:
-            failure_attempt_count = int(getattr(latest_version, "failure_attempt_count", 0) or 0)
-            resume_available = bool(
-                getattr(latest_pack, "status", "") == "failed"
-                and getattr(asset, "character_card", None) is not None
-                and getattr(asset.character_card, "resume_available", False)
-            )
-            if failure_attempt_count or resume_available:
-                latest_preparation["failure_attempt_count"] = failure_attempt_count
-                latest_preparation["resume_available"] = resume_available
-        if latest_preparation is not None and latest_version.failure_code:
-            latest_preparation["failure_code"] = latest_version.failure_code
+                public["mcp_handoff_ids"] = handoff_ids
+            failure_attempt_count = int(getattr(version, "failure_attempt_count", 0) or 0)
+            if failure_attempt_count:
+                public["failure_attempt_count"] = failure_attempt_count
+            failure_code = str(getattr(version, "failure_code", "") or "").strip()
+            if failure_code:
+                public["failure_code"] = failure_code
+            if include_resume:
+                resume_available = bool(
+                    getattr(pack, "status", "") == "failed"
+                    and getattr(asset, "character_card", None) is not None
+                    and getattr(asset.character_card, "resume_available", False)
+                )
+                if failure_attempt_count or resume_available:
+                    public["failure_attempt_count"] = failure_attempt_count
+                    public["resume_available"] = resume_available
+            return public
+
+        active_version = asset.active_version()
+        latest_version = asset.versions[-1] if asset.versions else None
+        latest_preparation = None
+        if latest_version is not None:
+            latest_preparation = _preparation_public(latest_version, include_resume=True)
+        preparation_history = [
+            _preparation_public(version)
+            for version in getattr(asset, "versions", [])
+            if getattr(version, "anchor_pack", None) is not None
+        ]
         card = getattr(asset, "character_card", None)
         card_public = None
         if card is not None:
@@ -428,6 +471,7 @@ class V3ProductRouteHandlers:
             "active_version_id": asset.active_version_id,
             "available_for_projects": bool(active_version and asset.lifecycle_status == "active"),
             "latest_preparation": latest_preparation,
+            "preparation_history": preparation_history,
             "character_card": card_public,
         }
 
@@ -508,7 +552,7 @@ class V3ProductRouteHandlers:
             }
             pending_mcp_handoff_ids = list(getattr(card, "pending_mcp_handoff_ids", []) or [])
             if pending_mcp_handoff_ids:
-                card_public["pending_mcp_handoff_ids"] = pending_mcp_handoff_ids
+                record["character_card"]["pending_mcp_handoff_ids"] = pending_mcp_handoff_ids
         return record
 
     def post_project_people_asset_prepare(

@@ -5274,7 +5274,7 @@ function v3VisualAssetPreparationFailureMessage(code) {
     return "正面标准参考没有通过共享检查。可以保留原图，调整源图后重新处理。";
   }
   if (normalized.includes("supplementary_view_failed")) {
-    return "侧前方或侧面标准参考没有完成共享检查。可以稍后重新处理。";
+    return "左前45°、右前45°或侧面90°标准参考没有完成共享检查。可以稍后重新处理。";
   }
   return "这次没有形成可启用的标准参考。原图已保存，可以重新处理。";
 }
@@ -5282,8 +5282,12 @@ function v3VisualAssetPreparationFailureMessage(code) {
 function v3VisualAssetViewLabel(role) {
   return {
     standard_front: "正面",
-    three_quarter: "侧前方",
-    profile: "侧面",
+    left_front_25: "左前25°",
+    three_quarter: "左前45°",
+    profile: "侧面90°",
+    right_front_25: "右前25°",
+    reverse_three_quarter: "右前45°",
+    rear_head: "后脑 / 背面",
   }[role] || "视角";
 }
 
@@ -5294,9 +5298,11 @@ const v3CharacterCardModuleMeta = {
     detail: "建立同一个人物在不同角度下仍然稳定的脸部与头部参考。",
     slots: [
       ["face.front", "正面"],
-      ["face.front_three_quarter", "侧前方"],
+      ["face.left_front_25", "左前25°"],
+      ["face.front_three_quarter", "左前45°"],
       ["face.profile", "侧面"],
-      ["face.reverse_three_quarter", "反侧前方"],
+      ["face.right_front_25", "右前25°"],
+      ["face.reverse_three_quarter", "右前45°"],
       ["face.rear_head", "后脑 / 背面"],
     ],
   },
@@ -5652,12 +5658,12 @@ function v3VisualAssetLifecycleLabel(asset) {
     };
   }
   if (status === "preparing") {
-    return { title: "正在建立标准建模", detail: "正在通过共享流程准备并检查三个视角，请不要重复提交。" };
+    return { title: "正在建立标准建模", detail: "正在通过共享流程准备并检查固定视角，请不要重复提交。" };
   }
   if (status === "archived") {
     return { title: "已归档", detail: "已归档的资产不会用于后续项目，历史任务不会受影响。" };
   }
-  return { title: "需要建立标准建模", detail: "源图已经保存。下一步会准备正面、侧前方和侧面参考。" };
+  return { title: "需要建立标准建模", detail: "源图已经保存。下一步会准备正面、左前45°、右前45°和侧面90°等固定参考。" };
 }
 
 function v3VisualAssetIsActive(asset) {

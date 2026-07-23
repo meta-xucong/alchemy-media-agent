@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -265,12 +266,52 @@ MANUAL_REVIEW_ISSUE_CODES = {
     "vision_provider_unavailable",
     "low_confidence_review",
     "provider_error",
+    "provider_timeout",
     "metadata_only_non_certifying",
     "hard_semantic_contract_unverified",
     "reference_evidence_unavailable",
     "feedback_or_similarity_not_verifiable",
     "human_naturalness_unverified",
 }
+
+
+def _vision_provider_timeout_seconds(metadata: dict[str, Any]) -> float:
+    raw = metadata.get("vision_inspection_timeout_seconds")
+    if raw is None and str(metadata.get("professional_anchor_capture_scope") or "") == "character_card_face_identity":
+        raw = os.getenv("V3_CHARACTER_CARD_VISION_TIMEOUT_SECONDS")
+    if raw is None:
+        raw = os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "90")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 90.0
+    return max(0.05, min(300.0, value))
+
+
+def _inspect_with_timeout(
+    provider: VisionInspectionProvider,
+    resolution: GeneratedOutputResolution,
+    *,
+    metadata: dict[str, Any],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            result["payload"] = provider.inspect(resolution, metadata=metadata)
+        except BaseException as exc:  # pragma: no cover - re-raised in caller thread
+            result["error"] = exc
+
+    thread = threading.Thread(target=runner, name="v3-vision-inspection", daemon=True)
+    thread.start()
+    thread.join(timeout=max(0.05, float(timeout_seconds)))
+    if thread.is_alive():
+        raise TimeoutError(f"Vision inspection timed out after {timeout_seconds:.2f} seconds.")
+    if "error" in result:
+        raise result["error"]
+    payload = result.get("payload")
+    return payload if isinstance(payload, dict) else {}
 
 
 class VisionOutputInspector:
@@ -396,8 +437,26 @@ class VisionOutputInspector:
         provider_error: VisionInspectionProviderError | None = None
         for attempt in range(1, max_attempts + 1):
             try:
-                payload = provider.inspect(resolution, metadata=metadata)
+                timeout_seconds = _vision_provider_timeout_seconds(metadata)
+                payload = _inspect_with_timeout(
+                    provider,
+                    resolution,
+                    metadata=metadata,
+                    timeout_seconds=timeout_seconds,
+                )
                 break
+            except TimeoutError as exc:
+                return self._manual_report(
+                    resolution,
+                    "provider_timeout",
+                    metadata,
+                    mode=mode,
+                    evidence_extra={
+                        "provider_error": str(exc)[:240],
+                        "provider_review_attempts": attempt,
+                        "provider_timeout_seconds": timeout_seconds,
+                    },
+                )
             except VisionInspectionProviderUnavailable:
                 return self._manual_report(resolution, "vision_provider_unavailable", metadata, mode=mode)
             except VisionInspectionProviderError as exc:

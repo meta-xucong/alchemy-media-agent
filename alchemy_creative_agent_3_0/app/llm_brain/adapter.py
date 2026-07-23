@@ -306,6 +306,14 @@ class V3LLMBrainAdapter:
             raise BrainProviderAdmissionDecisionMissing(
                 "Remote Brain did not return the required reference-led slot-delta receipt."
             )
+        stage_prompt_scope_violations = _character_card_stage_prompt_scope_violations(
+            prompts_raw,
+            request=request,
+        )
+        if stage_prompt_scope_violations:
+            raise BrainProviderAdmissionDecisionMissing(
+                "Remote Brain signed a Character Card stage prompt outside the requested slot target."
+            )
         anchor_prompt_scope_violations = _professional_anchor_prompt_scope_violations(
             prompts_raw,
             expected_requirement=professional_anchor_view_requirement,
@@ -513,6 +521,7 @@ class V3LLMBrainAdapter:
             requested_image_count=requested_count,
             requested_image_size=clean_text(metadata.get("requested_image_size"), 80) or None,
             reasoning_depth=_reasoning_depth(metadata),
+            transport_timeout_seconds=_brain_transport_timeout_seconds(metadata),
             metadata=request_metadata,
             capability_catalog=dict(capability_catalog or {}),
             pre_activation_capabilities=dict(pre_activation_capabilities or {}),
@@ -935,6 +944,17 @@ def _reasoning_depth(metadata: dict[str, Any]) -> str:
     return "balanced"
 
 
+def _brain_transport_timeout_seconds(metadata: dict[str, Any]) -> float | None:
+    raw = metadata.get("_brain_transport_timeout_seconds")
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(1.0, min(120.0, value))
+
+
 def _bounded_count(value: Any) -> int:
     try:
         return max(1, int(value or 2))
@@ -1258,8 +1278,10 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
         and isinstance(decision.get("frozen_binding"), dict)
         and target in {
             "standard_front",
+            "left_front_25",
             "three_quarter",
             "profile",
+            "right_front_25",
             "reverse_three_quarter",
             "rear_head",
         }
@@ -1291,7 +1313,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
             "A historical Professional anchor-view requirement cannot claim a v3 continuity decision."
         )
     if capture_scope == "character_card_face_identity":
-        if (
+        if target == "standard_front" and (
             framing_standard != "consistent_head_and_upper_shoulders_reference_crop"
             or crop_policy != "head_top_margin_full_face_neck_and_upper_shoulders_visible"
             or torso_scope != "upper_shoulders_only_no_half_body_or_big_head_crop"
@@ -1300,6 +1322,20 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
         ):
             raise BrainProfessionalAnchorViewDecisionMissing(
                 "The frozen Character Card Face Identity framing requirement is missing or contradictory."
+            )
+        if target != "standard_front" and any(
+            (
+                framing_standard,
+                crop_policy,
+                torso_scope,
+                aspect_ratio_standard,
+                source_viewpoint_inheritance,
+                front_pose_normalization,
+                face_axis_alignment,
+            )
+        ):
+            raise BrainProfessionalAnchorViewDecisionMissing(
+                "Non-front Character Card Face Identity receipts must not repeat standard-front framing fields."
             )
         if target == "standard_front" and (
             source_viewpoint_inheritance
@@ -1340,6 +1376,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
                 "aspect_ratio_standard": aspect_ratio_standard,
             }
             if capture_scope == "character_card_face_identity"
+            and target == "standard_front"
             else {}
         ),
         **(
@@ -1507,8 +1544,11 @@ def _professional_anchor_prompt_scope_violations(
         "head and shoulders",
         "head-and-upper-shoulders",
         "head and upper shoulders",
-        "upper-shoulder",
-        "upper shoulders",
+        "reference-card",
+        "reference card",
+        "modeling-card",
+        "modeling card",
+        "face card",
         "头部、颈部和上肩",
         "头部、颈部、上肩",
         "头部、完整面部、颈部和上肩",
@@ -1521,6 +1561,30 @@ def _professional_anchor_prompt_scope_violations(
         "上肩景别",
         "头颈上肩景别",
     )
+
+    def _forbidden_scope_match(text: str, term: str) -> bool:
+        start = text.find(term)
+        while start >= 0:
+            prefix = text[max(0, start - 36): start]
+            if any(
+                negation in prefix
+                for negation in (
+                    "not ",
+                    "not a ",
+                    "no ",
+                    "avoid ",
+                    "without ",
+                    "不是",
+                    "不要",
+                    "非",
+                    "无",
+                )
+            ):
+                start = text.find(term, start + len(term))
+                continue
+            return True
+        return False
+
     view_requirements = {
         "standard_front": (
             "front-facing",
@@ -1542,16 +1606,114 @@ def _professional_anchor_prompt_scope_violations(
             "面对镜头",
             "面向镜头",
         ),
-        "three_quarter": ("three-quarter", "3/4", "45-degree", "45 degree"),
-        "profile": ("profile", "side profile", "side view", "90-degree", "90 degree"),
-        "reverse_three_quarter": (
-            "reverse three-quarter",
-            "rear three-quarter",
-            "back three-quarter",
-            "back 3/4",
+        "three_quarter": (
+            "left-front",
+            "left front",
+            "front-left",
+            "front left",
+            "left-side 45",
+            "left 45",
+            "left-front 45",
+            "left front 45",
+            "left three-quarter",
+            "左前45",
+            "左侧前方",
         ),
-        "rear_head": ("rear head", "back of head", "rear view", "back view"),
+        "left_front_25": (
+            "left-front 25",
+            "left front 25",
+            "left-front transition",
+            "left front transition",
+            "shallow left-front",
+            "25-degree transition",
+            "25 degree transition",
+            "左前25",
+            "25度过渡",
+        ),
+        "profile": (
+            "profile",
+            "side profile",
+            "side view",
+            "90-degree",
+            "90 degree",
+            "90°",
+            "90度",
+            "侧面",
+            "正侧面",
+        ),
+        "reverse_three_quarter": (
+            "opposite three-quarter",
+            "opposite front-side",
+            "opposite front side",
+            "opposite-side 45",
+            "opposite 45",
+            "right-front",
+            "right front",
+            "front-right",
+            "front right",
+            "right-front 45",
+            "right front 45",
+            "right 45",
+            "right-side 45",
+            "反侧前方",
+            "另一侧45",
+            "另一侧前方",
+            "右前45",
+            "右侧前方",
+        ),
+        "right_front_25": (
+            "right-front 25",
+            "right front 25",
+            "opposite 25",
+            "right-front transition",
+            "right front transition",
+            "shallow right-front",
+            "opposite transition",
+            "25-degree transition",
+            "25 degree transition",
+            "右前25",
+            "反侧25",
+            "25度过渡",
+        ),
+        "rear_head": (
+            "rear head",
+            "back of head",
+            "rear view",
+            "back view",
+            "头部背面",
+            "后脑",
+            "背面",
+            "后视图",
+        ),
     }
+    rear_view_terms = (
+        "rear three-quarter",
+        "rear 3/4",
+        "back three-quarter",
+        "back 3/4",
+        "back of head dominant",
+        "rear of head dominant",
+        "back-of-head dominant",
+        "face turned mostly away",
+        "face mostly hidden",
+        "back-of-head reference",
+        "背后三分之四",
+        "背后四分之三",
+        "后脑为主",
+        "背向为主",
+        "脸部大部分背向",
+        "背面45度",
+        "头部背面",
+    )
+    front_gaze_terms = (
+        "looking at the camera",
+        "direct eye contact",
+        "front-facing eyes",
+        "面对镜头",
+        "直视镜头",
+        "正脸",
+        "正面",
+    )
     violations: list[str] = []
     for index, item in enumerate(candidate, start=1):
         prompt = str(item.get("prompt") or "") if isinstance(item, dict) else ""
@@ -1559,7 +1721,10 @@ def _professional_anchor_prompt_scope_violations(
         if not normalized:
             violations.append(f"output_{index}:empty_prompt")
             continue
-        leaked = next((term for term in forbidden_scope_terms if term in normalized), "")
+        leaked = next(
+            (term for term in forbidden_scope_terms if _forbidden_scope_match(normalized, term)),
+            "",
+        )
         if leaked:
             violations.append(f"output_{index}:scope_leak:{leaked}")
         if not any(term in normalized for term in required_framing_terms):
@@ -1567,6 +1732,20 @@ def _professional_anchor_prompt_scope_violations(
         required_view_terms = view_requirements.get(target, ())
         if required_view_terms and not any(term in normalized for term in required_view_terms):
             violations.append(f"output_{index}:view_not_materialized:{target}")
+        if target != "rear_head":
+            leaked_rear_view = next(
+                (term for term in rear_view_terms if _forbidden_scope_match(normalized, term)),
+                "",
+            )
+            if leaked_rear_view:
+                violations.append(f"output_{index}:view_conflict:{leaked_rear_view}")
+        if target == "rear_head":
+            leaked_front_gaze = next(
+                (term for term in front_gaze_terms if _forbidden_scope_match(normalized, term)),
+                "",
+            )
+            if leaked_front_gaze:
+                violations.append(f"output_{index}:rear_allows_front_face")
         if target == "standard_front" and (
             expected_requirement.get("front_pose_normalization")
             == "normalize_to_symmetric_camera_facing_front"
@@ -1605,28 +1784,6 @@ def _professional_anchor_prompt_scope_violations(
                 violations.append(f"output_{index}:front_pose_not_straight_on")
             if not any(term in normalized for term in alignment_terms):
                 violations.append(f"output_{index}:front_axis_not_normalized")
-        if (
-            expected_requirement.get("aspect_ratio_standard")
-            == "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
-        ):
-            aspect_terms = (
-                "vertical 2:3",
-                "2:3 vertical",
-                "2:3 card",
-                "1024x1536",
-                "1024×1536",
-                "portrait orientation",
-                "vertical card",
-                "竖版",
-                "竖向",
-                "纵向",
-                "2:3",
-                "2比3",
-                "二比三",
-                "1024 x 1536",
-            )
-            if not any(term in normalized for term in aspect_terms):
-                violations.append(f"output_{index}:aspect_ratio_not_materialized")
     return violations
 
 
@@ -1735,6 +1892,43 @@ def _matches_reference_led_slot_delta_receipts(
         and item["reference_led_slot_delta_decision"].get("status") in {"approved", "rewritten"}
         for index, item in enumerate(candidate, start=1)
     )
+
+
+def _character_card_stage_prompt_scope_violations(
+    candidate: Any,
+    *,
+    request: BrainRunRequest,
+) -> list[str]:
+    """Reject obvious Character Card stage/slot mismatches without recipes."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    target = context.get("character_card_slot_delta_target")
+    if not isinstance(target, dict):
+        return []
+    stage = str(target.get("stage") or "").strip()
+    slot_key = str(target.get("slot_key") or "").strip()
+    if stage != "expression_set" or not slot_key.startswith("expression."):
+        return []
+    expression = str(target.get("expression") or slot_key.split(".", 1)[1]).strip()
+    expression_terms = {
+        "smile": ("smile", "smiling", "happy", "joyful", "cheerful"),
+        "anger": ("angry", "anger", "annoyed", "serious", "stern", "upset", "frown"),
+        "sad": ("sad", "sadness", "pensive", "downcast", "melancholy", "somber", "unhappy"),
+    }.get(expression)
+    if not expression_terms:
+        return []
+    if not isinstance(candidate, list):
+        return []
+    violations: list[str] = []
+    for index, item in enumerate(candidate, start=1):
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip().lower()
+        if not prompt or not any(term in prompt for term in expression_terms):
+            violations.append(f"output_{index}:character_card_expression_slot_prompt_mismatch")
+    return violations
 
 
 def _has_remote_rendering_intent(candidate: Any) -> bool:

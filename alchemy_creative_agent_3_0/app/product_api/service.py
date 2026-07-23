@@ -847,7 +847,13 @@ class V3ProductApiService:
         trusted_professional_anchor_preparation: bool = False,
         trusted_professional_character_card: bool = False,
         professional_anchor_view_role: Literal[
-            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+            "standard_front",
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
         ] | None = None,
         professional_anchor_capture_scope: Literal["anchor_pack", "character_card_face_identity"] = "anchor_pack",
         professional_anchor_reference_evidence_ids: list[str] | None = None,
@@ -891,6 +897,7 @@ class V3ProductApiService:
             anchor_reference_assets = self._professional_anchor_reference_assets(
                 create_request,
                 view_role=professional_anchor_view_role,
+                capture_scope=professional_anchor_capture_scope,
                 reference_evidence_ids=professional_anchor_reference_evidence_ids,
             )
             create_request.metadata = {
@@ -1042,7 +1049,13 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest | dict[str, Any],
         *,
         view_role: Literal[
-            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+            "standard_front",
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
         ],
         reference_evidence_ids: list[str] | None = None,
         stage_plan_source_job_id: str | None = None,
@@ -1126,22 +1139,37 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest,
         *,
         view_role: Literal[
-            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+            "standard_front",
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
         ],
+        capture_scope: Literal["anchor_pack", "character_card_face_identity"] = "anchor_pack",
         reference_evidence_ids: list[str] | None,
     ) -> list[dict[str, Any]]:
         """Resolve one server-owned root/winner chain for shared execution."""
 
-        expected_count = (
-            None
-            if view_role == "standard_front"
-            else {
+        if view_role == "standard_front":
+            expected_count = None
+        elif capture_scope != "character_card_face_identity":
+            expected_count = {
                 "three_quarter": 2,
                 "profile": 3,
+            }.get(view_role)
+            if expected_count is None:
+                raise ValueError("professional_anchor_reference_chain_invalid")
+        else:
+            expected_count = {
+                "left_front_25": 2,
+                "three_quarter": 3,
+                "profile": 3,
+                "right_front_25": 3,
                 "reverse_three_quarter": 4,
-                "rear_head": 5,
+                "rear_head": 4,
             }[view_role]
-        )
         evidence_ids = [str(item or "").strip() for item in (reference_evidence_ids or [])]
         if not evidence_ids:
             evidence_ids = list(request.uploaded_asset_ids[:1])
@@ -1264,7 +1292,13 @@ class V3ProductApiService:
     def _professional_anchor_provider_evidence_ids(
         *,
         view_role: Literal[
-            "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+            "standard_front",
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
         ],
         evidence_ids: list[str],
     ) -> list[str]:
@@ -1278,7 +1312,7 @@ class V3ProductApiService:
         prompt recipe or a quality shortcut.
         """
 
-        if view_role in {"reverse_three_quarter", "rear_head"} and len(evidence_ids) > 3:
+        if view_role == "rear_head" and len(evidence_ids) > 3:
             return [evidence_ids[0], *evidence_ids[-2:]]
         return list(evidence_ids)
 
@@ -1593,9 +1627,12 @@ class V3ProductApiService:
         self._assert_photographer_profile_binding_immutable(record, generate_request)
         worker_claim = bool(generate_request.metadata.pop("_v3_background_worker_claim", False))
         background_attempt_id = str(generate_request.metadata.pop("_v3_background_generation_attempt_id", "") or "")
+        resume_finalizing_review = bool(generate_request.metadata.pop("_v3_resume_finalizing_review", False))
         if worker_claim and not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         if record.status == ProductJobStatusValue.FINALIZING:
+            if resume_finalizing_review:
+                return self._resume_finalizing_generation_review(record, generate_request, background_attempt_id)
             return self._status_from_record(record)
         if record.status == ProductJobStatusValue.GENERATING and not worker_claim:
             return self._status_from_record(record)
@@ -1755,6 +1792,66 @@ class V3ProductApiService:
                 # The separate projection is deliberately safe for Job/Project
                 # clients: it contains certification truth, never raw provider
                 # errors, candidates, assets, or other implementation details.
+                "review_certification": specialized_execution["review_certification"],
+            }
+            if specialized_execution["status"] != "complete":
+                missing = ", ".join(specialized_execution["missing_role_keys"])
+                noncertifying = ", ".join(specialized_execution.get("noncertifying_role_keys", []))
+                record.status = ProductJobStatusValue.BLOCKED
+                if noncertifying:
+                    record.warnings.append(
+                        "Specialized role delivery lacks certifying real-pixel review; final project delivery is withheld"
+                        f": roles {noncertifying}."
+                    )
+                else:
+                    record.warnings.append(
+                        "Specialized role execution is incomplete; final project delivery is withheld"
+                        + (f": missing {missing}." if missing else ".")
+                    )
+                record.balance_estimate = self._estimate_for_result(generation_result)
+                record.lifecycle = self._build_lifecycle(record)
+                self.job_store.save(record)
+                return self._status_from_record(record)
+        record.status = ProductJobStatusValue.GENERATED
+        record.balance_estimate = self._estimate_for_result(generation_result)
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return self._status_from_record(record)
+
+    def _resume_finalizing_generation_review(
+        self,
+        record: ProductJobRecord,
+        generate_request: GenerateJobRequest,
+        background_attempt_id: str = "",
+    ) -> ProductJobStatus:
+        generation_result = record.generation_result
+        if generation_result is None:
+            return self._status_from_record(record)
+        if isinstance(generation_result.metadata.get("post_generation_review_package"), dict):
+            return self._status_from_record(record)
+        provider_strategy = self._provider_strategy_for_generate(record, generate_request)
+        generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        if not self._background_generation_attempt_is_current(record, background_attempt_id):
+            return self._status_from_record(record)
+        self._clear_superseded_pre_generation_review_warning(record, generation_result)
+        generation_result = self._apply_text_pixel_delivery(record, generation_result)
+        if not self._background_generation_attempt_is_current(record, background_attempt_id):
+            return self._status_from_record(record)
+        generation_result = self._run_visual_auto_retries(
+            record=record,
+            generate_request=generate_request,
+            provider_strategy=provider_strategy,
+            generation_result=generation_result,
+        )
+        generation_result = self._apply_reviewed_delivery_preference(generation_result)
+        if not self._background_generation_attempt_is_current(record, background_attempt_id):
+            return self._status_from_record(record)
+        record.generation_result = generation_result
+        specialized_execution = self._specialized_role_execution_terminal_summary(record, generation_result)
+        if specialized_execution is not None:
+            record.request.metadata = {
+                **dict(record.request.metadata),
+                "specialized_execution_summary": specialized_execution,
                 "review_certification": specialized_execution["review_certification"],
             }
             if specialized_execution["status"] != "complete":
@@ -3604,7 +3701,10 @@ class V3ProductApiService:
                 continue
             prompts = brain.get("canonical_provider_prompts")
             audit = brain.get("audit") if isinstance(brain.get("audit"), dict) else {}
-            if isinstance(prompts, list) and prompts and bool(audit.get("remote_canonical_provider_prompts_received")):
+            prompt_set_received = bool(audit.get("remote_canonical_provider_prompts_received")) or bool(
+                audit.get("character_card_slot_delta_recovery_prompts_received")
+            )
+            if isinstance(prompts, list) and prompts and prompt_set_received:
                 return True
         return False
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from .contracts import IdentityMetricResult
 YUNET_FILENAME = "face_detection_yunet_2023mar.onnx"
 SFACE_FILENAME = "face_recognition_sface_2021dec.onnx"
 CALIBRATION_VERSION = "doc96_sface_cosine_v1"
+DEFAULT_OPERATION_TIMEOUT_SECONDS = 8.0
 
 
 class SFaceIdentityMetricProvider:
@@ -25,6 +27,7 @@ class SFaceIdentityMetricProvider:
         self._detector = None
         self._recognizer = None
         self._cv = None
+        self._native_lock = threading.Lock()
 
     def available(self) -> bool:
         if not _metric_enabled():
@@ -79,6 +82,8 @@ class SFaceIdentityMetricProvider:
             metric_confidence = max(0.0, min(1.0, detection_confidence * (0.9 if len(output_faces) == 1 else 0.78)))
             reference_view_hint = _view_hint(reference_face)
             output_view_hint = _view_hint(output_face)
+            reference_view_offset = _view_offset_ratio(reference_face)
+            output_view_offset = _view_offset_ratio(output_face)
             viewpoint_relationship = _viewpoint_relationship(reference_view_hint, output_view_hint)
             geometry_comparability = _geometry_comparability(reference_view_hint, output_view_hint)
             reason_codes: list[str] = []
@@ -110,9 +115,22 @@ class SFaceIdentityMetricProvider:
                     # change were same-view face-shape drift.
                     "selected_reference_view_hint": reference_view_hint,
                     "output_view_hint": output_view_hint,
+                    "selected_reference_view_offset_ratio": round(reference_view_offset, 4),
+                    "output_view_offset_ratio": round(output_view_offset, 4),
                     "viewpoint_relationship": viewpoint_relationship,
                     "geometry_comparability": geometry_comparability,
                     "ephemeral_embedding": True,
+                    "embedding_persisted": False,
+                },
+            )
+        except TimeoutError as exc:
+            return IdentityMetricResult(
+                status="unavailable",
+                reason_codes=["identity_metric_timeout"],
+                metadata={
+                    "provider": self.provider_name,
+                    "calibration_version": CALIBRATION_VERSION,
+                    "error": str(exc)[:180],
                     "embedding_persisted": False,
                 },
             )
@@ -151,12 +169,23 @@ class SFaceIdentityMetricProvider:
             return {
                 "status": "ready",
                 "view_hint": _view_hint(face),
+                "face_view_offset_ratio": round(_view_offset_ratio(face), 4),
+                "face_view_magnitude": round(abs(_view_offset_ratio(face)), 4),
                 "framing_hint": _framing_hint(face, image.shape),
                 "face_detection_confidence": round(float(face[-1]), 4),
                 "face_box": _normalized_face_box(face, image.shape),
                 "face_count": len(faces),
                 "provider": self.provider_name,
                 "embedding_computed": False,
+                "embedding_persisted": False,
+            }
+        except TimeoutError as exc:
+            return {
+                "status": "timeout",
+                "view_hint": "unknown",
+                "framing_hint": "unknown",
+                "reason_codes": ["identity_metric_timeout"],
+                "error": str(exc)[:180],
                 "embedding_persisted": False,
             }
         except Exception as exc:
@@ -201,10 +230,13 @@ class SFaceIdentityMetricProvider:
         return image
 
     def _detect(self, image) -> list[Any]:
-        height, width = image.shape[:2]
-        self._detector.setInputSize((width, height))
-        _status, faces = self._detector.detect(image)
-        return [] if faces is None else [face for face in faces]
+        def run() -> list[Any]:
+            height, width = image.shape[:2]
+            self._detector.setInputSize((width, height))
+            _status, faces = self._detector.detect(image)
+            return [] if faces is None else [face for face in faces]
+
+        return self._call_native_with_timeout("face_detection", run)
 
     def _select_face(self, faces: list[Any]):
         return self._select_face_with_index(faces)[1]
@@ -216,10 +248,34 @@ class SFaceIdentityMetricProvider:
         )
 
     def _feature(self, image, face):
-        return self._recognizer.feature(self._recognizer.alignCrop(image, face))
+        return self._call_native_with_timeout(
+            "face_feature",
+            lambda: self._recognizer.feature(self._recognizer.alignCrop(image, face)),
+        )
 
     def _model_path(self, filename: str) -> Path:
         return self.model_dir / filename
+
+    def _call_native_with_timeout(self, operation: str, callable_obj):
+        timeout_seconds = _identity_metric_operation_timeout_seconds()
+        result: dict[str, Any] = {}
+        error: dict[str, BaseException] = {}
+
+        def worker() -> None:
+            try:
+                with self._native_lock:
+                    result["value"] = callable_obj()
+            except BaseException as exc:  # pragma: no cover - re-raised in caller thread
+                error["exception"] = exc
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        thread.join(timeout_seconds)
+        if thread.is_alive():
+            raise TimeoutError(f"{operation}_timeout_after_{timeout_seconds:.2f}s")
+        if "exception" in error:
+            raise error["exception"]
+        return result.get("value")
 
 
 def create_default_identity_metric_provider() -> SFaceIdentityMetricProvider:
@@ -287,17 +343,21 @@ def _normalized_face_box(face: Any, shape: Any) -> list[float]:
 
 
 def _view_hint(face: Any) -> str:
-    right_eye = (float(face[4]), float(face[5]))
-    left_eye = (float(face[6]), float(face[7]))
-    nose = (float(face[8]), float(face[9]))
-    eye_mid = _midpoint(right_eye, left_eye)
-    eye_distance = max(1e-6, _distance(right_eye, left_eye))
-    offset = (nose[0] - eye_mid[0]) / eye_distance
+    offset = _view_offset_ratio(face)
     magnitude = abs(offset)
     if magnitude <= 0.12:
         return "front"
     side = "right" if offset > 0 else "left"
     return f"{side}_three_quarter" if magnitude <= 0.32 else f"{side}_profile"
+
+
+def _view_offset_ratio(face: Any) -> float:
+    right_eye = (float(face[4]), float(face[5]))
+    left_eye = (float(face[6]), float(face[7]))
+    nose = (float(face[8]), float(face[9]))
+    eye_mid = _midpoint(right_eye, left_eye)
+    eye_distance = max(1e-6, _distance(right_eye, left_eye))
+    return (nose[0] - eye_mid[0]) / eye_distance
 
 
 def _viewpoint_relationship(reference_view: str, output_view: str) -> str:
@@ -367,3 +427,24 @@ def _metric_enabled() -> bool:
         return bool(settings.v3_identity_metric_enabled)
     except Exception:
         return os.getenv("V3_IDENTITY_METRIC_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
+
+def _identity_metric_operation_timeout_seconds() -> float:
+    configured: Any = None
+    for key in ("V3_CHARACTER_CARD_IDENTITY_METRIC_TIMEOUT_SECONDS", "V3_IDENTITY_METRIC_OPERATION_TIMEOUT_SECONDS"):
+        value = os.getenv(key)
+        if value not in {None, ""}:
+            configured = value
+            break
+    if configured is None:
+        try:
+            from app.config import settings
+
+            configured = getattr(settings, "v3_identity_metric_operation_timeout_seconds", None)
+        except Exception:
+            configured = None
+    try:
+        timeout = float(configured) if configured is not None else DEFAULT_OPERATION_TIMEOUT_SECONDS
+    except (TypeError, ValueError):
+        timeout = DEFAULT_OPERATION_TIMEOUT_SECONDS
+    return max(0.05, min(60.0, timeout))

@@ -43,9 +43,9 @@ place on refresh.
 Five fixed slots:
 
 - 正面；
-- 左/右侧前方；
-- 侧面；
-- 反侧前方；
+- 左前45°；
+- 右前45°；
+- 侧面90°；
 - 后脑/背面。
 
 The neutral expression slot is an alias of the active front face and does not

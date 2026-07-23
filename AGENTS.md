@@ -1,5 +1,39 @@
 # AlchemyOS Agent Development Principles
 
+## Theory-First Correction Principle
+
+When a development task produces behavior that differs from the expected
+outcome, or when a test or real validation run fails, do not immediately stack
+local patches and rerun the same test loop.
+
+Before changing code, first write down the correction model:
+
+1. State the intended behavior and the exact observed mismatch.
+2. Identify the responsible layer: product contract, shared runtime, Brain
+   prompt contract, Provider/MCP outlet, Vision/review gate, persistence,
+   public projection, or frontend interaction.
+3. Check whether existing rules conflict, duplicate each other, or apply at the
+   wrong layer.
+4. Decide which rule remains authoritative, which rule is only supporting
+   evidence, and which older wording must be superseded or narrowed.
+5. Define the minimal complete fix that should pass in theory before touching
+   code.
+6. Only then implement, add or update regression tests, run the relevant test
+   set, and proceed to real validation.
+
+Do not treat repeated prompt tweaks, threshold nudges, or one-off validation
+scripts as a substitute for the theory pass.  If the failure suggests the
+current direction is wrong, pause implementation and re-evaluate the model
+instead of continuing the patch/test spiral.
+
+Short form:
+
+```text
+Think the system through first.
+Then patch once at the right layer.
+Then test.
+```
+
 ## V3 Foundation vs Specialized Template Principle
 
 When developing Alchemy Media Agent V3, always follow:

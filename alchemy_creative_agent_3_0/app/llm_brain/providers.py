@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 import json
 import os
+import threading
 import time
 from typing import Any
 
@@ -166,7 +167,7 @@ class V3LLMBrainProvider:
             runner = self._run_openai_compatible
         try:
             return _with_transport_receipt(
-                runner(request),
+                self._run_remote_attempt(runner, request, json_recovery=False),
                 attempts=1,
                 json_recovery_attempted=False,
                 execution_budget=self.execution_budget_receipt(),
@@ -174,7 +175,7 @@ class V3LLMBrainProvider:
         except BrainInvalidJsonResponse:
             try:
                 return _with_transport_receipt(
-                    runner(request, json_recovery=True),
+                    self._run_remote_attempt(runner, request, json_recovery=True),
                     attempts=2,
                     json_recovery_attempted=True,
                     execution_budget=self.execution_budget_receipt(),
@@ -188,6 +189,16 @@ class V3LLMBrainProvider:
                     "remote brain returned malformed JSON after one bounded serialization recovery"
                 ) from recovery_error
 
+    def _run_remote_attempt(self, runner: Any, request: BrainRunRequest, *, json_recovery: bool) -> dict[str, Any]:
+        timeout_seconds = self._effective_timeout_seconds(request)
+        try:
+            return _call_with_timeout(
+                lambda: runner(request, json_recovery=json_recovery),
+                timeout_seconds=timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise BrainProviderError(str(exc)) from exc
+
     def _ensure_budget_available(self) -> None:
         budget = _ACTIVE_EXECUTION_BUDGET.get()
         if budget is not None and budget.remaining_seconds() <= 0.0:
@@ -195,12 +206,14 @@ class V3LLMBrainProvider:
                 "remote Brain logical execution budget exhausted before a complete prompt could be signed"
             )
 
-    def _effective_timeout_seconds(self) -> float:
+    def _effective_timeout_seconds(self, request: BrainRunRequest) -> float:
         """Use the remaining shared deadline, never a stale full call timeout."""
 
         budget = _ACTIVE_EXECUTION_BUDGET.get()
+        request_cap = _request_timeout_cap_seconds(request)
+        base_timeout = min(self.timeout, request_cap) if request_cap is not None else self.timeout
         if budget is None:
-            return self.timeout
+            return base_timeout
         remaining = budget.remaining_seconds()
         if remaining <= 0.0:
             raise BrainExecutionBudgetExceeded(
@@ -208,7 +221,7 @@ class V3LLMBrainProvider:
             )
         # A non-zero timeout is required by all supported transports.  The
         # value is still bounded by the remaining logical preparation budget.
-        return max(0.1, min(self.timeout, remaining))
+        return max(0.1, min(base_timeout, remaining))
 
     def _run_openai_compatible(
         self,
@@ -247,7 +260,7 @@ class V3LLMBrainProvider:
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
                 text={"format": {"type": "json_object"}},
-                timeout=self._effective_timeout_seconds(),
+                timeout=self._effective_timeout_seconds(request),
                 max_output_tokens=self.max_tokens,
             )
             text = getattr(response, "output_text", None) or ""
@@ -295,7 +308,7 @@ class V3LLMBrainProvider:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0,
-                timeout=self._effective_timeout_seconds(),
+                timeout=self._effective_timeout_seconds(request),
                 max_tokens=self.max_tokens,
             )
             choices = getattr(response, "choices", None) or []
@@ -332,7 +345,7 @@ class V3LLMBrainProvider:
                 "system": _system_prompt(request.stage, json_recovery=json_recovery),
                 "messages": [{"role": "user", "content": build_remote_payload(request)}],
             }
-            with httpx.Client(timeout=self._effective_timeout_seconds()) as client:
+            with httpx.Client(timeout=self._effective_timeout_seconds(request)) as client:
                 response = client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
             response_json = response.json()
@@ -398,6 +411,39 @@ def _settings_value(name: str) -> Any:
         return getattr(settings, name, None)
     except Exception:
         return None
+
+
+def _request_timeout_cap_seconds(request: BrainRunRequest) -> float | None:
+    raw = getattr(request, "transport_timeout_seconds", None)
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(1.0, min(120.0, value))
+
+
+def _call_with_timeout(callable_obj: Any, *, timeout_seconds: float) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+
+    def runner() -> None:
+        try:
+            result["value"] = callable_obj()
+        except BaseException as exc:  # pragma: no cover - re-raised in caller thread
+            result["error"] = exc
+
+    thread = threading.Thread(target=runner, name="v3-llm-brain-provider", daemon=True)
+    thread.start()
+    thread.join(timeout=max(0.1, float(timeout_seconds)))
+    if thread.is_alive():
+        raise TimeoutError(f"remote Brain provider timed out after {timeout_seconds:.2f} seconds")
+    if "error" in result:
+        raise result["error"]
+    value = result.get("value")
+    if not isinstance(value, dict):
+        raise BrainProviderError("remote brain provider returned an invalid payload")
+    return value
 
 
 def _openai_client_kwargs(*, api_key: str, base_url: str | None, **extra: Any) -> dict[str, Any]:

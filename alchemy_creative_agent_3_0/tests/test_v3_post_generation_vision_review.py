@@ -2,6 +2,7 @@ import base64
 from io import BytesIO
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
@@ -152,6 +153,31 @@ class _StaticVisionProvider:
         self.calls.append(resolution)
         self.metadata_calls.append(dict(metadata or {}))
         return dict(self.payload)
+
+
+class _HangingVisionProvider:
+    provider_name = "hanging_test_vision"
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def inspect(self, resolution: GeneratedOutputResolution, *, metadata: dict | None = None) -> dict:
+        time.sleep(0.3)
+        return {"status": "pass", "confidence": 0.95, "issue_codes": []}
+
+
+def test_vision_provider_outer_timeout_returns_fail_closed_manual_report(tmp_path) -> None:
+    report = VisionOutputInspector(vision_provider=_HangingVisionProvider()).inspect(
+        _ready_resolution(tmp_path),
+        metadata={
+            "enable_real_vision_inspection": True,
+            "vision_inspection_timeout_seconds": 0.05,
+        },
+    )
+
+    assert report.status == "manual_review"
+    assert any(issue.get("code") == "provider_timeout" for issue in report.detected_issues)
+    assert report.evidence["provider_timeout_seconds"] == 0.05
 
 
 class _SequencedVisionProvider(_StaticVisionProvider):

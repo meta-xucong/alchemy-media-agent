@@ -153,7 +153,13 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
         "v3_professional_anchor_view_decision_v3",
     ]
     target_view_role: Literal[
-        "standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head"
+        "standard_front",
+        "left_front_25",
+        "three_quarter",
+        "profile",
+        "right_front_25",
+        "reverse_three_quarter",
+        "rear_head",
     ]
     # Required and exact for v2/v3 by the adapter. Optional here keeps
     # historical v1 receipts readable without weakening new preparation.
@@ -313,6 +319,9 @@ class BrainRunRequest(V3BaseModel):
     requested_image_count: int = Field(default=2, ge=1)
     requested_image_size: str | None = None
     reasoning_depth: str = "balanced"
+    # Transport-only guardrail. Payload builders deliberately do not include
+    # this field, so it cannot become creative evidence or renderer context.
+    transport_timeout_seconds: float | None = Field(default=None, ge=1.0, le=120.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
     capability_catalog: dict[str, Any] = Field(default_factory=dict)
     pre_activation_capabilities: dict[str, Any] = Field(default_factory=dict)

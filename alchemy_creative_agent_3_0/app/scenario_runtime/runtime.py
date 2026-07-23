@@ -10,7 +10,7 @@ from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.pipeline import run_creative_planning, run_generation_loop
 from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
-from ..llm_brain import BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
+from ..llm_brain import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
 from ..llm_brain.providers import (
     BrainDevelopmentalPresenceDecisionMissing,
     BrainExecutionBudgetExceeded,
@@ -32,6 +32,7 @@ from ..shared_capabilities import (
 )
 from ..shared_capabilities.apparel_construction import extract_apparel_construction_facts
 from ..shared_capabilities.activation import (
+    ActivationEvidence,
     CapabilityActivationError,
     CapabilityActivationIntent,
     CapabilityActivationPlan,
@@ -41,11 +42,15 @@ from ..shared_capabilities.activation import (
     CapabilityExecutionEnvelope,
     ComposedVisualContribution,
     NormalizedV3JobIntent,
+    ReferenceChannelOwnershipIntent,
+    RenderingIntent,
     ResolvedConstraintEntry,
     ResolvedConstraintLedger,
+    RequestedCapability,
     TemplateDeliverable,
     TemplateDeliverablePlan,
     TemplateCapabilityPolicy,
+    VisualSubjectEntity,
     VisualCapabilityManifest,
     VisualCapabilityRegistry,
     VisualTaskProfile,
@@ -400,6 +405,10 @@ class ScenarioRuntime:
             pre_activation_capabilities=self._capability_metadata(pre_activation_run),
             template_capability_policy=policy,
         )
+        brain_result = self._recover_character_card_slot_delta_brain_result(
+            request,
+            brain_result,
+        )
         self._require_remote_creative_brain(request, policy, brain_result)
         brain_result = self._bind_professional_task_profile(
             brain_result,
@@ -576,8 +585,10 @@ class ScenarioRuntime:
             )
             if stage not in {
                 "standard_front",
+                "left_front_25",
                 "three_quarter",
                 "profile",
+                "right_front_25",
                 "reverse_three_quarter",
                 "rear_head",
             }:
@@ -773,6 +784,8 @@ class ScenarioRuntime:
         real_image_job = self._requires_remote_creative_brain_for_real_images(request)
         if not policy.requires_remote_creative_brain and not real_image_job:
             return
+        if self._uses_character_card_slot_delta_recovery(brain_result):
+            return
         if not brain_result.llm_used or brain_result.fallback_used:
             raise self._remote_creative_brain_block(
                 "remote_brain_unauthorized"
@@ -839,6 +852,471 @@ class ScenarioRuntime:
                 brain_result,
             )
 
+    def _recover_character_card_slot_delta_brain_result(
+        self,
+        request: ScenarioRuntimeRequest,
+        brain_result: BrainRunResult,
+        *,
+        force_after_finalizer_failure: bool = False,
+        recovery_reason: str = "remote_brain_timeout_or_unavailable",
+    ) -> BrainRunResult:
+        """Bounded prompt recovery for reference-led Character Card face slots.
+
+        This is not a general local creative fallback.  It is allowed only for
+        later Face Identity card slots whose identity, age, crop and reference
+        chain are already frozen by Professional metadata.  The recovered text
+        is a minimal slot delta; generated pixels still go through the same
+        Provider/MCP output store and shared Vision gates.
+        """
+
+        if (
+            not force_after_finalizer_failure
+            and (brain_result.llm_used or not brain_result.fallback_used)
+        ):
+            return brain_result
+        if not force_after_finalizer_failure and str(brain_result.provider or "") != "remote_required":
+            return brain_result
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if metadata.get("professional_anchor_pack_preparation") is not True:
+            return brain_result
+        planning_metadata = metadata.get("professional_planning_metadata")
+        if not isinstance(planning_metadata, dict):
+            return brain_result
+        if planning_metadata.get("professional_anchor_capture_scope") != "character_card_face_identity":
+            return brain_result
+        view_role = str(planning_metadata.get("professional_reference_stage") or "").strip()
+        if view_role not in {
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
+        }:
+            return brain_result
+        reference_assets = metadata.get("professional_anchor_reference_assets")
+        if not isinstance(reference_assets, list):
+            return brain_result
+        source_asset_ids = self._character_card_slot_delta_recovery_source_asset_ids(
+            request,
+            reference_assets,
+        )
+        if len(source_asset_ids) < 2:
+            return brain_result
+        expected = self._requested_image_count_for_brain(request)
+        if expected != 1:
+            return brain_result
+
+        prompt = self._character_card_slot_delta_recovery_prompt(view_role)
+        project_id = str(metadata.get("project_id") or "").strip() or None
+        profile_id = stable_id(
+            "character_card_slot_delta_recovery_profile",
+            project_id or "",
+            view_role,
+            *source_asset_ids,
+        )
+        evidence_id = stable_id("character_card_slot_delta_recovery_evidence", profile_id)
+        task_profile = VisualTaskProfile(
+            profile_id=profile_id,
+            project_id=project_id,
+            job_id=stable_id("character_card_slot_delta_recovery_job", profile_id),
+            template_id="general_template",
+            scenario_id="general_creative",
+            rendering_intent=RenderingIntent(
+                rendering_mode="photoreal",
+                stylization_scope="none",
+                decision_owner="remote_brain",
+                evidence_ids=[evidence_id],
+            ),
+            developmental_age_intent="current_request_assigns_stage",
+            reference_channel_ownership_intent=ReferenceChannelOwnershipIntent(
+                applicability="applicable",
+                decision_owner="remote_brain",
+                reference_owned_channels=["identity_geometry"],
+                current_request_owned_channels=[
+                    "natural_complexion_direction",
+                    "hair_direction",
+                    "wardrobe_structure",
+                    "lighting_color",
+                    "scene_background",
+                    "camera_composition",
+                    "mood_art_direction",
+                    "style_finish",
+                ],
+                evidence_ids=[evidence_id],
+                confidence=0.9,
+            ),
+            subject_entities=[
+                VisualSubjectEntity(
+                    entity_id="character_card_face_identity_subject",
+                    entity_type="person",
+                    role="face_identity_subject",
+                    source_asset_ids=source_asset_ids,
+                    visible_in_target=view_role != "rear_head",
+                    preservation_level="strong",
+                    confidence=0.95,
+                    attributes={
+                        "capture_scope": "character_card_face_identity",
+                        "target_view_role": view_role,
+                    },
+                )
+            ],
+            allowed_changes=["view_angle_only"],
+            visual_intent_tags=[
+                "character_card_face_identity",
+                "reference_led_slot_delta",
+                view_role,
+            ],
+            commercial_goal_tags=["commercial_clean_reference_card"],
+            confidence=0.92,
+            evidence=[
+                ActivationEvidence(
+                    evidence_id=evidence_id,
+                    evidence_type="professional_character_card_reference_chain",
+                    source="bounded_slot_delta_recovery",
+                    value={"target_view_role": view_role, "reference_count": len(source_asset_ids)},
+                    confidence=0.95,
+                )
+            ],
+        )
+        activation_intent = CapabilityActivationIntent(
+            intent_id=stable_id("character_card_slot_delta_recovery_capabilities", profile_id),
+            task_profile_id=profile_id,
+            requested_capabilities=[
+                RequestedCapability(
+                    capability_id="portrait_identity",
+                    activation_mode="required",
+                    reason_codes=["approved_character_card_reference_identity"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="strong",
+                    confidence=0.95,
+                ),
+                RequestedCapability(
+                    capability_id="reference_channel_policy",
+                    activation_mode="required",
+                    reason_codes=["reference_led_slot_delta_identity_boundary"],
+                    evidence_ids=[evidence_id],
+                    confidence=0.95,
+                ),
+                RequestedCapability(
+                    capability_id="human_realism",
+                    activation_mode="required",
+                    reason_codes=["real_person_character_card_capture"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="strict",
+                    confidence=0.9,
+                ),
+                RequestedCapability(
+                    capability_id="commercial_quality",
+                    activation_mode="recommended",
+                    reason_codes=["commercial_clean_reference_card"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="commercial_strict",
+                    confidence=0.85,
+                ),
+            ],
+            confidence=0.92,
+        )
+        requested_size = str(metadata.get("requested_image_size") or "1024x1536").strip() or "1024x1536"
+        canonical = BrainCanonicalProviderPrompt(
+            output_index=1,
+            prompt=prompt,
+            review_status="approved",
+            semantic_preflight_status="approved",
+            human_naturalness_decision={
+                "contract_version": "v3_human_naturalness_decision_v1",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            reference_channel_ownership_decision={
+                "contract_version": "v3_reference_channel_ownership_decision_v1",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            human_developmental_age_decision={
+                "contract_version": "v3_human_developmental_age_decision_v2",
+                "age_fidelity": "follow_explicit_prompt",
+                "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+                "developmental_age_coherence": "whole_person_requested_stage",
+                "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            human_developmental_presence_decision={
+                "contract_version": "v3_human_developmental_presence_decision_v2",
+                "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                "resolution_mode": "holistic_person_and_situation_resolution",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            professional_anchor_view_decision={
+                "contract_version": "v3_professional_anchor_view_decision_v3",
+                "target_view_role": view_role,
+                "capture_presentation": "neutral_identity_evidence_capture",
+                "capture_continuity": "preserve_approved_prior_capture",
+                "capture_scope": "character_card_face_identity",
+                "framing_standard": "consistent_head_and_upper_shoulders_reference_crop",
+                "crop_policy": "head_top_margin_full_face_neck_and_upper_shoulders_visible",
+                "torso_scope": "upper_shoulders_only_no_half_body_or_big_head_crop",
+                "aspect_ratio_standard": "honor_frozen_rendering_size_as_reference_card_aspect_ratio",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            provider_admission_decision={
+                "contract_version": "v3_provider_admission_decision_v1",
+                "provider_admission_status": "admitted",
+                "prompt_language_mode": "concise_positive_renderer_direction",
+                "safety_sensitive_prompt_normalized": "applied",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            reference_led_slot_delta_decision={
+                "contract_version": "v3_reference_led_slot_delta_decision_v1",
+                "materialization_mode": "reference_led_slot_delta",
+                "stable_identity_source": "approved_character_card_reference",
+                "prompt_scope": "slot_delta_only",
+                "safety_sensitive_repetition_policy": "avoid_repeating_stable_person_biology",
+                "slot_delta_type": "view_angle",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+        )
+        return brain_result.model_copy(
+            update={
+                "canonical_provider_prompts": [canonical],
+                "image_set_plan": brain_result.image_set_plan.model_copy(
+                    update={
+                        "set_goal": f"character_card_{view_role}_slot_delta_recovery",
+                        "image_count": 1,
+                        "size": requested_size,
+                        "shot_plan": [prompt],
+                        "composition_rules": [
+                            "head, neck, and upper shoulders reference-card crop",
+                            "plain white studio background",
+                            "single complete image frame",
+                        ],
+                        "quality_bar": [
+                            "commercial clean image",
+                            "same-person likeness from approved references",
+                            "requested face-view angle must be visible",
+                        ],
+                    }
+                ),
+                "prompt_guidance": brain_result.prompt_guidance.model_copy(
+                    update={
+                        "optimized_direction": prompt,
+                        "visual_direction_addons": [prompt],
+                        "layout_notes": ["vertical 2:3 reference-card crop"],
+                        "hard_constraints": [
+                            "Use approved references for identity; change only the requested face-view angle.",
+                            "No props, branding, scene marketing, half-body crop, or big-head crop.",
+                        ],
+                        "negative_prompt_addons": [
+                            "avoid adult styling",
+                            "avoid plastic skin",
+                            "avoid dirty noise or smeared texture",
+                        ],
+                        "consistency_strategy": "reference_led_character_card_slot_delta_recovery",
+                    }
+                ),
+                "visual_task_profile": task_profile,
+                "capability_activation_intent": activation_intent,
+                "prompt_review": brain_result.prompt_review.model_copy(
+                    update={
+                        "status": "passed",
+                        "checks": [
+                            "character_card_reference_chain_present",
+                            "slot_delta_prompt_recovered_after_remote_timeout",
+                        ],
+                    }
+                ),
+                "warnings": [
+                    *list(brain_result.warnings or []),
+                    "Remote Brain timed out; Character Card used bounded reference-led slot-delta recovery.",
+                ],
+                "audit": {
+                    **dict(brain_result.audit or {}),
+                    "character_card_slot_delta_recovery_used": True,
+                    "character_card_slot_delta_recovery_prompts_received": True,
+                    "character_card_slot_delta_recovery_reason": recovery_reason,
+                    "character_card_slot_delta_recovery_scope": "professional_character_card_face_identity_non_front",
+                    "character_card_slot_delta_recovery_view_role": view_role,
+                    "remote_canonical_provider_prompts_received": False,
+                    "human_realism_semantic_preflight_signed": True,
+                    "human_realism_natural_presence_resigned": True,
+                    "human_realism_natural_presence_decision_signed": True,
+                    "reference_channel_ownership_decision_required": True,
+                    "reference_channel_ownership_decision_signed": True,
+                    "professional_anchor_view_decision_required": True,
+                    "professional_anchor_view_decision_signed": True,
+                    "provider_admission_decision_required": True,
+                    "provider_admission_decision_signed": True,
+                    "reference_led_slot_delta_decision_signed": True,
+                    "canonical_provider_prompt_stage": "character_card_slot_delta_recovery",
+                    "canonical_provider_prompt_stages": ["character_card_slot_delta_recovery"],
+                },
+            }
+        )
+
+    @staticmethod
+    def _character_card_slot_delta_recovery_source_asset_ids(
+        request: ScenarioRuntimeRequest,
+        reference_assets: list[Any],
+    ) -> list[str]:
+        """Return the complete root-plus-winner evidence chain for recovery.
+
+        ``professional_anchor_reference_assets`` intentionally contains only
+        reviewed output winners; the original uploaded root remains on
+        ``uploaded_asset_ids``.  The first 45° continuation therefore has one
+        winner asset but two authoritative evidence sources: root + front.
+        """
+
+        source_ids: list[str] = []
+        for asset_id in getattr(request, "uploaded_asset_ids", []) or []:
+            value = str(asset_id or "").strip()
+            if value and value not in source_ids:
+                source_ids.append(value)
+        for item in reference_assets:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("asset_id") or item.get("output_id") or "").strip()
+            if value and value not in source_ids:
+                source_ids.append(value)
+        return source_ids
+
+    @staticmethod
+    def _uses_character_card_slot_delta_recovery(brain_result: BrainRunResult) -> bool:
+        audit = brain_result.audit if isinstance(brain_result.audit, dict) else {}
+        return bool(audit.get("character_card_slot_delta_recovery_prompts_received"))
+
+    @staticmethod
+    def _character_card_slot_delta_transport_timeout_seconds(
+        request: ScenarioRuntimeRequest,
+    ) -> float | None:
+        """Shorten remote Brain waits only for reference-led non-front face slots.
+
+        These slots are deliberately weak delta prompts: approved references and
+        typed receipts already own identity, age, crop and material continuity.
+        A slow remote finalizer should therefore yield quickly to the bounded
+        slot-delta recovery path instead of stranding the browser.
+        """
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if metadata.get("professional_anchor_pack_preparation") is not True:
+            return None
+        planning_metadata = metadata.get("professional_planning_metadata")
+        if not isinstance(planning_metadata, dict):
+            return None
+        if planning_metadata.get("professional_anchor_capture_scope") != "character_card_face_identity":
+            return None
+        view_role = str(planning_metadata.get("professional_reference_stage") or "").strip()
+        if view_role not in {
+            "left_front_25",
+            "three_quarter",
+            "profile",
+            "right_front_25",
+            "reverse_three_quarter",
+            "rear_head",
+        }:
+            return None
+        try:
+            raw = float(os.getenv("V3_CHARACTER_CARD_SLOT_DELTA_BRAIN_TIMEOUT_SECONDS", "28"))
+        except ValueError:
+            raw = 28.0
+        return max(8.0, min(60.0, raw))
+
+    @staticmethod
+    def _character_card_slot_delta_recovery_prompt(view_role: str) -> str:
+        visible_face_framing = (
+            "Match the approved front card framing: same camera distance, head size, head-top margin, "
+            "upper-shoulders cutoff, collar line and white padding. Keep a vertical 2:3 head-neck-upper-shoulders "
+            "modeling card with the full head and hair boundary cleanly inside the frame; do not turn it into a "
+            "tight face close-up, half-body crop or torso portrait. "
+        )
+        profile_framing = (
+            "Match the approved front card framing: same camera distance, head size, head-top margin, "
+            "upper-shoulders cutoff, collar line and white padding. Keep a vertical 2:3 head-neck-upper-shoulders "
+            "modeling card with the full head and hair boundary cleanly inside the frame; do not turn it into a "
+            "tight face close-up, half-body crop or torso portrait. "
+        )
+        rear_framing = (
+            "Match the approved card framing: same camera distance, head size, head-top margin, "
+            "upper-shoulders cutoff, back collar line and white padding. Keep a vertical 2:3 head-neck-upper-shoulders "
+            "modeling card with the full back-of-head hair boundary cleanly inside the frame; do not turn it into a "
+            "tight head close-up, half-body crop or torso portrait. "
+        )
+        prompts = {
+            "left_front_25": (
+                "Left-front shallow three-quarter transition portrait of the same child from the approved front card, "
+                "head, neck and upper shoulders only, a natural left-front transition target around 25 to 30 degrees toward image-right, "
+                "visually shallower than the later 45-degree card while clearly no longer a straight front portrait. "
+                "Show measurable but moderate face depth, with the facial centerline slightly off-center, "
+                "the nose bridge and gaze angled toward image-right, the near cheek slightly broader, the far cheek subtly narrower, "
+                "the far eye slightly narrower than the near eye while both eyes remain close in size, and the left ear clearly beginning to show on image-left. "
+                "Turn the head itself, not only the eyes; the gaze should follow the nose direction rather than looking straight into the camera. "
+                "The result should sit between a straight front portrait and a full 45-degree view; allow natural renderer variation as long as it remains a usable transition bridge. "
+                f"{visible_face_framing}"
+                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, "
+                "cool fair real skin texture, commercial clean finish, natural calm expression. "
+                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+            ),
+            "three_quarter": (
+                "Left-front three-quarter view portrait of the same child from the approved references, "
+                "Reference role map: approved front card for identity and framing; approved left_front_25 only as the same-side identity bridge, not the target yaw. "
+                "Create an independent left-front 40-to-50-degree card toward image-right, visibly deeper than the 25-degree bridge but not a pure profile. "
+                "Turn head, neck and shoulders together; show the left ear on image-left, nose and gaze angled toward image-right, front-side facial depth, and a smaller far eye while both eyes remain visible. "
+                "Do not reuse the bridge pose with only the pupils looking sideways; avoid straight-front, side-profile, rear/back, or opposite-side results. "
+                f"{visible_face_framing}"
+                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, "
+                "cool fair real skin texture, commercial clean finish, natural calm expression. "
+                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+            ),
+            "profile": (
+                "Strict 90-degree side profile portrait of the same child from the approved references, "
+                "head, neck and upper shoulders only, face turned fully to the left with one eye contour, "
+                "nose bridge, lips and ear visible in side profile. Plain white studio background, bright even lighting, "
+                f"{profile_framing}"
+                "vertical 2:3 reference-card crop, cool fair real skin texture, commercial clean finish, natural calm expression. "
+                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+            ),
+            "right_front_25": (
+                "Right-front shallow three-quarter transition portrait of the same child from the approved front card, "
+                "head, neck and upper shoulders only, a natural right-front transition target around 25 to 30 degrees toward image-left, "
+                "visually shallower than the later 45-degree card while clearly no longer a straight front portrait. "
+                "Show measurable but moderate face depth, with the facial centerline slightly off-center toward image-left, "
+                "the nose bridge and gaze angled toward image-left, the near cheek slightly broader, the far cheek subtly narrower, "
+                "the far eye slightly narrower than the near eye while both eyes remain close in size, and the right/opposite ear clearly beginning to show on image-right. "
+                "Turn the head itself, not only the eyes; the gaze should follow the nose direction rather than looking straight into the camera. "
+                "The result should sit between a straight front portrait and a full 45-degree view; allow natural renderer variation as long as it remains a usable transition bridge. "
+                "This is an independent right-side transition view, not a horizontal flip or copied left-side face; preserve natural left/right facial and hair asymmetry. "
+                f"{visible_face_framing}"
+                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, "
+                "cool fair real skin texture, commercial clean finish, natural calm expression. "
+                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+            ),
+            "reverse_three_quarter": (
+                "Right-front three-quarter opposite front-side 45-degree view portrait of the same child from the approved references, "
+                "Reference role map: input 1 is root identity geometry, input 2 is front identity detail, input 3 is front full-frame card framing, input 4 is the approved 90-degree side profile and is the primary pose-depth guide, input 5 is the approved right-front 25-degree transition and is only the right-side identity/framing bridge. "
+                "Let input 4 control pose depth and input 5 preserve same-side identity/asymmetry; do not let the 25-degree bridge become the target yaw. "
+                "Create an independent right-front 40-to-50-degree card toward image-left, closer to the profile depth than to the bridge but not a pure profile. "
+                "Turn head, neck and shoulders together; show the right ear on image-right, nose and gaze angled toward image-left, front-side facial depth, and a smaller far eye while both eyes remain visible. "
+                "Do not mirror or copy the left-front card; avoid straight-front, side-profile, rear/back, or same-side results. "
+                f"{visible_face_framing}"
+                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, "
+                "commercial clean finish with natural hair and skin texture. "
+                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+            ),
+            "rear_head": (
+                "Back-of-head reference portrait of the same child from the approved references, "
+                "head, neck and upper shoulders only, rear view of the head, no visible face and no eyes visible, "
+                "natural hair shape and child head proportions. "
+                f"{rear_framing}"
+                "Plain white studio background, bright even lighting, vertical 2:3 reference-card crop, commercial clean finish. "
+                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+            ),
+        }
+        return prompts.get(view_role, prompts["three_quarter"])
+
     def _finalize_canonical_provider_prompts(
         self,
         request: ScenarioRuntimeRequest,
@@ -875,7 +1353,10 @@ class ScenarioRuntime:
             brain_result.audit.get("frozen_execution_reuse")
             and not retry_active
             and [item.output_index for item in existing] == list(range(1, expected + 1))
-            and bool(brain_result.audit.get("remote_canonical_provider_prompts_received"))
+            and (
+                bool(brain_result.audit.get("remote_canonical_provider_prompts_received"))
+                or self._uses_character_card_slot_delta_recovery(brain_result)
+            )
         ):
             return brain_result
 
@@ -943,6 +1424,7 @@ class ScenarioRuntime:
             requested_image_count=expected,
             requested_image_size=ledger.provider_projection.get("requested_image_size"),
             reasoning_depth="balanced",
+            transport_timeout_seconds=self._character_card_slot_delta_transport_timeout_seconds(request),
             metadata={"canonical_prompt_context": canonical_prompt_context},
             template_capability_policy=policy,
         )
@@ -1007,6 +1489,14 @@ class ScenarioRuntime:
                         "professional_anchor_view_contract_recovery_succeeded": True,
                     }
             if failure is not None:
+                recovered_brain_result = self._recover_character_card_slot_delta_brain_result(
+                    request,
+                    brain_result,
+                    force_after_finalizer_failure=True,
+                    recovery_reason="remote_final_prompt_anchor_view_contract_invalid",
+                )
+                if self._uses_character_card_slot_delta_recovery(recovered_brain_result):
+                    return recovered_brain_result
                 # Do not expose an upstream body or turn it into local text.
                 # The activation boundary records the public-safe reason only.
                 blocked_brain_result = brain_result
@@ -1071,6 +1561,7 @@ class ScenarioRuntime:
             == "v3_professional_anchor_view_decision_v3"
             and anchor_decision.get("capture_continuity")
             == "preserve_approved_prior_capture"
+            and anchor_decision.get("capture_scope") != "character_card_face_identity"
         )
         if serial_capture_resign_required:
             capture_context = self._human_naturalness_resigning_context(canonical_prompt_context)
@@ -1415,8 +1906,10 @@ class ScenarioRuntime:
                 ).strip() or "anchor_pack"
                 if target_view_role not in {
                     "standard_front",
+                    "left_front_25",
                     "three_quarter",
                     "profile",
+                    "right_front_25",
                     "reverse_three_quarter",
                     "rear_head",
                 }:
@@ -1445,7 +1938,10 @@ class ScenarioRuntime:
                     quality_contract = quality_contract if isinstance(quality_contract, dict) else {}
                     framing_contract = quality_contract.get("face_identity_framing_contract")
                     framing_contract = framing_contract if isinstance(framing_contract, dict) else {}
-                    if framing_contract.get("required") is True:
+                    if (
+                        target_view_role == "standard_front"
+                        and framing_contract.get("required") is True
+                    ):
                         context["professional_anchor_view_decision"].update(
                             {
                                 "framing_standard": framing_contract.get("framing_standard"),
@@ -1461,7 +1957,10 @@ class ScenarioRuntime:
                         if isinstance(evidence_capture_contract, dict)
                         else {}
                     )
-                    if evidence_capture_contract.get("required") is True:
+                    if (
+                        target_view_role == "standard_front"
+                        and evidence_capture_contract.get("required") is True
+                    ):
                         context["professional_anchor_view_decision"].update(
                             {
                                 "aspect_ratio_standard": evidence_capture_contract.get(
@@ -1502,6 +2001,23 @@ class ScenarioRuntime:
             elif request.metadata.get("professional_character_card_preparation") is True:
                 if not isinstance(context.get("reference_led_slot_delta_decision"), dict):
                     raise CapabilityActivationError("reference_led_slot_delta_contract_missing")
+                stage = str(request.metadata.get("professional_character_card_stage") or "").strip()
+                slot_key = str(request.metadata.get("professional_character_card_slot") or "").strip()
+                if stage and slot_key:
+                    context["character_card_slot_delta_target"] = {
+                        "stage": stage,
+                        "slot_key": slot_key,
+                        **(
+                            {"expression": slot_key.split(".", 1)[1]}
+                            if stage == "expression_set" and slot_key.startswith("expression.")
+                            else {}
+                        ),
+                        **(
+                            {"body_slot": slot_key.split(".", 1)[1]}
+                            if stage == "body_silhouette" and slot_key.startswith("body.")
+                            else {}
+                        ),
+                    }
                 context["provider_admission_decision"] = {
                     "required": True,
                     "contract_version": "v3_provider_admission_decision_v1",
@@ -1649,9 +2165,12 @@ class ScenarioRuntime:
             return
         expected = self._requested_image_count_for_brain(request)
         prompts = list(brain_result.canonical_provider_prompts or [])
+        prompt_set_received = bool(brain_result.audit.get("remote_canonical_provider_prompts_received")) or (
+            self._uses_character_card_slot_delta_recovery(brain_result)
+        )
         if (
             [item.output_index for item in prompts] != list(range(1, expected + 1))
-            or not bool(brain_result.audit.get("remote_canonical_provider_prompts_received"))
+            or not prompt_set_received
         ):
             raise self._remote_creative_brain_block(
                 "remote_creative_brain_prompt_signoff_invalid",
@@ -3678,16 +4197,29 @@ class ScenarioRuntime:
             and professional_strategy == "serial_anchor_pack_root_reuse_v1"
             and professional_stage in {
                 "standard_front",
+                "left_front_25",
                 "three_quarter",
                 "profile",
+                "right_front_25",
                 "reverse_three_quarter",
                 "rear_head",
             }
         ):
-            return {
+            frozen = {
                 "professional_identity_reference_strategy": professional_strategy,
                 "professional_reference_stage": professional_stage,
             }
+            capture_scope = str(plan_metadata.get("professional_anchor_capture_scope") or "").strip()
+            if capture_scope:
+                frozen["professional_anchor_capture_scope"] = capture_scope
+            reference_assets = plan_metadata.get("professional_anchor_reference_assets")
+            if isinstance(reference_assets, list):
+                frozen["professional_anchor_reference_assets"] = reference_assets
+            if plan_metadata.get("professional_anchor_initial_multi_source") is not None:
+                frozen["professional_anchor_initial_multi_source"] = plan_metadata.get(
+                    "professional_anchor_initial_multi_source"
+                )
+            return frozen
         return {}
 
     def _run_shared_capabilities(self, request: ScenarioRuntimeRequest, resolution) -> CapabilityRunResult | None:
@@ -3792,6 +4324,9 @@ class ScenarioRuntime:
             if not isinstance(safe_binding, dict):
                 raise CapabilityActivationError("visual_asset_library_brain_binding_missing")
             base_metadata["visual_asset_library_binding"] = dict(safe_binding)
+        slot_delta_timeout = self._character_card_slot_delta_transport_timeout_seconds(request)
+        if slot_delta_timeout is not None:
+            base_metadata["_brain_transport_timeout_seconds"] = slot_delta_timeout
         uploaded_assets = [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)]
         brain_request = self.llm_brain_adapter.build_request(
             user_input=request.user_input,

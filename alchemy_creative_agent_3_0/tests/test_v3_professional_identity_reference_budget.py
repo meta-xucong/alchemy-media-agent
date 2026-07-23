@@ -8,6 +8,7 @@ import pytest
 from alchemy_creative_agent_3_0.app.generation_router import (
     GenerationRequest,
     ProductionImageGenerationProvider,
+    build_provider_generation_request,
 )
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
@@ -27,7 +28,13 @@ def _image(path: Path, color: tuple[int, int, int]) -> Path:
     return path
 
 
-def _request(root: Path, front: Path, three_quarter: Path) -> GenerationRequest:
+def _request(
+    root: Path,
+    front: Path,
+    three_quarter: Path,
+    *,
+    third_output_id: str = "three_quarter_output",
+) -> GenerationRequest:
     policy = [
         {
             "source_asset_id": source_id,
@@ -35,7 +42,7 @@ def _request(root: Path, front: Path, three_quarter: Path) -> GenerationRequest:
             "identity_geometry": "hard",
             "prompt_owned_channels": ["hair_direction", "lighting_color", "scene_background"],
         }
-        for source_id in ("root_asset", "front_output", "three_quarter_output")
+        for source_id in ("root_asset", "front_output", third_output_id)
     ]
     asset = AssetSpec(
         asset_id="profile_asset",
@@ -61,7 +68,7 @@ def _request(root: Path, front: Path, three_quarter: Path) -> GenerationRequest:
             },
         },
     ]
-    for asset_id, path in (("front_output", front), ("three_quarter_output", three_quarter)):
+    for asset_id, path in (("front_output", front), (third_output_id, three_quarter)):
         uploaded_assets.append(
             {
                 "asset_id": asset_id,
@@ -112,6 +119,46 @@ def _request(root: Path, front: Path, three_quarter: Path) -> GenerationRequest:
             },
         },
     )
+
+
+def _reverse_45_request(root: Path, front: Path, profile: Path, right25: Path) -> GenerationRequest:
+    request = _request(root, front, right25, third_output_id="right25_output")
+    uploaded_assets = list(request.metadata["uploaded_assets"])
+    uploaded_assets.append(
+        {
+            "asset_id": "profile_output",
+            "output_id": "profile_output",
+            "file_path": str(profile),
+            "source_type": "selected_output",
+            "role": "face_reference",
+            "use_policy": "identity",
+            "strength": "hard",
+            "provider_input_required": True,
+            "source_integrity_id": "sha256:profile_output",
+            "metadata": {"canonical_output_binding": True},
+        }
+    )
+    by_id = {str(item.get("asset_id")): item for item in uploaded_assets}
+    ordered_assets = [
+        by_id["root_asset"],
+        by_id["front_output"],
+        by_id["profile_output"],
+        by_id["right25_output"],
+    ]
+    metadata = dict(request.metadata)
+    metadata.update(
+        {
+            "professional_reference_stage": "reverse_three_quarter",
+            "professional_anchor_capture_scope": "character_card_face_identity",
+            "uploaded_assets": ordered_assets,
+            "professional_anchor_reference_assets": [
+                by_id["front_output"],
+                by_id["profile_output"],
+                by_id["right25_output"],
+            ],
+        }
+    )
+    return request.model_copy(update={"metadata": metadata})
 
 
 def test_root_identity_derivative_can_be_reused_without_second_ai_generation(tmp_path: Path) -> None:
@@ -167,6 +214,91 @@ def test_professional_profile_uses_five_references_root_once_and_winners_twice(t
     legacy_references = legacy_provider._reference_assets(legacy_request)
     legacy_plan = legacy_provider._asset_plan(legacy_request, legacy_references)  # noqa: SLF001
     assert legacy_plan["provider_input_plan"]["reference_image_count"] == 6
+
+
+def test_doc190_character_card_reverse_45_uses_original_front_as_framing_reference_without_mirror(
+    tmp_path: Path,
+) -> None:
+    request = _reverse_45_request(
+        _image(tmp_path / "root.png", (220, 180, 160)),
+        _image(tmp_path / "front.png", (220, 181, 160)),
+        _image(tmp_path / "profile.png", (220, 183, 160)),
+        _image(tmp_path / "right25.png", (220, 182, 160)),
+    )
+    provider = ProductionImageGenerationProvider()
+    references = provider._reference_assets(request)  # noqa: SLF001
+    plan = provider._asset_plan(request, references)  # noqa: SLF001
+
+    assert plan["provider_input_plan"]["reference_image_count"] == 5
+    assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
+        ("root_asset", "portrait_identity_pose_geometry_crop"),
+        ("front_output", "portrait_identity_crop"),
+        ("front_output", "character_card_full_frame_framing_reference"),
+        ("profile_output", "portrait_identity_pose_geometry_crop"),
+        ("right25_output", "portrait_identity_crop"),
+    ]
+    evidence = plan["provider_input_plan"]["view_conditioned_evidence"]
+    assert evidence["ready"] is True
+    assert evidence["required_source_scopes"] == {
+        "root_asset": ["pose_geometry"],
+        "front_output": ["feature_detail", "card_framing"],
+        "profile_output": ["pose_geometry"],
+        "right25_output": ["feature_detail"],
+    }
+    framing_reference = plan["assets"][2]
+    assert framing_reference["provider_reference_derivative"] is False
+    assert framing_reference["identity_evidence_scope"] == "card_framing"
+    assert framing_reference["reference_truth_layer"] == "character_card_framing_truth"
+    assert framing_reference["character_card_framing_mirrored"] is False
+    assert framing_reference["character_card_framing_reference_mode"] == "independent_original_card_framing"
+    assert framing_reference["asset_id"] == "front_output"
+    assert framing_reference["storage_path"] == str(request.metadata["uploaded_assets"][1]["file_path"])
+    assert "horizontal flip" in framing_reference["prompt_constraints"][0]
+
+
+def test_doc190_provider_request_projection_preserves_character_card_reference_scope(
+    tmp_path: Path,
+) -> None:
+    request = _reverse_45_request(
+        _image(tmp_path / "root.png", (220, 180, 160)),
+        _image(tmp_path / "front.png", (220, 181, 160)),
+        _image(tmp_path / "profile.png", (220, 183, 160)),
+        _image(tmp_path / "right25.png", (220, 182, 160)),
+    )
+    generation_metadata = dict(request.generation_plan.metadata or {})
+    generation_metadata.update(
+        {
+            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+            "professional_reference_stage": "reverse_three_quarter",
+            "professional_anchor_capture_scope": "character_card_face_identity",
+            "professional_anchor_reference_assets": list(
+                request.metadata["professional_anchor_reference_assets"]
+            ),
+            "uploaded_assets": list(request.metadata["uploaded_assets"]),
+            "visual_cluster": request.metadata["visual_cluster"],
+        }
+    )
+    projected = build_provider_generation_request(
+        asset_spec=request.asset_spec,
+        layout_plan=request.layout_plan,
+        prompt_compilation=request.prompt_compilation,
+        condition_plan=request.condition_plan,
+        generation_plan=request.generation_plan.model_copy(update={"metadata": generation_metadata}),
+        job_id="job_doc190_projection",
+    )
+    provider = ProductionImageGenerationProvider()
+    references = provider._reference_assets(projected)  # noqa: SLF001
+    plan = provider._asset_plan(projected, references)  # noqa: SLF001
+
+    assert projected.metadata["professional_anchor_capture_scope"] == "character_card_face_identity"
+    assert len(projected.metadata["professional_anchor_reference_assets"]) == 3
+    assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
+        ("root_asset", "portrait_identity_pose_geometry_crop"),
+        ("front_output", "portrait_identity_crop"),
+        ("front_output", "character_card_full_frame_framing_reference"),
+        ("profile_output", "portrait_identity_pose_geometry_crop"),
+        ("right25_output", "portrait_identity_crop"),
+    ]
 
 
 def test_standard_mode_keeps_both_identity_derivatives(tmp_path: Path) -> None:

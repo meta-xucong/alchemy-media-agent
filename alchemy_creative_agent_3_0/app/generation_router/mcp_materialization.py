@@ -133,21 +133,35 @@ class McpMaterializationHandoffStore:
         prompt_hash = str(prompt_sha256 or "").strip().lower()
         if not operation or not prompt_hash or not str(prompt or "").strip():
             raise McpMaterializationError("mcp_materialization_contract_incomplete")
-        handoff_id = stable_id("mcp_handoff", operation, prompt_hash)
-        path = self._record_path(handoff_id)
+        hashes = self._reference_hashes(reference_assets)
+        reference_fingerprint = hashlib.sha256("|".join(hashes).encode("utf-8")).hexdigest()
         with self._lock:
-            existing = self._read(handoff_id)
-            if existing is not None:
-                if str(existing.get("prompt_sha256") or "") != prompt_hash:
-                    raise McpMaterializationError("mcp_materialization_prompt_mismatch")
-                if existing.get("reference_asset_hashes") != self._reference_hashes(reference_assets):
-                    raise McpMaterializationError("mcp_materialization_reference_mismatch")
-                return existing
-            hashes = self._reference_hashes(reference_assets)
+            for revision in range(1, 1000):
+                handoff_id = stable_id(
+                    "mcp_handoff",
+                    operation,
+                    prompt_hash,
+                    reference_fingerprint,
+                    *(("rev", str(revision)) if revision > 1 else ()),
+                )
+                path = self._record_path(handoff_id)
+                existing = self._read(handoff_id)
+                if existing is not None:
+                    if str(existing.get("prompt_sha256") or "") != prompt_hash:
+                        raise McpMaterializationError("mcp_materialization_prompt_mismatch")
+                    if existing.get("reference_asset_hashes") != hashes:
+                        raise McpMaterializationError("mcp_materialization_reference_mismatch")
+                    if str(existing.get("status") or "").strip().lower() != "consumed":
+                        return existing
+                    continue
+                break
+            else:
+                raise McpMaterializationError("mcp_materialization_revision_exhausted")
             payload = {
                 "schema_version": self.schema_version,
                 "handoff_id": handoff_id,
                 "operation_id": operation,
+                "revision": revision,
                 "status": "pending",
                 "created_at": _now_iso(),
                 "updated_at": _now_iso(),

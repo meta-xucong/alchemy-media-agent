@@ -133,13 +133,44 @@ def infer_target_view(value: str) -> str:
 
 def infer_target_framing(value: str) -> str:
     text = str(value or "").lower()
+    if any(
+        term in text
+        for term in (
+            "head, neck and upper shoulders",
+            "head, neck, upper shoulders",
+            "head-neck-upper shoulders",
+            "upper shoulders only",
+            "head, neck and upper shoulders only",
+            "头颈上肩",
+            "头部、颈部和上肩",
+            "头部,颈部和上肩",
+            "头部颈部和上肩",
+        )
+    ):
+        return "head_shoulders"
     if any(term in text for term in ("face close-up", "extreme close-up", "脸部特写", "大特写")):
         return "face_closeup"
     if any(term in text for term in ("head and shoulders", "headshot", "半身特写", "肩部以上")):
         return "head_shoulders"
     if any(term in text for term in ("full body", "full-length", "全身", "全身照")):
         return "full_body"
-    if any(term in text for term in ("half body", "waist-up", "半身", "腰部以上")):
+    if any(
+        term in text
+        for term in (
+            "no half-body",
+            "not a half-body",
+            "not half-body",
+            "avoid half-body",
+            "without half-body",
+            "禁止半身",
+            "不要半身",
+            "不是半身",
+            "非半身",
+            "不做半身",
+        )
+    ):
+        return "unknown"
+    if any(term in text for term in ("half body", "half-body", "waist-up", "半身", "腰部以上")):
         return "half_body"
     if any(term in text for term in ("wide shot", "environmental portrait", "远景", "环境人像")):
         return "environmental"

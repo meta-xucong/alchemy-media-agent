@@ -205,6 +205,7 @@ class EcommerceRemoteBrainTestProvider:
         )
         anchor_character_card_framing_valid = (
             anchor_capture_scope != "character_card_face_identity"
+            or anchor_view_target != "standard_front"
             or (
                 anchor_framing_standard == "consistent_head_and_upper_shoulders_reference_crop"
                 and anchor_crop_policy == "head_top_margin_full_face_neck_and_upper_shoulders_visible"
@@ -275,6 +276,12 @@ class EcommerceRemoteBrainTestProvider:
             if isinstance(slot_delta_requirement, dict)
             else ""
         )
+        slot_delta_target = (
+            context.get("character_card_slot_delta_target") if isinstance(context, dict) else None
+        )
+        slot_delta_target = slot_delta_target if isinstance(slot_delta_target, dict) else {}
+        expression_target = str(slot_delta_target.get("expression") or "").strip()
+        body_target = str(slot_delta_target.get("body_slot") or "").strip()
         requires_slot_delta_decision = bool(
             isinstance(slot_delta_requirement, dict)
             and slot_delta_requirement.get("required") is True
@@ -296,22 +303,65 @@ class EcommerceRemoteBrainTestProvider:
                 "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
             ),
             "three_quarter": (
-                "Clean three-quarter vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
-                "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
+                "Clean left-front 45-degree three-quarter vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "background, same person, left ear visible on image-left and nose angled toward image-right, "
+                "same camera distance and head size as the approved front card, complete head-and-hair silhouette around the cranium, "
+                "similar head-top margin, same foreground card scale and subject top margin, full face, neck, upper shoulders and collar line visible, allowing natural face-box projection changes from the head turn, "
+                "crop ends just below the upper shoulders with clean white padding below the shoulder line, long hair may crop naturally below the upper shoulders, not a tight face close-up "
+                "and not a half-body crop, no chest-or-torso panel below the upper shoulders, not zoomed in, no soft feathered vignette or faded hair boundary, natural camera-observed human materiality, crisp commercial clean finish."
             ),
             "profile": (
                 "Clean side profile vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
-                "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
+                "background, same person, same camera distance and head size as the approved front card, complete head-and-hair silhouette around the cranium, "
+                "similar head-top margin, same foreground card scale and subject top margin, neck, upper shoulders and collar line visible, same head-and-upper-shoulders card scale, "
+                "crop ends just below the upper shoulders with clean white padding below the shoulder line, long hair may crop naturally below the upper shoulders, not a tight face close-up and not a half-body crop, "
+                "no chest-or-torso panel below the upper shoulders, not zoomed in, no soft feathered vignette or faded hair boundary, natural camera-observed human materiality, crisp commercial clean finish."
             ),
             "reverse_three_quarter": (
-                "Clean reverse three-quarter vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
-                "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
+                "Clean right-front opposite 45-degree three-quarter vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
+                "background, same person, independent opposite-side right-front view with right ear visible on image-right "
+                "and nose angled toward image-left, not a horizontal flip or literal mirror of the left-front card, preserving natural left/right face and hair asymmetry, "
+                "same camera distance and head size as the approved front card, complete head-and-hair silhouette around the cranium, "
+                "similar head-top margin, same foreground card scale and subject top margin, full face, neck, upper shoulders and collar line visible, allowing natural face-box projection changes from the head turn, "
+                "crop ends just below the upper shoulders with clean white padding below the shoulder line, long hair may crop naturally below the upper shoulders, not a tight face close-up and not a half-body crop, "
+                "no chest-or-torso panel below the upper shoulders, not zoomed in, no soft feathered vignette or faded hair boundary, natural camera-observed human materiality, crisp commercial clean finish."
             ),
             "rear_head": (
                 "Clean rear head view vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
-                "background, same person hair and head shape, natural camera-observed human materiality, crisp commercial clean finish."
+                "background, same person hair and head shape, same camera distance and head size as the approved front card, complete back-of-head silhouette around the cranium, "
+                "similar head-top margin, same foreground card scale and subject top margin, neck, upper shoulders and back collar line visible, same back-of-head head-and-upper-shoulders card scale, "
+                "crop ends just below the upper shoulders with clean white padding below the shoulder line, long hair may crop naturally below the upper shoulders, no visible face and no visible eyes, "
+                "not a tight head close-up and not a half-body crop, no chest-or-torso panel below the upper shoulders, not zoomed in, no soft feathered vignette "
+                "or faded hair boundary, natural camera-observed human materiality, crisp commercial clean finish."
             ),
         }.get(anchor_view_target)
+        expression_slot_prompt = {
+            "smile": (
+                "Reference-led Character Card expression.smile portrait of the same person, "
+                "gentle genuine age-appropriate smile, clean white reference-card framing."
+            ),
+            "anger": (
+                "Reference-led Character Card expression.anger portrait of the same person, "
+                "mild age-appropriate annoyed serious expression, clean white reference-card framing."
+            ),
+            "sad": (
+                "Reference-led Character Card expression.sad portrait of the same person, "
+                "quiet age-appropriate sad pensive expression, clean white reference-card framing."
+            ),
+        }.get(expression_target)
+        body_slot_prompt = (
+            f"Reference-led Character Card body.{body_target} silhouette card of the same person, "
+            "clean white full-body modeling-card framing."
+            if body_target
+            else None
+        )
+        slot_delta_prompt = (
+            expression_slot_prompt
+            if slot_delta_type == "expression"
+            else body_slot_prompt
+            if slot_delta_type == "body_pose"
+            else None
+        )
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -320,6 +370,8 @@ class EcommerceRemoteBrainTestProvider:
                     if requires_anchor_view_decision
                     and anchor_capture_scope == "character_card_face_identity"
                     and character_card_face_prompt
+                    else slot_delta_prompt
+                    if requires_slot_delta_decision and slot_delta_prompt
                     else (
                         f"Remote Brain approved complete product image {index}: preserve the supplied product facts, "
                         "reference truth, and explicit user constraints in one coherent photographic image."
@@ -407,6 +459,7 @@ class EcommerceRemoteBrainTestProvider:
                                     "aspect_ratio_standard": anchor_aspect_ratio_standard,
                                 }
                                 if anchor_capture_scope == "character_card_face_identity"
+                                and anchor_view_target == "standard_front"
                                 else {}
                             ),
                             **(

@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     BrainProfessionalAnchorViewDecisionMissing,
     BrainProviderAdmissionDecisionMissing,
 )
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
+    CapabilityActivationPlan,
+    TemplateCapabilityPolicy,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
@@ -253,3 +260,308 @@ def test_doc186_general_mode_does_not_receive_character_card_delta_contract() ->
     schema = payload["return_schema"]["canonical_provider_prompts"][0]
 
     assert "reference_led_slot_delta_decision" not in schema
+
+
+def _slot_delta_runtime_request(
+    view_role: str,
+    *,
+    uploaded_asset_ids: list[str] | None = None,
+    reference_assets: list[dict[str, str]] | None = None,
+) -> ScenarioRuntimeRequest:
+    return ScenarioRuntimeRequest(
+        user_input="继续生成标准人物角色卡后续角度位。",
+        uploaded_asset_ids=list(uploaded_asset_ids or ["root_source"]),
+        metadata={
+            "project_id": "project_doc186_recovery",
+            "requested_image_count": 1,
+            "require_real_images": True,
+            "professional_mode": True,
+            "professional_anchor_pack_preparation": True,
+            "professional_anchor_reference_assets": list(
+                reference_assets
+                if reference_assets is not None
+                else [
+                    {"asset_id": "root_source", "role": "root"},
+                    {"asset_id": "front_winner", "role": "face_front_winner"},
+                ]
+            ),
+            "professional_planning_metadata": {
+                "professional_anchor_capture_scope": "character_card_face_identity",
+                "professional_reference_stage": view_role,
+            },
+            "generation_channel": "mcp",
+            "mcp_operation_id": f"asset_doc186:{view_role}:1",
+        },
+    )
+
+
+def _remote_required_brain_result(view_role: str):
+    return build_remote_required_result(
+        BrainRunRequest(
+            user_input=f"Prepare one Character Card {view_role} slot.",
+            stage="scenario_runtime",
+            scenario_id="general_creative",
+            template_id="general_template",
+            requested_image_count=1,
+            requested_image_size="1024x1536",
+            metadata=_slot_delta_runtime_request(view_role).metadata,
+        ),
+        "Remote Brain timed out in a reference-led Character Card slot.",
+    )
+
+
+def test_doc186_nonfront_character_card_brain_timeout_uses_bounded_slot_delta_recovery() -> None:
+    runtime = ScenarioRuntime()
+    request = _slot_delta_runtime_request("profile")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_brain_result("profile"),
+    )
+
+    assert recovered.canonical_provider_prompts
+    canonical = recovered.canonical_provider_prompts[0]
+    assert "Strict 90-degree side profile" in canonical.prompt
+    assert canonical.reference_led_slot_delta_decision.prompt_scope == "slot_delta_only"
+    assert canonical.provider_admission_decision.provider_admission_status == "admitted"
+    assert recovered.audit["character_card_slot_delta_recovery_prompts_received"] is True
+    assert recovered.visual_task_profile is not None
+    assert recovered.capability_activation_intent is not None
+    assert recovered.visual_task_profile.rendering_intent.decision_owner == "remote_brain"
+    assert (
+        recovered.visual_task_profile.reference_channel_ownership_intent is not None
+        and recovered.visual_task_profile.reference_channel_ownership_intent.decision_owner == "remote_brain"
+    )
+    assert {
+        item.capability_id for item in recovered.capability_activation_intent.requested_capabilities
+    } >= {"portrait_identity", "reference_channel_policy", "human_realism"}
+
+    runtime._require_remote_creative_brain(  # noqa: SLF001
+        request,
+        TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+        recovered,
+    )
+    runtime._require_brain_signed_provider_prompts(  # noqa: SLF001
+        request,
+        TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+        recovered,
+        CapabilityActivationPlan(
+            plan_id="plan_doc186_recovery",
+            fingerprint="fp_doc186_recovery",
+            job_id="job_doc186_recovery",
+            task_profile_id="profile_doc186_recovery",
+            template_id="general_template",
+            scenario_id="general_creative",
+        ),
+    )
+
+
+def test_doc190_first_45_recovery_counts_root_plus_front_winner_chain() -> None:
+    runtime = ScenarioRuntime()
+    request = _slot_delta_runtime_request(
+        "three_quarter",
+        uploaded_asset_ids=["root_source"],
+        reference_assets=[
+            {"asset_id": "front_winner", "role": "face_front_winner"},
+        ],
+    )
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_brain_result("three_quarter"),
+    )
+
+    assert recovered.canonical_provider_prompts
+    assert recovered.audit["character_card_slot_delta_recovery_prompts_received"] is True
+    assert recovered.audit["character_card_slot_delta_recovery_view_role"] == "three_quarter"
+    source_ids = recovered.visual_task_profile.subject_entities[0].source_asset_ids
+    assert source_ids == ["root_source", "front_winner"]
+    prompt = recovered.canonical_provider_prompts[0].prompt
+    assert "Reference role map" in prompt
+    assert "approved left_front_25 only as the same-side identity bridge" in prompt
+    assert "profile card as the stronger pose-depth reference" not in prompt
+
+
+def test_doc192_left_25_timeout_recovery_preserves_card_scale_family_without_hard_angle() -> None:
+    runtime = ScenarioRuntime()
+    request = _slot_delta_runtime_request("left_front_25")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_brain_result("left_front_25"),
+    )
+
+    prompt = recovered.canonical_provider_prompts[0].prompt
+    assert "Left-front shallow three-quarter transition" in prompt
+    assert "natural left-front transition target around 25 to 30 degrees" in prompt
+    assert "allow natural renderer variation" in prompt
+    assert "approved front card framing" in prompt
+    assert "same camera distance" in prompt
+    assert "head-top margin" in prompt
+    assert "head-neck-upper-shoulders" in prompt
+    assert "tight face close-up" in prompt
+
+
+def test_doc190_recovered_character_card_slot_keeps_shared_human_realism_execution_active() -> None:
+    runtime = ScenarioRuntime()
+    request = _slot_delta_runtime_request("reverse_three_quarter")
+    resolution = runtime.scenario_registry.resolve(request.scenario_selection)
+    policy = runtime._resolve_template_capability_policy(request, resolution)  # noqa: SLF001
+    catalog = runtime.visual_capability_registry.catalog_snapshot(
+        runtime._template_id(request, resolution),  # noqa: SLF001
+        resolution.manifest.scenario_id,
+    )
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_brain_result("reverse_three_quarter"),
+    )
+    plan = runtime._reuse_or_build_activation_plan(  # noqa: SLF001
+        request,
+        resolution,
+        recovered,
+        policy,
+        catalog.catalog_version,
+        runtime._capability_activation_mode(request),  # noqa: SLF001
+    )
+    active_run = runtime._run_active_capabilities(  # noqa: SLF001
+        request,
+        resolution,
+        plan,
+        None,
+        brain_result=recovered,
+    )
+
+    cluster = next(
+        result
+        for result in active_run.results
+        if result.module_id == "visual_capability_cluster"
+    ).facts["visual_capability_cluster"]
+
+    assert cluster["human_photorealism_guidance"]["applies"] is True
+    runtime._validate_frozen_capability_execution(plan, active_run)  # noqa: SLF001
+
+
+def test_doc190_reverse_three_quarter_timeout_recovery_is_opposite_front_45_not_rear() -> None:
+    runtime = ScenarioRuntime()
+    request = _slot_delta_runtime_request("reverse_three_quarter")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_brain_result("reverse_three_quarter"),
+    )
+
+    prompt = recovered.canonical_provider_prompts[0].prompt
+    assert "Right-front three-quarter" in prompt
+    assert "opposite front-side 45-degree" in prompt
+    assert "independent right-front" in prompt
+    assert "Do not mirror or copy the left-front card" in prompt
+    assert "Reference role map" in prompt
+    assert "input 4 is the approved 90-degree side profile and is the primary pose-depth guide" in prompt
+    assert "input 5 is the approved right-front 25-degree transition" in prompt
+    assert "right-side identity/framing bridge" in prompt
+    assert "right ear on image-right" in prompt
+    assert "nose and gaze angled toward image-left" in prompt
+    assert "upper-shoulders cutoff" in prompt
+    assert "white padding" in prompt
+    assert "torso portrait" in prompt
+    assert "back of head dominant" not in prompt
+    assert "mostly away" not in prompt
+    assert "mirrored opposite side" not in prompt
+    assert "Mirror the approved" not in prompt
+
+
+def test_doc190_profile_timeout_recovery_preserves_card_scale_without_face_area_parity() -> None:
+    runtime = ScenarioRuntime()
+    request = _slot_delta_runtime_request("profile")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_brain_result("profile"),
+    )
+
+    prompt = recovered.canonical_provider_prompts[0].prompt
+    assert "Strict 90-degree side profile" in prompt
+    assert "same camera distance" in prompt
+    assert "head size" in prompt
+    assert "upper-shoulders cutoff" in prompt
+    assert "collar line" in prompt
+    assert "same face area proportion" not in prompt
+    assert "full face" not in prompt
+
+
+def test_doc190_rear_head_timeout_recovery_preserves_rear_card_scale_without_face_terms() -> None:
+    runtime = ScenarioRuntime()
+    request = _slot_delta_runtime_request("rear_head")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_brain_result("rear_head"),
+    )
+
+    prompt = recovered.canonical_provider_prompts[0].prompt
+    assert "Back-of-head reference" in prompt
+    assert "no visible face and no eyes visible" in prompt
+    assert "full back-of-head hair boundary" in prompt
+    assert "back collar line" in prompt
+    assert "upper-shoulders cutoff" in prompt
+    assert "same face area proportion" not in prompt
+    assert "full face" not in prompt
+
+
+def test_doc190_slot_delta_transport_timeout_is_not_brain_payload() -> None:
+    adapter = V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+    request = adapter.build_request(
+        user_input="Prepare one Character Card side slot.",
+        stage="provider_prompt_finalize",
+        scenario_id="general_creative",
+        template_id="general_template",
+        metadata={"_brain_transport_timeout_seconds": 11, "requested_image_count": 1},
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    assert request.transport_timeout_seconds == 11
+    assert "_brain_transport_timeout_seconds" not in json.dumps(payload, ensure_ascii=False)
+    assert "transport_timeout_seconds" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_doc190_runtime_shortens_only_character_card_nonfront_slot_delta_brain_wait() -> None:
+    runtime = ScenarioRuntime()
+
+    assert runtime._character_card_slot_delta_transport_timeout_seconds(  # noqa: SLF001
+        _slot_delta_runtime_request("reverse_three_quarter")
+    ) == 28.0
+    assert runtime._character_card_slot_delta_transport_timeout_seconds(  # noqa: SLF001
+        _slot_delta_runtime_request("standard_front")
+    ) is None
+    assert runtime._character_card_slot_delta_transport_timeout_seconds(  # noqa: SLF001
+        ScenarioRuntimeRequest(
+            user_input="普通图片",
+            scenario_selection={"scenario_id": "general_creative"},
+            metadata={"requested_image_count": 1},
+        )
+    ) is None
+
+
+def test_doc186_front_face_slot_never_uses_timeout_recovery() -> None:
+    runtime = ScenarioRuntime()
+    request = _slot_delta_runtime_request("standard_front")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_brain_result("standard_front"),
+    )
+
+    assert not recovered.canonical_provider_prompts
+    assert "character_card_slot_delta_recovery_prompts_received" not in recovered.audit
+
+
+def test_doc186_product_api_accepts_recovered_slot_delta_prompt_as_shared_materialization_contract() -> None:
+    result = SimpleNamespace(
+        metadata={
+            "llm_brain": {
+                "canonical_provider_prompts": [{"output_index": 1, "prompt": "slot delta"}],
+                "audit": {
+                    "character_card_slot_delta_recovery_prompts_received": True,
+                    "remote_canonical_provider_prompts_received": False,
+                },
+            }
+        },
+        creative_job=None,
+    )
+
+    assert V3ProductApiService._uses_brain_signed_provider_prompts(result) is True  # noqa: SLF001
