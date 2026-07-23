@@ -16,6 +16,9 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from ..shared_capabilities.visual_cluster.expression_review import laugh_expression_receipt_allows_slot
+from ..shared_capabilities.visual_cluster.review_repair import (
+    shared_review_repair_context_from_decision,
+)
 
 
 FACE_SLOT_KEYS = (
@@ -506,6 +509,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     consent_provenance_id: str | None = None
     generation_channel: Literal["provider", "mcp"] = "provider"
     mcp_handoff_id: str | None = None
+    prior_review_repair: dict[str, Any] | None = None
     candidate_count: Literal[3] = 3
 
     @field_validator("project_id", "people_asset_id", "card_version_id", "user_intent")
@@ -1105,6 +1109,7 @@ class CharacterCardPreparationService:
         slot_attempts: list[CharacterCardCandidateAttempt] = []
         slot_failures: list[CharacterCardFailureEvent] = []
         passing: list[tuple[CharacterCardCandidateResult, Any]] = []
+        prior_review_repair: dict[str, Any] | None = None
         attempt_round = int(card.slot_retry_rounds.get(slot_key, 1))
         start_candidate_index = 1
         if (
@@ -1138,6 +1143,7 @@ class CharacterCardPreparationService:
                     slot_key=slot_key,
                     candidate_index=candidate_index,
                 ),
+                prior_review_repair=prior_review_repair,
             )
             try:
                 candidate = self.generator.generate(request)
@@ -1164,6 +1170,15 @@ class CharacterCardPreparationService:
             slot_attempts.append(attempt)
             if getattr(review, "status", None) == "pass" and self._review_allows_slot(slot_key, review):
                 passing.append((candidate, review))
+            else:
+                repair_context = shared_review_repair_context_from_decision(
+                    candidate_id=candidate.candidate_id,
+                    output_id=candidate.output_id,
+                    issue_codes=getattr(review, "issue_codes", []) or [],
+                    shared_review_receipts=getattr(review, "shared_review_receipts", []) or [],
+                )
+                if repair_context:
+                    prior_review_repair = repair_context
         if not passing:
             if not slot_failures:
                 slot_failures = [

@@ -113,6 +113,13 @@ from .reference_channel_policy import (
     ReferenceChannelPolicyModule,
     reference_channel_retry_patch,
 )
+from .review_repair import (
+    SHARED_REVIEW_REPAIR_CONTEXT_VERSION,
+    SHARED_REVIEW_REPAIR_ISSUE_CODES,
+    shared_review_observations_for_issue_codes,
+    shared_review_repair_context_from_decision,
+    shared_review_repair_prompt_delta,
+)
 from .quality_review import OutputQualityReviewMerger
 from .strong_reference_loop import StrongReferenceLoopPlanner
 from .subject_asset_memory import SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID, SubjectContinuityAssetPackBuilder
@@ -214,6 +221,11 @@ __all__ = [
     "StrongReferenceLoopPlanner",
     "StrictVisualReviewPolicy",
     "StylingDeltaPolicy",
+    "SHARED_REVIEW_REPAIR_CONTEXT_VERSION",
+    "SHARED_REVIEW_REPAIR_ISSUE_CODES",
+    "shared_review_observations_for_issue_codes",
+    "shared_review_repair_context_from_decision",
+    "shared_review_repair_prompt_delta",
     "SubjectIdentityCard",
     "SUBJECT_CONTINUITY_ASSET_PACK_MODULE_ID",
     "SubjectContinuityAssetPackBuilder",

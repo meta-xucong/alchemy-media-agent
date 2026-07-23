@@ -65,6 +65,7 @@ from ..shared_capabilities.visual_cluster.expression_review import (
     laugh_expression_intent_contract,
     laugh_expression_materialization_directive,
 )
+from ..shared_capabilities.visual_cluster.review_repair import shared_review_repair_prompt_delta
 from ..visual_assets import (
     CanonicalProviderPromptReceipt,
     FrozenVisualAssetBindingSet,
@@ -1215,7 +1216,11 @@ class ScenarioRuntime:
         if expected != 1:
             return brain_result
 
-        prompt = self._character_card_expression_slot_delta_recovery_prompt(expression)
+        repair_context = metadata.get("character_card_prior_review_repair")
+        prompt = self._character_card_expression_slot_delta_recovery_prompt(
+            expression,
+            repair_context=repair_context if isinstance(repair_context, dict) else None,
+        )
         project_id = str(metadata.get("project_id") or "").strip() or None
         profile_id = stable_id(
             "character_card_expression_slot_delta_recovery_profile",
@@ -1501,7 +1506,11 @@ class ScenarioRuntime:
         return bool(audit.get("character_card_slot_delta_recovery_prompts_received"))
 
     @staticmethod
-    def _character_card_expression_slot_delta_recovery_prompt(expression: str) -> str:
+    def _character_card_expression_slot_delta_recovery_prompt(
+        expression: str,
+        *,
+        repair_context: dict[str, Any] | None = None,
+    ) -> str:
         base = (
             "Same person as the approved face.front Character Card winner, inheriting the face.front card framing, "
             "camera distance, head size, head-top margin, eye-line placement, background treatment, lighting direction, "
@@ -1532,7 +1541,10 @@ class ScenarioRuntime:
             "no unrequested wardrobe/style/scene change, no mouth-only expression, no detached gaze, no plastic skin, "
             "no oily shine, no dirty noise or smeared texture."
         )
-        return base + endings.get(expression, endings["laugh"]) + avoid
+        repair_delta = shared_review_repair_prompt_delta(repair_context)
+        if repair_delta:
+            repair_delta = " " + repair_delta
+        return base + endings.get(expression, endings["laugh"]) + repair_delta + avoid
 
     @staticmethod
     def _character_card_slot_delta_transport_timeout_seconds(

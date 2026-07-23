@@ -1011,6 +1011,9 @@ class ProductApiAnchorPackPreparationHost:
                 "requested_image_count": 1,
                 "require_real_images": True,
             }
+            repair_metadata = self._character_card_prior_review_repair_metadata(request)
+            if repair_metadata:
+                request_metadata.update(repair_metadata)
             if request.generation_channel == "mcp" and request.mcp_handoff_id:
                 request_metadata["mcp_materialization"] = {
                     "handoff_id": request.mcp_handoff_id,
@@ -1119,6 +1122,51 @@ class ProductApiAnchorPackPreparationHost:
         candidate, review = self._character_card_candidate_and_review(status_job_id, request)
         self._character_card_reviews[candidate.candidate_id] = review
         return candidate
+
+    @staticmethod
+    def _character_card_prior_review_repair_metadata(
+        request: CharacterCardCandidateRequest,
+    ) -> dict[str, Any]:
+        repair = request.prior_review_repair if isinstance(request.prior_review_repair, dict) else {}
+        if not repair:
+            return {}
+        if str(repair.get("owner") or "") != "v3_shared_visual_cluster":
+            return {}
+        issue_codes = [
+            str(item or "").strip()
+            for item in repair.get("issue_codes", [])
+            if str(item or "").strip()
+        ]
+        observed = [
+            " ".join(str(item or "").replace("\x00", " ").split())[:240].strip()
+            for item in repair.get("observed_review_evidence", [])
+            if str(item or "").strip()
+        ]
+        issue_codes = list(dict.fromkeys(issue_codes))[:12]
+        observed = list(dict.fromkeys(item for item in observed if item))[:8]
+        if not issue_codes or not observed:
+            return {}
+        repair_context = {
+            "contract_version": str(repair.get("contract_version") or "").strip(),
+            "owner": "v3_shared_visual_cluster",
+            "source": "prior_candidate_shared_review",
+            "retry_evidence_only": True,
+            "target_candidate_id": str(repair.get("target_candidate_id") or "").strip(),
+            "target_output_id": str(repair.get("target_output_id") or "").strip(),
+            "issue_codes": issue_codes,
+            "observed_review_evidence": observed,
+        }
+        return {
+            "visual_retry_reason_codes": issue_codes,
+            "resolved_retry_provenance": {
+                "authority": "v3_product_api",
+                "source": "character_card_prior_candidate_shared_review",
+                "retry_evidence_only": True,
+                "prompt_owner": "remote_v3_llm_brain",
+                "observed_review_evidence": observed,
+            },
+            "character_card_prior_review_repair": repair_context,
+        }
 
     def _mcp_resume_character_card_stage_job_record(
         self,
