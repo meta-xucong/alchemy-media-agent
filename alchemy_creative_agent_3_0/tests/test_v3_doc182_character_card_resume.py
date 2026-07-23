@@ -230,6 +230,39 @@ def test_doc183_character_card_failure_exposes_only_resumable_mcp_handoff() -> N
     assert "file_path" not in public_card
 
 
+def test_doc195_mcp_stage_pauses_after_first_pending_handoff() -> None:
+    class _PendingMcpGenerator:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request):  # noqa: ANN001, ANN201
+            self.requests.append(request)
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_pending",
+                mcp_handoff_id=f"mcp_handoff_{request.slot_key}_{request.candidate_index}",
+            )
+
+    generator = _PendingMcpGenerator()
+    service = CharacterCardPreparationService(
+        generator=generator,
+        reviewer=_PassReviewer(),
+    )
+    result = service.prepare_expression_set(
+        _face_card(),
+        front_output_id="front_winner",
+        user_intents={"smile": "natural smile", "anger": "quietly serious", "sad": "subtle sadness"},
+        generation_channel="mcp",
+    )
+
+    assert result.status == "blocked"
+    assert [request.candidate_index for request in generator.requests] == [1]
+    assert result.card.last_failed_slot_key == "expression.smile"
+    assert result.card.last_failure_attempt_count == 1
+    assert result.mcp_handoff_ids == ["mcp_handoff_expression.smile_1"]
+    assert result.card.pending_mcp_handoff_ids == ["mcp_handoff_expression.smile_1"]
+    assert result.card.resume_available is True
+
+
 def test_doc191_character_card_stage_surfaces_remote_brain_unavailable() -> None:
     class _BlockedStageService:
         visual_asset_catalog = None
