@@ -189,7 +189,44 @@ def _minimal_request(*, metadata: dict | None = None):
     )
 
 
-def _minimal_planning_result(job_id: str, *, asset_id: str = "asset_doc223c") -> PlanningResult:
+def _current_character_card_planning_metadata(
+    *,
+    operation_id: str,
+    refs: list[str] | None = None,
+    stage: str = "expression_set",
+    slot_key: str = "expression.laugh",
+    attempt_round: int = 5,
+    handoff: dict | None = None,
+) -> dict:
+    reference_ids = [str(item).strip() for item in (refs or ["front_winner"]) if str(item).strip()]
+    metadata = {
+        "professional_character_card_preparation": True,
+        "professional_character_card_stage": stage,
+        "professional_character_card_slot": slot_key,
+        "professional_character_card_source_class": None,
+        "professional_character_card_attempt_round": attempt_round,
+        "professional_character_card_reference_output_ids": reference_ids,
+        "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+        "professional_reference_stage": f"character_card_{stage}",
+        "generation_channel": "mcp",
+        "mcp_operation_id": operation_id,
+        "professional_anchor_reference_assets": _current_expression_reference_assets(),
+        "professional_planning_metadata": {
+            "scope": f"character_card_{stage}",
+            "slot_key": slot_key,
+        },
+    }
+    if handoff is not None:
+        metadata["mcp_materialization"] = handoff
+    return metadata
+
+
+def _minimal_planning_result(
+    job_id: str,
+    *,
+    asset_id: str = "asset_doc223c",
+    generation_metadata: dict | None = None,
+) -> PlanningResult:
     asset = AssetSpec(
         asset_id=asset_id,
         asset_type=AssetType.MAIN_POSTER,
@@ -220,6 +257,7 @@ def _minimal_planning_result(job_id: str, *, asset_id: str = "asset_doc223c") ->
         provider_strategy=ProviderStrategy.MCP_MATERIALIZATION,
         candidate_count=1,
         max_refine_rounds=0,
+        metadata=generation_metadata or {},
     )
     packaged = PackagedAsset(
         asset_id=asset.asset_id,
@@ -1079,7 +1117,10 @@ def test_doc215_character_card_reenters_same_interrupted_mcp_job_without_replann
     interrupted_record = SimpleNamespace(
         job_id="job_doc215_interrupted",
         status=ProductJobStatusValue.GENERATING,
-        planning_result=object(),
+        planning_result=_minimal_planning_result(
+            "job_doc215_interrupted",
+            generation_metadata=_current_character_card_planning_metadata(operation_id=operation_id),
+        ),
         generation_result=None,
         request=SimpleNamespace(
             metadata={
@@ -1160,7 +1201,17 @@ def test_doc215_existing_mcp_handoff_still_uses_normal_handoff_resume_not_reentr
     pending_record = SimpleNamespace(
         job_id="job_doc215_pending",
         status=ProductJobStatusValue.BLOCKED,
-        planning_result=object(),
+        planning_result=_minimal_planning_result(
+            "job_doc215_pending",
+            generation_metadata=_current_character_card_planning_metadata(
+                operation_id=operation_id,
+                handoff={
+                    "handoff_id": "mcp_handoff_doc215_existing",
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                },
+            ),
+        ),
         generation_result=None,
         request=SimpleNamespace(
             metadata={
@@ -1474,7 +1525,10 @@ def test_doc221_clean_interrupted_job_wins_over_older_stale_blocked_handoff_job(
     clean_generating_record = SimpleNamespace(
         job_id="job_doc221_clean_generating",
         status=ProductJobStatusValue.GENERATING,
-        planning_result=object(),
+        planning_result=_minimal_planning_result(
+            "job_doc221_clean_generating",
+            generation_metadata=_current_character_card_planning_metadata(operation_id=operation_id),
+        ),
         generation_result=None,
         request=SimpleNamespace(
             metadata={
@@ -1613,7 +1667,17 @@ def test_doc221_current_handoff_resume_still_requires_exact_operation_and_refs()
     exact_record = SimpleNamespace(
         job_id="job_doc221_exact_current",
         status=ProductJobStatusValue.BLOCKED,
-        planning_result=object(),
+        planning_result=_minimal_planning_result(
+            "job_doc221_exact_current",
+            generation_metadata=_current_character_card_planning_metadata(
+                operation_id=requested_operation,
+                handoff={
+                    "handoff_id": current_handoff,
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                },
+            ),
+        ),
         generation_result=None,
         request=SimpleNamespace(
             metadata={
@@ -1694,7 +1758,10 @@ def test_doc223c_character_card_recovers_old_interrupted_job_beyond_recent_windo
         ),
         status=ProductJobStatusValue.GENERATING,
         job_id_value="job_doc223c_character_old_checkpoint",
-        planning_result=_minimal_planning_result("job_doc223c_character_old_checkpoint"),
+        planning_result=_minimal_planning_result(
+            "job_doc223c_character_old_checkpoint",
+            generation_metadata=_current_character_card_planning_metadata(operation_id=operation_id),
+        ),
     )
     store.save(target)
     _save_doc223c_noise_jobs(store, 230)
@@ -1836,7 +1903,12 @@ def test_doc223c_character_card_conflicting_operation_records_fail_closed(
                 ),
                 status=ProductJobStatusValue.GENERATING,
                 job_id_value=job_id,
-                planning_result=_minimal_planning_result(job_id),
+                planning_result=_minimal_planning_result(
+                    job_id,
+                    generation_metadata=_current_character_card_planning_metadata(
+                        operation_id=operation_id
+                    ),
+                ),
             )
         )
 
@@ -1935,3 +2007,109 @@ def test_doc223c_character_card_wrong_reference_record_is_not_reused(
 
     assert service.created_payloads
     assert service.created_payloads[0]["metadata"].get("mcp_materialization") is None
+
+
+def test_doc226_character_card_stale_planning_metadata_does_not_resume_old_operation_job(
+    tmp_path: Path,
+) -> None:
+    operation_id = "people_doc223c:expression_set:expression.laugh:2:round5"
+    store = PersistentProductJobStore(tmp_path / "jobs")
+    stale_record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="positive expression keyframe",
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+            },
+        ),
+        status=ProductJobStatusValue.GENERATING,
+        job_id_value="job_doc226_stale_same_operation",
+        # This reproduces the real Doc225 pre-fix checkpoint: request metadata
+        # says Character Card, but the frozen generation plan has no
+        # Character Card stage/slot/preparation transport and no materialized
+        # handoff yet, so a naive interrupted-job resume would re-enter the
+        # stale frozen plan instead of creating a current full-frame handoff.
+        planning_result=_minimal_planning_result("job_doc226_stale_same_operation"),
+    )
+    store.save(stale_record)
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.job_store = store
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda _handoff_id: None,
+                list_unconsumed_by_operation=lambda _operation_id: [],
+            )
+            self.created_payloads = []
+            self.generated_calls = []
+            self.record = ProductJobRecord(
+                request=CreateCreativeJobRequest(
+                    user_input="positive expression keyframe",
+                    metadata={
+                        "professional_character_card_preparation": True,
+                        "professional_character_card_stage": "expression_set",
+                        "professional_character_card_slot": "expression.laugh",
+                        "professional_character_card_reference_output_ids": ["front_winner"],
+                        "generation_channel": "mcp",
+                        "mcp_operation_id": operation_id,
+                    },
+                ),
+                status=ProductJobStatusValue.PLANNED,
+                job_id_value="job_doc226_new_current_contract",
+                planning_result=_minimal_planning_result(
+                    "job_doc226_new_current_contract",
+                    generation_metadata=_current_character_card_planning_metadata(
+                        operation_id=operation_id
+                    ),
+                ),
+            )
+
+        def create_professional_character_card_stage_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.created_payloads.append(payload)
+            return ProductJobStatus(
+                job_id=self.record.job_id,
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, job_id, payload):  # noqa: ANN001, ANN201
+            self.generated_calls.append((job_id, payload))
+            assert job_id == self.record.job_id
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, job_id):  # noqa: ANN001, ANN201
+            if job_id == self.record.job_id:
+                return self.record
+            return self.job_store.get(job_id)
+
+    service = _Service()
+    with pytest.raises(AnchorCandidateUnavailable, match="character_card_candidate_generation_failed"):
+        ProductApiAnchorPackPreparationHost(service).generate(
+            _character_card_doc223c_request(operation_id=operation_id)
+        )  # type: ignore[arg-type]
+
+    assert service.created_payloads
+    assert service.generated_calls == [
+        (
+            "job_doc226_new_current_contract",
+            {
+                "quality_mode": "strict",
+                "metadata": {
+                    "disable_visual_auto_retry": True,
+                    "max_visual_retry_attempts": 0,
+                },
+            },
+        )
+    ]

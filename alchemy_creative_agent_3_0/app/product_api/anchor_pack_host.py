@@ -1263,6 +1263,27 @@ class ProductApiAnchorPackPreparationHost:
             if record_refs != requested_refs:
                 continue
             materialization = metadata.get("mcp_materialization")
+            if isinstance(materialization, dict):
+                handoff_id = str(materialization.get("handoff_id") or "").strip()
+                payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None
+                handoff_payload = payload if isinstance(payload, dict) else materialization
+                if not self._character_card_mcp_handoff_current(request, handoff_payload):
+                    handoff_status = str(
+                        handoff_payload.get("status") or materialization.get("status") or ""
+                    ).strip().lower()
+                    if handoff_status == "pending":
+                        continue
+                    raise AnchorCandidateUnavailable(
+                        "mcp_materialization_reference_mismatch",
+                        mcp_handoff_id=handoff_id or None,
+                    )
+            if not self._character_card_planning_metadata_current(
+                request,
+                record,
+                operation_id,
+                requested_refs,
+            ):
+                continue
             if requested_handoff:
                 if isinstance(materialization, dict):
                     if str(materialization.get("handoff_id") or "").strip() != requested_handoff:
@@ -1278,20 +1299,6 @@ class ProductApiAnchorPackPreparationHost:
                         continue
                     if not self._is_interrupted_mcp_materialization_checkpoint(record):
                         continue
-            if isinstance(materialization, dict):
-                handoff_id = str(materialization.get("handoff_id") or "").strip()
-                payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None
-                handoff_payload = payload if isinstance(payload, dict) else materialization
-                if not self._character_card_mcp_handoff_current(request, handoff_payload):
-                    handoff_status = str(
-                        handoff_payload.get("status") or materialization.get("status") or ""
-                    ).strip().lower()
-                    if handoff_status == "pending":
-                        continue
-                    raise AnchorCandidateUnavailable(
-                        "mcp_materialization_reference_mismatch",
-                        mcp_handoff_id=handoff_id or None,
-                    )
             if getattr(record, "generation_result", None) is None and not isinstance(materialization, dict):
                 if not self._is_interrupted_mcp_materialization_checkpoint(record):
                     continue
@@ -1302,6 +1309,76 @@ class ProductApiAnchorPackPreparationHost:
                 mcp_handoff_id=requested_handoff or None,
             )
         return matches[0] if matches else None
+
+    def _character_card_planning_metadata_current(
+        self,
+        request: CharacterCardCandidateRequest,
+        record: Any,
+        operation_id: str,
+        requested_refs: list[str],
+    ) -> bool:
+        """Verify the frozen generation plan can still own MCP resumption.
+
+        Request metadata says which operation a job was created for.  The
+        generation plan metadata says which provider/MCP reference contract was
+        frozen for that job.  A pre-Doc225 Character Card job can have correct
+        request metadata while its generation plan lacks the stage/slot fields
+        that trigger full-frame-first Expression Set materialization; resuming
+        such a job would keep reopening crop-first handoffs.  Treat those
+        records as stale checkpoints and allow a current job/revision instead.
+        """
+
+        planning_result = getattr(record, "planning_result", None)
+        generation_plans = getattr(planning_result, "generation_plans", None)
+        if not isinstance(generation_plans, list) or not generation_plans:
+            return False
+        source_class = "" if request.source_class is None else str(request.source_class).strip()
+        expected_stage = f"character_card_{request.module}"
+        for plan in generation_plans:
+            metadata = getattr(plan, "metadata", None)
+            if not isinstance(metadata, dict):
+                continue
+            if metadata.get("professional_character_card_preparation") is not True:
+                continue
+            if str(metadata.get("generation_channel") or "").strip().lower() != "mcp":
+                continue
+            if str(metadata.get("mcp_operation_id") or "").strip() != operation_id:
+                continue
+            if str(metadata.get("professional_identity_reference_strategy") or "").strip() != (
+                "character_card_shared_identity_v1"
+            ):
+                continue
+            if str(metadata.get("professional_reference_stage") or "").strip() != expected_stage:
+                continue
+            if str(metadata.get("professional_character_card_stage") or "").strip() != request.module:
+                continue
+            if str(metadata.get("professional_character_card_slot") or "").strip() != request.slot_key:
+                continue
+            if str(metadata.get("professional_character_card_source_class") or "").strip() != source_class:
+                continue
+            try:
+                attempt_round = int(metadata.get("professional_character_card_attempt_round") or 0)
+            except (TypeError, ValueError):
+                attempt_round = 0
+            if attempt_round != int(request.attempt_round):
+                continue
+            plan_refs = [
+                str(item).strip()
+                for item in (metadata.get("professional_character_card_reference_output_ids") or [])
+                if str(item).strip()
+            ]
+            if plan_refs != requested_refs:
+                continue
+            if request.module == "expression_set":
+                reference_assets = metadata.get("professional_anchor_reference_assets")
+                if not isinstance(reference_assets, list):
+                    continue
+                if not self._character_card_expression_handoff_reference_order_current(
+                    {"reference_assets": reference_assets}
+                ):
+                    continue
+            return True
+        return False
 
     @staticmethod
     def _is_interrupted_mcp_materialization_checkpoint(record: Any) -> bool:

@@ -358,7 +358,34 @@ def test_doc191_character_card_mcp_stage_resumes_existing_handoff_job() -> None:
             self.created = 0
             self.record = SimpleNamespace(
                 job_id="job_doc191_existing_mcp",
-                planning_result=SimpleNamespace(result_id="planning_doc191"),
+                planning_result=SimpleNamespace(
+                    result_id="planning_doc191",
+                    generation_plans=[
+                        SimpleNamespace(
+                            metadata={
+                                "professional_character_card_preparation": True,
+                                "professional_character_card_stage": "expression_set",
+                                "professional_character_card_slot": "expression.smile",
+                                "professional_character_card_source_class": None,
+                                "professional_character_card_attempt_round": 1,
+                                "professional_character_card_reference_output_ids": ["front_winner"],
+                                "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+                                "professional_reference_stage": "character_card_expression_set",
+                                "generation_channel": "mcp",
+                                "mcp_operation_id": "people_doc191:expression_set:expression.smile:1",
+                                "professional_anchor_reference_assets": [
+                                    {
+                                        "asset_id": "front_winner",
+                                        "derivative_kind": "character_card_full_frame_framing_reference",
+                                        "identity_evidence_scope": "card_framing",
+                                    },
+                                    {"asset_id": "front_winner::portrait_identity_crop"},
+                                    {"asset_id": "front_winner::portrait_identity_geometry_crop"},
+                                ],
+                            }
+                        )
+                    ],
+                ),
                 generation_result=None,
                 request=SimpleNamespace(
                     metadata={

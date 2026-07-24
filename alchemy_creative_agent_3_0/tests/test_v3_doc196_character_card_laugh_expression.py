@@ -705,6 +705,10 @@ class _ReviewService:
         reference_output_ids: list[str] | None = None,
     ) -> None:
         reference_output_ids = list(reference_output_ids or ["front_winner"])
+        try:
+            attempt_round = int(operation_id.rsplit(":round", 1)[1]) if ":round" in operation_id else 1
+        except (TypeError, ValueError):
+            attempt_round = 1
         self.output = SimpleNamespace(
             output_id="output_laugh",
             candidate_id="candidate_laugh",
@@ -731,7 +735,33 @@ class _ReviewService:
         self.output_store = _OutputStore(self.output)
         self.record = SimpleNamespace(
             job_id="job_laugh",
-            planning_result=object(),
+            planning_result=SimpleNamespace(
+                generation_plans=[
+                    SimpleNamespace(
+                        metadata={
+                            "professional_character_card_preparation": True,
+                            "professional_character_card_stage": "expression_set",
+                            "professional_character_card_slot": "expression.laugh",
+                            "professional_character_card_source_class": None,
+                            "professional_character_card_attempt_round": attempt_round,
+                            "professional_character_card_reference_output_ids": reference_output_ids,
+                            "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+                            "professional_reference_stage": "character_card_expression_set",
+                            "generation_channel": "mcp",
+                            "mcp_operation_id": operation_id,
+                            "professional_anchor_reference_assets": [
+                                {
+                                    "asset_id": "front_winner",
+                                    "derivative_kind": "character_card_full_frame_framing_reference",
+                                    "identity_evidence_scope": "card_framing",
+                                },
+                                {"asset_id": "front_winner::portrait_identity_crop"},
+                                {"asset_id": "front_winner::portrait_identity_geometry_crop"},
+                            ],
+                        }
+                    )
+                ]
+            ),
             request=SimpleNamespace(
                 metadata={
                     "professional_character_card_preparation": True,
