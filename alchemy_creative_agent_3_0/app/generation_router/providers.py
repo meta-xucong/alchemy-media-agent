@@ -1705,6 +1705,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _build_app_request(self, request: GenerationRequest):
         from app import schemas as app_schemas
 
+        metadata = self._generation_request_metadata(request)
         image_request_cls = getattr(app_schemas, "ImageGenerationRequest")
         prompt_plan_cls = getattr(app_schemas, "Image" + "PromptPlan")
 
@@ -1739,10 +1740,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "requested_image_size": materialization.size,
                 "input_fidelity": materialization.input_fidelity,
                 "input_fidelity_required": self._input_fidelity_is_required(materialization.asset_plan),
-                "generation_channel": request.metadata.get("generation_channel", "provider"),
-                "mcp_operation_id": request.metadata.get("mcp_operation_id"),
-                "identity_repair_canvas_path": request.metadata.get("identity_repair_canvas_path"),
-                "identity_repair_mask_path": request.metadata.get("identity_repair_mask_path"),
+                "generation_channel": metadata.get("generation_channel", "provider"),
+                "mcp_operation_id": metadata.get("mcp_operation_id"),
+                "identity_repair_canvas_path": metadata.get("identity_repair_canvas_path"),
+                "identity_repair_mask_path": metadata.get("identity_repair_mask_path"),
             },
         )
         return (
@@ -5285,13 +5286,14 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "input_fidelity_required": bool(variables.get("input_fidelity_required")),
             "size_normalization": "white_matte_contain_to_contract_size",
         }
+        metadata = self._generation_request_metadata(request)
         context = {
             "operation_id": str(
-                request.metadata.get("mcp_operation_id")
+                metadata.get("mcp_operation_id")
                 or variables.get("mcp_operation_id")
                 or stable_id(
                     "mcp_operation",
-                    request.metadata.get("job_id"),
+                    metadata.get("job_id"),
                     request.generation_plan.asset_id,
                     request.prompt_compilation.prompt_compilation_id,
                 )
@@ -5326,7 +5328,8 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         current_reference_assets: list[dict[str, Any]],
         current_rendering_contract: dict[str, Any],
     ) -> dict[str, Any] | None:
-        materialization = request.metadata.get("mcp_materialization")
+        metadata = self._generation_request_metadata(request)
+        materialization = metadata.get("mcp_materialization")
         if not isinstance(materialization, dict):
             return None
         handoff_id = str(materialization.get("handoff_id") or "").strip()
@@ -5356,11 +5359,23 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 provider=self.provider_name,
                 detail={"failure_code": "mcp_materialization_reference_mismatch", "handoff_id": handoff_id},
             )
+        handoff_reference_fingerprint = self.handoff_store._existing_reference_semantic_fingerprint(handoff)
+        current_reference_fingerprint = self.handoff_store._reference_semantic_fingerprint(
+            current_reference_assets,
+            current_hashes,
+        )
+        if handoff_reference_fingerprint and handoff_reference_fingerprint != current_reference_fingerprint:
+            if handoff_status == "pending":
+                return None
+            raise ProviderRuntimeError(
+                "MCP materialization reference semantics do not match the current stage.",
+                provider=self.provider_name,
+                detail={"failure_code": "mcp_materialization_reference_semantic_mismatch", "handoff_id": handoff_id},
+            )
         handoff_contract = dict(handoff.get("rendering_contract") or {})
-        comparable_keys = {"size", "quality", "output_format", "count", "api_operation"}
-        if {key: handoff_contract.get(key) for key in comparable_keys} != {
-            key: current_rendering_contract.get(key) for key in comparable_keys
-        }:
+        if self.handoff_store._rendering_contract_fingerprint(
+            handoff_contract
+        ) != self.handoff_store._rendering_contract_fingerprint(current_rendering_contract):
             if handoff_status == "pending":
                 return None
             raise ProviderRuntimeError(

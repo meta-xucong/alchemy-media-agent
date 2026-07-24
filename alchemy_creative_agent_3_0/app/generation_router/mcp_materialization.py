@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import secrets
 import threading
+import time
 from typing import Any
 
 from ..creative_core.rules import stable_id
@@ -134,7 +135,9 @@ class McpMaterializationHandoffStore:
         if not operation or not prompt_hash or not str(prompt or "").strip():
             raise McpMaterializationError("mcp_materialization_contract_incomplete")
         hashes = self._reference_hashes(reference_assets)
-        reference_fingerprint = hashlib.sha256("|".join(hashes).encode("utf-8")).hexdigest()
+        reference_fingerprint = self._reference_semantic_fingerprint(reference_assets, hashes)
+        safe_rendering_contract = self._safe_rendering_contract(rendering_contract)
+        rendering_fingerprint = self._rendering_contract_fingerprint(safe_rendering_contract)
         with self._lock:
             for revision in range(1, 1000):
                 handoff_id = stable_id(
@@ -151,6 +154,23 @@ class McpMaterializationHandoffStore:
                         raise McpMaterializationError("mcp_materialization_prompt_mismatch")
                     if existing.get("reference_asset_hashes") != hashes:
                         raise McpMaterializationError("mcp_materialization_reference_mismatch")
+                    existing_reference_fingerprint = self._existing_reference_semantic_fingerprint(existing)
+                    existing_rendering_fingerprint = self._existing_rendering_contract_fingerprint(existing)
+                    contract_mismatch = (
+                        bool(existing_reference_fingerprint)
+                        and existing_reference_fingerprint != reference_fingerprint
+                    ) or (
+                        bool(existing_rendering_fingerprint)
+                        and existing_rendering_fingerprint != rendering_fingerprint
+                    )
+                    existing_status = str(existing.get("status") or "").strip().lower()
+                    if contract_mismatch:
+                        if existing_status == "pending":
+                            continue
+                        if existing_status == "submitted":
+                            raise McpMaterializationError("mcp_materialization_contract_mismatch")
+                        if existing_status != "consumed":
+                            raise McpMaterializationError("mcp_materialization_contract_mismatch")
                     if str(existing.get("status") or "").strip().lower() != "consumed":
                         return existing
                     continue
@@ -170,7 +190,9 @@ class McpMaterializationHandoffStore:
                 "prompt_sha256": prompt_hash,
                 "reference_assets": self._safe_reference_contract(reference_assets, hashes),
                 "reference_asset_hashes": hashes,
-                "rendering_contract": self._safe_rendering_contract(rendering_contract),
+                "reference_semantic_fingerprint": reference_fingerprint,
+                "rendering_contract": safe_rendering_contract,
+                "rendering_contract_fingerprint": rendering_fingerprint,
                 "artifact_file": None,
                 "artifact_sha256": None,
                 "artifact_format": None,
@@ -388,9 +410,19 @@ class McpMaterializationHandoffStore:
 
     def _write(self, path: Path, payload: dict[str, Any]) -> None:
         self.storage_root.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(".json.tmp")
+        temp = path.with_name(
+            f"{path.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(8)}.tmp"
+        )
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(path)
+        for attempt in range(5):
+            try:
+                temp.replace(path)
+                return
+            except PermissionError:
+                if attempt >= 4:
+                    temp.unlink(missing_ok=True)
+                    raise
+                time.sleep(0.05 * (attempt + 1))
 
     @staticmethod
     def _reference_hashes(reference_assets: list[dict[str, Any]]) -> list[str]:
@@ -411,15 +443,93 @@ class McpMaterializationHandoffStore:
         safe: list[dict[str, Any]] = []
         for index, item in enumerate(reference_assets):
             data = dict(item or {})
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            derivative_kind = str(data.get("derivative_kind") or metadata.get("derivative_kind") or "").strip()
+            identity_scope = str(
+                data.get("identity_evidence_scope") or metadata.get("identity_evidence_scope") or ""
+            ).strip()
+            output_id = str(data.get("output_id") or metadata.get("output_id") or "").strip()
+            source_asset_id = str(
+                data.get("source_asset_id") or metadata.get("source_asset_id") or ""
+            ).strip()
+            reference_truth_layer = str(
+                data.get("reference_truth_layer") or metadata.get("reference_truth_layer") or ""
+            ).strip()
             safe.append(
                 {
                     "asset_id": str(data.get("asset_id") or data.get("output_id") or ""),
+                    "source_asset_id": source_asset_id or None,
+                    "output_id": output_id or None,
                     "file_path": str(data.get("file_path") or data.get("storage_path") or ""),
                     "sha256": hashes[index],
                     "role": str(data.get("role") or data.get("source_type") or "reference"),
+                    "derivative_kind": derivative_kind or None,
+                    "identity_evidence_scope": identity_scope or None,
+                    "reference_truth_layer": reference_truth_layer or None,
                 }
             )
         return safe
+
+    @staticmethod
+    def _reference_semantic_tokens(reference_assets: list[dict[str, Any]], hashes: list[str]) -> list[str]:
+        tokens: list[str] = []
+        for index, item in enumerate(reference_assets):
+            data = dict(item or {})
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            asset_id = str(data.get("asset_id") or data.get("output_id") or "").strip()
+            source_asset_id = str(
+                data.get("source_asset_id") or metadata.get("source_asset_id") or ""
+            ).strip()
+            output_id = str(data.get("output_id") or metadata.get("output_id") or "").strip()
+            derivative_kind = str(data.get("derivative_kind") or metadata.get("derivative_kind") or "").strip()
+            identity_scope = str(
+                data.get("identity_evidence_scope") or metadata.get("identity_evidence_scope") or ""
+            ).strip()
+            reference_truth_layer = str(
+                data.get("reference_truth_layer") or metadata.get("reference_truth_layer") or ""
+            ).strip()
+            tokens.append(
+                "\x1f".join(
+                    [
+                        str(index),
+                        hashes[index],
+                        asset_id,
+                        source_asset_id,
+                        output_id,
+                        derivative_kind,
+                        identity_scope,
+                        reference_truth_layer,
+                    ]
+                )
+            )
+        return tokens
+
+    @classmethod
+    def _reference_semantic_fingerprint(
+        cls,
+        reference_assets: list[dict[str, Any]],
+        hashes: list[str],
+    ) -> str:
+        return hashlib.sha256(
+            "|".join(cls._reference_semantic_tokens(reference_assets, hashes)).encode("utf-8")
+        ).hexdigest()
+
+    @classmethod
+    def _existing_reference_semantic_fingerprint(cls, payload: dict[str, Any]) -> str:
+        existing = str(payload.get("reference_semantic_fingerprint") or "").strip().lower()
+        if existing:
+            return existing
+        references = payload.get("reference_assets")
+        hashes = payload.get("reference_asset_hashes")
+        if not isinstance(references, list) or not isinstance(hashes, list):
+            return ""
+        try:
+            return cls._reference_semantic_fingerprint(
+                [dict(item) for item in references if isinstance(item, dict)],
+                [str(item) for item in hashes],
+            )
+        except Exception:
+            return ""
 
     @staticmethod
     def _safe_rendering_contract(contract: dict[str, Any]) -> dict[str, Any]:
@@ -436,6 +546,22 @@ class McpMaterializationHandoffStore:
             "size_normalization",
         }
         return {key: value for key, value in dict(contract or {}).items() if key in allowed}
+
+    @classmethod
+    def _rendering_contract_fingerprint(cls, contract: dict[str, Any]) -> str:
+        safe = cls._safe_rendering_contract(contract)
+        canonical = json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _existing_rendering_contract_fingerprint(cls, payload: dict[str, Any]) -> str:
+        existing = str(payload.get("rendering_contract_fingerprint") or "").strip().lower()
+        if existing:
+            return existing
+        rendering_contract = payload.get("rendering_contract")
+        if not isinstance(rendering_contract, dict):
+            return ""
+        return cls._rendering_contract_fingerprint(rendering_contract)
 
     @staticmethod
     def _image_format(content: bytes) -> tuple[str, str]:

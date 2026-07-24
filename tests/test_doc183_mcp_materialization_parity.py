@@ -4,10 +4,12 @@ import base64
 from io import BytesIO
 import hashlib
 from pathlib import Path
+import threading
 
 import pytest
 
 from alchemy_creative_agent_3_0.app.generation_router import (
+    GenerationRequest,
     McpMaterializationProvider,
     ProductionImageGenerationProvider,
     build_provider_generation_request,
@@ -16,7 +18,20 @@ from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import
     McpMaterializationError,
     McpMaterializationHandoffStore,
 )
+from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.schemas import (
+    AssetSpec,
+    AssetType,
+    ConditionPlan,
+    GenerationPlan,
+    LayoutPlan,
+    LayoutRegion,
+    Platform,
+    PromptCompilationResult,
+    ProviderStrategy,
+    TextRenderingMode,
+)
 from app.providers.base import ProviderRuntimeError
 from services.alchemy_codex_local_adapter.mcp_server import TOOL_SCHEMAS
 
@@ -41,6 +56,49 @@ def _provider_request() -> object:
         condition_plan=plan.condition_plans[0],
         generation_plan=plan.generation_plans[0],
         job_id=plan.creative_job.job_id,
+    )
+
+
+def _light_provider_request(*, generation_metadata: dict | None = None, metadata: dict | None = None) -> GenerationRequest:
+    asset = AssetSpec(
+        asset_id="asset_doc222",
+        asset_type=AssetType.MAIN_POSTER,
+        platform=Platform.XIAOHONGSHU,
+        aspect_ratio="2:3",
+        purpose="character card validation image",
+    )
+    layout = LayoutPlan(
+        layout_plan_id="layout_doc222",
+        asset_id=asset.asset_id,
+        platform=asset.platform,
+        aspect_ratio=asset.aspect_ratio,
+        text_rendering=TextRenderingMode.NO_TEXT,
+        visual_hierarchy=["subject"],
+        product_area=LayoutRegion(name="subject", position="center"),
+    )
+    prompt = PromptCompilationResult(
+        prompt_compilation_id="prompt_doc222",
+        asset_id=asset.asset_id,
+        visual_prompt="same character card portrait",
+        negative_prompt="no watermark",
+        text_policy="no_text",
+    )
+    condition = ConditionPlan(condition_plan_id="condition_doc222", asset_id=asset.asset_id)
+    generation = GenerationPlan(
+        generation_plan_id="generation_doc222",
+        asset_id=asset.asset_id,
+        provider_strategy=ProviderStrategy.MCP_MATERIALIZATION,
+        candidate_count=1,
+        max_refine_rounds=0,
+        metadata=generation_metadata or {},
+    )
+    return GenerationRequest(
+        asset_spec=asset,
+        layout_plan=layout,
+        prompt_compilation=prompt,
+        condition_plan=condition,
+        generation_plan=generation,
+        metadata=metadata or {},
     )
 
 
@@ -110,6 +168,256 @@ def test_handoff_rejects_format_and_reference_mismatch(tmp_path: Path) -> None:
         )
 
 
+def test_doc222_handoff_store_round_trips_character_card_reference_semantics(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    references = [
+        {
+            "asset_id": "front_output",
+            "output_id": "front_output",
+            "sha256": "1" * 64,
+            "derivative_kind": "character_card_full_frame_framing_reference",
+            "identity_evidence_scope": "card_framing",
+        },
+        {
+            "asset_id": "front_output",
+            "output_id": "front_output",
+            "sha256": "2" * 64,
+            "derivative_kind": "portrait_identity_crop",
+            "identity_evidence_scope": "feature_detail",
+        },
+        {
+            "asset_id": "front_output",
+            "output_id": "front_output",
+            "sha256": "3" * 64,
+            "derivative_kind": "portrait_identity_pose_geometry_crop",
+            "identity_evidence_scope": "head_geometry",
+        },
+    ]
+
+    pending = store.ensure_pending(
+        operation_id="doc222-full-frame-first",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=references,
+        rendering_contract={"output_format": "png"},
+    )
+    readback = store.get(pending["handoff_id"])
+
+    assert readback is not None
+    assert readback["reference_assets"][0]["derivative_kind"] == (
+        "character_card_full_frame_framing_reference"
+    )
+    assert readback["reference_assets"][0]["identity_evidence_scope"] == "card_framing"
+    assert ProductApiAnchorPackPreparationHost._character_card_expression_handoff_reference_order_current(  # noqa: SLF001
+        readback
+    )
+
+
+def test_doc222_handoff_semantic_fingerprint_separates_same_bytes_different_roles(
+    tmp_path: Path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    base = [
+        {
+            "asset_id": "front_output",
+            "sha256": "a" * 64,
+            "derivative_kind": "character_card_full_frame_framing_reference",
+            "identity_evidence_scope": "card_framing",
+        },
+        {
+            "asset_id": "front_output",
+            "sha256": "a" * 64,
+            "derivative_kind": "portrait_identity_crop",
+            "identity_evidence_scope": "feature_detail",
+        },
+    ]
+    swapped = [dict(base[1]), dict(base[0])]
+
+    first = store.ensure_pending(
+        operation_id="doc222-same-bytes",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=base,
+        rendering_contract={"output_format": "png"},
+    )
+    second = store.ensure_pending(
+        operation_id="doc222-same-bytes",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=swapped,
+        rendering_contract={"output_format": "png"},
+    )
+
+    assert first["handoff_id"] != second["handoff_id"]
+    assert first["reference_asset_hashes"] == second["reference_asset_hashes"]
+    assert first["reference_semantic_fingerprint"] != second["reference_semantic_fingerprint"]
+
+
+def test_doc222_rendering_contract_mismatch_creates_new_pending_revision(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    references = [{"asset_id": "front_output", "sha256": "1" * 64}]
+    first = store.ensure_pending(
+        operation_id="doc222-rendering",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=references,
+        rendering_contract={"size": "24x24", "quality": "high", "output_format": "png"},
+    )
+    second = store.ensure_pending(
+        operation_id="doc222-rendering",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=references,
+        rendering_contract={"size": "1536x1024", "quality": "high", "output_format": "png"},
+    )
+
+    assert first["handoff_id"] != second["handoff_id"]
+    assert first["revision"] == 1
+    assert second["revision"] == 2
+    assert first["reference_asset_hashes"] == second["reference_asset_hashes"]
+    assert first["rendering_contract_fingerprint"] != second["rendering_contract_fingerprint"]
+
+
+def test_doc222_submitted_rendering_contract_mismatch_fails_closed(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    references = [{"asset_id": "front_output", "sha256": "1" * 64}]
+    pending = store.ensure_pending(
+        operation_id="doc222-submitted-rendering",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=references,
+        rendering_contract={"size": "24x24", "quality": "high", "output_format": "png"},
+    )
+    store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_hash,
+        reference_asset_hashes=pending["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+
+    with pytest.raises(McpMaterializationError, match="contract_mismatch"):
+        store.ensure_pending(
+            operation_id="doc222-submitted-rendering",
+            prompt=prompt,
+            prompt_sha256=prompt_hash,
+            reference_assets=references,
+            rendering_contract={"size": "32x32", "quality": "high", "output_format": "png"},
+        )
+
+
+def test_doc223_handoff_store_uses_unique_temp_files_under_concurrent_writes(
+    tmp_path: Path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    errors: list[BaseException] = []
+
+    def _write(index: int) -> None:
+        try:
+            store.ensure_pending(
+                operation_id=f"doc223-concurrent-{index}",
+                prompt=prompt,
+                prompt_sha256=prompt_hash,
+                reference_assets=[{"asset_id": f"front_{index}", "sha256": f"{index:064x}"}],
+                rendering_contract={"size": "1024x1536", "output_format": "png"},
+            )
+        except BaseException as exc:  # pragma: no cover - assertion reports collected exceptions.
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_write, args=(index + 1,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert len(list(tmp_path.glob("mcp_handoff_*.json"))) == 8
+    assert list(tmp_path.glob("*.json.tmp")) == []
+
+
+def test_doc222_handoff_order_current_supports_suffix_fallback_but_rejects_degraded_contract(
+    tmp_path: Path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    suffix_only = store.ensure_pending(
+        operation_id="doc222-suffix-only",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[
+            {"asset_id": "front_output", "sha256": "1" * 64},
+            {"asset_id": "front_output::portrait_identity_crop", "sha256": "2" * 64},
+            {"asset_id": "front_output::portrait_identity_geometry_crop", "sha256": "3" * 64},
+        ],
+        rendering_contract={"output_format": "png"},
+    )
+    degraded = store.ensure_pending(
+        operation_id="doc222-degraded",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[
+            {"asset_id": "front_output", "sha256": "1" * 64},
+            {"asset_id": "front_output", "sha256": "2" * 64},
+            {"asset_id": "front_output", "sha256": "3" * 64},
+        ],
+        rendering_contract={"output_format": "png"},
+    )
+
+    assert ProductApiAnchorPackPreparationHost._character_card_expression_handoff_reference_order_current(  # noqa: SLF001
+        store.get(suffix_only["handoff_id"]) or {}
+    )
+    assert not ProductApiAnchorPackPreparationHost._character_card_expression_handoff_reference_order_current(  # noqa: SLF001
+        store.get(degraded["handoff_id"]) or {}
+    )
+
+
+def test_doc222_crop_first_handoff_round_trip_remains_rejected(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    pending = store.ensure_pending(
+        operation_id="doc222-crop-first",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[
+            {
+                "asset_id": "front_output",
+                "sha256": "2" * 64,
+                "derivative_kind": "portrait_identity_crop",
+                "identity_evidence_scope": "feature_detail",
+            },
+            {
+                "asset_id": "front_output",
+                "sha256": "3" * 64,
+                "derivative_kind": "portrait_identity_pose_geometry_crop",
+                "identity_evidence_scope": "head_geometry",
+            },
+            {
+                "asset_id": "front_output",
+                "sha256": "1" * 64,
+                "derivative_kind": "character_card_full_frame_framing_reference",
+                "identity_evidence_scope": "card_framing",
+            },
+        ],
+        rendering_contract={"output_format": "png"},
+    )
+
+    assert not ProductApiAnchorPackPreparationHost._character_card_expression_handoff_reference_order_current(  # noqa: SLF001
+        store.get(pending["handoff_id"]) or {}
+    )
+
+
 def test_mcp_and_provider_materializers_share_prompt_reference_and_rendering_contract() -> None:
     request = _provider_request()
     web = ProductionImageGenerationProvider(output_store=object())
@@ -133,6 +441,179 @@ def test_mcp_and_provider_materializers_share_prompt_reference_and_rendering_con
         "input_fidelity": None,
         "input_fidelity_required": False,
     }
+
+
+def test_doc222_provider_recovers_handoff_from_generation_plan_metadata_only(tmp_path: Path) -> None:
+    provider = McpMaterializationProvider(
+        output_store=object(),
+        handoff_store=McpMaterializationHandoffStore(tmp_path / "handoffs"),
+    )
+    operation_id = "doc222-generation-plan-only"
+    planning_only_request = _light_provider_request(
+        generation_metadata={"mcp_operation_id": operation_id},
+        metadata={},
+    )
+    app_request, _provider_name, reference_assets = provider._build_app_request(planning_only_request)
+    context = app_request.prompt_plan.variables["mcp_materialization_context"]
+    handoff = provider.handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=context["canonical_prompt"],
+        prompt_sha256=context["prompt_sha256"],
+        reference_assets=reference_assets,
+        rendering_contract=context["rendering_contract"],
+    )
+    resume_request = planning_only_request.model_copy(
+        update={
+            "generation_plan": planning_only_request.generation_plan.model_copy(
+                update={
+                    "metadata": {
+                        **dict(planning_only_request.generation_plan.metadata or {}),
+                        "mcp_materialization": {
+                            "handoff_id": handoff["handoff_id"],
+                            "status": "pending",
+                            "generation_channel": "mcp",
+                        },
+                    }
+                }
+            ),
+            "metadata": {
+                key: value
+                for key, value in dict(planning_only_request.metadata or {}).items()
+                if key not in {"mcp_operation_id", "mcp_materialization"}
+            },
+        }
+    )
+
+    resumed_app_request, _provider_name, _references = provider._build_app_request(resume_request)
+    variables = resumed_app_request.prompt_plan.variables
+
+    assert variables["provider_prompt_materialization"] == "v3_mcp_frozen_handoff_resume"
+    assert variables["mcp_materialization_context"]["handoff_id"] == handoff["handoff_id"]
+
+
+def test_doc222_provider_pending_resume_checks_reference_semantic_fingerprint(tmp_path: Path) -> None:
+    provider = McpMaterializationProvider(
+        output_store=object(),
+        handoff_store=McpMaterializationHandoffStore(tmp_path / "handoffs"),
+    )
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    operation_id = "doc222-provider-semantic"
+    crop_first = [
+        {
+            "asset_id": "front_output",
+            "sha256": "a" * 64,
+            "derivative_kind": "portrait_identity_crop",
+            "identity_evidence_scope": "feature_detail",
+        },
+        {
+            "asset_id": "front_output",
+            "sha256": "a" * 64,
+            "derivative_kind": "character_card_full_frame_framing_reference",
+            "identity_evidence_scope": "card_framing",
+        },
+    ]
+    full_frame_first = [dict(crop_first[1]), dict(crop_first[0])]
+    rendering_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+    }
+    handoff = provider.handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=crop_first,
+        rendering_contract=rendering_contract,
+    )
+    request = _light_provider_request(
+        metadata={
+            "mcp_operation_id": operation_id,
+            "mcp_materialization": {
+                "handoff_id": handoff["handoff_id"],
+                "status": "pending",
+                "generation_channel": "mcp",
+            },
+        }
+    )
+
+    assert (
+        provider._existing_mcp_handoff_context(  # noqa: SLF001
+            request,
+            current_context={
+                "operation_id": operation_id,
+                "canonical_prompt": prompt,
+                "prompt_sha256": prompt_hash,
+            },
+            current_reference_assets=full_frame_first,
+            current_rendering_contract=rendering_contract,
+        )
+        is None
+    )
+
+
+def test_doc222_provider_pending_resume_checks_full_rendering_fingerprint(tmp_path: Path) -> None:
+    provider = McpMaterializationProvider(
+        output_store=object(),
+        handoff_store=McpMaterializationHandoffStore(tmp_path / "handoffs"),
+    )
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    operation_id = "doc222-provider-rendering"
+    references = [{"asset_id": "front_output", "sha256": "a" * 64}]
+    handoff = provider.handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=references,
+        rendering_contract={
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "1024x1536",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_edit",
+            "input_fidelity": "high",
+        },
+    )
+    request = _light_provider_request(
+        metadata={
+            "mcp_operation_id": operation_id,
+            "mcp_materialization": {
+                "handoff_id": handoff["handoff_id"],
+                "status": "pending",
+                "generation_channel": "mcp",
+            },
+        }
+    )
+
+    assert (
+        provider._existing_mcp_handoff_context(  # noqa: SLF001
+            request,
+            current_context={
+                "operation_id": operation_id,
+                "canonical_prompt": prompt,
+                "prompt_sha256": prompt_hash,
+            },
+            current_reference_assets=references,
+            current_rendering_contract={
+                "renderer": "codex_builtin_imagegen",
+                "model": "gpt-image-2",
+                "size": "1024x1536",
+                "quality": "high",
+                "output_format": "png",
+                "count": 1,
+                "api_operation": "image_edit",
+                "input_fidelity": "low",
+            },
+        )
+        is None
+    )
 
 
 def test_mcp_pending_is_not_a_provider_retry_and_success_uses_shared_output_store(tmp_path: Path) -> None:
