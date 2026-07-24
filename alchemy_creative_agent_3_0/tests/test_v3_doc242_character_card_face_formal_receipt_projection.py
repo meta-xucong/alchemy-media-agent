@@ -18,6 +18,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
     RootSourceProvenance,
+    historical_identity_context_from_anchor_pack_payload,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
     FormalSlotCandidateSummary,
@@ -290,50 +291,103 @@ def test_task5_legacy_face_winner_still_requires_review_and_parity() -> None:
         )
 
 
-def test_task5_legacy_active_anchor_pack_without_formal_receipt_is_readable_not_projectable() -> None:
-    legacy_view = AnchorView(
-        view_id="view_legacy_standard_front",
-        view_role="standard_front",
-        output_id="output_legacy_front",
-        source_candidate_ids=["candidate_1", "candidate_2", "candidate_3"],
-        identity_scores=_identity_scores(),
-        formal_slot_receipt=None,
-    )
-    legacy_bridge = AnchorView(
-        view_id="view_legacy_left_front_25",
-        view_role="left_front_25",
-        output_id="output_legacy_bridge",
-        source_candidate_ids=["candidate_bridge"],
-        identity_scores=_identity_scores(),
-        formal_slot_receipt=None,
-    )
-    pack = IdentityAnchorPackVersion(
-        pack_version_id="pack_legacy",
-        people_asset_id="person_1",
-        status="active",
-        anchor_views=[
-            legacy_view,
-            legacy_bridge,
-            _view("three_quarter"),
-            _view("profile"),
-            _view("reverse_three_quarter"),
-            _view("rear_head"),
-        ],
-        root_source_provenance=RootSourceProvenance(
-            source_type="uploaded_portrait",
-            source_asset_id="asset_root_1",
-            project_id="project_1",
-        ),
-        user_activation_confirmed=True,
-    )
+def test_task5_active_anchor_pack_without_formal_receipt_fails_closed() -> None:
+    with pytest.raises(ValidationError, match="active Face Identity views require formal slot receipts"):
+        IdentityAnchorPackVersion(
+            pack_version_id="pack_legacy",
+            people_asset_id="person_1",
+            status="active",
+            anchor_views=[
+                AnchorView(
+                    view_id="view_legacy_standard_front",
+                    view_role="standard_front",
+                    output_id="output_legacy_front",
+                    source_candidate_ids=["candidate_1", "candidate_2", "candidate_3"],
+                    identity_scores=_identity_scores(),
+                    formal_slot_receipt=None,
+                ),
+                _view("three_quarter"),
+                _view("profile"),
+            ],
+            root_source_provenance=RootSourceProvenance(
+                source_type="uploaded_portrait",
+                source_asset_id="asset_root_1",
+                project_id="project_1",
+            ),
+            user_activation_confirmed=True,
+        )
 
-    assert pack.anchor_views[0].formal_slot_receipt is None
-    assert pack.anchor_views[0].reference_context_mode() == HISTORICAL_IDENTITY_CONTEXT_ONLY
-    assert pack.anchor_views[1].view_role == "left_front_25"
-    assert pack.anchor_views[1].reference_context_mode() == HISTORICAL_IDENTITY_CONTEXT_ONLY
-    assert pack.anchor_views[0].formal_slot_public_summary() is None
+
+def test_task5_legacy_anchor_payload_can_only_be_loaded_as_context_adapter() -> None:
+    legacy_payload = {
+        "pack_version_id": "pack_legacy",
+        "people_asset_id": "person_1",
+        "status": "active",
+        "anchor_views": [
+            {
+                "view_id": "view_legacy_standard_front",
+                "view_role": "standard_front",
+                "output_id": "output_legacy_front",
+                "source_candidate_ids": ["candidate_1", "candidate_2", "candidate_3"],
+                "identity_scores": _identity_scores().model_dump(mode="python"),
+                "formal_slot_receipt": None,
+                "active": True,
+            },
+            {
+                "view_id": "view_legacy_left_front_25",
+                "view_role": "left_front_25",
+                "output_id": "output_legacy_bridge",
+                "source_candidate_ids": ["candidate_bridge"],
+                "identity_scores": _identity_scores().model_dump(mode="python"),
+                "formal_slot_receipt": None,
+                "active": True,
+            },
+        ],
+        "root_source_provenance": {
+            "source_type": "uploaded_portrait",
+            "source_asset_id": "asset_root_1",
+            "project_id": "project_1",
+        },
+        "user_activation_confirmed": True,
+    }
+
+    context = historical_identity_context_from_anchor_pack_payload(legacy_payload)
+
+    assert context.context_mode == HISTORICAL_IDENTITY_CONTEXT_ONLY
+    assert [view.view_role for view in context.views] == ["standard_front", "left_front_25"]
+    assert [view.output_id for view in context.views] == ["output_legacy_front", "output_legacy_bridge"]
     with pytest.raises((ValueError, ValidationError)):
-        apply_face_identity_pack_to_card(CharacterCardState.initial(card_version_id="card_1"), pack)
+        IdentityAnchorPackVersion.model_validate(legacy_payload)
+
+
+def test_task5_historical_context_rejects_missing_output_or_identity_evidence() -> None:
+    payload = {
+        "anchor_views": [
+            {
+                "view_role": "standard_front",
+                "output_id": "",
+                "source_candidate_ids": ["candidate_1"],
+                "identity_scores": IdentityScoreSummary(
+                    same_face_score=0.9,
+                    visual_quality_score=0.9,
+                    evidence_codes=["face_geometry_match"],
+                ).model_dump(mode="python"),
+                "formal_slot_receipt": None,
+                "active": True,
+            }
+        ]
+    }
+    with pytest.raises(ValidationError, match="historical identity context requires an output"):
+        historical_identity_context_from_anchor_pack_payload(payload)
+
+    payload["anchor_views"][0]["output_id"] = "output_legacy_front"
+    payload["anchor_views"][0]["identity_scores"] = IdentityScoreSummary(
+        same_face_score=0.9,
+        visual_quality_score=0.9,
+        evidence_codes=[],
+    ).model_dump(mode="python")
+    with pytest.raises(ValidationError, match="historical identity context requires identity evidence"):
+        historical_identity_context_from_anchor_pack_payload(payload)
 
 
 def test_task5_catalog_style_reload_preserves_face_formal_receipt_and_public_summary_is_safe() -> None:

@@ -7,7 +7,7 @@ scenario-specific delivery fields.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal, Mapping
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -195,6 +195,65 @@ class AnchorView(_StrictVisualAssetModel):
         return None
 
 
+class HistoricalIdentityContextView(_StrictVisualAssetModel):
+    """Read-only identity reference extracted from a pre-formal Face record."""
+
+    context_mode: Literal["historical_identity_context_only"] = HISTORICAL_IDENTITY_CONTEXT_ONLY
+    view_role: FaceViewRole
+    output_id: str
+    source_candidate_ids: list[str] = Field(min_length=1)
+    identity_scores: IdentityScoreSummary
+
+    @field_validator("output_id")
+    @classmethod
+    def validate_output_id(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("historical identity context requires an output")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_identity_evidence(self) -> "HistoricalIdentityContextView":
+        if not self.identity_scores.evidence_codes:
+            raise ValueError("historical identity context requires identity evidence")
+        return self
+
+
+class HistoricalIdentityContext(_StrictVisualAssetModel):
+    """Explicit compatibility envelope; never formal Face activation proof."""
+
+    context_mode: Literal["historical_identity_context_only"] = HISTORICAL_IDENTITY_CONTEXT_ONLY
+    views: list[HistoricalIdentityContextView] = Field(min_length=1)
+
+
+def _payload_get(payload: Any, field: str, default: Any = None) -> Any:
+    if isinstance(payload, Mapping):
+        return payload.get(field, default)
+    return getattr(payload, field, default)
+
+
+def historical_identity_context_from_anchor_pack_payload(
+    payload: Mapping[str, Any] | object,
+) -> HistoricalIdentityContext:
+    """Extract legacy Face references without weakening active pack validation."""
+
+    views: list[HistoricalIdentityContextView] = []
+    for raw_view in _payload_get(payload, "anchor_views", []) or []:
+        if _payload_get(raw_view, "active", True) is not True:
+            continue
+        if _payload_get(raw_view, "formal_slot_receipt") is not None:
+            continue
+        views.append(
+            HistoricalIdentityContextView(
+                view_role=_payload_get(raw_view, "view_role"),
+                output_id=_payload_get(raw_view, "output_id"),
+                source_candidate_ids=list(_payload_get(raw_view, "source_candidate_ids", []) or []),
+                identity_scores=IdentityScoreSummary.model_validate(_payload_get(raw_view, "identity_scores")),
+            )
+        )
+    return HistoricalIdentityContext(views=views)
+
+
 class AnchorAuxiliaryReference(_StrictVisualAssetModel):
     reference_id: str
     reference_role: FaceViewRole
@@ -291,10 +350,11 @@ class IdentityAnchorPackVersion(_StrictVisualAssetModel):
                 raise ValueError(f"active pack is missing required face views: {sorted(missing)}")
             for view in self.anchor_views:
                 if view.active:
-                    if view.formal_slot_receipt is not None:
-                        if view.view_role in FACE_AUXILIARY_BRIDGE_ROLES:
-                            raise ValueError("active Face Identity packs cannot activate 25-35 degree bridge references")
-                        validate_formal_slot_receipt_for_activation(view.formal_slot_receipt)
+                    if view.view_role in FACE_AUXILIARY_BRIDGE_ROLES:
+                        raise ValueError("active Face Identity packs cannot activate 25-35 degree bridge references")
+                    if view.formal_slot_receipt is None:
+                        raise ValueError("active Face Identity views require formal slot receipts")
+                    validate_formal_slot_receipt_for_activation(view.formal_slot_receipt)
         return self
 
 
