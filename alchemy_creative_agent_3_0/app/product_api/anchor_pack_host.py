@@ -520,6 +520,17 @@ class ProductApiAnchorPackPreparationHost:
         )
         self._record_stage_visual_retry_usage(stage_key, status_job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
+            if (
+                request.generation_channel == "mcp"
+                and resume_record is not None
+                and self._character_card_mcp_review_package_still_pending(status_job_id, request)
+            ):
+                raise AnchorCandidateUnavailable(
+                    "mcp_review_pending",
+                    mcp_handoff_id=request.mcp_handoff_id,
+                    output_id=self._character_card_review_pending_output_id(status_job_id),
+                    candidate_id=self._character_card_review_pending_candidate_id(status_job_id),
+                )
             mcp_materialization = self._mcp_materialization_from_generation_failure(generation, status_job_id)
             handoff_id = (
                 str(mcp_materialization.get("handoff_id") or "").strip()
@@ -1082,6 +1093,10 @@ class ProductApiAnchorPackPreparationHost:
             if getattr(resume_record, "generation_result", None) is not None:
                 try:
                     candidate, review = self._character_card_candidate_and_review(status_job_id, request)
+                except AnchorCandidateUnavailable as exc:
+                    if exc.failure_code != "mcp_review_pending":
+                        raise
+                    status_value = ProductJobStatusValue.PLANNED
                 except RuntimeError as exc:
                     if str(exc) != "character_card_real_pixel_review_missing":
                         raise
@@ -1097,16 +1112,21 @@ class ProductApiAnchorPackPreparationHost:
         if request.generation_channel == "mcp" and request.mcp_handoff_id:
             status_record = self.product_service.get_job_record(status_job_id)
             if status_record is not None:
-                status_record.request.metadata = {
-                    **dict(status_record.request.metadata),
-                    "mcp_materialization": {
-                        "handoff_id": request.mcp_handoff_id,
-                        "status": "pending",
-                        "generation_channel": "mcp",
-                        "resume_required": True,
-                    },
-                }
-                self.product_service.job_store.save(status_record)
+                existing_metadata = dict(status_record.request.metadata)
+                existing_handoff = existing_metadata.get("mcp_materialization")
+                if not isinstance(existing_handoff, dict) or not str(
+                    existing_handoff.get("handoff_id") or ""
+                ).strip():
+                    status_record.request.metadata = {
+                        **existing_metadata,
+                        "mcp_materialization": {
+                            "handoff_id": request.mcp_handoff_id,
+                            "status": "pending",
+                            "generation_channel": "mcp",
+                            "resume_required": True,
+                        },
+                    }
+                    self.product_service.job_store.save(status_record)
         if status_value != ProductJobStatusValue.PLANNED:
             record = self.product_service.get_job_record(status_job_id)
             request_metadata = dict(record.request.metadata) if record is not None else {}
@@ -1138,6 +1158,17 @@ class ProductApiAnchorPackPreparationHost:
         )
         self._record_character_card_retry_usage(stage_key, status_job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
+            if (
+                request.generation_channel == "mcp"
+                and resume_record is not None
+                and self._character_card_mcp_review_package_still_pending(status_job_id, request)
+            ):
+                raise AnchorCandidateUnavailable(
+                    "mcp_review_pending",
+                    mcp_handoff_id=request.mcp_handoff_id,
+                    output_id=self._character_card_review_pending_output_id(status_job_id),
+                    candidate_id=self._character_card_review_pending_candidate_id(status_job_id),
+                )
             mcp_materialization = self._mcp_materialization_from_generation_failure(generation, status_job_id)
             handoff_id = (
                 str(mcp_materialization.get("handoff_id") or "").strip()
@@ -1534,6 +1565,75 @@ class ProductApiAnchorPackPreparationHost:
             if isinstance(materialization, dict) and str(materialization.get("handoff_id") or "").strip():
                 return materialization
         return None
+
+    def _character_card_mcp_review_package_still_pending(
+        self,
+        job_id: str,
+        request: CharacterCardCandidateRequest,
+    ) -> bool:
+        record = self.product_service.get_job_record(job_id)
+        result = getattr(record, "generation_result", None) if record is not None else None
+        package = (
+            result.metadata.get("post_generation_review_package")
+            if result is not None and isinstance(getattr(result, "metadata", None), dict)
+            else None
+        )
+        if not isinstance(package, dict):
+            metadata = getattr(getattr(record, "request", None), "metadata", None) if record is not None else None
+            review = metadata.get("mcp_review_status") if isinstance(metadata, dict) else None
+            return (
+                isinstance(review, dict)
+                and str(review.get("status") or "").strip().lower() == "pending"
+                and str(review.get("reason_code") or "").strip() == "provider_timeout"
+            )
+        inspections = [
+            item for item in package.get("inspections", []) if isinstance(item, dict)
+        ]
+        for inspection in inspections:
+            raw_status = _inspection_status(inspection)
+            raw_issues = inspection.get("issue_codes") or inspection.get("detected_issues") or []
+            issue_codes = [
+                str(item.get("code") if isinstance(item, dict) else item).strip()
+                for item in raw_issues
+                if str(item.get("code") if isinstance(item, dict) else item).strip()
+            ]
+            verified = (
+                str(inspection.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
+                and str(inspection.get("verification_state") or "").strip().lower() == "verified"
+            )
+            if self._mcp_review_pending(request, inspection, issue_codes, verified):
+                return True
+        return False
+
+    def _character_card_review_pending_output_id(self, job_id: str) -> str | None:
+        return self._character_card_review_pending_identity(job_id)[0] or None
+
+    def _character_card_review_pending_candidate_id(self, job_id: str) -> str | None:
+        return self._character_card_review_pending_identity(job_id)[1] or None
+
+    def _character_card_review_pending_identity(self, job_id: str) -> tuple[str, str]:
+        record = self.product_service.get_job_record(job_id)
+        result = getattr(record, "generation_result", None) if record is not None else None
+        package = (
+            result.metadata.get("post_generation_review_package")
+            if result is not None and isinstance(getattr(result, "metadata", None), dict)
+            else None
+        )
+        if isinstance(package, dict):
+            for inspection in package.get("inspections", []):
+                if isinstance(inspection, dict):
+                    output_id = str(inspection.get("output_id") or "").strip()
+                    candidate_id = str(inspection.get("candidate_id") or "").strip()
+                    if output_id or candidate_id:
+                        return output_id, candidate_id
+        metadata = getattr(getattr(record, "request", None), "metadata", None) if record is not None else None
+        review = metadata.get("mcp_review_status") if isinstance(metadata, dict) else None
+        if isinstance(review, dict):
+            return (
+                str(review.get("output_id") or "").strip(),
+                str(review.get("candidate_id") or "").strip(),
+            )
+        return "", ""
 
     def _record_character_card_retry_usage(self, stage_key: tuple[str, str, str], job_id: str) -> None:
         record = self.product_service.get_job_record(job_id)

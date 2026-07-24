@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from io import BytesIO
 from pathlib import Path
@@ -31,6 +32,9 @@ from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRunt
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     expression_front_card_framing_materialization_directive,
     laugh_expression_materialization_directive,
+)
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import (
+    VisualInspectionReport,
 )
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
@@ -94,6 +98,222 @@ def _current_expression_reference_assets() -> list[dict]:
             "sha256": "3" * 64,
         },
     ]
+
+
+def _laugh_pass_score_card() -> dict[str, float]:
+    return {
+        "same_person_readability": 0.94,
+        "identity_consistency": 0.93,
+        "distinctive_feature_readability": 0.91,
+        "human_realism": 0.92,
+        "visual_quality": 0.93,
+        "pose_compliance": 0.90,
+        "overall": 0.94,
+        "mouth_eye_coherence": 0.90,
+        "gaze_engagement": 0.89,
+        "periocular_affect": 0.88,
+        "cheek_jaw_coupling": 0.90,
+        "jaw_relaxation": 0.85,
+        "arousal_intensity_coherence": 0.88,
+        "spontaneity_asymmetry": 0.78,
+        "expression_age_coherence": 0.91,
+        "expression_identity_preservation": 0.88,
+        "expression_framing_parity": 0.93,
+        "face_area_delta_from_front": 0.03,
+        "top_margin_delta_from_front": 0.02,
+        "bottom_margin_delta_from_front": 0.02,
+        "eye_line_delta_from_front": 0.02,
+        "center_x_delta_from_front": 0.02,
+        "shoulder_span_delta_from_front": 0.04,
+        "head_yaw_delta_from_front": 0.02,
+        "head_pitch_delta_from_front": 0.02,
+    }
+
+
+def _provider_timeout_review_package(
+    *,
+    job_id: str,
+    output_id: str,
+    candidate_id: str,
+) -> dict[str, object]:
+    return {
+        "package_id": f"review_timeout_{job_id}",
+        "job_id": job_id,
+        "inspections": [
+            {
+                "inspection_id": f"inspection_timeout_{job_id}",
+                "job_id": job_id,
+                "candidate_id": candidate_id,
+                "output_id": output_id,
+                "mode": "hybrid",
+                "status": "manual_review",
+                "verification_state": "unverified",
+                "confidence": 0.35,
+                "score_card": {
+                    "same_person_readability": 0.94,
+                    "identity_consistency": 0.93,
+                    "overall": 0.5,
+                },
+                "detected_issues": [
+                    {
+                        "code": "provider_timeout",
+                        "severity": "low",
+                        "retryable": False,
+                        "confidence": 0.4,
+                    }
+                ],
+                "issue_codes": ["provider_timeout"],
+                "evidence": {
+                    "provider_error": "Vision inspection timed out after 90.00 seconds.",
+                    "provider_timeout_seconds": 90.0,
+                },
+            }
+        ],
+        "metadata": {"post_generation": True, "inspection_count": 1},
+    }
+
+
+def _attach_output_checkpoint(
+    result: PlanningResult,
+    *,
+    output_id: str,
+    candidate_id: str,
+    handoff_id: str = "mcp_handoff_doc228_timeout",
+    provider_prompt_sha256: str = "sha256:doc228",
+    prompt_compilation_id: str = "prompt_doc228",
+) -> PlanningResult:
+    packaged = result.asset_pack.assets[0]
+    candidate_metadata = {
+        "output_id": output_id,
+        "candidate_id": candidate_id,
+        "provider_prompt_sha256": provider_prompt_sha256,
+        "prompt_compilation_id": prompt_compilation_id,
+        "provider_reference_image_count": 2,
+        "prompt_reference_parity": {
+            "verified": True,
+            "expected_reference_count": 2,
+            "actual_reference_count": 2,
+        },
+        "reference_evidence_parity": {
+            "verified": True,
+            "expected_reference_count": 2,
+            "actual_reference_count": 2,
+        },
+        "mcp_materialization": {
+            "handoff_id": handoff_id,
+            "status": "job_checkpointed",
+            "generation_channel": "mcp",
+            "expected_checkpoint": {
+                "job_id": result.creative_job.job_id,
+                "candidate_id": candidate_id,
+                "output_id": output_id,
+            },
+        },
+    }
+    updated_packaged = packaged.model_copy(
+        update={
+            "metadata": {
+                **dict(packaged.metadata or {}),
+                "selected_candidate_id": candidate_id,
+                "output_id": output_id,
+                "candidate_metadata": candidate_metadata,
+            }
+        }
+    )
+    asset_pack = result.asset_pack.model_copy(update={"assets": [updated_packaged], "planning_only": False})
+    return result.model_copy(update={"asset_pack": asset_pack})
+
+
+def _with_review_package(result: PlanningResult, package: dict[str, object]) -> PlanningResult:
+    metadata = dict(result.metadata or {})
+    visual_cluster = dict(metadata.get("visual_cluster") or {})
+    shared_capabilities = dict(metadata.get("shared_capabilities") or {})
+    shared_visual_cluster = dict(shared_capabilities.get("visual_cluster") or {})
+    visual_cluster["post_generation_review_package"] = package
+    visual_cluster["has_post_generation_review"] = True
+    shared_visual_cluster["post_generation_review_package"] = package
+    shared_visual_cluster["has_post_generation_review"] = True
+    shared_capabilities["visual_cluster"] = shared_visual_cluster
+    metadata.update(
+        {
+            "post_generation_review_package": package,
+            "visual_cluster": visual_cluster,
+            "shared_capabilities": shared_capabilities,
+        }
+    )
+    asset_pack = result.asset_pack.model_copy(
+        update={
+            "manifest": {
+                **dict(result.asset_pack.manifest or {}),
+                "post_generation_review_package": package,
+            },
+            "metadata": {
+                **dict(result.asset_pack.metadata or {}),
+                "post_generation_review_package": package,
+            },
+        }
+    )
+    return result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
+
+
+def _doc228_generated_timeout_record(
+    *,
+    job_id: str,
+    output_id: str,
+    candidate_id: str,
+    operation_id: str = "people_doc228:expression_set:expression.laugh:2:round5",
+    handoff_id: str = "mcp_handoff_doc228_timeout",
+    request_handoff_status: str = "pending",
+) -> tuple[PlanningResult, ProductJobRecord, dict[str, object]]:
+    timeout_package = _provider_timeout_review_package(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+    )
+    result = _with_review_package(
+        _attach_output_checkpoint(
+            _minimal_planning_result(
+                job_id,
+                generation_metadata=_current_character_card_planning_metadata(
+                    operation_id=operation_id,
+                    handoff={
+                        "handoff_id": handoff_id,
+                        "status": "job_checkpointed",
+                        "generation_channel": "mcp",
+                    },
+                ),
+            ),
+            output_id=output_id,
+            candidate_id=candidate_id,
+            handoff_id=handoff_id,
+        ),
+        timeout_package,
+    )
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="positive expression keyframe",
+            metadata={
+                "project_id": "project_doc228",
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {
+                    "handoff_id": handoff_id,
+                    "status": request_handoff_status,
+                    "generation_channel": "mcp",
+                    "resume_required": True,
+                },
+            },
+        ),
+        status=ProductJobStatusValue.GENERATED,
+        job_id_value=job_id,
+        planning_result=result,
+        generation_result=result,
+    )
+    return result, record, timeout_package
 
 
 def _stale_crop_first_expression_reference_assets() -> list[dict]:
@@ -1801,6 +2021,777 @@ def test_doc223c_character_card_recovers_old_interrupted_job_beyond_recent_windo
     assert service.created_payloads == []
     assert service.generated_calls[0][0] == target.job_id
     assert len(store.list_mcp_operation_records(operation_id)) == 1
+
+
+def test_doc228_service_review_only_resume_rechecks_generated_timeout_package_without_regeneration(
+    tmp_path: Path,
+) -> None:
+    job_id = "job_doc228_generated_timeout"
+    output_id = "v3_output_a27b83988d28f9010cd1"
+    candidate_id = "candidate_doc228_timeout"
+    operation_id = "people_doc228:expression_set:expression.laugh:2:round5"
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    prompt = _current_laugh_handoff_prompt()
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        reference_assets=_current_expression_reference_assets(),
+        rendering_contract={"size": "32x48", "output_format": "png", "count": 1},
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=pending["prompt_sha256"],
+        reference_asset_hashes=pending["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+    consumed = handoff_store.consume(submitted["handoff_id"])
+    handoff_store.mark_output_checkpoint(
+        pending["handoff_id"],
+        job_id=job_id,
+        candidate_id=candidate_id,
+        output_id=output_id,
+        artifact_sha256=consumed["artifact_sha256"],
+    )
+    handoff_store.mark_job_checkpoint(
+        pending["handoff_id"],
+        job_id=job_id,
+        candidate_id=candidate_id,
+        output_id=output_id,
+        generation_result_id=f"planning_{job_id}",
+    )
+    result, record, timeout_package = _doc228_generated_timeout_record(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+        operation_id=operation_id,
+        handoff_id=pending["handoff_id"],
+        request_handoff_status="pending",
+    )
+    output_store.save_base64_output(
+        job_id=job_id,
+        candidate_id=candidate_id,
+        asset_id=result.asset_pack.assets[0].asset_id,
+        provider="mcp_materialization",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(_png_bytes()).decode("ascii"),
+        output_id=output_id,
+        metadata={
+            "project_id": "project_doc228",
+            "provider_prompt_sha256": "sha256:doc228",
+            "prompt_compilation_id": "prompt_doc228",
+            "provider_reference_image_count": 2,
+            "prompt_reference_parity": {"verified": True},
+            "reference_evidence_parity": {"verified": True},
+        },
+    )
+    job_store.save(record)
+
+    class _NoRuntime:
+        calls = 0
+
+        def generate_job(self, *_args, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls += 1
+            raise AssertionError("review-only resume must not call ScenarioRuntime/provider generation")
+
+    class _VisionStub:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def inspect(self, resolution, metadata=None):  # noqa: ANN001, ANN201
+            self.calls.append((resolution.output_id, dict(metadata or {})))
+            return VisualInspectionReport(
+                inspection_id="visual_inspection_doc228_pass",
+                project_id="project_doc228",
+                job_id=job_id,
+                candidate_id=candidate_id,
+                output_id=output_id,
+                mode="hybrid",
+                status="pass",
+                verification_state="verified",
+                confidence=0.94,
+                score_card=_laugh_pass_score_card(),
+                detected_issues=[],
+                evidence={"doc228_review_only_resume": True},
+                user_visible_summary=["shared Vision review succeeded on resume"],
+            )
+
+    vision = _VisionStub()
+    service = V3ProductApiService(
+        scenario_runtime=_NoRuntime(),  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        vision_inspector=vision,  # type: ignore[arg-type]
+        mcp_materialization_store=handoff_store,
+    )
+
+    status = service.generate_asset_series(
+        job_id,
+        {
+            "quality_mode": "strict",
+            "metadata": {
+                "_v3_resume_finalizing_review": True,
+                "disable_visual_auto_retry": True,
+                "max_visual_retry_attempts": 0,
+            },
+        },
+    )
+
+    updated = job_store.get(job_id)
+    assert status.status == ProductJobStatusValue.GENERATED
+    assert _NoRuntime.calls == 0
+    assert [item[0] for item in vision.calls] == [output_id]
+    assert len(output_store.list_by_job(job_id)) == 1
+    assert updated is not None
+    assert updated.generation_result is not None
+    inspection = updated.generation_result.metadata["post_generation_review_package"]["inspections"][0]
+    assert inspection["inspection_id"] == "visual_inspection_doc228_pass"
+    assert inspection["verification_state"] == "verified"
+    assert inspection["status"] == "pass"
+    assert updated.generation_result.metadata["post_generation_review_package"] != timeout_package
+    assert updated.request.metadata["mcp_materialization"]["status"] == "job_checkpointed"
+    assert "mcp_review_status" not in updated.request.metadata
+
+
+def test_doc228_service_plain_generated_or_blocked_with_result_does_not_recheck_or_regenerate(
+    tmp_path: Path,
+) -> None:
+    for status_value in (ProductJobStatusValue.GENERATED, ProductJobStatusValue.BLOCKED):
+        job_id = f"job_doc228_plain_{status_value.value}"
+        output_id = (
+            "v3_output_11111111111111111111"
+            if status_value == ProductJobStatusValue.GENERATED
+            else "v3_output_22222222222222222222"
+        )
+        candidate_id = f"candidate_doc228_plain_{status_value.value}"
+        timeout_package = _provider_timeout_review_package(
+            job_id=job_id,
+            output_id=output_id,
+            candidate_id=candidate_id,
+        )
+        result = _with_review_package(
+            _attach_output_checkpoint(
+                _minimal_planning_result(job_id),
+                output_id=output_id,
+                candidate_id=candidate_id,
+            ),
+            timeout_package,
+        )
+        job_store = PersistentProductJobStore(tmp_path / f"jobs_{status_value.value}")
+        output_store = V3GeneratedOutputStore(tmp_path / f"outputs_{status_value.value}")
+        output_store.save_base64_output(
+            job_id=job_id,
+            candidate_id=candidate_id,
+            asset_id=result.asset_pack.assets[0].asset_id,
+            provider="mcp_materialization",
+            model="gpt-image-2",
+            encoded_image=base64.b64encode(_png_bytes()).decode("ascii"),
+            output_id=output_id,
+        )
+        job_store.save(
+            ProductJobRecord(
+                request=CreateCreativeJobRequest(
+                    user_input="plain generated resume",
+                    metadata={"project_id": "project_doc228"},
+                ),
+                status=status_value,
+                job_id_value=job_id,
+                planning_result=result,
+                generation_result=result,
+            )
+        )
+
+        class _NoRuntime:
+            calls = 0
+
+            def generate_job(self, *_args, **_kwargs):  # noqa: ANN001, ANN201
+                self.calls += 1
+                raise AssertionError("plain completed resume must be idempotent")
+
+        class _NoVision:
+            calls = 0
+
+            def inspect(self, *_args, **_kwargs):  # noqa: ANN001, ANN201
+                self.calls += 1
+                raise AssertionError("plain completed resume must not re-run Vision")
+
+        service = V3ProductApiService(
+            scenario_runtime=_NoRuntime(),  # type: ignore[arg-type]
+            job_store=job_store,
+            output_store=output_store,
+            vision_inspector=_NoVision(),  # type: ignore[arg-type]
+        )
+
+        status = service.generate_asset_series(job_id, {"quality_mode": "strict", "metadata": {}})
+
+        updated = job_store.get(job_id)
+        assert status.status == status_value
+        assert _NoRuntime.calls == 0
+        assert _NoVision.calls == 0
+        assert updated is not None
+        assert updated.generation_result is not None
+        assert updated.generation_result.metadata["post_generation_review_package"] == timeout_package
+
+
+def test_doc228_host_reroutes_mcp_review_pending_to_review_only_resume_without_new_job() -> None:
+    job_id = "job_doc228_host_timeout"
+    output_id = "v3_output_33333333333333333333"
+    candidate_id = "candidate_doc228_host"
+    handoff_id = "mcp_handoff_doc228_host"
+    operation_id = "people_doc228:expression_set:expression.laugh:2:round5"
+
+    class _OutputStore:
+        def __init__(self) -> None:
+            self.records = [
+                SimpleNamespace(
+                    output_id=output_id,
+                    candidate_id=candidate_id,
+                    metadata={
+                        "provider_prompt_sha256": "sha256:doc228",
+                        "prompt_compilation_id": "prompt_doc228",
+                        "provider_reference_image_count": 2,
+                        "prompt_reference_parity": {"verified": True},
+                        "reference_evidence_parity": {"verified": True},
+                    },
+                )
+            ]
+
+        def list_by_job(self, _job_id):  # noqa: ANN001, ANN201
+            return list(self.records)
+
+    class _JobStore:
+        def __init__(self, record) -> None:  # noqa: ANN001
+            self.record = record
+
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return [self.record]
+
+        def list_mcp_operation_records(self, _operation_id):  # noqa: ANN001, ANN201
+            return [self.record]
+
+        def save(self, record):  # noqa: ANN001, ANN201
+            self.record = record
+            return record
+
+    class _ResumeReviewService:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            timeout_package = _provider_timeout_review_package(
+                job_id=job_id,
+                output_id=output_id,
+                candidate_id=candidate_id,
+            )
+            generation = _with_review_package(
+                _attach_output_checkpoint(
+                    _minimal_planning_result(
+                        job_id,
+                        generation_metadata=_current_character_card_planning_metadata(
+                            operation_id=operation_id,
+                            handoff={
+                                "handoff_id": handoff_id,
+                                "status": "job_checkpointed",
+                                "generation_channel": "mcp",
+                            },
+                        ),
+                    ),
+                    output_id=output_id,
+                    candidate_id=candidate_id,
+                    handoff_id=handoff_id,
+                ),
+                timeout_package,
+            )
+            self.record = SimpleNamespace(
+                job_id=job_id,
+                status=ProductJobStatusValue.GENERATED,
+                planning_result=generation,
+                generation_result=generation,
+                request=SimpleNamespace(
+                    metadata={
+                        "project_id": "project_doc228",
+                        "professional_character_card_preparation": True,
+                        "professional_character_card_stage": "expression_set",
+                        "professional_character_card_slot": "expression.laugh",
+                        "professional_character_card_reference_output_ids": ["front_winner"],
+                        "generation_channel": "mcp",
+                        "mcp_operation_id": operation_id,
+                        "mcp_materialization": {
+                            "handoff_id": handoff_id,
+                            "status": "job_checkpointed",
+                            "generation_channel": "mcp",
+                        },
+                    }
+                ),
+            )
+            self.created = 0
+            self.generated_calls = []
+            self.output_store = _OutputStore()
+            self.job_store = _JobStore(self.record)
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda _handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "job_checkpointed",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _current_expression_reference_assets(),
+                }
+            )
+
+        def create_professional_character_card_stage_job(self, *_args, **_kwargs):
+            self.created += 1
+            raise AssertionError("mcp_review_pending must resume the same job instead of creating a new one")
+
+        def generate_job(self, job_id_arg, request):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            self.generated_calls.append((job_id_arg, request))
+            assert request["metadata"]["_v3_resume_finalizing_review"] is True
+            package = {
+                "package_id": "review_doc228_host_pass",
+                "job_id": job_id,
+                "inspections": [
+                    {
+                        "inspection_id": "visual_inspection_doc228_host_pass",
+                        "job_id": job_id,
+                        "candidate_id": candidate_id,
+                        "output_id": output_id,
+                        "mode": "hybrid",
+                        "status": "pass",
+                        "verification_state": "verified",
+                        "confidence": 0.94,
+                        "score_card": _laugh_pass_score_card(),
+                        "detected_issues": [],
+                        "issue_codes": [],
+                    }
+                ],
+                "metadata": {"post_generation": True, "inspection_count": 1},
+            }
+            self.record.generation_result = _with_review_package(self.record.generation_result, package)
+            self.record.status = ProductJobStatusValue.GENERATED
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.GENERATED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, job_id_arg):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            return self.record
+
+    service = _ResumeReviewService()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc228",
+        people_asset_id="people_doc228",
+        card_version_id="card_doc228",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id=handoff_id,
+    )
+
+    candidate = ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert service.created == 0
+    assert service.generated_calls
+    assert candidate.output_id == output_id
+    assert len(service.output_store.list_by_job(job_id)) == 1
+
+
+def test_doc228_review_only_resume_syncs_durable_job_checkpoint_and_review_pending(
+    tmp_path: Path,
+) -> None:
+    job_id = "job_doc228_sync_checkpoint"
+    output_id = "v3_output_44444444444444444444"
+    candidate_id = "candidate_doc228_sync"
+    operation_id = "people_doc228:expression_set:expression.laugh:2:round5"
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    prompt = _current_laugh_handoff_prompt()
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        reference_assets=_current_expression_reference_assets(),
+        rendering_contract={"size": "32x48", "output_format": "png", "count": 1},
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=pending["prompt_sha256"],
+        reference_asset_hashes=pending["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+    consumed = handoff_store.consume(submitted["handoff_id"])
+    handoff_store.mark_output_checkpoint(
+        pending["handoff_id"],
+        job_id=job_id,
+        candidate_id=candidate_id,
+        output_id=output_id,
+        artifact_sha256=consumed["artifact_sha256"],
+    )
+    handoff_store.mark_job_checkpoint(
+        pending["handoff_id"],
+        job_id=job_id,
+        candidate_id=candidate_id,
+        output_id=output_id,
+        generation_result_id=f"planning_{job_id}",
+    )
+    reloaded_handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    assert reloaded_handoff_store.get(pending["handoff_id"])["status"] == "job_checkpointed"
+
+    result, record, _timeout_package = _doc228_generated_timeout_record(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+        operation_id=operation_id,
+        handoff_id=pending["handoff_id"],
+        request_handoff_status="pending",
+    )
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    output_store.save_base64_output(
+        job_id=job_id,
+        candidate_id=candidate_id,
+        asset_id=result.asset_pack.assets[0].asset_id,
+        provider="mcp_materialization",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(_png_bytes()).decode("ascii"),
+        output_id=output_id,
+    )
+    job_store.save(record)
+
+    class _NoRuntime:
+        calls = 0
+
+        def generate_job(self, *_args, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls += 1
+            raise AssertionError("review-only timeout resume must not regenerate")
+
+    class _TimeoutVision:
+        calls = 0
+
+        def inspect(self, resolution, metadata=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            return VisualInspectionReport(
+                inspection_id="visual_inspection_doc228_timeout_again",
+                project_id="project_doc228",
+                job_id=job_id,
+                candidate_id=candidate_id,
+                output_id=resolution.output_id,
+                mode="hybrid",
+                status="manual_review",
+                verification_state="unverified",
+                confidence=0.35,
+                score_card={"same_person_readability": 0.94, "overall": 0.5},
+                detected_issues=[
+                    {
+                        "code": "provider_timeout",
+                        "severity": "low",
+                        "retryable": False,
+                        "confidence": 0.4,
+                    }
+                ],
+                evidence={"provider_error": "Vision inspection timed out after 90.00 seconds."},
+            )
+
+    timeout_vision = _TimeoutVision()
+    service = V3ProductApiService(
+        scenario_runtime=_NoRuntime(),  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        vision_inspector=timeout_vision,  # type: ignore[arg-type]
+        mcp_materialization_store=reloaded_handoff_store,
+    )
+
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    updated = job_store.get(job_id)
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert _NoRuntime.calls == 0
+    assert timeout_vision.calls == 1
+    assert updated is not None
+    assert updated.request.metadata["mcp_materialization"]["status"] == "job_checkpointed"
+    assert updated.request.metadata["mcp_review_status"] == {
+        "status": "pending",
+        "reason_code": "provider_timeout",
+        "handoff_id": pending["handoff_id"],
+        "output_id": output_id,
+        "candidate_id": candidate_id,
+        "review_owner": "v3_shared_visual_cluster",
+    }
+    assert reloaded_handoff_store.get(pending["handoff_id"])["status"] == "job_checkpointed"
+    reloaded_job = PersistentProductJobStore(tmp_path / "jobs").get(job_id)
+    assert reloaded_job is not None
+    assert reloaded_job.request.metadata["mcp_materialization"]["status"] == "job_checkpointed"
+    assert reloaded_job.request.metadata["mcp_review_status"]["status"] == "pending"
+    assert len(output_store.list_by_job(job_id)) == 1
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_patch", "expected_reason"),
+    [
+        ({"job_id": "job_doc228_wrong"}, "mcp_materialization_checkpoint_mismatch"),
+        ({"candidate_id": "candidate_doc228_wrong"}, "mcp_materialization_checkpoint_mismatch"),
+        ({"output_id": "v3_output_66666666666666666666"}, "mcp_materialization_checkpoint_mismatch"),
+        ({"generation_result_id": "generation_result_wrong"}, "mcp_materialization_checkpoint_mismatch"),
+        ({"operation_id": ""}, "mcp_materialization_checkpoint_mismatch"),
+    ],
+)
+def test_doc228_review_only_resume_rejects_checkpoint_identity_mismatch(
+    tmp_path: Path,
+    checkpoint_patch: dict[str, str],
+    expected_reason: str,
+) -> None:
+    job_id = "job_doc228_identity_mismatch"
+    output_id = "v3_output_77777777777777777777"
+    candidate_id = "candidate_doc228_identity"
+    handoff_id = "mcp_handoff_doc228_identity"
+    operation_id = "people_doc228:expression_set:expression.laugh:2:round5"
+    result, record, _timeout_package = _doc228_generated_timeout_record(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+        operation_id=operation_id,
+        handoff_id=handoff_id,
+        request_handoff_status="pending",
+    )
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    output_store.save_base64_output(
+        job_id=job_id,
+        candidate_id=candidate_id,
+        asset_id=result.asset_pack.assets[0].asset_id,
+        provider="mcp_materialization",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(_png_bytes()).decode("ascii"),
+        output_id=output_id,
+    )
+    job_store.save(record)
+    job_checkpoint = {
+        "status": "job_checkpointed",
+        "operation_id": operation_id,
+        "handoff_id": handoff_id,
+        "job_id": job_id,
+        "candidate_id": candidate_id,
+        "output_id": output_id,
+        "generation_result_id": result.planning_result_id,
+        **checkpoint_patch,
+    }
+
+    class _MismatchHandoffStore:
+        def get(self, _handoff_id):  # noqa: ANN001, ANN201
+            return {
+                "handoff_id": handoff_id,
+                "status": "job_checkpointed",
+                "generation_channel": "mcp",
+                "job_checkpoint": job_checkpoint,
+                "mcp_checkpoint": dict(job_checkpoint),
+            }
+
+    class _NoRuntime:
+        calls = 0
+
+        def generate_job(self, *_args, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls += 1
+            raise AssertionError("checkpoint mismatch must not regenerate")
+
+    class _VisionPass:
+        calls = 0
+
+        def inspect(self, resolution, metadata=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            return VisualInspectionReport(
+                inspection_id="visual_inspection_doc228_mismatch_pass",
+                project_id="project_doc228",
+                job_id=job_id,
+                candidate_id=candidate_id,
+                output_id=resolution.output_id,
+                mode="hybrid",
+                status="pass",
+                verification_state="verified",
+                confidence=0.94,
+                score_card=_laugh_pass_score_card(),
+                detected_issues=[],
+            )
+
+    vision = _VisionPass()
+    service = V3ProductApiService(
+        scenario_runtime=_NoRuntime(),  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        vision_inspector=vision,  # type: ignore[arg-type]
+        mcp_materialization_store=_MismatchHandoffStore(),  # type: ignore[arg-type]
+    )
+
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    updated = job_store.get(job_id)
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert _NoRuntime.calls == 0
+    assert vision.calls == 1
+    assert updated is not None
+    assert updated.request.metadata["mcp_review_status"]["reason_code"] == expected_reason
+    assert updated.request.metadata["mcp_materialization"]["status"] == "pending"
+
+
+def test_doc228_host_keeps_review_timeout_resumable_after_second_timeout() -> None:
+    job_id = "job_doc228_host_timeout_again"
+    output_id = "v3_output_55555555555555555555"
+    candidate_id = "candidate_doc228_again"
+    handoff_id = "mcp_handoff_doc228_again"
+    operation_id = "people_doc228:expression_set:expression.laugh:2:round5"
+
+    class _OutputStore:
+        def list_by_job(self, _job_id):  # noqa: ANN001, ANN201
+            return [
+                SimpleNamespace(
+                    output_id=output_id,
+                    candidate_id=candidate_id,
+                    metadata={
+                        "provider_prompt_sha256": "sha256:doc228",
+                        "prompt_compilation_id": "prompt_doc228",
+                        "provider_reference_image_count": 2,
+                        "prompt_reference_parity": {"verified": True},
+                        "reference_evidence_parity": {"verified": True},
+                    },
+                )
+            ]
+
+    class _Store:
+        def __init__(self, record) -> None:  # noqa: ANN001
+            self.record = record
+
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return [self.record]
+
+        def list_mcp_operation_records(self, _operation_id):  # noqa: ANN001, ANN201
+            return [self.record]
+
+        def save(self, record):  # noqa: ANN001, ANN201
+            self.record = record
+            return record
+
+    class _TimeoutAgainService:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            generation = _with_review_package(
+                _attach_output_checkpoint(
+                    _minimal_planning_result(
+                        job_id,
+                        generation_metadata=_current_character_card_planning_metadata(
+                            operation_id=operation_id,
+                            handoff={
+                                "handoff_id": handoff_id,
+                                "status": "job_checkpointed",
+                                "generation_channel": "mcp",
+                            },
+                        ),
+                    ),
+                    output_id=output_id,
+                    candidate_id=candidate_id,
+                    handoff_id=handoff_id,
+                ),
+                _provider_timeout_review_package(
+                    job_id=job_id,
+                    output_id=output_id,
+                    candidate_id=candidate_id,
+                ),
+            )
+            self.record = SimpleNamespace(
+                job_id=job_id,
+                status=ProductJobStatusValue.GENERATED,
+                planning_result=generation,
+                generation_result=generation,
+                request=SimpleNamespace(
+                    metadata={
+                        "project_id": "project_doc228",
+                        "professional_character_card_preparation": True,
+                        "professional_character_card_stage": "expression_set",
+                        "professional_character_card_slot": "expression.laugh",
+                        "professional_character_card_reference_output_ids": ["front_winner"],
+                        "generation_channel": "mcp",
+                        "mcp_operation_id": operation_id,
+                        "mcp_materialization": {
+                            "handoff_id": handoff_id,
+                            "status": "job_checkpointed",
+                            "generation_channel": "mcp",
+                        },
+                    }
+                ),
+            )
+            self.output_store = _OutputStore()
+            self.job_store = _Store(self.record)
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda _handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "job_checkpointed",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _current_expression_reference_assets(),
+                }
+            )
+
+        def create_professional_character_card_stage_job(self, *_args, **_kwargs):
+            raise AssertionError("review timeout resume must not create a new job")
+
+        def generate_job(self, job_id_arg, request):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            assert request["metadata"]["_v3_resume_finalizing_review"] is True
+            self.record.status = ProductJobStatusValue.BLOCKED
+            self.record.request.metadata = {
+                **dict(self.record.request.metadata),
+                "mcp_review_status": {
+                    "status": "pending",
+                    "reason_code": "provider_timeout",
+                    "handoff_id": handoff_id,
+                    "output_id": output_id,
+                    "candidate_id": candidate_id,
+                    "review_owner": "v3_shared_visual_cluster",
+                },
+            }
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, job_id_arg):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            return self.record
+
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc228",
+        people_asset_id="people_doc228",
+        card_version_id="card_doc228",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id=handoff_id,
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        ProductApiAnchorPackPreparationHost(_TimeoutAgainService()).generate(request)  # type: ignore[arg-type]
+
+    assert exc_info.value.failure_code == "mcp_review_pending"
+    assert exc_info.value.mcp_handoff_id == handoff_id
+    assert exc_info.value.output_id == output_id
+    assert exc_info.value.candidate_id == candidate_id
 
 
 def test_doc223c_anchor_pack_recovers_old_handoff_job_beyond_recent_window(

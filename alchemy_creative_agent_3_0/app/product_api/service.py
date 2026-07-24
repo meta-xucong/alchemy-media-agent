@@ -1670,7 +1670,24 @@ class V3ProductApiService:
             if checkpoint_status is not None:
                 return checkpoint_status
             if resume_finalizing_review:
-                return self._resume_finalizing_generation_review(record, generate_request, background_attempt_id)
+                return self._resume_finalizing_generation_review(
+                    record,
+                    generate_request,
+                    background_attempt_id,
+                    review_only=True,
+                )
+            return self._status_from_record(record)
+        if (
+            record.status in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.BLOCKED}
+            and record.generation_result is not None
+        ):
+            if resume_finalizing_review:
+                return self._resume_finalizing_generation_review(
+                    record,
+                    generate_request,
+                    background_attempt_id,
+                    review_only=True,
+                )
             return self._status_from_record(record)
         if record.status == ProductJobStatusValue.GENERATING and not worker_claim:
             if not (
@@ -1942,11 +1959,16 @@ class V3ProductApiService:
         record: ProductJobRecord,
         generate_request: GenerateJobRequest,
         background_attempt_id: str = "",
+        *,
+        review_only: bool = False,
     ) -> ProductJobStatus:
         generation_result = record.generation_result
         if generation_result is None:
             return self._status_from_record(record)
-        if isinstance(generation_result.metadata.get("post_generation_review_package"), dict):
+        existing_package = generation_result.metadata.get("post_generation_review_package")
+        if isinstance(existing_package, dict) and not self._post_generation_review_package_requires_resume(
+            existing_package
+        ):
             return self._status_from_record(record)
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
@@ -1956,16 +1978,39 @@ class V3ProductApiService:
         generation_result = self._apply_text_pixel_delivery(record, generation_result)
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
-        generation_result = self._run_visual_auto_retries(
-            record=record,
-            generate_request=generate_request,
-            provider_strategy=provider_strategy,
-            generation_result=generation_result,
-        )
+        if not review_only:
+            generation_result = self._run_visual_auto_retries(
+                record=record,
+                generate_request=generate_request,
+                provider_strategy=provider_strategy,
+                generation_result=generation_result,
+            )
         generation_result = self._apply_reviewed_delivery_preference(generation_result)
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         record.generation_result = generation_result
+        package = generation_result.metadata.get("post_generation_review_package")
+        review_still_pending = (
+            isinstance(package, dict)
+            and self._post_generation_review_package_requires_resume(package)
+        )
+        projection_ok = self._sync_mcp_review_resume_projection(
+            record,
+            generation_result,
+            review_pending=review_still_pending,
+        )
+        if review_only and not projection_ok:
+            record.status = ProductJobStatusValue.BLOCKED
+            record.balance_estimate = self._estimate_for_result(generation_result)
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+            return self._status_from_record(record)
+        if review_only and review_still_pending:
+            record.status = ProductJobStatusValue.BLOCKED
+            record.balance_estimate = self._estimate_for_result(generation_result)
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+            return self._status_from_record(record)
         specialized_execution = self._specialized_role_execution_terminal_summary(record, generation_result)
         if specialized_execution is not None:
             record.request.metadata = {
@@ -1996,6 +2041,220 @@ class V3ProductApiService:
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)
+
+    def _sync_mcp_review_resume_projection(
+        self,
+        record: ProductJobRecord,
+        generation_result: PlanningResult,
+        *,
+        review_pending: bool,
+    ) -> bool:
+        request_metadata = dict(record.request.metadata or {})
+        handoff_id, output_id, candidate_id = self._mcp_review_resume_checkpoint_identity(generation_result)
+        if handoff_id:
+            materialization = self._safe_mcp_materialization_projection(handoff_id)
+            materialization_status = (
+                str(materialization.get("status") or "").strip()
+                if isinstance(materialization, dict)
+                else ""
+            )
+            materialization_ready = (
+                materialization_status in {"output_checkpointed", "job_checkpointed"}
+                if output_id or candidate_id
+                else bool(materialization)
+            )
+            if materialization_ready:
+                materialization_ready = self._mcp_materialization_projection_matches_result(
+                    materialization,
+                    record=record,
+                    generation_result=generation_result,
+                    handoff_id=handoff_id,
+                    output_id=output_id,
+                    candidate_id=candidate_id,
+                )
+            if not materialization_ready:
+                reason_code = (
+                    "mcp_materialization_checkpoint_mismatch"
+                    if isinstance(materialization, dict)
+                    else "mcp_materialization_projection_unavailable"
+                )
+                review_projection = {
+                    "status": "pending",
+                    "reason_code": reason_code,
+                    "handoff_id": handoff_id,
+                    "output_id": output_id,
+                    "candidate_id": candidate_id,
+                    "review_owner": "v3_shared_visual_cluster",
+                }
+                request_metadata["mcp_review"] = dict(review_projection)
+                request_metadata["mcp_review_status"] = dict(review_projection)
+                record.request.metadata = request_metadata
+                return False
+            request_metadata["mcp_materialization"] = materialization
+        if review_pending:
+            review_projection = {
+                "status": "pending",
+                "reason_code": "provider_timeout",
+                "handoff_id": handoff_id,
+                "output_id": output_id,
+                "candidate_id": candidate_id,
+                "review_owner": "v3_shared_visual_cluster",
+            }
+            request_metadata["mcp_review"] = dict(review_projection)
+            request_metadata["mcp_review_status"] = dict(review_projection)
+        else:
+            request_metadata.pop("mcp_review", None)
+            request_metadata.pop("mcp_review_status", None)
+        record.request.metadata = request_metadata
+        return True
+
+    @staticmethod
+    def _mcp_materialization_projection_matches_result(
+        materialization: dict[str, Any],
+        *,
+        record: ProductJobRecord,
+        generation_result: PlanningResult,
+        handoff_id: str,
+        output_id: str,
+        candidate_id: str,
+    ) -> bool:
+        if not isinstance(materialization, dict):
+            return False
+        if str(materialization.get("handoff_id") or "").strip() != str(handoff_id or "").strip():
+            return False
+        request_metadata = dict(record.request.metadata or {})
+        operation_id = str(request_metadata.get("mcp_operation_id") or "").strip()
+        if not operation_id:
+            return False
+        status = str(materialization.get("status") or "").strip()
+        checkpoint_keys = (
+            ("job_checkpoint",)
+            if status == "job_checkpointed"
+            else ("output_checkpoint", "job_checkpoint")
+        )
+        checkpoints = [
+            materialization.get(key)
+            for key in checkpoint_keys
+            if isinstance(materialization.get(key), dict)
+        ]
+        if not checkpoints:
+            return False
+        expected_result_id = str(generation_result.planning_result_id or "").strip()
+        for checkpoint in checkpoints:
+            if str(checkpoint.get("handoff_id") or "").strip() != str(handoff_id or "").strip():
+                return False
+            if str(checkpoint.get("operation_id") or "").strip() != operation_id:
+                return False
+            if str(checkpoint.get("job_id") or "").strip() != str(record.job_id or "").strip():
+                return False
+            if candidate_id and str(checkpoint.get("candidate_id") or "").strip() != candidate_id:
+                return False
+            if output_id and str(checkpoint.get("output_id") or "").strip() != output_id:
+                return False
+            checkpoint_result_id = str(checkpoint.get("generation_result_id") or "").strip()
+            if expected_result_id and checkpoint_result_id != expected_result_id:
+                return False
+        return True
+
+    def _mcp_review_resume_checkpoint_identity(
+        self,
+        generation_result: PlanningResult,
+    ) -> tuple[str, str, str]:
+        for asset in generation_result.asset_pack.assets:
+            metadata = dict(asset.metadata or {})
+            candidate_metadata = (
+                dict(metadata.get("candidate_metadata"))
+                if isinstance(metadata.get("candidate_metadata"), dict)
+                else {}
+            )
+            materialization = (
+                dict(candidate_metadata.get("mcp_materialization"))
+                if isinstance(candidate_metadata.get("mcp_materialization"), dict)
+                else {}
+            )
+            handoff_id = str(materialization.get("handoff_id") or "").strip()
+            output_id = str(candidate_metadata.get("output_id") or metadata.get("output_id") or "").strip()
+            candidate_id = str(
+                candidate_metadata.get("candidate_id")
+                or metadata.get("selected_candidate_id")
+                or ""
+            ).strip()
+            if handoff_id or output_id or candidate_id:
+                return handoff_id, output_id, candidate_id
+        return "", "", ""
+
+    def _safe_mcp_materialization_projection(self, handoff_id: str) -> dict[str, Any] | None:
+        handoff = str(handoff_id or "").strip()
+        if not handoff:
+            return None
+        store = getattr(self, "mcp_materialization_store", None)
+        getter = getattr(store, "get", None)
+        if not callable(getter):
+            return None
+        try:
+            payload = getter(handoff)
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        status = str(payload.get("status") or "").strip()
+        if status not in {
+            "pending",
+            "submitted",
+            "consumed",
+            "consumed_uncheckpointed",
+            "output_checkpointed",
+            "job_checkpointed",
+        }:
+            return None
+        projection = {
+            "handoff_id": str(payload.get("handoff_id") or handoff),
+            "status": status,
+            "generation_channel": str(payload.get("generation_channel") or "mcp"),
+            "resume_required": True,
+        }
+        for key in ("expected_checkpoint", "mcp_checkpoint", "output_checkpoint", "job_checkpoint"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                projection[key] = {
+                    safe_key: str(value.get(safe_key) or "")
+                    for safe_key in (
+                        "status",
+                        "operation_id",
+                        "handoff_id",
+                        "job_id",
+                        "candidate_id",
+                        "output_id",
+                        "generation_result_id",
+                    )
+                    if str(value.get(safe_key) or "").strip()
+                }
+        return projection
+
+    @staticmethod
+    def _post_generation_review_package_requires_resume(package: dict[str, Any]) -> bool:
+        inspections = package.get("inspections")
+        if not isinstance(inspections, list):
+            return False
+        for inspection in inspections:
+            if not isinstance(inspection, dict):
+                continue
+            if str(inspection.get("verification_state") or "").strip().lower() == "verified":
+                continue
+            status = str(inspection.get("status") or "").strip().lower()
+            if status not in {"manual_review", "fail_retryable"}:
+                continue
+            raw_issues = inspection.get("issue_codes") or inspection.get("detected_issues") or []
+            issue_codes = {
+                str(item.get("code") if isinstance(item, dict) else item).strip()
+                for item in raw_issues
+                if str(item.get("code") if isinstance(item, dict) else item).strip()
+            }
+            evidence = inspection.get("evidence") if isinstance(inspection.get("evidence"), dict) else {}
+            provider_error = str(evidence.get("provider_error") or "").lower()
+            if "provider_timeout" in issue_codes or "timed out" in provider_error:
+                return True
+        return False
 
     def _specialized_role_execution_terminal_summary(
         self,
