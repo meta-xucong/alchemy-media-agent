@@ -38,6 +38,7 @@ FormalSlotReviewStatus = Literal[
     "unverified",
 ]
 FormalSlotRequirementStatus = Literal["pass", "fail", "missing", "not_applicable"]
+FormalSlotEnhancedProofStatus = Literal["pass", "fail", "missing", "not_applicable"]
 
 STANDARD_THREE_CANDIDATE_COUNT = 3
 SAFE_PUBLIC_FORBIDDEN_TOKENS = (
@@ -178,6 +179,72 @@ class FormalSlotRequirementSummary(_StrictFormalSlotModel):
         return self.status in _PASSING_REQUIREMENT_STATUSES
 
 
+class FormalSlotCandidateEnhancedProofSummary(_StrictFormalSlotModel):
+    """Opaque profile-gate result for one already-reviewed candidate."""
+
+    owner: Literal["v3_professional_enhanced_profile_contract"] = (
+        "v3_professional_enhanced_profile_contract"
+    )
+    contract_version: Literal["v3_formal_slot_candidate_enhanced_proof_v1"] = (
+        "v3_formal_slot_candidate_enhanced_proof_v1"
+    )
+    profile_id: str
+    requirement_id: str
+    candidate_id: str
+    output_id: str
+    eligible: bool
+    status: FormalSlotEnhancedProofStatus
+    evidence_codes: list[str]
+    issue_codes: list[str] = Field(default_factory=list)
+    dimensions: dict[str, float]
+
+    @field_validator("profile_id", "requirement_id")
+    @classmethod
+    def validate_profile_identity(cls, value: str) -> str:
+        return _require_safe_public_label(value, "enhanced profile identity")
+
+    @field_validator("candidate_id", "output_id")
+    @classmethod
+    def validate_candidate_identity(cls, value: str) -> str:
+        return _require_nonempty_text(value, "enhanced candidate identity")
+
+    @field_validator("evidence_codes", "issue_codes")
+    @classmethod
+    def validate_public_codes(cls, value: list[str]) -> list[str]:
+        normalized = [_require_safe_public_label(item, "enhanced proof code") for item in value]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("enhanced proof codes must be unique")
+        return normalized
+
+    @field_validator("dimensions")
+    @classmethod
+    def validate_dimensions(cls, value: dict[str, float]) -> dict[str, float]:
+        return _validate_public_score_dimensions(value, "enhanced proof dimensions")
+
+    @model_validator(mode="after")
+    def require_explicit_profile_proof(self) -> "FormalSlotCandidateEnhancedProofSummary":
+        if not self.evidence_codes:
+            raise ValueError("enhanced proof requires evidence codes")
+        if not self.dimensions:
+            raise ValueError("enhanced proof requires dimensions")
+        if self.eligible != (self.status == "pass"):
+            raise ValueError("enhanced proof eligibility must match pass status")
+        return self
+
+    def public_summary(self) -> dict[str, object]:
+        return {
+            "owner": self.owner,
+            "contract_version": self.contract_version,
+            "profile_id": self.profile_id,
+            "requirement_id": self.requirement_id,
+            "eligible": self.eligible,
+            "status": self.status,
+            "evidence_codes": list(self.evidence_codes),
+            "issue_codes": list(self.issue_codes),
+            "dimensions": dict(self.dimensions),
+        }
+
+
 class FormalSlotCandidateSummary(_StrictFormalSlotModel):
     """A reviewed candidate attempt for a formal slot or auxiliary collection."""
 
@@ -187,6 +254,7 @@ class FormalSlotCandidateSummary(_StrictFormalSlotModel):
     reviewed: bool
     selected_as_winner: bool = False
     shared_review: FormalSlotSharedReviewSummary
+    enhanced_proof: FormalSlotCandidateEnhancedProofSummary | None = None
 
     @field_validator("candidate_id", "output_id")
     @classmethod
@@ -197,6 +265,11 @@ class FormalSlotCandidateSummary(_StrictFormalSlotModel):
     def require_reviewed_attempt(self) -> "FormalSlotCandidateSummary":
         if not self.reviewed:
             raise ValueError("candidate summary must represent a real reviewed attempt")
+        if self.enhanced_proof is not None:
+            if self.enhanced_proof.candidate_id != self.candidate_id:
+                raise ValueError("enhanced proof candidate does not match candidate summary")
+            if self.enhanced_proof.output_id != self.output_id:
+                raise ValueError("enhanced proof output does not match candidate summary")
         return self
 
 
