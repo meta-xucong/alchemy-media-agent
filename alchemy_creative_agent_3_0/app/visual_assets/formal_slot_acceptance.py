@@ -18,6 +18,8 @@ from ..schemas.models import V3BaseModel
 
 FORMAL_SLOT_RECEIPT_VERSION = "v3_formal_slot_acceptance_receipt_v1"
 FORMAL_SLOT_RECEIPT_OWNER = "v3_professional_formal_slot_acceptance_core"
+FORMAL_SLOT_SHARED_REVIEW_OWNER = "v3_shared_visual_cluster"
+FORMAL_SLOT_SHARED_REVIEW_CONTRACT_VERSION = "v3_character_card_generic_slot_review_receipt_v1"
 
 FormalSlotAcceptanceMode = Literal[
     "standard_three_candidate",
@@ -97,17 +99,15 @@ class FormalSlotSharedReviewSummary(_StrictFormalSlotModel):
     candidates still count as reviewed attempts when their summary is present.
     """
 
-    owner: str = "v3_shared_visual_review"
+    owner: Literal["v3_shared_visual_cluster"] = FORMAL_SLOT_SHARED_REVIEW_OWNER
+    contract_version: Literal["v3_character_card_generic_slot_review_receipt_v1"] = (
+        FORMAL_SLOT_SHARED_REVIEW_CONTRACT_VERSION
+    )
     status: FormalSlotReviewStatus
     evidence_codes: list[str] = Field(default_factory=list)
     issue_codes: list[str] = Field(default_factory=list)
     score_dimensions: dict[str, float] = Field(default_factory=dict)
     framing_delta_dimensions: dict[str, float] = Field(default_factory=dict)
-
-    @field_validator("owner")
-    @classmethod
-    def validate_owner(cls, value: str) -> str:
-        return _require_safe_public_label(value, "review owner")
 
     @field_validator("evidence_codes", "issue_codes")
     @classmethod
@@ -121,6 +121,15 @@ class FormalSlotSharedReviewSummary(_StrictFormalSlotModel):
     @classmethod
     def validate_dimensions(cls, value: dict[str, float]) -> dict[str, float]:
         return _validate_public_score_dimensions(value, "review dimensions")
+
+    @model_validator(mode="after")
+    def require_passing_evidence(self) -> "FormalSlotSharedReviewSummary":
+        if self.passed:
+            if not self.evidence_codes:
+                raise ValueError("passing shared review requires evidence codes")
+            if not self.score_dimensions:
+                raise ValueError("passing shared review requires score dimensions")
+        return self
 
     @property
     def passed(self) -> bool:
@@ -146,6 +155,15 @@ class FormalSlotRequirementSummary(_StrictFormalSlotModel):
     @classmethod
     def validate_dimensions(cls, value: dict[str, float]) -> dict[str, float]:
         return _validate_public_score_dimensions(value, "requirement dimensions")
+
+    @model_validator(mode="after")
+    def require_passing_evidence(self) -> "FormalSlotRequirementSummary":
+        if self.passed:
+            if not self.evidence_codes:
+                raise ValueError("passing requirement summary requires evidence codes")
+            if not self.dimensions:
+                raise ValueError("passing requirement summary requires dimensions")
+        return self
 
     @property
     def passed(self) -> bool:
@@ -249,27 +267,46 @@ class FormalSlotReceipt(_StrictFormalSlotModel):
             raise ValueError("standard_three_candidate requires formal_slot slot scope")
         if self.reviewed_candidate_count != STANDARD_THREE_CANDIDATE_COUNT:
             raise ValueError("standard_three_candidate requires exactly three reviewed candidates")
+        if [candidate.candidate_index for candidate in sorted(self.candidates, key=lambda item: item.candidate_index)] != [
+            1,
+            2,
+            3,
+        ]:
+            raise ValueError("standard_three_candidate requires candidate indexes 1, 2, and 3")
         winner = self._validate_winner(selected)
-        if not winner.shared_review.passed:
-            raise ValueError("standard_three_candidate winner requires passing shared review")
-        if not self.framing_summary.passed:
-            raise ValueError("standard_three_candidate requires passing framing summary")
-        if not self.parity_summary.passed:
-            raise ValueError("standard_three_candidate requires passing parity summary")
-        if not self.identity_summary.passed:
-            raise ValueError("standard_three_candidate requires passing identity summary")
-        if not self.reload_public_projection_verified:
-            raise ValueError("standard_three_candidate requires reload/public projection verification")
+        self._validate_success_proof("standard_three_candidate", winner)
 
     def _validate_target_only_collection(self, selected: list[FormalSlotCandidateSummary]) -> None:
         if self.slot_scope != "formal_slot":
             raise ValueError("target-only collection references a formal slot target")
-        self._validate_winner(selected)
+        if self.reviewed_candidate_count != 1 or len(self.candidates) != 1:
+            raise ValueError("target-only collection requires exactly one reviewed target")
+        if self.candidates[0].candidate_index != 1:
+            raise ValueError("target-only collection requires candidate index 1")
+        winner = self._validate_winner(selected)
+        self._validate_success_proof("target-only collection", winner)
 
     def _validate_auxiliary_bridge(self, selected: list[FormalSlotCandidateSummary]) -> None:
         if self.slot_scope != "auxiliary_reference":
             raise ValueError("auxiliary_first_pass_reference must use auxiliary_reference scope")
-        self._validate_winner(selected)
+        if self.reviewed_candidate_count != 1 or len(self.candidates) != 1:
+            raise ValueError("auxiliary_first_pass_reference requires exactly one reviewed bridge target")
+        if self.candidates[0].candidate_index != 1:
+            raise ValueError("auxiliary_first_pass_reference requires candidate index 1")
+        winner = self._validate_winner(selected)
+        self._validate_success_proof("auxiliary_first_pass_reference", winner)
+
+    def _validate_success_proof(self, mode_label: str, winner: FormalSlotCandidateSummary) -> None:
+        if not winner.shared_review.passed:
+            raise ValueError(f"{mode_label} winner requires passing shared review")
+        if not self.framing_summary.passed:
+            raise ValueError(f"{mode_label} requires passing framing summary")
+        if not self.parity_summary.passed:
+            raise ValueError(f"{mode_label} requires passing parity summary")
+        if not self.identity_summary.passed:
+            raise ValueError(f"{mode_label} requires passing identity summary")
+        if not self.reload_public_projection_verified:
+            raise ValueError(f"{mode_label} requires reload/public projection verification")
 
     @property
     def formal_completion_verified(self) -> bool:

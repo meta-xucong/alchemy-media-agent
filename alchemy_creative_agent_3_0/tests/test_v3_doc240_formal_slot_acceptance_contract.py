@@ -149,6 +149,30 @@ def test_doc240_standard_three_candidate_requires_three_real_reviewed_attempts()
         _standard_receipt(candidate_count=2)
 
 
+def test_doc240_standard_three_candidate_requires_exact_candidate_indexes() -> None:
+    candidates = [
+        _candidate(1, status="fail_retryable"),
+        _candidate(2, winner=True),
+        _candidate(4, status="fail_retryable"),
+    ]
+    with pytest.raises(ValidationError, match="indexes 1, 2, and 3"):
+        FormalSlotReceipt(
+            module="expression_set",
+            slot_key="expression.anger",
+            acceptance_mode="standard_three_candidate",
+            slot_scope="formal_slot",
+            reviewed_candidate_count=3,
+            candidates=candidates,
+            winner_candidate_id="candidate_2",
+            winner_output_id="output_2",
+            winner_shared_review=candidates[1].shared_review,
+            framing_summary=_requirement("pass"),
+            parity_summary=_requirement("pass"),
+            identity_summary=_requirement("pass"),
+            reload_public_projection_verified=True,
+        )
+
+
 def test_doc240_reviewed_count_cannot_be_faked_by_constant() -> None:
     with pytest.raises(ValidationError, match="must equal the real candidate summary count"):
         _standard_receipt(candidate_count=1, reviewed_candidate_count=3, winner_index=1)
@@ -173,6 +197,44 @@ def test_doc240_target_only_is_collectable_but_not_formal_activation() -> None:
         validate_formal_slot_receipt_for_activation(receipt)
 
 
+def test_doc240_target_only_requires_one_passing_existing_target() -> None:
+    candidates = [_candidate(1, winner=True), _candidate(2)]
+    with pytest.raises(ValidationError, match="exactly one reviewed target"):
+        FormalSlotReceipt(
+            module="expression_set",
+            slot_key="expression.laugh",
+            acceptance_mode="target_only_existing_candidate_collection",
+            slot_scope="formal_slot",
+            reviewed_candidate_count=2,
+            candidates=candidates,
+            winner_candidate_id="candidate_1",
+            winner_output_id="output_1",
+            winner_shared_review=candidates[0].shared_review,
+            framing_summary=_requirement("pass"),
+            parity_summary=_requirement("pass"),
+            identity_summary=_requirement("pass"),
+            reload_public_projection_verified=True,
+        )
+
+    failed_target = _candidate(1, status="fail_retryable", winner=True)
+    with pytest.raises(ValidationError, match="passing shared review"):
+        FormalSlotReceipt(
+            module="expression_set",
+            slot_key="expression.laugh",
+            acceptance_mode="target_only_existing_candidate_collection",
+            slot_scope="formal_slot",
+            reviewed_candidate_count=1,
+            candidates=[failed_target],
+            winner_candidate_id=failed_target.candidate_id,
+            winner_output_id=failed_target.output_id,
+            winner_shared_review=failed_target.shared_review,
+            framing_summary=_requirement("pass"),
+            parity_summary=_requirement("pass"),
+            identity_summary=_requirement("pass"),
+            reload_public_projection_verified=True,
+        )
+
+
 def test_doc240_auxiliary_first_pass_reference_is_not_a_formal_slot_receipt() -> None:
     receipt = _bridge_receipt()
     summary = project_formal_slot_public_summary(receipt)
@@ -183,6 +245,44 @@ def test_doc240_auxiliary_first_pass_reference_is_not_a_formal_slot_receipt() ->
     assert summary["activation_eligible"] is False
     with pytest.raises(ValueError, match="standard_three_candidate"):
         validate_formal_slot_receipt_for_activation(receipt)
+
+
+def test_doc240_auxiliary_bridge_requires_one_passing_bridge_target() -> None:
+    candidates = [_candidate(1, winner=True), _candidate(2), _candidate(3)]
+    with pytest.raises(ValidationError, match="exactly one reviewed bridge target"):
+        FormalSlotReceipt(
+            module="face_identity_auxiliary",
+            slot_key="reference_bridge.left_25",
+            acceptance_mode="auxiliary_first_pass_reference",
+            slot_scope="auxiliary_reference",
+            reviewed_candidate_count=3,
+            candidates=candidates,
+            winner_candidate_id="candidate_1",
+            winner_output_id="output_1",
+            winner_shared_review=candidates[0].shared_review,
+            framing_summary=_requirement("pass"),
+            parity_summary=_requirement("pass"),
+            identity_summary=_requirement("pass"),
+            reload_public_projection_verified=True,
+        )
+
+    failed_bridge = _candidate(1, status="fail_retryable", winner=True)
+    with pytest.raises(ValidationError, match="passing shared review"):
+        FormalSlotReceipt(
+            module="face_identity_auxiliary",
+            slot_key="reference_bridge.left_25",
+            acceptance_mode="auxiliary_first_pass_reference",
+            slot_scope="auxiliary_reference",
+            reviewed_candidate_count=1,
+            candidates=[failed_bridge],
+            winner_candidate_id=failed_bridge.candidate_id,
+            winner_output_id=failed_bridge.output_id,
+            winner_shared_review=failed_bridge.shared_review,
+            framing_summary=_requirement("pass"),
+            parity_summary=_requirement("pass"),
+            identity_summary=_requirement("pass"),
+            reload_public_projection_verified=True,
+        )
 
 
 def test_doc240_auxiliary_bridge_cannot_use_formal_slot_scope() -> None:
@@ -203,6 +303,38 @@ def test_doc240_auxiliary_bridge_cannot_use_formal_slot_scope() -> None:
             identity_summary=_requirement("pass"),
             reload_public_projection_verified=True,
         )
+
+
+def test_doc240_shared_review_requires_canonical_owner_version_and_passing_evidence() -> None:
+    review = _shared_review()
+    assert review.owner == "v3_shared_visual_cluster"
+    assert review.contract_version == "v3_character_card_generic_slot_review_receipt_v1"
+
+    with pytest.raises(ValidationError):
+        FormalSlotSharedReviewSummary(
+            owner="random_review",  # type: ignore[arg-type]
+            status="pass",
+            evidence_codes=["shared_visual_review_verified"],
+            score_dimensions={"generic_visual_quality": 0.9},
+        )
+    with pytest.raises(ValidationError):
+        FormalSlotSharedReviewSummary(
+            contract_version="random_contract",  # type: ignore[arg-type]
+            status="pass",
+            evidence_codes=["shared_visual_review_verified"],
+            score_dimensions={"generic_visual_quality": 0.9},
+        )
+    with pytest.raises(ValidationError, match="evidence codes"):
+        FormalSlotSharedReviewSummary(status="pass", score_dimensions={"generic_visual_quality": 0.9})
+    with pytest.raises(ValidationError, match="score dimensions"):
+        FormalSlotSharedReviewSummary(status="pass", evidence_codes=["shared_visual_review_verified"])
+
+
+def test_doc240_passing_requirement_requires_evidence_and_dimensions() -> None:
+    with pytest.raises(ValidationError, match="evidence codes"):
+        FormalSlotRequirementSummary(status="pass", dimensions={"summary_score": 0.9})
+    with pytest.raises(ValidationError, match="dimensions"):
+        FormalSlotRequirementSummary(status="pass", evidence_codes=["framing_verified"])
 
 
 def test_doc240_public_summary_is_safe_and_round_trips() -> None:
