@@ -1648,6 +1648,9 @@ class V3ProductApiService:
         if worker_claim and not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         if record.status == ProductJobStatusValue.FINALIZING:
+            checkpoint_status = self._checkpoint_mcp_generation_result(record, record.generation_result)
+            if checkpoint_status is not None:
+                return checkpoint_status
             if resume_finalizing_review:
                 return self._resume_finalizing_generation_review(record, generate_request, background_attempt_id)
             return self._status_from_record(record)
@@ -1795,6 +1798,9 @@ class V3ProductApiService:
         record.status = ProductJobStatusValue.FINALIZING
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
+        checkpoint_status = self._checkpoint_mcp_generation_result(record, generation_result)
+        if checkpoint_status is not None:
+            return checkpoint_status
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
@@ -1845,6 +1851,70 @@ class V3ProductApiService:
                 return self._status_from_record(record)
         record.status = ProductJobStatusValue.GENERATED
         record.balance_estimate = self._estimate_for_result(generation_result)
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return self._status_from_record(record)
+
+    def _checkpoint_mcp_generation_result(
+        self,
+        record: ProductJobRecord,
+        generation_result: PlanningResult | None,
+    ) -> ProductJobStatus | None:
+        if generation_result is None:
+            return None
+        failures: list[str] = []
+        for asset in generation_result.asset_pack.assets:
+            metadata = dict(asset.metadata or {})
+            candidate_metadata = (
+                dict(metadata.get("candidate_metadata"))
+                if isinstance(metadata.get("candidate_metadata"), dict)
+                else {}
+            )
+            mcp_materialization = (
+                dict(candidate_metadata.get("mcp_materialization"))
+                if isinstance(candidate_metadata.get("mcp_materialization"), dict)
+                else {}
+            )
+            handoff_id = str(mcp_materialization.get("handoff_id") or "").strip()
+            if not handoff_id:
+                continue
+            expected_checkpoint = (
+                dict(mcp_materialization.get("expected_checkpoint"))
+                if isinstance(mcp_materialization.get("expected_checkpoint"), dict)
+                else {}
+            )
+            try:
+                self.mcp_materialization_store.mark_job_checkpoint(
+                    handoff_id,
+                    job_id=record.job_id,
+                    candidate_id=str(
+                        metadata.get("selected_candidate_id")
+                        or expected_checkpoint.get("candidate_id")
+                        or ""
+                    ),
+                    output_id=str(
+                        candidate_metadata.get("output_id")
+                        or expected_checkpoint.get("output_id")
+                        or ""
+                    ),
+                    generation_result_id=generation_result.planning_result_id,
+                )
+            except Exception:
+                failures.append(handoff_id)
+        if not failures:
+            return None
+        record.status = ProductJobStatusValue.BLOCKED
+        record.request.metadata = {
+            **dict(record.request.metadata),
+            "mcp_materialization_checkpoint_failure": {
+                "status": "blocked",
+                "failure_code": "mcp_materialization_job_checkpoint_failed",
+                "handoff_ids": failures,
+            },
+        }
+        record.warnings.append(
+            "MCP materialization checkpoint could not be reconciled with the saved generation result."
+        )
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)

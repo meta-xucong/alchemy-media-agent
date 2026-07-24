@@ -366,12 +366,19 @@ class McpMaterializationHandoffStore:
             self._write(self._record_path(str(payload["handoff_id"])), updated)
             return self.public_view(handoff_id)
 
-    def consume(self, handoff_id: str) -> dict[str, Any]:
+    def consume(self, handoff_id: str, *, expected_checkpoint: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
             payload = self._read(handoff_id)
             if payload is None:
                 raise McpMaterializationError("mcp_materialization_not_found")
-            if payload.get("status") != "submitted":
+            status = str(payload.get("status") or "").strip().lower()
+            if status not in {
+                "submitted",
+                "consumed",
+                "consumed_uncheckpointed",
+                "output_checkpointed",
+                "job_checkpointed",
+            }:
                 raise McpMaterializationError("mcp_materialization_pending")
             artifact_file = Path(str(payload.get("artifact_file") or ""))
             if not artifact_file.is_file():
@@ -379,14 +386,152 @@ class McpMaterializationHandoffStore:
             content = artifact_file.read_bytes()
             if _sha256(content) != str(payload.get("artifact_sha256") or ""):
                 raise McpMaterializationError("mcp_materialization_artifact_changed")
-            updated = {**payload, "status": "consumed", "updated_at": _now_iso(), "consumed_at": _now_iso()}
-            self._write(self._record_path(str(payload["handoff_id"])), updated)
+            expected = {
+                str(key): str(value)
+                for key, value in dict(expected_checkpoint or {}).items()
+                if str(value or "").strip()
+            }
+            existing_checkpoint = (
+                dict(payload.get("mcp_checkpoint"))
+                if isinstance(payload.get("mcp_checkpoint"), dict)
+                else {}
+            )
+            for key in {"job_id", "candidate_id", "output_id"}:
+                if (
+                    expected.get(key)
+                    and existing_checkpoint.get(key)
+                    and str(existing_checkpoint.get(key)) != str(expected[key])
+                ):
+                    raise McpMaterializationError("mcp_materialization_checkpoint_mismatch")
+            if status == "submitted":
+                updated = {
+                    **payload,
+                    "status": "consumed_uncheckpointed",
+                    "updated_at": _now_iso(),
+                    "consumed_at": _now_iso(),
+                    "mcp_checkpoint": {
+                        "status": "consumed_uncheckpointed",
+                        "operation_id": str(payload.get("operation_id") or ""),
+                        "handoff_id": str(payload.get("handoff_id") or ""),
+                        "artifact_file": str(artifact_file),
+                        "artifact_sha256": str(payload.get("artifact_sha256") or ""),
+                        **expected,
+                    },
+                }
+                self._write(self._record_path(str(payload["handoff_id"])), updated)
+            else:
+                updated = payload
             return {
                 "artifact_base64": base64.b64encode(content).decode("ascii"),
-                "artifact_format": payload.get("artifact_format") or "png",
-                "artifact_mime_type": payload.get("artifact_mime_type") or "image/png",
-                "artifact_sha256": payload.get("artifact_sha256"),
+                "artifact_format": updated.get("artifact_format") or "png",
+                "artifact_mime_type": updated.get("artifact_mime_type") or "image/png",
+                "artifact_sha256": updated.get("artifact_sha256"),
+                "checkpoint_status": updated.get("status"),
+                "expected_checkpoint": (
+                    dict(updated.get("mcp_checkpoint"))
+                    if isinstance(updated.get("mcp_checkpoint"), dict)
+                    else expected
+                ),
+                "output_checkpoint": (
+                    dict(updated.get("output_checkpoint"))
+                    if isinstance(updated.get("output_checkpoint"), dict)
+                    else None
+                ),
             }
+
+    def mark_output_checkpoint(
+        self,
+        handoff_id: str,
+        *,
+        job_id: str,
+        candidate_id: str,
+        output_id: str,
+        artifact_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            payload = self._read(handoff_id)
+            if payload is None:
+                raise McpMaterializationError("mcp_materialization_not_found")
+            status = str(payload.get("status") or "").strip().lower()
+            if status not in {"consumed_uncheckpointed", "output_checkpointed", "job_checkpointed"}:
+                raise McpMaterializationError("mcp_materialization_checkpoint_order_invalid")
+            checkpoint = {
+                "status": "output_checkpointed",
+                "operation_id": str(payload.get("operation_id") or ""),
+                "handoff_id": str(payload.get("handoff_id") or ""),
+                "job_id": str(job_id or ""),
+                "candidate_id": str(candidate_id or ""),
+                "output_id": str(output_id or ""),
+                "artifact_sha256": str(artifact_sha256 or payload.get("artifact_sha256") or ""),
+            }
+            existing = payload.get("output_checkpoint")
+            if isinstance(existing, dict):
+                comparable_keys = {"job_id", "candidate_id", "output_id", "artifact_sha256"}
+                for key in comparable_keys:
+                    if str(existing.get(key) or "") and str(existing.get(key) or "") != str(checkpoint.get(key) or ""):
+                        raise McpMaterializationError("mcp_materialization_output_checkpoint_mismatch")
+            updated = {
+                **payload,
+                "status": "job_checkpointed" if status == "job_checkpointed" else "output_checkpointed",
+                "updated_at": _now_iso(),
+                "output_checkpoint": {**checkpoint, **(existing if isinstance(existing, dict) else {})},
+                "mcp_checkpoint": {
+                    **dict(payload.get("mcp_checkpoint") or {}),
+                    **checkpoint,
+                },
+            }
+            self._write(self._record_path(str(payload["handoff_id"])), updated)
+            return updated
+
+    def mark_job_checkpoint(
+        self,
+        handoff_id: str,
+        *,
+        job_id: str,
+        candidate_id: str | None = None,
+        output_id: str | None = None,
+        generation_result_id: str | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            payload = self._read(handoff_id)
+            if payload is None:
+                raise McpMaterializationError("mcp_materialization_not_found")
+            status = str(payload.get("status") or "").strip().lower()
+            if status not in {"output_checkpointed", "job_checkpointed"}:
+                raise McpMaterializationError("mcp_materialization_checkpoint_order_invalid")
+            output_checkpoint = (
+                dict(payload.get("output_checkpoint"))
+                if isinstance(payload.get("output_checkpoint"), dict)
+                else {}
+            )
+            if output_checkpoint:
+                if str(job_id or "") and str(output_checkpoint.get("job_id") or "") != str(job_id or ""):
+                    raise McpMaterializationError("mcp_materialization_job_checkpoint_mismatch")
+                if candidate_id and str(output_checkpoint.get("candidate_id") or "") != str(candidate_id):
+                    raise McpMaterializationError("mcp_materialization_job_checkpoint_mismatch")
+                if output_id and str(output_checkpoint.get("output_id") or "") != str(output_id):
+                    raise McpMaterializationError("mcp_materialization_job_checkpoint_mismatch")
+            job_checkpoint = {
+                "status": "job_checkpointed",
+                "operation_id": str(payload.get("operation_id") or ""),
+                "handoff_id": str(payload.get("handoff_id") or ""),
+                "job_id": str(job_id or output_checkpoint.get("job_id") or ""),
+                "candidate_id": str(candidate_id or output_checkpoint.get("candidate_id") or ""),
+                "output_id": str(output_id or output_checkpoint.get("output_id") or ""),
+                "generation_result_id": str(generation_result_id or ""),
+            }
+            updated = {
+                **payload,
+                "status": "job_checkpointed",
+                "updated_at": _now_iso(),
+                "job_checkpoint": job_checkpoint,
+                "mcp_checkpoint": {
+                    **dict(payload.get("mcp_checkpoint") or {}),
+                    **job_checkpoint,
+                },
+            }
+            self._write(self._record_path(str(payload["handoff_id"])), updated)
+            return updated
 
     def _record_path(self, handoff_id: str) -> Path:
         value = str(handoff_id or "")

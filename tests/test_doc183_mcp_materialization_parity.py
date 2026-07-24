@@ -19,17 +19,28 @@ from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import
     McpMaterializationHandoffStore,
 )
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.product_api.contracts import CreateCreativeJobRequest, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.product_api.service import ProductJobRecord, V3ProductApiService
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
+    BrandProfile,
+    CommercialAssetPack,
+    CommercialBrief,
     ConditionPlan,
+    CreativeJob,
+    CreativePlan,
     GenerationPlan,
+    IndustryCategory,
     LayoutPlan,
     LayoutRegion,
+    PackagedAsset,
     Platform,
+    PlanningResult,
     PromptCompilationResult,
     ProviderStrategy,
+    SeriesPlan,
     TextRenderingMode,
 )
 from app.providers.base import ProviderRuntimeError
@@ -92,13 +103,114 @@ def _light_provider_request(*, generation_metadata: dict | None = None, metadata
         max_refine_rounds=0,
         metadata=generation_metadata or {},
     )
+    base_metadata = {
+        "llm_brain": {
+            "canonical_provider_prompts": [
+                {
+                    "output_index": 1,
+                    "review_status": "approved",
+                    "prompt": "same character card portrait",
+                }
+            ]
+        }
+    }
+    base_metadata.update(metadata or {})
     return GenerationRequest(
         asset_spec=asset,
         layout_plan=layout,
         prompt_compilation=prompt,
         condition_plan=condition,
         generation_plan=generation,
-        metadata=metadata or {},
+        metadata=base_metadata,
+    )
+
+
+class _CrashBeforeOutputStore(V3GeneratedOutputStore):
+    def save_base64_output(self, **_kwargs):  # noqa: ANN001, ANN201
+        raise RuntimeError("doc223 injected crash before output checkpoint")
+
+
+def _minimal_generation_result_with_candidate(candidate, *, job_id: str) -> PlanningResult:  # noqa: ANN001
+    asset = AssetSpec(
+        asset_id=candidate.asset_id,
+        asset_type=AssetType.MAIN_POSTER,
+        platform=Platform.XIAOHONGSHU,
+        aspect_ratio="2:3",
+        purpose="checkpoint fixture",
+    )
+    layout = LayoutPlan(
+        layout_plan_id="layout_doc223",
+        asset_id=asset.asset_id,
+        platform=asset.platform,
+        aspect_ratio=asset.aspect_ratio,
+        text_rendering=TextRenderingMode.NO_TEXT,
+        visual_hierarchy=["subject"],
+        product_area=LayoutRegion(name="subject", position="center"),
+    )
+    prompt = PromptCompilationResult(
+        prompt_compilation_id=str(candidate.prompt_compilation_id or "prompt_doc223"),
+        asset_id=asset.asset_id,
+        visual_prompt="same character card portrait",
+        negative_prompt="no watermark",
+        text_policy="no_text",
+    )
+    condition = ConditionPlan(condition_plan_id=str(candidate.condition_plan_id or "condition_doc223"), asset_id=asset.asset_id)
+    generation = GenerationPlan(
+        generation_plan_id="generation_doc223",
+        asset_id=asset.asset_id,
+        provider_strategy=ProviderStrategy.MCP_MATERIALIZATION,
+        candidate_count=1,
+        max_refine_rounds=0,
+    )
+    packaged = PackagedAsset(
+        asset_id=asset.asset_id,
+        asset_type=asset.asset_type,
+        platform=asset.platform,
+        aspect_ratio=asset.aspect_ratio,
+        purpose=asset.purpose,
+        file_path=candidate.file_path,
+        uri=candidate.uri,
+        layout_plan_id=layout.layout_plan_id,
+        prompt_compilation_id=prompt.prompt_compilation_id,
+        metadata={
+            "selected_candidate_id": candidate.candidate_id,
+            "candidate_metadata": dict(candidate.metadata),
+        },
+    )
+    job = CreativeJob(job_id=job_id, raw_user_input="doc223 checkpoint")
+    return PlanningResult(
+        planning_result_id="planning_doc223",
+        creative_job=job,
+        commercial_brief=CommercialBrief(
+            brief_id="brief_doc223",
+            job_id=job_id,
+            industry=IndustryCategory.UNKNOWN,
+            scenario="checkpoint",
+            business_goal="checkpoint",
+            target_platforms=[Platform.XIAOHONGSHU],
+        ),
+        brand_profile=BrandProfile(brand_id="brand_doc223"),
+        creative_plan=CreativePlan(
+            creative_plan_id="plan_doc223",
+            job_id=job_id,
+            brief_id="brief_doc223",
+            concept="checkpoint",
+            visual_direction="checkpoint",
+            composition_strategy="single subject",
+        ),
+        series_plan=SeriesPlan(series_plan_id="series_doc223", job_id=job_id, assets=[asset]),
+        layout_plans=[layout],
+        prompt_compilations=[prompt],
+        condition_plans=[condition],
+        generation_plans=[generation],
+        evaluation_reports=[],
+        asset_pack=CommercialAssetPack(
+            asset_pack_id="asset_pack_doc223",
+            job_id=job_id,
+            assets=[packaged],
+            planning_only=False,
+        ),
+        metadata={},
     )
 
 
@@ -134,9 +246,9 @@ def test_handoff_is_nonce_hash_reference_and_one_time_safe(tmp_path: Path) -> No
     assert submitted["status"] == "submitted"
     artifact = store.consume(pending["handoff_id"])
     assert artifact["artifact_format"] == "png"
-    assert store.get(pending["handoff_id"])["status"] == "consumed"
-    with pytest.raises(McpMaterializationError, match="pending"):
-        store.consume(pending["handoff_id"])
+    assert store.get(pending["handoff_id"])["status"] == "consumed_uncheckpointed"
+    replayed = store.consume(pending["handoff_id"])
+    assert replayed["artifact_sha256"] == artifact["artifact_sha256"]
 
 
 def test_handoff_rejects_format_and_reference_mismatch(tmp_path: Path) -> None:
@@ -419,7 +531,7 @@ def test_doc222_crop_first_handoff_round_trip_remains_rejected(tmp_path: Path) -
 
 
 def test_mcp_and_provider_materializers_share_prompt_reference_and_rendering_contract() -> None:
-    request = _provider_request()
+    request = _light_provider_request()
     web = ProductionImageGenerationProvider(output_store=object())
     mcp = McpMaterializationProvider(output_store=object(), handoff_store=McpMaterializationHandoffStore())
     web_materialization = web.materialize_final_prompt(request)
@@ -440,6 +552,7 @@ def test_mcp_and_provider_materializers_share_prompt_reference_and_rendering_con
         "api_operation": "image_generate",
         "input_fidelity": None,
         "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
     }
 
 
@@ -616,10 +729,133 @@ def test_doc222_provider_pending_resume_checks_full_rendering_fingerprint(tmp_pa
     )
 
 
-def test_mcp_pending_is_not_a_provider_retry_and_success_uses_shared_output_store(tmp_path: Path) -> None:
-    request = _provider_request().model_copy(
-        update={"metadata": {**_provider_request().metadata, "generation_channel": "mcp", "mcp_operation_id": "resume-op"}}
+def test_doc223a_resume_after_consume_before_output_checkpoint_uses_same_handoff_and_output(
+    tmp_path: Path,
+) -> None:
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    operation_id = "doc223a-consume-before-output"
+    request = _light_provider_request(metadata={"generation_channel": "mcp", "mcp_operation_id": operation_id})
+    failing_provider = McpMaterializationProvider(
+        output_store=_CrashBeforeOutputStore(tmp_path / "crash-outputs"),
+        handoff_store=handoffs,
     )
+    with pytest.raises(ProviderRuntimeError) as pending:
+        failing_provider.generate(request)
+    handoff_id = pending.value.detail["handoff_id"]
+    public = handoffs.public_view(handoff_id)
+    handoffs.submit(
+        handoff_id,
+        nonce=public["nonce"],
+        prompt_sha256=public["prompt_sha256"],
+        reference_asset_hashes=public["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+
+    with pytest.raises(RuntimeError, match="injected crash"):
+        failing_provider.generate(request)
+    consumed = handoffs.get(handoff_id)
+    assert consumed is not None
+    assert consumed["status"] == "consumed_uncheckpointed"
+    expected_output_id = consumed["mcp_checkpoint"]["output_id"]
+
+    outputs = V3GeneratedOutputStore(tmp_path / "outputs")
+    recovery_provider = McpMaterializationProvider(output_store=outputs, handoff_store=handoffs)
+    response = recovery_provider.generate(request)
+    recovered = handoffs.get(handoff_id)
+
+    assert len(response.candidates) == 1
+    assert response.candidates[0].metadata["output_id"] == expected_output_id
+    assert recovered is not None
+    assert recovered["status"] == "output_checkpointed"
+    assert recovered["output_checkpoint"]["output_id"] == expected_output_id
+    assert len(outputs.list_outputs()) == 1
+
+
+def test_doc223a_resume_after_output_checkpoint_is_idempotent_and_does_not_duplicate_output(
+    tmp_path: Path,
+) -> None:
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    outputs = V3GeneratedOutputStore(tmp_path / "outputs")
+    provider = McpMaterializationProvider(output_store=outputs, handoff_store=handoffs)
+    operation_id = "doc223a-output-before-job"
+    request = _light_provider_request(metadata={"generation_channel": "mcp", "mcp_operation_id": operation_id})
+    with pytest.raises(ProviderRuntimeError) as pending:
+        provider.generate(request)
+    handoff_id = pending.value.detail["handoff_id"]
+    public = handoffs.public_view(handoff_id)
+    handoffs.submit(
+        handoff_id,
+        nonce=public["nonce"],
+        prompt_sha256=public["prompt_sha256"],
+        reference_asset_hashes=public["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+
+    first = provider.generate(request)
+    checkpointed = handoffs.get(handoff_id)
+    assert checkpointed is not None
+    assert checkpointed["status"] == "output_checkpointed"
+    first_output_id = first.candidates[0].metadata["output_id"]
+    assert len(outputs.list_outputs()) == 1
+
+    second = provider.generate(request)
+    assert second.candidates[0].metadata["output_id"] == first_output_id
+    assert len(outputs.list_outputs()) == 1
+    assert handoffs.get(handoff_id)["status"] == "output_checkpointed"
+
+
+def test_doc223a_product_job_checkpoint_advances_handoff_after_generation_result_save(
+    tmp_path: Path,
+) -> None:
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    outputs = V3GeneratedOutputStore(tmp_path / "outputs")
+    provider = McpMaterializationProvider(output_store=outputs, handoff_store=handoffs)
+    operation_id = "doc223a-job-checkpoint"
+    request = _light_provider_request(
+        metadata={
+            "generation_channel": "mcp",
+            "mcp_operation_id": operation_id,
+            "job_id": "job_doc223a_checkpoint",
+        }
+    )
+    with pytest.raises(ProviderRuntimeError) as pending:
+        provider.generate(request)
+    handoff_id = pending.value.detail["handoff_id"]
+    public = handoffs.public_view(handoff_id)
+    handoffs.submit(
+        handoff_id,
+        nonce=public["nonce"],
+        prompt_sha256=public["prompt_sha256"],
+        reference_asset_hashes=public["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+    response = provider.generate(request)
+    candidate = response.candidates[0]
+    generation_result = _minimal_generation_result_with_candidate(
+        candidate,
+        job_id="job_doc223a_checkpoint",
+    )
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(user_input="doc223 checkpoint"),
+        status=ProductJobStatusValue.FINALIZING,
+        job_id_value="job_doc223a_checkpoint",
+        generation_result=generation_result,
+    )
+    service = V3ProductApiService(
+        output_store=outputs,
+        mcp_materialization_store=handoffs,
+    )
+
+    assert service._checkpoint_mcp_generation_result(record, generation_result) is None  # noqa: SLF001
+    checkpointed = handoffs.get(handoff_id)
+    assert checkpointed is not None
+    assert checkpointed["status"] == "job_checkpointed"
+    assert checkpointed["job_checkpoint"]["job_id"] == "job_doc223a_checkpoint"
+    assert checkpointed["job_checkpoint"]["output_id"] == candidate.metadata["output_id"]
+
+
+def test_mcp_pending_is_not_a_provider_retry_and_success_uses_shared_output_store(tmp_path: Path) -> None:
+    request = _light_provider_request(metadata={"generation_channel": "mcp", "mcp_operation_id": "resume-op"})
     handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
     outputs = V3GeneratedOutputStore(tmp_path / "outputs")
     provider = McpMaterializationProvider(output_store=outputs, handoff_store=handoffs)

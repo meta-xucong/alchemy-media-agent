@@ -240,7 +240,7 @@ def test_doc203_mcp_provider_consumes_explicit_handoff_not_stale_same_operation(
     record = outputs.get_output(response.candidates[0].metadata["output_id"])
     assert record is not None
     assert record.metadata["provider_raw_summary"]["mcp_handoff_id"] == current["handoff_id"]
-    assert handoffs.get(current["handoff_id"])["status"] == "consumed"
+    assert handoffs.get(current["handoff_id"])["status"] == "output_checkpointed"
     assert handoffs.get(stale["handoff_id"])["status"] == "submitted"
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
+import hashlib
 from io import BytesIO
 import json
 import os
@@ -64,19 +65,36 @@ class V3GeneratedOutputStore:
         provider: str,
         model: str | None,
         encoded_image: str,
+        output_id: str | None = None,
         mime_type: str | None = None,
         output_format: str | None = None,
         width: int | None = None,
         height: int | None = None,
         metadata: dict | None = None,
     ) -> V3GeneratedOutputRecord:
-        output_id = f"v3_output_{uuid4().hex[:20]}"
         fmt = _normalise_format(output_format, mime_type)
         mime = _normalise_mime(mime_type, fmt)
         content = _decode_image(encoded_image)
+        content_sha256 = hashlib.sha256(content).hexdigest()
         actual_width, actual_height = _validate_image(content)
         width = width or actual_width
         height = height or actual_height
+        output_id = str(output_id or "").strip() or f"v3_output_{uuid4().hex[:20]}"
+        if not _valid_output_id(output_id):
+            raise ValueError("refusing to persist an invalid V3 output id")
+
+        existing = self.get_output(output_id)
+        if existing is not None:
+            if (
+                existing.job_id != job_id
+                or existing.candidate_id != candidate_id
+                or existing.asset_id != asset_id
+            ):
+                raise ValueError("existing V3 output checkpoint belongs to another candidate")
+            existing_sha = str((existing.metadata or {}).get("content_sha256") or "")
+            if existing_sha and existing_sha != content_sha256:
+                raise ValueError("existing V3 output checkpoint content changed")
+            return existing
 
         output_dir = self.storage_root / output_id
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,7 +123,7 @@ class V3GeneratedOutputStore:
             preview_url=preview_route(output_id),
             thumbnail_url=thumbnail_route(output_id),
             created_at=_now_iso(),
-            metadata={**(metadata or {}), "v3_owned_output": True},
+            metadata={**(metadata or {}), "v3_owned_output": True, "content_sha256": content_sha256},
         )
         self._write_record(record)
         self._invalidate_cache()

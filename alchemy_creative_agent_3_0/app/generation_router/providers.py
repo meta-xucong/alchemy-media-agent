@@ -945,6 +945,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
             candidate_id = stable_id(
                 *candidate_id_parts,
             )
+            mcp_materialization = (
+                dict(output.get("mcp_materialization"))
+                if isinstance(output.get("mcp_materialization"), dict)
+                else {}
+            )
             record = self.output_store.save_base64_output(
                 job_id=str(request.metadata.get("job_id") or request.generation_plan.metadata.get("job_id") or "v3_job"),
                 candidate_id=candidate_id,
@@ -952,6 +957,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 provider=str(getattr(result, "provider", provider_name)),
                 model=str(getattr(result, "model", "") or ""),
                 encoded_image=str(encoded),
+                output_id=output.get("output_id"),
                 mime_type=output.get("mime_type"),
                 output_format=output.get("format") or app_request.prompt_plan.output_format,
                 width=output.get("width"),
@@ -987,6 +993,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                     "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
                     "provider_raw_summary": getattr(result, "raw_response_summary", {}) or {},
+                    "mcp_materialization": mcp_materialization,
                     "provider_failure_retry": provider_failure_retry,
                     "reference_input_execution": {
                         **reference_input_execution,
@@ -1025,6 +1032,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "mode_quality_profile": mode_quality_profile,
                 },
             )
+            mcp_handoff_id = str(mcp_materialization.get("handoff_id") or "").strip()
+            if mcp_handoff_id and hasattr(self, "handoff_store"):
+                self.handoff_store.mark_output_checkpoint(
+                    mcp_handoff_id,
+                    job_id=record.job_id,
+                    candidate_id=record.candidate_id,
+                    output_id=record.output_id,
+                    artifact_sha256=str(mcp_materialization.get("artifact_sha256") or ""),
+                )
             candidates.append(
                 CandidateResult(
                     candidate_id=candidate_id,
@@ -1074,6 +1090,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "reference_asset_ids": reference_asset_ids,
                         "reference_truth_source_ids": reference_truth_package.get("truth_source_ids") or [],
                         "reference_truth_derivative_ids": reference_truth_package.get("truth_derivative_ids") or [],
+                        "mcp_materialization": mcp_materialization,
                         "provider_failure_retry": provider_failure_retry,
                         "reference_input_execution": {
                             **reference_input_execution,
@@ -5303,6 +5320,12 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "reference_assets": [dict(item or {}) for item in reference_assets],
             "rendering_contract": contract,
         }
+        context["expected_checkpoint"] = self._mcp_expected_checkpoint_context(
+            request,
+            context=context,
+            reference_assets=reference_assets,
+            rendering_contract=contract,
+        )
         frozen_context = self._existing_mcp_handoff_context(
             request,
             current_context=context,
@@ -5316,9 +5339,65 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             variables["provider_prompt_sha256"] = str(context.get("prompt_sha256") or "")
             variables["provider_prompt_chars"] = len(str(context.get("canonical_prompt") or ""))
             variables["provider_prompt_materialization"] = "v3_mcp_frozen_handoff_resume"
+            context["expected_checkpoint"] = self._mcp_expected_checkpoint_context(
+                request,
+                context=context,
+                reference_assets=reference_assets,
+                rendering_contract=dict(context.get("rendering_contract") or contract),
+            )
         variables["mcp_materialization_context"] = context
         prompt_plan = app_request.prompt_plan.model_copy(update={"variables": variables})
         return app_request.model_copy(update={"prompt_plan": prompt_plan}), provider_name, reference_assets
+
+    def _mcp_expected_checkpoint_context(
+        self,
+        request: GenerationRequest,
+        *,
+        context: dict[str, Any],
+        reference_assets: list[dict[str, Any]],
+        rendering_contract: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = self._generation_request_metadata(request)
+        job_id = str(metadata.get("job_id") or "v3_job")
+        retry_attempt = self._retry_attempt(request)
+        candidate_id_parts: list[Any] = [
+            "candidate",
+            request.generation_plan.asset_id,
+            request.prompt_compilation.prompt_compilation_id,
+            "codex_builtin_imagegen",
+            "gpt-image-2",
+            0,
+        ]
+        if retry_attempt:
+            candidate_id_parts.append(f"retry_{retry_attempt}")
+        candidate_id = stable_id(*candidate_id_parts)
+        reference_hashes = self.handoff_store._reference_hashes(reference_assets)
+        reference_fingerprint = self.handoff_store._reference_semantic_fingerprint(
+            reference_assets,
+            reference_hashes,
+        )
+        rendering_fingerprint = self.handoff_store._rendering_contract_fingerprint(rendering_contract)
+        output_id = "v3_output_" + hashlib.sha256(
+            "|".join(
+                [
+                    "mcp_output_checkpoint",
+                    str(context.get("operation_id") or ""),
+                    candidate_id,
+                    str(context.get("prompt_sha256") or ""),
+                    reference_fingerprint,
+                    rendering_fingerprint,
+                ]
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        return {
+            "operation_id": str(context.get("operation_id") or ""),
+            "job_id": job_id,
+            "candidate_id": candidate_id,
+            "output_id": output_id,
+            "prompt_sha256": str(context.get("prompt_sha256") or ""),
+            "reference_semantic_fingerprint": reference_fingerprint,
+            "rendering_contract_fingerprint": rendering_fingerprint,
+        }
 
     def _existing_mcp_handoff_context(
         self,
@@ -5421,7 +5500,15 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                     reference_assets=list(context.get("reference_assets") or []),
                     rendering_contract=dict(context.get("rendering_contract") or {}),
                 )
-            artifact = self.handoff_store.consume(str(handoff["handoff_id"]))
+            expected_checkpoint = (
+                dict(context.get("expected_checkpoint"))
+                if isinstance(context.get("expected_checkpoint"), dict)
+                else {}
+            )
+            artifact = self.handoff_store.consume(
+                str(handoff["handoff_id"]),
+                expected_checkpoint=expected_checkpoint,
+            )
         except McpMaterializationError as exc:
             code = exc.code
             summary = {
@@ -5457,15 +5544,29 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "attempts": [{"attempt": 1, "status": "succeeded"}],
             "execution_audit": {"generation_channel": "mcp", "outer_max_attempts": 1},
             "mcp_handoff_id": handoff["handoff_id"],
+            "mcp_expected_checkpoint": dict(context.get("expected_checkpoint") or {}),
         }
+        expected_checkpoint = (
+            dict(context.get("expected_checkpoint"))
+            if isinstance(context.get("expected_checkpoint"), dict)
+            else {}
+        )
         return SimpleNamespace(
             outputs=[
                 {
                     "b64_json": artifact["artifact_base64"],
                     "mime_type": artifact["artifact_mime_type"],
                     "format": artifact["artifact_format"],
+                    "output_id": expected_checkpoint.get("output_id"),
                     "api_operation": (context.get("rendering_contract") or {}).get("api_operation"),
                     "request_index": 0,
+                    "mcp_materialization": {
+                        "handoff_id": handoff["handoff_id"],
+                        "operation_id": str(context.get("operation_id") or ""),
+                        "checkpoint_status": artifact.get("checkpoint_status"),
+                        "expected_checkpoint": expected_checkpoint,
+                        "artifact_sha256": artifact.get("artifact_sha256"),
+                    },
                 }
             ],
             provider="codex_builtin_imagegen",
@@ -5473,6 +5574,7 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             raw_response_summary={
                 "output_count": 1,
                 "mcp_handoff_id": handoff["handoff_id"],
+                "mcp_expected_checkpoint": expected_checkpoint,
                 "artifact_sha256": artifact.get("artifact_sha256"),
             },
         )

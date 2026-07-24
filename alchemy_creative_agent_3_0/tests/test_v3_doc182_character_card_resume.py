@@ -2033,11 +2033,11 @@ def test_doc192_mcp_consumed_handoff_replan_creates_new_revision(tmp_path: Path)
 
     assert same_pending["handoff_id"] == first["handoff_id"]
     assert consumed_record is not None
-    assert consumed_record["status"] == "consumed"
-    assert second["handoff_id"] != first["handoff_id"]
-    assert second["status"] == "pending"
+    assert consumed_record["status"] == "consumed_uncheckpointed"
+    assert second["handoff_id"] == first["handoff_id"]
+    assert second["status"] == "consumed_uncheckpointed"
     assert second["operation_id"] == first["operation_id"]
-    assert second["revision"] == 2
+    assert second["revision"] == 1
 
 
 def test_doc188_mcp_submit_rejects_size_mismatch_without_policy(tmp_path: Path) -> None:
