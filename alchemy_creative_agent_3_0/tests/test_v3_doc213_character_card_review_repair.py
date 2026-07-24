@@ -118,8 +118,24 @@ def test_doc213_failed_character_card_candidate_projects_review_repair_to_next_r
         reviewer=_FirstLaughCandidateNeedsDoc93RepairReviewer(),
     )
 
-    result = service.prepare_expression_set(
+    first = service.prepare_expression_set(
         _face_ready_card(),
+        front_output_id="front_winner",
+        user_intents={
+            "laugh": "medium laugh keyframe",
+            "anger": "quiet controlled anger",
+            "sad": "subtle sadness",
+        },
+        generation_channel="mcp",
+    )
+
+    assert first.status == "blocked"
+    assert first.card.last_failure_code == "character_card_shared_review_failed"
+    assert first.card.last_failure_attempt_count == 1
+    assert first.card.last_review_repair_context is not None
+
+    result = service.prepare_expression_set(
+        first.card,
         front_output_id="front_winner",
         user_intents={
             "laugh": "medium laugh keyframe",

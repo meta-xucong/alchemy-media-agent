@@ -251,6 +251,10 @@ class CharacterCardState(_CharacterCardModel):
     # parity and public receipt dimensions so a later resume cannot erase
     # already-reviewed pixels.
     last_shared_runtime_failure: dict[str, Any] | None = None
+    # Sanitized repair evidence from the latest reviewed-but-failed candidate.
+    # This is produced by the shared visual-cluster repair projection and is
+    # used only to inform the next candidate in the same slot/round.
+    last_review_repair_context: dict[str, Any] | None = None
     # Opaque local-MCP receipts for a blocked stage.  They are cleared by a
     # successful stage and never carry prompt, path, provider or artifact data.
     pending_mcp_handoff_ids: list[str] = Field(default_factory=list)
@@ -447,6 +451,7 @@ class CharacterCardState(_CharacterCardModel):
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
                 "resume_available": False,
                 "pending_mcp_handoff_ids": [],
                 "append_only_revision": self.append_only_revision + 1,
@@ -583,6 +588,7 @@ class CharacterCardFailureEvent(_CharacterCardModel):
     attempt_round: int = Field(default=1, ge=1)
     failure_code: str
     mcp_handoff_id: str | None = None
+    review_repair_context: dict[str, Any] | None = None
 
 
 class CharacterCardStageResult(_CharacterCardModel):
@@ -845,11 +851,16 @@ class CharacterCardPreparationService:
                     slots=slots,
                     status_field="expression_set_status",
                 )
+                blocked_updates: dict[str, Any] = {
+                    "pending_mcp_handoff_ids": self._mcp_handoff_ids(slot_failures)
+                }
+                if failure_code == "character_card_shared_review_failed":
+                    blocked_updates["last_review_repair_context"] = self._failure_review_repair_context(
+                        slot_failures
+                    )
                 return CharacterCardStageResult(
                     status="blocked",
-                    card=failed_card.model_copy(
-                        update={"pending_mcp_handoff_ids": self._mcp_handoff_ids(slot_failures)}
-                    ),
+                    card=failed_card.model_copy(update=blocked_updates),
                     attempts=attempts,
                     winner_output_ids=winners,
                     failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
@@ -872,6 +883,7 @@ class CharacterCardPreparationService:
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
                 "resume_available": False,
                 "pending_mcp_handoff_ids": [],
             }
@@ -948,11 +960,12 @@ class CharacterCardPreparationService:
                     slots=slots,
                     status_field="expression_set_status",
                 )
+            blocked_updates = {"pending_mcp_handoff_ids": self._mcp_handoff_ids(slot_failures)}
+            if failure_code == "character_card_shared_review_failed":
+                blocked_updates["last_review_repair_context"] = self._failure_review_repair_context(slot_failures)
             return CharacterCardStageResult(
                 status="blocked",
-                card=failed_card.model_copy(
-                    update={"pending_mcp_handoff_ids": self._mcp_handoff_ids(slot_failures)}
-                ),
+                card=failed_card.model_copy(update=blocked_updates),
                 attempts=attempts,
                 winner_output_ids={},
                 failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
@@ -975,6 +988,7 @@ class CharacterCardPreparationService:
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
                 "resume_available": False,
                 "pending_mcp_handoff_ids": [],
             }
@@ -1079,6 +1093,7 @@ class CharacterCardPreparationService:
                 "last_failure_code": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
                 "resume_available": False,
                 "pending_mcp_handoff_ids": [],
             }
@@ -1109,19 +1124,33 @@ class CharacterCardPreparationService:
         slot_attempts: list[CharacterCardCandidateAttempt] = []
         slot_failures: list[CharacterCardFailureEvent] = []
         passing: list[tuple[CharacterCardCandidateResult, Any]] = []
-        prior_review_repair: dict[str, Any] | None = None
         attempt_round = int(card.slot_retry_rounds.get(slot_key, 1))
-        start_candidate_index = 1
-        if (
-            generation_channel == "mcp"
-            and card.last_failed_module == module
-            and card.last_failed_slot_key == slot_key
-            and card.last_failure_code in {"mcp_materialization_pending", "mcp_review_pending"}
-            and int(card.last_failure_attempt_count or 0) >= 1
-        ):
-            start_candidate_index = min(
-                self.CANDIDATE_COUNT,
-                max(1, int(card.last_failure_attempt_count or 1)),
+        start_candidate_index = self._candidate_start_index(
+            card,
+            module=module,
+            slot_key=slot_key,
+            generation_channel=generation_channel,
+        )
+        prior_review_repair: dict[str, Any] | None = self._resumable_review_repair_context(
+            card,
+            module=module,
+            slot_key=slot_key,
+            generation_channel=generation_channel,
+            start_candidate_index=start_candidate_index,
+        )
+        if start_candidate_index > self.CANDIDATE_COUNT:
+            return (
+                None,
+                slot_attempts,
+                [
+                    CharacterCardFailureEvent(
+                        module=module,
+                        slot_key=slot_key,  # type: ignore[arg-type]
+                        candidate_index=self.CANDIDATE_COUNT,
+                        attempt_round=attempt_round,
+                        failure_code=str(card.last_failure_code or "character_card_shared_review_failed"),
+                    )
+                ],
             )
         for candidate_index in range(start_candidate_index, self.CANDIDATE_COUNT + 1):
             request = CharacterCardCandidateRequest(
@@ -1179,6 +1208,18 @@ class CharacterCardPreparationService:
                 )
                 if repair_context:
                     prior_review_repair = repair_context
+                if generation_channel == "mcp":
+                    slot_failures.append(
+                        CharacterCardFailureEvent(
+                            module=module,
+                            slot_key=slot_key,  # type: ignore[arg-type]
+                            candidate_index=candidate_index,
+                            attempt_round=attempt_round,
+                            failure_code="character_card_shared_review_failed",
+                            review_repair_context=repair_context,
+                        )
+                    )
+                    return None, slot_attempts, slot_failures
         if not passing:
             if not slot_failures:
                 slot_failures = [
@@ -1194,6 +1235,60 @@ class CharacterCardPreparationService:
             return None, slot_attempts, slot_failures
         selected = max(passing, key=lambda item: self._selection_key(item[1]))
         return selected[0], slot_attempts, slot_failures
+
+    @staticmethod
+    def _failure_review_repair_context(
+        failures: list[CharacterCardFailureEvent],
+    ) -> dict[str, Any] | None:
+        for failure in reversed(failures):
+            repair = failure.review_repair_context
+            if isinstance(repair, dict) and repair.get("owner") == "v3_shared_visual_cluster":
+                return dict(repair)
+        return None
+
+    @staticmethod
+    def _resumable_review_repair_context(
+        card: CharacterCardState,
+        *,
+        module: CharacterCardModule,
+        slot_key: str,
+        generation_channel: Literal["provider", "mcp"],
+        start_candidate_index: int,
+    ) -> dict[str, Any] | None:
+        if generation_channel != "mcp":
+            return None
+        if card.last_failed_module != module or card.last_failed_slot_key != slot_key:
+            return None
+        if card.last_failure_code != "character_card_shared_review_failed":
+            return None
+        if int(card.last_failure_attempt_count or 0) != start_candidate_index - 1:
+            return None
+        repair = card.last_review_repair_context
+        if not isinstance(repair, dict) or repair.get("owner") != "v3_shared_visual_cluster":
+            return None
+        return dict(repair)
+
+    @classmethod
+    def _candidate_start_index(
+        cls,
+        card: CharacterCardState,
+        *,
+        module: CharacterCardModule,
+        slot_key: str,
+        generation_channel: Literal["provider", "mcp"],
+    ) -> int:
+        if generation_channel != "mcp":
+            return 1
+        if card.last_failed_module != module or card.last_failed_slot_key != slot_key:
+            return 1
+        failure_count = int(card.last_failure_attempt_count or 0)
+        if failure_count < 1:
+            return 1
+        if card.last_failure_code in {"mcp_materialization_pending", "mcp_review_pending"}:
+            return min(cls.CANDIDATE_COUNT, max(1, failure_count))
+        if card.last_failure_code == "character_card_shared_review_failed":
+            return failure_count + 1
+        return 1
 
     @staticmethod
     def _mcp_handoff_ids(failures: list[CharacterCardFailureEvent]) -> list[str]:
