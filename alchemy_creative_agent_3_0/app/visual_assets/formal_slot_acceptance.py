@@ -184,7 +184,7 @@ class FormalSlotCandidateSummary(_StrictFormalSlotModel):
     candidate_index: int = Field(ge=1)
     candidate_id: str
     output_id: str
-    reviewed: bool = True
+    reviewed: bool
     selected_as_winner: bool = False
     shared_review: FormalSlotSharedReviewSummary
 

@@ -167,6 +167,34 @@ def test_doc241_core_does_not_default_reload_public_projection_to_true() -> None
         )
 
 
+def test_doc241_candidate_reviewed_must_be_explicit_true() -> None:
+    missing_reviewed = {
+        "candidate_index": 1,
+        "candidate_id": "candidate_1",
+        "output_id": "output_1",
+        "shared_review": _shared_review().model_dump(mode="json"),
+    }
+    with pytest.raises(ValidationError):
+        FormalSlotCandidateSummary.model_validate(missing_reviewed)
+    with pytest.raises(ValidationError):
+        _core().accept(
+            module="expression_set",
+            slot_key="expression.anger",
+            acceptance_mode="target_only_existing_candidate_collection",
+            candidates=[missing_reviewed],
+            framing_summary=_requirement(),
+            parity_summary=_requirement(),
+            identity_summary=_requirement(),
+            reload_public_projection_verified=True,
+        )
+
+    explicit_false = {**missing_reviewed, "reviewed": False}
+    with pytest.raises(ValidationError, match="real reviewed attempt"):
+        FormalSlotCandidateSummary.model_validate(explicit_false)
+    explicit_true = FormalSlotCandidateSummary.model_validate({**missing_reviewed, "reviewed": True})
+    assert explicit_true.reviewed is True
+
+
 @pytest.mark.parametrize(
     ("acceptance_mode", "slot_scope"),
     [
