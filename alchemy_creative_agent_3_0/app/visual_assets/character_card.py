@@ -1987,6 +1987,16 @@ class CharacterCardPreparationService:
         )
 
     @staticmethod
+    def _formal_generic_framing_passed(candidates: list[FormalSlotCandidateSummary]) -> bool:
+        """Use only canonical generic shared review framing evidence."""
+
+        return any(
+            candidate.shared_review.passed
+            and bool(candidate.shared_review.framing_delta_dimensions)
+            for candidate in candidates
+        )
+
+    @staticmethod
     def _formal_expression_enhanced_proof(
         *,
         slot_key: str,
@@ -2043,7 +2053,7 @@ class CharacterCardPreparationService:
                     enhanced_proof=enhanced_proof,
                 )
             )
-        framing_ok = any(candidate.enhanced_proof is not None and candidate.enhanced_proof.eligible for candidate in candidates)
+        framing_ok = cls._formal_generic_framing_passed(candidates)
         parity_ok = all(attempt.candidate.prompt_reference_parity_verified for attempt in slot_attempts)
         identity_ok = any(candidate.shared_review.passed for candidate in candidates)
         return FormalSlotAcceptanceCore().accept(
@@ -2140,7 +2150,7 @@ class CharacterCardPreparationService:
                     enhanced_proof=enhanced_proof,
                 )
             )
-        framing_ok = any(candidate.enhanced_proof is not None and candidate.enhanced_proof.eligible for candidate in candidates)
+        framing_ok = cls._formal_generic_framing_passed(candidates)
         parity_ok = all(attempt.candidate.prompt_reference_parity_verified for attempt in slot_attempts)
         identity_ok = any(candidate.shared_review.passed for candidate in candidates)
         return FormalSlotAcceptanceCore().accept(

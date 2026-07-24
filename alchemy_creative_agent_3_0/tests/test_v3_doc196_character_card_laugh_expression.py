@@ -485,7 +485,7 @@ class _ExplicitSmileStageHost:
                 )
             )
         formal_slot_receipts = {}
-        if slot_key in EXPRESSION_SLOT_KEYS and slot_key != "expression.neutral":
+        if slot_key.startswith("expression.") and slot_key != "expression.neutral":
             formal_slot_receipts[slot_key] = CharacterCardPreparationService._formal_expression_slot_receipt(
                 slot_key=slot_key,
                 attempts=attempts,

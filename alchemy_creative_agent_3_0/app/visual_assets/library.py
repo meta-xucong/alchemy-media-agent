@@ -997,8 +997,9 @@ class VisualAssetLibraryLifecycleService:
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")
         if getattr(result, "status", None) == "review":
-            if getattr(result, "shared_runtime_receipt", None) is None:
-                raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_required")
+            formal_receipts = dict(getattr(result, "formal_slot_receipts", {}) or {})
+            if getattr(result, "shared_runtime_receipt", None) is None and not formal_receipts:
+                raise CharacterCardRuntimeUnavailable("character_card_formal_or_shared_runtime_receipt_required")
         elif getattr(result, "status", None) == "blocked":
             if getattr(result, "shared_runtime_failure", None) is None:
                 raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_failure_receipt_required")
@@ -1038,14 +1039,33 @@ class VisualAssetLibraryLifecycleService:
         *,
         stage: Literal["expression_set", "body_silhouette"],
     ) -> CharacterCardState:
-        receipt = CharacterCardSharedRuntimeReceipt.model_validate(result.shared_runtime_receipt)
+        stage_receipt = (
+            CharacterCardSharedRuntimeReceipt.model_validate(result.shared_runtime_receipt)
+            if getattr(result, "shared_runtime_receipt", None) is not None
+            else None
+        )
+        formal_receipts = {
+            str(slot_key): FormalSlotReceipt.model_validate(receipt)
+            for slot_key, receipt in dict(getattr(result, "formal_slot_receipts", {}) or {}).items()
+        }
         winners = {
             str(slot_key): str(output_id)
             for slot_key, output_id in dict(getattr(result, "winner_output_ids", {}) or {}).items()
             if str(slot_key).strip() and str(output_id).strip()
         }
+        formal_winners = {
+            slot_key: str(receipt.winner_output_id)
+            for slot_key, receipt in formal_receipts.items()
+            if VisualAssetLibraryLifecycleService._stage_uses_formal_slot_receipt(stage, slot_key)
+            and str(receipt.winner_output_id or "").strip()
+        }
+        for slot_key, output_id in formal_winners.items():
+            if slot_key in winners and winners[slot_key] != output_id:
+                raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_winner_map_conflict")
+        if not winners and formal_winners:
+            winners = dict(formal_winners)
         if not winners:
-            raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_winner_required")
+            raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_winner_required")
         card: CharacterCardState = result.card
         if stage == "expression_set":
             slots_field = "expression_slots"
@@ -1059,45 +1079,48 @@ class VisualAssetLibraryLifecycleService:
                 raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_slot_mismatch")
             if slot.output_id != output_id or slot.state not in {"winner_selected", "active"}:
                 raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_output_mismatch")
-            attempt = next(
-                (
-                    item
-                    for item in getattr(result, "attempts", []) or []
-                    if getattr(getattr(item, "candidate", None), "slot_key", None) == slot_key
-                    and getattr(getattr(item, "candidate", None), "output_id", None) == output_id
-                ),
-                None,
-            )
-            if attempt is None:
-                if slot.shared_runtime_receipt is not None:
-                    CharacterCardSlot.model_validate(slot.model_dump(mode="python"))
-                    continue
-                raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_attempt_missing")
-            shared_review_receipts = getattr(getattr(attempt, "review", None), "shared_review_receipts", []) or []
-            projected = project_character_card_slot_success_receipt(
-                receipt,
-                module=stage,
-                slot_key=slot_key,
-                output_id=output_id,
-                shared_review_receipts=shared_review_receipts,
-            )
-            slot_updates: dict[str, Any] = {"shared_runtime_receipt": projected}
-            formal_receipts = dict(getattr(result, "formal_slot_receipts", {}) or {})
-            if (
-                stage == "expression_set"
-                and slot_key in EXPRESSION_SLOT_KEYS
-                and slot_key != "expression.neutral"
-            ) or stage == "body_silhouette":
-                if slot_key not in formal_receipts:
+            slot_updates: dict[str, Any] = {}
+            formal_receipt = formal_receipts.get(slot_key)
+            if VisualAssetLibraryLifecycleService._stage_uses_formal_slot_receipt(stage, slot_key):
+                if formal_receipt is None:
                     raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_required")
-                formal_receipt = FormalSlotReceipt.model_validate(formal_receipts[slot_key])
                 if formal_receipt.module != stage:
                     raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_module_mismatch")
                 if formal_receipt.slot_key != slot_key:
                     raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_slot_mismatch")
                 if formal_receipt.winner_output_id != output_id:
                     raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_output_mismatch")
+                if stage_receipt is not None:
+                    if stage_receipt.acceptance_mode != formal_receipt.acceptance_mode:
+                        raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_formal_mode_conflict")
+                    if int(stage_receipt.reviewed_candidate_count) != int(formal_receipt.reviewed_candidate_count):
+                        raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_formal_count_conflict")
                 slot_updates["formal_slot_receipt"] = formal_receipt
+            if stage_receipt is not None:
+                attempt = next(
+                    (
+                        item
+                        for item in getattr(result, "attempts", []) or []
+                        if getattr(getattr(item, "candidate", None), "slot_key", None) == slot_key
+                        and getattr(getattr(item, "candidate", None), "output_id", None) == output_id
+                    ),
+                    None,
+                )
+                if attempt is not None:
+                    shared_review_receipts = getattr(getattr(attempt, "review", None), "shared_review_receipts", []) or []
+                    projected = project_character_card_slot_success_receipt(
+                        stage_receipt,
+                        module=stage,
+                        slot_key=slot_key,
+                        output_id=output_id,
+                        shared_review_receipts=shared_review_receipts,
+                    )
+                    slot_updates["shared_runtime_receipt"] = projected
+                elif formal_receipt is None:
+                    if slot.shared_runtime_receipt is not None:
+                        CharacterCardSlot.model_validate(slot.model_dump(mode="python"))
+                        continue
+                    raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_attempt_missing")
             updated_slot = slot.model_copy(update=slot_updates)
             slots[slot_key] = CharacterCardSlot.model_validate(
                 updated_slot.model_dump(mode="python")
@@ -1109,6 +1132,15 @@ class VisualAssetLibraryLifecycleService:
                 "last_review_repair_context": None,
             }
         )
+
+    @staticmethod
+    def _stage_uses_formal_slot_receipt(
+        stage: Literal["expression_set", "body_silhouette"],
+        slot_key: str,
+    ) -> bool:
+        if stage == "body_silhouette":
+            return str(slot_key).startswith("body.")
+        return str(slot_key).startswith("expression.") and slot_key != "expression.neutral"
 
     @staticmethod
     def _mark_formal_receipts_after_projection(

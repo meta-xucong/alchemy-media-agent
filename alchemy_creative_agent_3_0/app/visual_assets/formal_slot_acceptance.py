@@ -294,6 +294,7 @@ class FormalSlotReceipt(_StrictFormalSlotModel):
     framing_summary: FormalSlotRequirementSummary
     parity_summary: FormalSlotRequirementSummary
     identity_summary: FormalSlotRequirementSummary
+    candidate_eligibility_required: bool = False
     retry_count: int = Field(default=0, ge=0)
     repair_count: int = Field(default=0, ge=0)
     reload_public_projection_verified: bool = False
@@ -384,6 +385,9 @@ class FormalSlotReceipt(_StrictFormalSlotModel):
     def _validate_success_proof(self, mode_label: str, winner: FormalSlotCandidateSummary) -> None:
         if not winner.shared_review.passed:
             raise ValueError(f"{mode_label} winner requires passing shared review")
+        if self.candidate_eligibility_required:
+            if winner.enhanced_proof is None or not winner.enhanced_proof.eligible:
+                raise ValueError(f"{mode_label} winner requires passing enhanced proof")
         if not self.framing_summary.passed:
             raise ValueError(f"{mode_label} requires passing framing summary")
         if not self.parity_summary.passed:
@@ -402,6 +406,15 @@ class FormalSlotReceipt(_StrictFormalSlotModel):
             and self.framing_summary.passed
             and self.parity_summary.passed
             and self.identity_summary.passed
+            and (
+                not self.candidate_eligibility_required
+                or any(
+                    candidate.selected_as_winner
+                    and candidate.enhanced_proof is not None
+                    and candidate.enhanced_proof.eligible
+                    for candidate in self.candidates
+                )
+            )
             and self.reload_public_projection_verified
         )
 
@@ -435,6 +448,7 @@ class FormalSlotPublicSummary(_StrictFormalSlotModel):
     identity_status: FormalSlotRequirementStatus
     retry_count: int
     repair_count: int
+    candidate_eligibility_required: bool
 
     @classmethod
     def from_receipt(cls, receipt: FormalSlotReceipt) -> "FormalSlotPublicSummary":
@@ -458,6 +472,7 @@ class FormalSlotPublicSummary(_StrictFormalSlotModel):
             identity_status=receipt.identity_summary.status,
             retry_count=receipt.retry_count,
             repair_count=receipt.repair_count,
+            candidate_eligibility_required=receipt.candidate_eligibility_required,
         )
 
 
@@ -511,6 +526,7 @@ class FormalSlotAcceptanceCore:
             framing_summary=self._coerce_requirement_summary(framing_summary),
             parity_summary=self._coerce_requirement_summary(parity_summary),
             identity_summary=self._coerce_requirement_summary(identity_summary),
+            candidate_eligibility_required=candidate_eligibility is not None,
             retry_count=retry_count,
             repair_count=repair_count,
             reload_public_projection_verified=reload_public_projection_verified,
