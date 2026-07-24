@@ -2491,10 +2491,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 asset,
             )
             professional_reference_stage = str(
-                (request.metadata if isinstance(request.metadata, dict) else {}).get(
-                    "professional_reference_stage"
-                )
-                or ""
+                self._generation_request_metadata(request).get("professional_reference_stage") or ""
             ).strip()
             if (character_card_full_frame_framing or not reference_sanitization.get("applies")) and self._should_include_original_reference(
                 request=request,
@@ -2712,7 +2709,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         the first native input for this one stage.
         """
 
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = ProductionImageGenerationProvider._generation_request_metadata(request)
         if (
             metadata.get("professional_identity_reference_strategy") != "character_card_shared_identity_v1"
             or str(metadata.get("professional_character_card_stage") or "").strip() != "expression_set"
@@ -2744,6 +2741,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             not in framing_keys
         ]
         return [*framing, *rest]
+
+    @staticmethod
+    def _generation_request_metadata(request: GenerationRequest) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        generation_plan_metadata = getattr(getattr(request, "generation_plan", None), "metadata", None)
+        if isinstance(generation_plan_metadata, dict):
+            metadata.update(generation_plan_metadata)
+        if isinstance(request.metadata, dict):
+            metadata.update(request.metadata)
+        return metadata
 
     @staticmethod
     def _dedupe_reference_sanitization_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2943,7 +2950,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         sources: dict[str, dict[str, Any]] = {}
         source_order: list[str] = []
         truth_source_ids: list[str] = []
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = ProductionImageGenerationProvider._generation_request_metadata(request)
         professional_server_owned_identity_chain = metadata.get(
             "professional_identity_reference_strategy"
         ) in {
@@ -3083,7 +3090,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         ordinary uploaded-portrait job.
         """
 
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = ProductionImageGenerationProvider._generation_request_metadata(request)
         if metadata.get("professional_identity_reference_strategy") == "character_card_shared_identity_v1":
             stage = str(metadata.get("professional_character_card_stage") or "").strip()
             if stage == "expression_set":
@@ -3161,7 +3168,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if professional_kinds is not None:
             return professional_kinds
 
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = self._generation_request_metadata(request)
         if (
             metadata.get("professional_anchor_pack_preparation")
             or metadata.get("professional_identity_reference_strategy")
@@ -3210,7 +3217,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         invents missing evidence or changes the hard 2/3/5 input budget.
         """
 
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = self._generation_request_metadata(request)
         if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
             return None
         stage = str(metadata.get("professional_reference_stage") or "").strip()
@@ -3342,7 +3349,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return bool(source_id and source_id == framing_source_id)
 
     def _professional_character_card_ordered_generated_reference_ids(self, request: GenerationRequest) -> list[str]:
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = self._generation_request_metadata(request)
         strategy = metadata.get("professional_identity_reference_strategy")
         if strategy not in {
             "serial_anchor_pack_root_reuse_v1",
@@ -3367,7 +3374,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return ordered_ids
 
     def _professional_character_card_framing_source_id(self, request: GenerationRequest) -> str:
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = self._generation_request_metadata(request)
         if metadata.get("professional_identity_reference_strategy") == "character_card_shared_identity_v1":
             if str(metadata.get("professional_character_card_stage") or "").strip() != "expression_set":
                 return ""
@@ -3389,7 +3396,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return ordered_ids[-1] if stage == "rear_head" else ordered_ids[0]
 
     def _professional_character_card_reverse_45_bridge_source_id(self, request: GenerationRequest) -> str:
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = self._generation_request_metadata(request)
         if str(metadata.get("professional_reference_stage") or "").strip() != "reverse_three_quarter":
             return ""
         ordered_ids = self._professional_character_card_ordered_generated_reference_ids(request)
@@ -4267,7 +4274,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         before local materialization can supply executable wording.
         """
 
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        metadata = ProductionImageGenerationProvider._generation_request_metadata(request)
         if bool(metadata.get("require_real_images") or metadata.get("real_image_generation")):
             return True
         normalized = metadata.get("normalized_v3_job_intent")
@@ -5338,9 +5345,12 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 provider=self.provider_name,
                 detail={"failure_code": "mcp_materialization_operation_mismatch", "handoff_id": handoff_id},
             )
+        handoff_status = str(handoff.get("status") or "").strip().lower()
         expected_hashes = list(handoff.get("reference_asset_hashes") or [])
         current_hashes = self.handoff_store._reference_hashes(current_reference_assets)
         if current_hashes != expected_hashes:
+            if handoff_status == "pending":
+                return None
             raise ProviderRuntimeError(
                 "MCP materialization references do not match the current stage.",
                 provider=self.provider_name,
@@ -5351,6 +5361,8 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         if {key: handoff_contract.get(key) for key in comparable_keys} != {
             key: current_rendering_contract.get(key) for key in comparable_keys
         }:
+            if handoff_status == "pending":
+                return None
             raise ProviderRuntimeError(
                 "MCP materialization rendering contract does not match the current stage.",
                 provider=self.provider_name,

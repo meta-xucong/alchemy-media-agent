@@ -38,11 +38,12 @@ from alchemy_creative_agent_3_0.app.schemas import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorCandidateUnavailable
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import CharacterCardCandidateRequest
+from app.providers.base import ProviderRuntimeError
 
 
-def _png_bytes() -> bytes:
+def _png_bytes(color: tuple[int, int, int] = (224, 236, 255)) -> bytes:
     buffer = BytesIO()
-    Image.new("RGB", (32, 48), color=(224, 236, 255)).save(buffer, format="PNG")
+    Image.new("RGB", (32, 48), color=color).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -204,6 +205,124 @@ def test_doc203_mcp_provider_consumes_explicit_handoff_not_stale_same_operation(
     assert record.metadata["provider_raw_summary"]["mcp_handoff_id"] == current["handoff_id"]
     assert handoffs.get(current["handoff_id"])["status"] == "consumed"
     assert handoffs.get(stale["handoff_id"])["status"] == "submitted"
+
+
+def test_doc218_mcp_pending_handoff_with_stale_contract_is_superseded(tmp_path: Path) -> None:
+    operation_id = "doc218-stale-pending-operation"
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs"),
+        handoff_store=handoffs,
+    )
+    stale_path = tmp_path / "stale.png"
+    current_path = tmp_path / "current.png"
+    stale_path.write_bytes(_png_bytes())
+    current_path.write_bytes(_png_bytes((255, 232, 224)))
+    stale_refs = [{"asset_id": "stale_ref", "file_path": str(stale_path)}]
+    current_refs = [{"asset_id": "current_ref", "file_path": str(current_path)}]
+    prompt = "same frozen prompt"
+    prompt_sha = hashlib.sha256(prompt.encode()).hexdigest()
+    contract = {
+        "size": "32x48",
+        "quality": "standard",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+    }
+    stale = handoffs.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=stale_refs,
+        rendering_contract=contract,
+    )
+    explicit_request = _minimal_request(
+        metadata=_request_metadata(
+            operation_id=operation_id,
+            materialization={
+                "handoff_id": stale["handoff_id"],
+                "status": "pending",
+                "generation_channel": "mcp",
+                "resume_required": True,
+            },
+        )
+    )
+
+    context = provider._existing_mcp_handoff_context(  # noqa: SLF001
+        explicit_request,
+        current_context={
+            "operation_id": operation_id,
+            "canonical_prompt": prompt,
+            "prompt_sha256": prompt_sha,
+        },
+        current_reference_assets=current_refs,
+        current_rendering_contract=contract,
+    )
+
+    assert context is None
+
+
+def test_doc218_mcp_submitted_handoff_with_stale_contract_fails_closed(tmp_path: Path) -> None:
+    operation_id = "doc218-stale-submitted-operation"
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs"),
+        handoff_store=handoffs,
+    )
+    stale_path = tmp_path / "stale-submitted.png"
+    current_path = tmp_path / "current-submitted.png"
+    stale_path.write_bytes(_png_bytes())
+    current_path.write_bytes(_png_bytes((255, 232, 224)))
+    stale_refs = [{"asset_id": "stale_ref", "file_path": str(stale_path)}]
+    current_refs = [{"asset_id": "current_ref", "file_path": str(current_path)}]
+    prompt = "same frozen prompt"
+    prompt_sha = hashlib.sha256(prompt.encode()).hexdigest()
+    contract = {
+        "size": "32x48",
+        "quality": "standard",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+    }
+    stale = handoffs.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=stale_refs,
+        rendering_contract=contract,
+    )
+    handoffs.submit(
+        stale["handoff_id"],
+        nonce=stale["nonce"],
+        prompt_sha256=stale["prompt_sha256"],
+        reference_asset_hashes=stale["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+    explicit_request = _minimal_request(
+        metadata=_request_metadata(
+            operation_id=operation_id,
+            materialization={
+                "handoff_id": stale["handoff_id"],
+                "status": "pending",
+                "generation_channel": "mcp",
+                "resume_required": True,
+            },
+        )
+    )
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider._existing_mcp_handoff_context(  # noqa: SLF001
+            explicit_request,
+            current_context={
+                "operation_id": operation_id,
+                "canonical_prompt": prompt,
+                "prompt_sha256": prompt_sha,
+            },
+            current_reference_assets=current_refs,
+            current_rendering_contract=contract,
+        )
+
+    assert getattr(exc_info.value, "detail", {})["failure_code"] == "mcp_materialization_reference_mismatch"
 
 
 def test_doc203_character_card_stage_creation_receives_explicit_mcp_handoff() -> None:

@@ -329,6 +329,34 @@ def test_doc216_expression_set_uses_front_full_frame_as_first_provider_reference
     assert plan["provider_input_plan"]["reference_image_asset_ids"][0] == "front_output"
 
 
+def test_doc218_expression_set_reference_order_reads_generation_plan_metadata(
+    tmp_path: Path,
+) -> None:
+    request = _expression_request(_image(tmp_path / "front.png", (220, 181, 160)))
+    generation_plan = request.generation_plan.model_copy(
+        update={"metadata": dict(request.metadata)},
+        deep=True,
+    )
+    projected = request.model_copy(
+        update={
+            "metadata": {"job_id": "job_expression_projected_metadata_only"},
+            "generation_plan": generation_plan,
+        },
+        deep=True,
+    )
+    provider = ProductionImageGenerationProvider()
+    references = provider._reference_assets(projected)  # noqa: SLF001
+    plan = provider._asset_plan(projected, references)  # noqa: SLF001
+
+    assert plan["provider_input_plan"]["reference_image_count"] == 3
+    assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
+        ("front_output", "character_card_full_frame_framing_reference"),
+        ("front_output", "portrait_identity_crop"),
+        ("front_output", "portrait_identity_pose_geometry_crop"),
+    ]
+    assert plan["provider_input_plan"]["reference_image_asset_ids"][0] == "front_output"
+
+
 def test_doc190_provider_request_projection_preserves_character_card_reference_scope(
     tmp_path: Path,
 ) -> None:
