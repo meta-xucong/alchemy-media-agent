@@ -1502,6 +1502,97 @@ def test_doc215_character_card_reenters_same_interrupted_mcp_job_without_replann
     assert service.generated_calls[0][1]["metadata"]["max_visual_retry_attempts"] == 0
 
 
+def test_doc233_character_card_reenters_pre_handoff_job_with_logical_front_reference_plan() -> None:
+    operation_id = "people_doc233:expression_set:expression.anger:1"
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        slot_key="expression.anger",
+        attempt_round=1,
+    )
+    # Real Product API Character Card plans freeze the logical face.front winner.
+    # Provider/MCP materialization derives the full-frame/card-framing and crop
+    # references later, before the durable handoff is created.  A pre-handoff
+    # interrupted job must therefore be resumable from this logical plan; the
+    # full-frame-first contract is enforced at the handoff boundary instead.
+    planning_metadata["professional_anchor_reference_assets"] = [
+        {"asset_id": "front_winner", "output_id": "front_winner"}
+    ]
+    interrupted_record = SimpleNamespace(
+        job_id="job_doc233_interrupted_logical_front",
+        status=ProductJobStatusValue.GENERATING,
+        planning_result=_minimal_planning_result(
+            "job_doc233_interrupted_logical_front",
+            generation_metadata=planning_metadata,
+        ),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.anger",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+            }
+        ),
+    )
+
+    class _Store:
+        def list_mcp_operation_records(self, _operation_id):  # noqa: ANN001, ANN201
+            return [interrupted_record]
+
+        def save(self, _record) -> None:  # noqa: ANN001
+            return None
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created_payloads = []
+            self.generated_calls = []
+            self.job_store = _Store()
+            self.mcp_materialization_store = SimpleNamespace(get=lambda _handoff_id: None)
+
+        def create_professional_character_card_stage_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.created_payloads.append(payload)
+            raise AssertionError("pre-handoff recovery must reuse the interrupted job")
+
+        def generate_job(self, job_id, request):  # noqa: ANN001, ANN201
+            self.generated_calls.append((job_id, request))
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):  # noqa: ANN001, ANN201
+            return interrupted_record
+
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc233",
+        people_asset_id="people_doc233",
+        card_version_id="card_doc233",
+        module="expression_set",
+        slot_key="expression.anger",
+        candidate_index=1,
+        attempt_round=1,
+        reference_output_ids=["front_winner"],
+        user_intent="controlled anger keyframe",
+        generation_channel="mcp",
+    )
+
+    service = _Service()
+    with pytest.raises(AnchorCandidateUnavailable, match="character_card_candidate_generation_failed"):
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert service.created_payloads == []
+    assert service.generated_calls[0][0] == "job_doc233_interrupted_logical_front"
+    assert service.generated_calls[0][1]["metadata"]["_v3_resume_interrupted_mcp_materialization"] is True
+    assert service.generated_calls[0][1]["metadata"]["disable_visual_auto_retry"] is True
+    assert service.generated_calls[0][1]["metadata"]["max_visual_retry_attempts"] == 0
+
+
 def test_doc215_existing_mcp_handoff_still_uses_normal_handoff_resume_not_reentry() -> None:
     operation_id = "people_doc215:expression_set:expression.laugh:1:round5"
     pending_record = SimpleNamespace(

@@ -1651,14 +1651,57 @@ class ProductApiAnchorPackPreparationHost:
                 continue
             if request.module == "expression_set":
                 reference_assets = metadata.get("professional_anchor_reference_assets")
-                if not isinstance(reference_assets, list):
-                    continue
-                if not self._character_card_expression_handoff_reference_order_current(
-                    {"reference_assets": reference_assets}
+                if not self._character_card_expression_planning_reference_assets_current(
+                    reference_assets,
+                    requested_refs,
                 ):
                     continue
             return True
         return False
+
+    @classmethod
+    def _character_card_expression_planning_reference_assets_current(
+        cls,
+        reference_assets: Any,
+        requested_refs: list[str],
+    ) -> bool:
+        """Validate the frozen planning reference contract for Expression Set.
+
+        Planning freezes the server-owned logical ``face.front`` winner.  The
+        Provider/MCP materializer derives the full-frame card-framing reference
+        and identity crops later, before a durable handoff exists.  Therefore a
+        pre-handoff interrupted job may be safely re-entered when its logical
+        references match the requested front winner, while existing handoffs and
+        generated outputs still require the stricter materialized reference
+        order.
+        """
+
+        if not isinstance(reference_assets, list) or not reference_assets:
+            return False
+        if cls._character_card_expression_handoff_reference_order_current(
+            {"reference_assets": reference_assets}
+        ):
+            return True
+        logical_refs: list[str] = []
+        for item in reference_assets:
+            if not isinstance(item, dict):
+                return False
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            derivative_kind = str(
+                item.get("derivative_kind") or metadata.get("derivative_kind") or ""
+            ).strip()
+            identity_scope = str(
+                item.get("identity_evidence_scope") or metadata.get("identity_evidence_scope") or ""
+            ).strip()
+            if derivative_kind or identity_scope:
+                return False
+            output_id = str(item.get("output_id") or metadata.get("output_id") or "").strip()
+            asset_id = str(item.get("asset_id") or "").strip()
+            value = output_id or asset_id
+            if not value:
+                return False
+            logical_refs.append(value)
+        return logical_refs == [str(item).strip() for item in requested_refs if str(item).strip()]
 
     @staticmethod
     def _is_interrupted_mcp_materialization_checkpoint(record: Any) -> bool:
