@@ -1191,12 +1191,14 @@ class ProductApiAnchorPackPreparationHost:
                     raise AnchorCandidateUnavailable(
                         "character_card_stage_prompt_contract_invalid"
                     )
-                raise AnchorCandidateUnavailable(
-                    "mcp_materialization_pending"
-                    if str(mcp_materialization.get("status") or "").lower() == "pending"
-                    else "mcp_materialization_failed",
-                    mcp_handoff_id=handoff_id,
-                )
+                failure_code = str(mcp_materialization.get("failure_code") or "").strip()
+                if not failure_code:
+                    failure_code = (
+                        "mcp_materialization_pending"
+                        if str(mcp_materialization.get("status") or "").lower() == "pending"
+                        else "mcp_materialization_failed"
+                    )
+                raise AnchorCandidateUnavailable(failure_code, mcp_handoff_id=handoff_id)
             raise AnchorCandidateUnavailable("character_card_candidate_generation_failed")
         candidate, review = self._character_card_candidate_and_review(status_job_id, request)
         self._character_card_reviews[candidate.candidate_id] = review
@@ -1294,10 +1296,14 @@ class ProductApiAnchorPackPreparationHost:
             if record_refs != requested_refs:
                 continue
             materialization = metadata.get("mcp_materialization")
+            handoff_id = ""
+            durable_handoff_payload: dict[str, Any] | None = None
+            handoff_payload: dict[str, Any] | None = None
             if isinstance(materialization, dict):
                 handoff_id = str(materialization.get("handoff_id") or "").strip()
                 payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None
-                handoff_payload = payload if isinstance(payload, dict) else materialization
+                durable_handoff_payload = payload if isinstance(payload, dict) else None
+                handoff_payload = durable_handoff_payload if durable_handoff_payload is not None else materialization
                 if not self._character_card_mcp_handoff_current(request, handoff_payload):
                     handoff_status = str(
                         handoff_payload.get("status") or materialization.get("status") or ""
@@ -1308,12 +1314,23 @@ class ProductApiAnchorPackPreparationHost:
                         "mcp_materialization_reference_mismatch",
                         mcp_handoff_id=handoff_id or None,
                     )
-            if not self._character_card_planning_metadata_current(
+            elif requested_handoff and isinstance(requested_handoff_payload, dict):
+                handoff_id = requested_handoff
+                durable_handoff_payload = requested_handoff_payload
+                handoff_payload = requested_handoff_payload
+            generated_checkpoint_current = self._character_card_generated_mcp_checkpoint_current(
+                request,
+                record,
+                operation_id,
+                durable_handoff_payload,
+            )
+            planning_metadata_current = self._character_card_planning_metadata_current(
                 request,
                 record,
                 operation_id,
                 requested_refs,
-            ):
+            )
+            if not planning_metadata_current and not generated_checkpoint_current:
                 continue
             if requested_handoff:
                 if isinstance(materialization, dict):
@@ -1340,6 +1357,87 @@ class ProductApiAnchorPackPreparationHost:
                 mcp_handoff_id=requested_handoff or None,
             )
         return matches[0] if matches else None
+
+    def _character_card_generated_mcp_checkpoint_current(
+        self,
+        request: CharacterCardCandidateRequest,
+        record: Any,
+        operation_id: str,
+        handoff_payload: dict[str, Any] | None,
+    ) -> bool:
+        """Treat a durable generated MCP checkpoint as review-only authority.
+
+        Some older Character Card jobs have stale planning reference metadata
+        while their already materialized output is checkpointed by a current
+        durable MCP handoff.  For review-only resumption, the handoff/job/output
+        checkpoint may own the resume decision only when all identity fields
+        match the same operation.  Any mismatch remains fail-closed.
+        """
+
+        generation_result = getattr(record, "generation_result", None)
+        if generation_result is None or not isinstance(handoff_payload, dict):
+            return False
+        if not self._character_card_mcp_handoff_current(request, handoff_payload):
+            return False
+        if str(handoff_payload.get("status") or "").strip().lower() != "job_checkpointed":
+            return False
+        identity = self._character_card_generation_result_mcp_identity(generation_result)
+        handoff_id = str(handoff_payload.get("handoff_id") or "").strip()
+        requested_handoff = str(request.mcp_handoff_id or "").strip()
+        if not handoff_id or (requested_handoff and requested_handoff != handoff_id):
+            return False
+        if identity.get("handoff_id") != handoff_id:
+            return False
+        checkpoint = handoff_payload.get("job_checkpoint")
+        if not isinstance(checkpoint, dict):
+            return False
+        expected = {
+            "operation_id": str(operation_id or "").strip(),
+            "handoff_id": handoff_id,
+            "job_id": str(getattr(record, "job_id", "") or "").strip(),
+            "candidate_id": identity.get("candidate_id", ""),
+            "output_id": identity.get("output_id", ""),
+            "generation_result_id": str(getattr(generation_result, "planning_result_id", "") or "").strip(),
+        }
+        if not all(expected.values()):
+            return False
+        for key, value in expected.items():
+            if str(checkpoint.get(key) or "").strip() != value:
+                return False
+        return True
+
+    @staticmethod
+    def _character_card_generation_result_mcp_identity(generation_result: Any) -> dict[str, str]:
+        asset_pack = getattr(generation_result, "asset_pack", None)
+        assets = getattr(asset_pack, "assets", None)
+        if not isinstance(assets, list):
+            return {}
+        for asset in assets:
+            metadata = dict(getattr(asset, "metadata", {}) or {})
+            candidate_metadata = (
+                dict(metadata.get("candidate_metadata"))
+                if isinstance(metadata.get("candidate_metadata"), dict)
+                else {}
+            )
+            materialization = (
+                dict(candidate_metadata.get("mcp_materialization"))
+                if isinstance(candidate_metadata.get("mcp_materialization"), dict)
+                else {}
+            )
+            handoff_id = str(materialization.get("handoff_id") or "").strip()
+            output_id = str(candidate_metadata.get("output_id") or metadata.get("output_id") or "").strip()
+            candidate_id = str(
+                candidate_metadata.get("candidate_id")
+                or metadata.get("selected_candidate_id")
+                or ""
+            ).strip()
+            if handoff_id or output_id or candidate_id:
+                return {
+                    "handoff_id": handoff_id,
+                    "output_id": output_id,
+                    "candidate_id": candidate_id,
+                }
+        return {}
 
     def _character_card_planning_metadata_current(
         self,

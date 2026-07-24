@@ -63,7 +63,11 @@ from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateUnavailable,
     AnchorGenerationRequest,
 )
-from alchemy_creative_agent_3_0.app.visual_assets.character_card import CharacterCardCandidateRequest
+from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+    CharacterCardCandidateRequest,
+    CharacterCardPreparationService,
+    CharacterCardState,
+)
 from app.providers.base import ProviderRuntimeError
 
 
@@ -2874,6 +2878,377 @@ def test_doc228_host_keeps_review_timeout_resumable_after_second_timeout() -> No
     assert exc_info.value.mcp_handoff_id == handoff_id
     assert exc_info.value.output_id == output_id
     assert exc_info.value.candidate_id == candidate_id
+
+
+def test_doc230_host_reuses_job_checkpoint_when_planning_reference_projection_is_stale() -> None:
+    job_id = "job_doc230_real_review_only"
+    output_id = "v3_output_doc230_existing"
+    candidate_id = "candidate_doc230_existing"
+    handoff_id = "mcp_handoff_doc230_existing"
+    operation_id = "people_doc230:expression_set:expression.laugh:2:round5"
+
+    class _OutputStore:
+        def __init__(self) -> None:
+            self.records = [
+                SimpleNamespace(
+                    output_id=output_id,
+                    candidate_id=candidate_id,
+                    metadata={
+                        "provider_prompt_sha256": "sha256:doc230",
+                        "prompt_compilation_id": "prompt_doc230",
+                        "provider_reference_image_count": 3,
+                        "reference_asset_count": 3,
+                        "provider_reference_assets": _current_expression_reference_assets(),
+                        "prompt_reference_parity": {"verified": True},
+                        "reference_evidence_parity": {"verified": True},
+                    },
+                )
+            ]
+
+        def list_by_job(self, _job_id):  # noqa: ANN001, ANN201
+            return list(self.records)
+
+    stale_planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        handoff={
+            "handoff_id": handoff_id,
+            "status": "job_checkpointed",
+            "generation_channel": "mcp",
+        },
+    )
+    # Real post-Doc229 evidence: the old job/output is valid and the durable
+    # handoff is authoritative, but the frozen planning projection only kept the
+    # logical face.front id and lacks the newer full-frame/card-framing fields.
+    stale_planning_metadata["professional_anchor_reference_assets"] = [
+        {"asset_id": "front_winner"}
+    ]
+
+    timeout_package = _provider_timeout_review_package(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+    )
+    generation = _with_review_package(
+        _attach_output_checkpoint(
+            _minimal_planning_result(
+                job_id,
+                generation_metadata=stale_planning_metadata,
+            ),
+            output_id=output_id,
+            candidate_id=candidate_id,
+            handoff_id=handoff_id,
+            provider_prompt_sha256="sha256:doc230",
+            prompt_compilation_id="prompt_doc230",
+        ),
+        timeout_package,
+    )
+    record = SimpleNamespace(
+        job_id=job_id,
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=generation,
+        generation_result=generation,
+        request=SimpleNamespace(
+            metadata={
+                "project_id": "project_doc230",
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {
+                    "handoff_id": handoff_id,
+                    "status": "job_checkpointed",
+                    "generation_channel": "mcp",
+                    "resume_required": True,
+                    "job_checkpoint": {
+                        "status": "job_checkpointed",
+                        "operation_id": operation_id,
+                        "handoff_id": handoff_id,
+                        "job_id": job_id,
+                        "candidate_id": candidate_id,
+                        "output_id": output_id,
+                        "generation_result_id": generation.planning_result_id,
+                    },
+                },
+                "mcp_review_status": {
+                    "status": "pending",
+                    "reason_code": "provider_timeout",
+                    "handoff_id": handoff_id,
+                    "output_id": output_id,
+                    "candidate_id": candidate_id,
+                    "review_owner": "v3_shared_visual_cluster",
+                },
+            }
+        ),
+    )
+
+    class _JobStore:
+        def list_mcp_operation_records(self, _operation_id):  # noqa: ANN001, ANN201
+            return [record]
+
+        def save(self, new_record):  # noqa: ANN001, ANN201
+            return new_record
+
+    class _ResumeReviewService:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created = 0
+            self.generated_calls = []
+            self.output_store = _OutputStore()
+            self.job_store = _JobStore()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda _handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "job_checkpointed",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _current_expression_reference_assets(),
+                    "reference_semantic_fingerprint": "semantic_doc230",
+                    "rendering_contract_fingerprint": "rendering_doc230",
+                    "job_checkpoint": {
+                        "status": "job_checkpointed",
+                        "operation_id": operation_id,
+                        "handoff_id": handoff_id,
+                        "job_id": job_id,
+                        "candidate_id": candidate_id,
+                        "output_id": output_id,
+                        "generation_result_id": generation.planning_result_id,
+                    },
+                }
+            )
+
+        def create_professional_character_card_stage_job(self, *_args, **_kwargs):
+            self.created += 1
+            raise AssertionError("review-only must reuse the checkpointed job, not create a new job")
+
+        def generate_job(self, job_id_arg, request):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            self.generated_calls.append((job_id_arg, request))
+            assert request["metadata"]["_v3_resume_finalizing_review"] is True
+            package = {
+                "package_id": "review_doc230_host_pass",
+                "job_id": job_id,
+                "inspections": [
+                    {
+                        "inspection_id": "visual_inspection_doc230_host_pass",
+                        "job_id": job_id,
+                        "candidate_id": candidate_id,
+                        "output_id": output_id,
+                        "mode": "hybrid",
+                        "status": "pass",
+                        "verification_state": "verified",
+                        "confidence": 0.94,
+                        "score_card": _laugh_pass_score_card(),
+                        "detected_issues": [],
+                        "issue_codes": [],
+                    }
+                ],
+                "metadata": {"post_generation": True, "inspection_count": 1},
+            }
+            record.generation_result = _with_review_package(record.generation_result, package)
+            record.status = ProductJobStatusValue.GENERATED
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.GENERATED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, job_id_arg):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            return record
+
+    service = _ResumeReviewService()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc230",
+        people_asset_id="people_doc230",
+        card_version_id="card_doc230",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id=handoff_id,
+    )
+
+    candidate = ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert service.created == 0
+    assert service.generated_calls[0][0] == job_id
+    assert candidate.output_id == output_id
+    assert candidate.candidate_id == candidate_id
+
+
+def test_doc230_character_host_preserves_checkpoint_mismatch_failure_code() -> None:
+    job_id = "job_doc230_checkpoint_mismatch"
+    handoff_id = "mcp_handoff_doc230_mismatch"
+    operation_id = "people_doc230:expression_set:expression.laugh:2:round5"
+
+    class _JobStore:
+        def save(self, record):  # noqa: ANN001, ANN201
+            return record
+
+    class _MismatchService:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.output_store = SimpleNamespace()
+            self.job_store = _JobStore()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda _handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "job_checkpointed",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _current_expression_reference_assets(),
+                    "job_checkpoint": {
+                        "status": "job_checkpointed",
+                        "operation_id": operation_id,
+                        "handoff_id": handoff_id,
+                        "job_id": "job_doc230_different",
+                        "candidate_id": "candidate_doc230_different",
+                        "output_id": "v3_output_doc230_different",
+                        "generation_result_id": "generation_result_doc230_different",
+                    },
+                }
+            )
+            self.record = SimpleNamespace(
+                job_id=job_id,
+                status=ProductJobStatusValue.PLANNED,
+                planning_result=_minimal_planning_result(
+                    job_id,
+                    generation_metadata=_current_character_card_planning_metadata(
+                        operation_id=operation_id,
+                        handoff={"handoff_id": handoff_id, "status": "pending"},
+                    ),
+                ),
+                generation_result=None,
+                request=SimpleNamespace(
+                    metadata={
+                        "project_id": "project_doc230",
+                        "professional_character_card_preparation": True,
+                        "professional_character_card_stage": "expression_set",
+                        "professional_character_card_slot": "expression.laugh",
+                        "professional_character_card_reference_output_ids": ["front_winner"],
+                        "generation_channel": "mcp",
+                        "mcp_operation_id": operation_id,
+                        "mcp_materialization": {
+                            "handoff_id": handoff_id,
+                            "status": "pending",
+                            "generation_channel": "mcp",
+                            "resume_required": True,
+                        },
+                    }
+                ),
+            )
+
+        def create_professional_character_card_stage_job(self, *_args, **_kwargs):
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, job_id_arg, _request):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            self.record.request.metadata["mcp_materialization"] = {
+                "handoff_id": handoff_id,
+                "status": "job_checkpointed",
+                "generation_channel": "mcp",
+                "resume_required": True,
+                "failure_code": "mcp_materialization_checkpoint_mismatch",
+            }
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, job_id_arg):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            return self.record
+
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc230",
+        people_asset_id="people_doc230",
+        card_version_id="card_doc230",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id=handoff_id,
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        ProductApiAnchorPackPreparationHost(_MismatchService()).generate(request)  # type: ignore[arg-type]
+
+    assert exc_info.value.failure_code == "mcp_materialization_checkpoint_mismatch"
+    assert exc_info.value.mcp_handoff_id == handoff_id
+
+
+def test_doc230_checkpoint_mismatch_hard_stops_instead_of_advancing_candidate3() -> None:
+    card = CharacterCardState.initial(card_version_id="card_doc230")
+    front = card.face_slots["face.front"].model_copy(
+        update={
+            "state": "active",
+            "output_id": "front_winner",
+            "review_verified": True,
+            "prompt_reference_parity_verified": True,
+        }
+    )
+    card = card.model_copy(
+        update={
+            "face_identity_status": "active",
+            "face_slots": {**card.face_slots, "face.front": front},
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_review_pending",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": ["mcp_handoff_doc230_existing"],
+            "slot_retry_rounds": {"expression.laugh": 5},
+        }
+    )
+
+    class _Generator:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def generate(self, request):  # noqa: ANN001, ANN201
+            self.calls.append(request.candidate_index)
+            if request.candidate_index != 2:
+                raise AssertionError("checkpoint mismatch must hard-stop before candidate 3")
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id="mcp_handoff_doc230_existing",
+            )
+
+    class _Reviewer:
+        def review(self, _candidate):  # noqa: ANN001, ANN201
+            raise AssertionError("checkpoint mismatch has no reviewed pixel")
+
+    generator = _Generator()
+    result = CharacterCardPreparationService(generator=generator, reviewer=_Reviewer()).prepare_expression_set(
+        card,
+        front_output_id="front_winner",
+        project_id="project_doc230",
+        people_asset_id="people_doc230",
+        user_intents={"laugh": "laugh", "anger": "anger", "sad": "sad"},
+        generation_channel="mcp",
+    )
+
+    assert generator.calls == [2]
+    assert result.status == "blocked"
+    assert result.card.last_failure_code == "mcp_materialization_checkpoint_mismatch"
+    assert result.card.last_failure_attempt_count == 2
 
 
 def test_doc223c_anchor_pack_recovers_old_handoff_job_beyond_recent_window(

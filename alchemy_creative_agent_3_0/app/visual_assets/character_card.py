@@ -1429,6 +1429,8 @@ class CharacterCardPreparationService:
                     "mcp_materialization_pending",
                     "mcp_review_pending",
                     "mcp_materialization_operation_ambiguous",
+                    "mcp_materialization_checkpoint_mismatch",
+                    "mcp_materialization_projection_unavailable",
                 }:
                     return None, slot_attempts, slot_failures
                 continue
