@@ -18,6 +18,7 @@ from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatus, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     expression_front_card_framing_materialization_directive,
@@ -715,3 +716,192 @@ def test_doc208_character_card_request_pending_hint_cannot_override_submitted_ar
     selected = service.created_payloads[0]["metadata"]["mcp_materialization"]
     assert selected["handoff_id"] == submitted["handoff_id"]
     assert selected["handoff_id"] != pending["handoff_id"]
+
+
+def test_doc215_product_api_allows_only_pre_handoff_mcp_interruption_reentry() -> None:
+    base_record = SimpleNamespace(
+        status=ProductJobStatusValue.GENERATING,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "generation_channel": "mcp",
+                "mcp_operation_id": "people_doc215:expression_set:expression.laugh:1:round5",
+            }
+        ),
+    )
+
+    assert V3ProductApiService._can_resume_interrupted_mcp_materialization(base_record) is True
+
+    for metadata_patch, field_patch in (
+        ({"mcp_materialization": {"handoff_id": "mcp_handoff_existing"}}, {}),
+        ({}, {"generation_result": object()}),
+        ({"generation_channel": "provider"}, {}),
+        ({"professional_character_card_preparation": False}, {}),
+        ({"background_generation_attempt_id": "attempt_running_elsewhere"}, {}),
+    ):
+        metadata = {**base_record.request.metadata, **metadata_patch}
+        record = SimpleNamespace(
+            status=ProductJobStatusValue.GENERATING,
+            planning_result=object(),
+            generation_result=None,
+            request=SimpleNamespace(metadata=metadata),
+        )
+        for name, value in field_patch.items():
+            setattr(record, name, value)
+        assert V3ProductApiService._can_resume_interrupted_mcp_materialization(record) is False
+
+
+def test_doc215_character_card_reenters_same_interrupted_mcp_job_without_replanning() -> None:
+    operation_id = "people_doc215:expression_set:expression.laugh:1:round5"
+    interrupted_record = SimpleNamespace(
+        job_id="job_doc215_interrupted",
+        status=ProductJobStatusValue.GENERATING,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+            }
+        ),
+    )
+
+    class _Store:
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return [interrupted_record]
+
+        def save(self, _record) -> None:  # noqa: ANN001
+            return None
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created_payloads = []
+            self.generated_calls = []
+            self.job_store = _Store()
+            self.mcp_materialization_store = SimpleNamespace(get=lambda _handoff_id: None)
+
+        def create_professional_character_card_stage_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.created_payloads.append(payload)
+            raise AssertionError("Doc215 must reuse the interrupted job instead of re-planning")
+
+        def generate_job(self, job_id, request):  # noqa: ANN001, ANN201
+            self.generated_calls.append((job_id, request))
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):  # noqa: ANN001, ANN201
+            return interrupted_record
+
+    service = _Service()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc215",
+        people_asset_id="people_doc215",
+        card_version_id="card_doc215",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=1,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="character_card_candidate_generation_failed"):
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert service.created_payloads == []
+    assert service.generated_calls[0][0] == "job_doc215_interrupted"
+    assert (
+        service.generated_calls[0][1]["metadata"]["_v3_resume_interrupted_mcp_materialization"]
+        is True
+    )
+
+
+def test_doc215_existing_mcp_handoff_still_uses_normal_handoff_resume_not_reentry() -> None:
+    operation_id = "people_doc215:expression_set:expression.laugh:1:round5"
+    pending_record = SimpleNamespace(
+        job_id="job_doc215_pending",
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {
+                    "handoff_id": "mcp_handoff_doc215_existing",
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                },
+            }
+        ),
+    )
+
+    class _Store:
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return [pending_record]
+
+        def save(self, _record) -> None:  # noqa: ANN001
+            return None
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.generated_calls = []
+            self.job_store = _Store()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "pending",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                }
+            )
+
+        def generate_job(self, job_id, request):  # noqa: ANN001, ANN201
+            self.generated_calls.append((job_id, request))
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):  # noqa: ANN001, ANN201
+            return pending_record
+
+    service = _Service()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc215",
+        people_asset_id="people_doc215",
+        card_version_id="card_doc215",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=1,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id="mcp_handoff_doc215_existing",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="mcp_materialization_pending"):
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert "_v3_resume_interrupted_mcp_materialization" not in service.generated_calls[0][1]["metadata"]

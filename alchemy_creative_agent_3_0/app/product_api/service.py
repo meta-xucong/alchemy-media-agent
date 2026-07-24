@@ -1633,6 +1633,9 @@ class V3ProductApiService:
         self._assert_photographer_profile_binding_immutable(record, generate_request)
         worker_claim = bool(generate_request.metadata.pop("_v3_background_worker_claim", False))
         background_attempt_id = str(generate_request.metadata.pop("_v3_background_generation_attempt_id", "") or "")
+        resume_interrupted_mcp_materialization = bool(
+            generate_request.metadata.pop("_v3_resume_interrupted_mcp_materialization", False)
+        )
         resume_finalizing_review = bool(generate_request.metadata.pop("_v3_resume_finalizing_review", False))
         if worker_claim and not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
@@ -1641,7 +1644,21 @@ class V3ProductApiService:
                 return self._resume_finalizing_generation_review(record, generate_request, background_attempt_id)
             return self._status_from_record(record)
         if record.status == ProductJobStatusValue.GENERATING and not worker_claim:
-            return self._status_from_record(record)
+            if not (
+                resume_interrupted_mcp_materialization
+                and self._can_resume_interrupted_mcp_materialization(record)
+            ):
+                return self._status_from_record(record)
+            record.request.metadata = {
+                **dict(record.request.metadata),
+                "mcp_materialization_recovery": {
+                    "status": "reentered",
+                    "reason_code": "interrupted_before_handoff",
+                    "generation_channel": "mcp",
+                    "automatic_replay": False,
+                },
+            }
+            self.job_store.save(record)
         if not self.balance_adapter.has_available_credits(record.balance_estimate.get("credits_required", 0)):
             record.status = ProductJobStatusValue.BLOCKED
             record.warnings.append("Insufficient V3 balance adapter credits for this operation.")
@@ -2216,6 +2233,35 @@ class V3ProductApiService:
         return (
             active_attempt_id == background_attempt_id
             and record.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
+        )
+
+    @staticmethod
+    def _can_resume_interrupted_mcp_materialization(record: ProductJobRecord) -> bool:
+        """Allow a trusted internal retry to re-enter a stranded MCP job.
+
+        The only safe checkpoint is before an MCP handoff exists: no immutable
+        prompt/artifact has been exposed, no pixels were generated, and the
+        same server-owned operation id remains on the job record.  Once a
+        handoff or generation result exists, the ordinary handoff resume/review
+        paths own recovery instead.
+        """
+
+        if record.status != ProductJobStatusValue.GENERATING:
+            return False
+        if record.generation_result is not None or record.planning_result is None:
+            return False
+        metadata = dict(record.request.metadata or {})
+        if str(metadata.get("generation_channel") or "").strip().lower() != "mcp":
+            return False
+        if isinstance(metadata.get("mcp_materialization"), dict):
+            return False
+        if not str(metadata.get("mcp_operation_id") or "").strip():
+            return False
+        if str(metadata.get("background_generation_attempt_id") or "").strip():
+            return False
+        return bool(
+            metadata.get("professional_character_card_preparation") is True
+            or metadata.get("professional_anchor_pack_preparation") is True
         )
 
     def _provider_strategy_for_generate(

@@ -1041,6 +1041,9 @@ class ProductApiAnchorPackPreparationHost:
             status_value = status.status
         else:
             status_job_id = resume_record.job_id
+            resume_interrupted_mcp_materialization = self._is_interrupted_mcp_materialization_checkpoint(
+                resume_record
+            )
             if getattr(resume_record, "generation_result", None) is not None:
                 try:
                     candidate, review = self._character_card_candidate_and_review(status_job_id, request)
@@ -1054,6 +1057,8 @@ class ProductApiAnchorPackPreparationHost:
                     return candidate
             else:
                 status_value = ProductJobStatusValue.PLANNED
+        if resume_record is None:
+            resume_interrupted_mcp_materialization = False
         if request.generation_channel == "mcp" and request.mcp_handoff_id:
             status_record = self.product_service.get_job_record(status_job_id)
             if status_record is not None:
@@ -1082,6 +1087,11 @@ class ProductApiAnchorPackPreparationHost:
                 "quality_mode": "strict",
                 "metadata": {
                     "max_visual_retry_attempts": 1,
+                    **(
+                        {"_v3_resume_interrupted_mcp_materialization": True}
+                        if resume_interrupted_mcp_materialization
+                        else {}
+                    ),
                     **(
                         {"_v3_resume_finalizing_review": True}
                         if resume_record is not None and request.generation_channel == "mcp"
@@ -1229,9 +1239,29 @@ class ProductApiAnchorPackPreparationHost:
                 else:
                     continue
             if getattr(record, "generation_result", None) is None and not isinstance(materialization, dict):
-                continue
+                if not self._is_interrupted_mcp_materialization_checkpoint(record):
+                    continue
             return record
         return None
+
+    @staticmethod
+    def _is_interrupted_mcp_materialization_checkpoint(record: Any) -> bool:
+        if getattr(record, "generation_result", None) is not None:
+            return False
+        if getattr(record, "planning_result", None) is None:
+            return False
+        status = getattr(record, "status", None)
+        status_value = getattr(status, "value", status)
+        if str(status_value or "").strip().lower() != ProductJobStatusValue.GENERATING.value:
+            return False
+        metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+        if isinstance(metadata.get("mcp_materialization"), dict):
+            return False
+        if str(metadata.get("generation_channel") or "").strip().lower() != "mcp":
+            return False
+        if not str(metadata.get("mcp_operation_id") or "").strip():
+            return False
+        return metadata.get("professional_character_card_preparation") is True
 
     def _recover_unconsumed_character_card_mcp_handoff_id(
         self,
