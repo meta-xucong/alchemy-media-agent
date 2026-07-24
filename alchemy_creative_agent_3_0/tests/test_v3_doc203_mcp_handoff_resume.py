@@ -259,6 +259,55 @@ def _provider_timeout_review_package(
     }
 
 
+def _provider_unavailable_signal_review_package(
+    *,
+    job_id: str,
+    output_id: str,
+    candidate_id: str,
+) -> dict[str, object]:
+    return {
+        "package_id": f"review_unavailable_{job_id}",
+        "job_id": job_id,
+        "resolutions": [],
+        "inspections": [
+            {
+                "inspection_id": f"inspection_unavailable_{job_id}",
+                "job_id": job_id,
+                "candidate_id": candidate_id,
+                "output_id": output_id,
+                "mode": "hybrid",
+                "status": "manual_review",
+                "verification_state": "unverified",
+                "confidence": 0.35,
+                "score_card": {
+                    "same_person_readability": 0.94,
+                    "identity_consistency": 0.93,
+                    "overall": 0.5,
+                },
+                "detected_issues": [],
+                "issue_codes": [],
+                "evidence": {},
+            }
+        ],
+        "real_review_signal_package": {
+            "package_id": f"real_review_signal_{job_id}",
+            "job_id": job_id,
+            "candidate_signals": [
+                {
+                    "candidate_id": candidate_id,
+                    "output_id": output_id,
+                    "status": "manual_review",
+                    "issue_codes": ["vision_provider_unavailable"],
+                    "observed_review_evidence": [
+                        "This image needs manual confirmation before automatic retry."
+                    ],
+                }
+            ],
+        },
+        "metadata": {"post_generation": True, "inspection_count": 1},
+    }
+
+
 def _attach_output_checkpoint(
     result: PlanningResult,
     *,
@@ -2329,6 +2378,139 @@ def test_doc228_service_review_only_resume_rechecks_generated_timeout_package_wi
     assert inspection["verification_state"] == "verified"
     assert inspection["status"] == "pass"
     assert updated.generation_result.metadata["post_generation_review_package"] != timeout_package
+    assert updated.request.metadata["mcp_materialization"]["status"] == "job_checkpointed"
+    assert "mcp_review_status" not in updated.request.metadata
+
+
+def test_doc228_service_review_only_resume_rechecks_signal_provider_unavailable_without_regeneration(
+    tmp_path: Path,
+) -> None:
+    job_id = "job_doc228_signal_unavailable"
+    output_id = "v3_output_88888888888888888888"
+    candidate_id = "candidate_doc228_signal_unavailable"
+    operation_id = "people_doc228:expression_set:expression.anger:1:round2"
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    prompt = _current_laugh_handoff_prompt()
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        reference_assets=_current_expression_reference_assets(),
+        rendering_contract={"size": "32x48", "output_format": "png", "count": 1},
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=pending["prompt_sha256"],
+        reference_asset_hashes=pending["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+    )
+    consumed = handoff_store.consume(submitted["handoff_id"])
+    handoff_store.mark_output_checkpoint(
+        pending["handoff_id"],
+        job_id=job_id,
+        candidate_id=candidate_id,
+        output_id=output_id,
+        artifact_sha256=consumed["artifact_sha256"],
+    )
+    handoff_store.mark_job_checkpoint(
+        pending["handoff_id"],
+        job_id=job_id,
+        candidate_id=candidate_id,
+        output_id=output_id,
+        generation_result_id=f"planning_{job_id}",
+    )
+    result, record, _timeout_package = _doc228_generated_timeout_record(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+        operation_id=operation_id,
+        handoff_id=pending["handoff_id"],
+        request_handoff_status="pending",
+    )
+    unavailable_package = _provider_unavailable_signal_review_package(
+        job_id=job_id,
+        output_id=output_id,
+        candidate_id=candidate_id,
+    )
+    record.generation_result = _with_review_package(result, unavailable_package)
+    record.planning_result = record.generation_result
+    output_store.save_base64_output(
+        job_id=job_id,
+        candidate_id=candidate_id,
+        asset_id=result.asset_pack.assets[0].asset_id,
+        provider="mcp_materialization",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(_png_bytes()).decode("ascii"),
+        output_id=output_id,
+    )
+    job_store.save(record)
+
+    class _NoRuntime:
+        calls = 0
+
+        def generate_job(self, *_args, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls += 1
+            raise AssertionError("review-only resume must not call ScenarioRuntime/provider generation")
+
+    class _VisionStub:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def inspect(self, resolution, metadata=None):  # noqa: ANN001, ANN201
+            self.calls.append((resolution.output_id, dict(metadata or {})))
+            return VisualInspectionReport(
+                inspection_id="visual_inspection_doc228_unavailable_rechecked",
+                project_id="project_doc228",
+                job_id=job_id,
+                candidate_id=candidate_id,
+                output_id=output_id,
+                mode="hybrid",
+                status="pass",
+                verification_state="verified",
+                confidence=0.94,
+                score_card=_laugh_pass_score_card(),
+                detected_issues=[],
+                evidence={"doc228_review_only_resume": "provider_unavailable_rechecked"},
+                user_visible_summary=["shared Vision review succeeded after provider config was restored"],
+            )
+
+    vision = _VisionStub()
+    service = V3ProductApiService(
+        scenario_runtime=_NoRuntime(),  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        vision_inspector=vision,  # type: ignore[arg-type]
+        mcp_materialization_store=handoff_store,
+    )
+
+    status = service.generate_asset_series(
+        job_id,
+        {
+            "quality_mode": "strict",
+            "metadata": {
+                "_v3_resume_finalizing_review": True,
+                "disable_visual_auto_retry": True,
+                "max_visual_retry_attempts": 0,
+            },
+        },
+    )
+
+    updated = job_store.get(job_id)
+    assert status.status == ProductJobStatusValue.GENERATED
+    assert _NoRuntime.calls == 0
+    assert [item[0] for item in vision.calls] == [output_id]
+    assert len(output_store.list_by_job(job_id)) == 1
+    assert updated is not None
+    assert updated.generation_result is not None
+    package = updated.generation_result.metadata["post_generation_review_package"]
+    inspection = package["inspections"][0]
+    assert inspection["inspection_id"] == "visual_inspection_doc228_unavailable_rechecked"
+    assert inspection["verification_state"] == "verified"
+    assert inspection["status"] == "pass"
+    assert package != unavailable_package
     assert updated.request.metadata["mcp_materialization"]["status"] == "job_checkpointed"
     assert "mcp_review_status" not in updated.request.metadata
 

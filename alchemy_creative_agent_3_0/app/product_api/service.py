@@ -437,6 +437,13 @@ VISUAL_AUTO_RETRY_NON_RETRYABLE_ISSUES = {
     "conflicting_user_request",
 }
 
+POST_GENERATION_REVIEW_RESUMABLE_PROVIDER_ISSUES = {
+    "provider_timeout",
+    "provider_error",
+    "vision_provider_unavailable",
+    "vision_provider_not_configured",
+}
+
 VISUAL_RETRY_PATCH_FIELDS = (
     "prompt_additions",
     "negative_additions",
@@ -2236,6 +2243,7 @@ class V3ProductApiService:
         inspections = package.get("inspections")
         if not isinstance(inspections, list):
             return False
+        package_issue_codes = V3ProductApiService._post_generation_review_package_issue_codes(package)
         for inspection in inspections:
             if not isinstance(inspection, dict):
                 continue
@@ -2244,17 +2252,44 @@ class V3ProductApiService:
             status = str(inspection.get("status") or "").strip().lower()
             if status not in {"manual_review", "fail_retryable"}:
                 continue
-            raw_issues = inspection.get("issue_codes") or inspection.get("detected_issues") or []
-            issue_codes = {
-                str(item.get("code") if isinstance(item, dict) else item).strip()
-                for item in raw_issues
-                if str(item.get("code") if isinstance(item, dict) else item).strip()
-            }
+            issue_codes = V3ProductApiService._review_issue_codes(inspection) | package_issue_codes
             evidence = inspection.get("evidence") if isinstance(inspection.get("evidence"), dict) else {}
             provider_error = str(evidence.get("provider_error") or "").lower()
-            if "provider_timeout" in issue_codes or "timed out" in provider_error:
+            if (
+                issue_codes.intersection(POST_GENERATION_REVIEW_RESUMABLE_PROVIDER_ISSUES)
+                or "timed out" in provider_error
+            ):
                 return True
         return False
+
+    @staticmethod
+    def _post_generation_review_package_issue_codes(package: dict[str, Any]) -> set[str]:
+        issue_codes: set[str] = set()
+        signal_package = package.get("real_review_signal_package")
+        candidate_signals = (
+            signal_package.get("candidate_signals")
+            if isinstance(signal_package, dict)
+            else None
+        )
+        if isinstance(candidate_signals, list):
+            for signal in candidate_signals:
+                if isinstance(signal, dict):
+                    issue_codes.update(V3ProductApiService._review_issue_codes(signal))
+        return issue_codes
+
+    @staticmethod
+    def _review_issue_codes(payload: dict[str, Any]) -> set[str]:
+        issue_codes: set[str] = set()
+        for key in ("issue_codes", "detected_issues"):
+            raw_issues = payload.get(key)
+            if not isinstance(raw_issues, list):
+                continue
+            for item in raw_issues:
+                code = item.get("code") if isinstance(item, dict) else item
+                normalized = str(code or "").strip()
+                if normalized:
+                    issue_codes.add(normalized)
+        return issue_codes
 
     def _specialized_role_execution_terminal_summary(
         self,
