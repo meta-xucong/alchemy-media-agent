@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 
 LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION = "v3_affective_laugh_intent_v3"
+GENERIC_SLOT_REVIEW_RECEIPT_CONTRACT_VERSION = "v3_character_card_generic_slot_review_receipt_v1"
 
 LAUGH_EXPRESSION_INTENT_CONTRACT: dict[str, Any] = {
     "contract_version": LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION,
@@ -186,6 +187,38 @@ class AffectiveExpressionReviewReceipt:
         }
 
 
+@dataclass(frozen=True)
+class GenericVisualReviewReceipt:
+    """Foundation-owned generic visual review receipt for Character Card slots.
+
+    This receipt projects an already-completed shared Vision inspection into a
+    small durable proof that a candidate passed the shared visual review path.
+    It deliberately does not add slot-specific expression thresholds; those
+    remain explicit Enhanced quality policies such as the laugh receipt below.
+    """
+
+    status: Literal["pass", "fail"]
+    evidence_codes: tuple[str, ...]
+    issue_codes: tuple[str, ...]
+    score_dimensions: tuple[str, ...]
+    framing_delta_dimensions: tuple[str, ...]
+    owner: Literal["v3_shared_visual_cluster"] = "v3_shared_visual_cluster"
+    contract_version: Literal["v3_character_card_generic_slot_review_receipt_v1"] = (
+        GENERIC_SLOT_REVIEW_RECEIPT_CONTRACT_VERSION
+    )
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "contract_version": self.contract_version,
+            "status": self.status,
+            "evidence_codes": list(self.evidence_codes),
+            "issue_codes": list(self.issue_codes),
+            "score_dimensions": list(self.score_dimensions),
+            "framing_delta_dimensions": list(self.framing_delta_dimensions),
+        }
+
+
 def normalize_affective_expression_score_card(raw_score_card: Any) -> dict[str, float]:
     """Normalize shared Vision expression dimensions and aliases.
 
@@ -229,6 +262,41 @@ def normalize_affective_expression_score_card(raw_score_card: Any) -> dict[str, 
     copy_first("head_yaw_delta_from_front", ("head_yaw_delta", "normalized_head_yaw_delta"))
     copy_first("head_pitch_delta_from_front", ("head_pitch_delta", "normalized_head_pitch_delta"))
     return score_card
+
+
+def project_generic_visual_review_receipt(
+    *,
+    score_card: Any,
+    issue_codes: list[str] | tuple[str, ...] | set[str],
+    verified: bool,
+    raw_status: str,
+) -> GenericVisualReviewReceipt:
+    """Project shared Vision's generic pass/fail facts into a safe receipt.
+
+    The function only preserves facts already produced by the shared review
+    package: verification status, issue codes and score dimension names.  It
+    does not create an anger/sad/body private reviewer and does not introduce
+    new thresholds.
+    """
+
+    normalized_scores = normalize_affective_expression_score_card(score_card)
+    normalized_issues = tuple(
+        dict.fromkeys(str(item or "").strip() for item in issue_codes if str(item or "").strip())
+    )
+    status = "pass" if verified and str(raw_status or "").strip().lower() in {"pass", "warning"} else "fail"
+    evidence_codes = ["shared_visual_review_verified" if verified else "shared_visual_review_unverified"]
+    if status == "pass":
+        evidence_codes.append("shared_visual_review_status_pass")
+    framing_dimensions = tuple(
+        sorted(dimension for dimension in EXPRESSION_FRAMING_DELTA_MAX if dimension in normalized_scores)
+    )
+    return GenericVisualReviewReceipt(
+        status=status,
+        evidence_codes=tuple(dict.fromkeys(evidence_codes)),
+        issue_codes=normalized_issues,
+        score_dimensions=tuple(sorted(normalized_scores)),
+        framing_delta_dimensions=framing_dimensions,
+    )
 
 
 def project_laugh_expression_review_receipt(
@@ -332,6 +400,8 @@ __all__ = [
     "AffectiveExpressionReviewReceipt",
     "EXPRESSION_FRAMING_DELTA_MAX",
     "EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES",
+    "GENERIC_SLOT_REVIEW_RECEIPT_CONTRACT_VERSION",
+    "GenericVisualReviewReceipt",
     "LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION",
     "LAUGH_EXPRESSION_EVIDENCE_CODES",
     "LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES",
@@ -340,5 +410,6 @@ __all__ = [
     "laugh_expression_materialization_directive",
     "laugh_expression_receipt_allows_slot",
     "normalize_affective_expression_score_card",
+    "project_generic_visual_review_receipt",
     "project_laugh_expression_review_receipt",
 ]

@@ -1049,6 +1049,29 @@ def _laugh_request(
     )
 
 
+def _anger_request(
+    *,
+    project_id: str = "project_doc196",
+    people_asset_id: str = "people_doc196",
+    candidate_index: int = 1,
+    user_intent: str = "mild controlled anger expression",
+    generation_channel: str = "provider",
+    mcp_handoff_id: str | None = None,
+) -> CharacterCardCandidateRequest:
+    return CharacterCardCandidateRequest(
+        project_id=project_id,
+        people_asset_id=people_asset_id,
+        card_version_id="card_doc196",
+        module="expression_set",
+        slot_key="expression.anger",
+        candidate_index=candidate_index,
+        reference_output_ids=["front_winner"],
+        user_intent=user_intent,
+        generation_channel=generation_channel,  # type: ignore[arg-type]
+        mcp_handoff_id=mcp_handoff_id,
+    )
+
+
 def _laugh_inspection(
     *,
     issue_codes: list[str] | None = None,
@@ -1106,6 +1129,55 @@ def test_doc196_host_projects_laugh_score_dimensions_into_shared_evidence_codes(
     assert review.shared_review_receipts[0]["framing_baseline"] == "face.front"
     assert "mouth_eye_coherence" in review.shared_review_receipts[0]["score_dimensions"]
     assert "eye_line_delta_from_front" in review.shared_review_receipts[0]["framing_delta_dimensions"]
+
+
+def test_doc234_host_projects_generic_verified_review_receipt_for_anger_slot() -> None:
+    host = ProductApiAnchorPackPreparationHost(
+        _ReviewService(
+            _laugh_inspection(),
+            operation_id="people_doc196:expression_set:expression.anger:1",
+        )  # type: ignore[arg-type]
+    )
+
+    candidate, review = host._character_card_candidate_and_review("job_laugh", _anger_request())  # noqa: SLF001
+
+    assert review.status == "pass"
+    assert review.shared_review_receipts
+    receipt = review.shared_review_receipts[0]
+    assert receipt["owner"] == "v3_shared_visual_cluster"
+    assert receipt["contract_version"] == "v3_character_card_generic_slot_review_receipt_v1"
+    assert receipt["status"] == "pass"
+    assert "shared_visual_review_verified" in receipt["evidence_codes"]
+    assert "visual_quality" in receipt["score_dimensions"]
+    assert "same_person_readability" in receipt["score_dimensions"]
+    attached = host._attach_character_card_receipt(  # noqa: SLF001
+        CharacterCardStageResult(
+            status="review",
+            card=_face_ready_card(),
+            attempts=[
+                CharacterCardCandidateAttempt(
+                    request=_anger_request(),
+                    candidate=candidate,
+                    review=review,
+                )
+            ],
+            winner_output_ids={"expression.anger": candidate.output_id},
+        ),
+        asset=type("Asset", (), {"visual_asset_id": "asset_doc234"})(),
+        stage="expression_set",
+    )
+    assert attached.shared_runtime_receipt is not None
+    projected = project_character_card_slot_success_receipt(
+        attached.shared_runtime_receipt,
+        module="expression_set",
+        slot_key="expression.anger",
+        output_id=candidate.output_id,
+        shared_review_receipts=review.shared_review_receipts,
+    )
+    assert projected["slot_key"] == "expression.anger"
+    assert projected["shared_review_receipts"][0]["contract_version"] == (
+        "v3_character_card_generic_slot_review_receipt_v1"
+    )
 
 
 def test_doc198_expression_candidate_parity_accepts_front_crop_geometry_and_full_frame_package() -> None:

@@ -17,6 +17,7 @@ from PIL import Image
 from ..shared_capabilities.visual_cluster.expression_review import (
     expression_front_card_framing_materialization_directive,
     laugh_expression_materialization_directive,
+    project_generic_visual_review_receipt,
     project_laugh_expression_review_receipt,
 )
 from ..shared_capabilities.visual_cluster.identity_metric import create_default_identity_metric_provider
@@ -2016,6 +2017,12 @@ class ProductApiAnchorPackPreparationHost:
         evidence_codes = ["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"]
         expression_gate_issues: list[str] = []
         shared_review_receipts: list[dict[str, Any]] = []
+        generic_receipt = project_generic_visual_review_receipt(
+            score_card=score_card,
+            issue_codes=issue_codes,
+            verified=verified,
+            raw_status=raw_status,
+        )
         if request.module == "expression_set" and request.slot_key == "expression.laugh":
             expression_receipt = project_laugh_expression_review_receipt(
                 score_card=score_card,
@@ -2025,6 +2032,7 @@ class ProductApiAnchorPackPreparationHost:
             expression_gate_issues.extend(expression_receipt.issue_codes)
             issue_codes.extend(expression_receipt.issue_codes)
             shared_review_receipts.append(expression_receipt.to_public_dict())
+        shared_review_receipts.append(generic_receipt.to_public_dict())
         review = AnchorReviewDecision(
             status=(
                 "pass"
