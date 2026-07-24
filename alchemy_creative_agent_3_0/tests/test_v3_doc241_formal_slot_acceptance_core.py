@@ -139,6 +139,34 @@ def test_doc241_core_uses_injected_ranking_without_changing_implementation() -> 
     assert all(candidate.selected_as_winner is False for candidate in candidates)
 
 
+def test_doc241_standard_mode_requires_explicit_ranking_key() -> None:
+    with pytest.raises(ValueError, match="explicit ranking key"):
+        _core().accept(
+            module="face_identity",
+            slot_key="face.front",
+            acceptance_mode="standard_three_candidate",
+            candidates=[_candidate(1), _candidate(2), _candidate(3)],
+            framing_summary=_requirement(),
+            parity_summary=_requirement(),
+            identity_summary=_requirement(),
+            reload_public_projection_verified=True,
+        )
+
+
+def test_doc241_core_does_not_default_reload_public_projection_to_true() -> None:
+    with pytest.raises(ValidationError, match="reload/public projection"):
+        _core().accept(
+            module="expression_set",
+            slot_key="expression.anger",
+            acceptance_mode="standard_three_candidate",
+            candidates=[_candidate(1), _candidate(2), _candidate(3)],
+            framing_summary=_requirement(),
+            parity_summary=_requirement(),
+            identity_summary=_requirement(),
+            ranking_key=lambda candidate: candidate.candidate_index,
+        )
+
+
 @pytest.mark.parametrize(
     ("acceptance_mode", "slot_scope"),
     [

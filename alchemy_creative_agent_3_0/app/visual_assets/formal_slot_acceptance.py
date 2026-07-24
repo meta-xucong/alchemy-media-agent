@@ -410,7 +410,7 @@ class FormalSlotAcceptanceCore:
         ranking_key: FormalSlotRankingKey | None = None,
         retry_count: int = 0,
         repair_count: int = 0,
-        reload_public_projection_verified: bool = True,
+        reload_public_projection_verified: bool = False,
     ) -> FormalSlotReceipt:
         """Build and validate a formal-slot receipt without module branches."""
 
@@ -492,7 +492,7 @@ class FormalSlotAcceptanceCore:
         if not eligible:
             raise ValueError("standard_three_candidate requires at least one passing reviewed candidate")
         if ranking_key is None:
-            return min(eligible, key=lambda candidate: candidate.candidate_index)
+            raise ValueError("standard_three_candidate requires an explicit ranking key")
         return max(eligible, key=lambda candidate: (ranking_key(candidate), -candidate.candidate_index))
 
     def _slot_scope_for_mode(self, acceptance_mode: FormalSlotAcceptanceMode) -> FormalSlotArtifactScope:
