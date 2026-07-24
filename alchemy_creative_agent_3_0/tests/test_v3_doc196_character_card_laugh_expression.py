@@ -722,6 +722,46 @@ def test_doc238_lifecycle_does_not_route_submitted_materialization_resume_as_rev
     assert updated.character_card.expression_slots["expression.anger"].output_id == "anger_output"
 
 
+@pytest.mark.parametrize(
+    "failure_code",
+    [
+        "mcp_materialization_checkpoint_mismatch",
+        "mcp_materialization_projection_unavailable",
+    ],
+)
+def test_doc238_lifecycle_keeps_non_review_pending_mcp_resume_off_target_collection(
+    failure_code: str,
+) -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    active_card = _face_ready_card().model_copy(
+        update={
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.anger",
+            "last_failure_code": failure_code,
+            "last_failure_attempt_count": 3,
+            "pending_mcp_handoff_ids": ["mcp_handoff_doc238_current"],
+        }
+    )
+    catalog.save(asset.model_copy(update={"character_card": active_card}))
+    host = _ExplicitSmileStageHost()
+    lifecycle = VisualAssetLibraryLifecycleService(catalog, character_card_stage_host=host)
+
+    updated = lifecycle.prepare_character_card_stage(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        stage="expression_set",
+        expression="anger",
+        resume=True,
+        generation_channel="mcp",
+    )
+
+    assert host.expression == "anger"
+    assert host.generation_channel == "mcp"
+    assert host.review_only_resume is False
+    assert updated.character_card.expression_slots["expression.anger"].output_id == "anger_output"
+
+
 def test_doc196_default_expression_prepare_emits_laugh_before_other_slots() -> None:
     generator = _OneSlotGenerator()
     service = CharacterCardPreparationService(

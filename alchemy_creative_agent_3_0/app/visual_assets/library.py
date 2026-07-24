@@ -1100,11 +1100,7 @@ class VisualAssetLibraryLifecycleService:
         slot_key = f"expression.{expression}"
         if card.last_failed_module != "expression_set" or card.last_failed_slot_key != slot_key:
             return False
-        return card.last_failure_code in {
-            "mcp_review_pending",
-            "mcp_materialization_checkpoint_mismatch",
-            "mcp_materialization_projection_unavailable",
-        }
+        return card.last_failure_code == "mcp_review_pending"
 
     @staticmethod
     def _persist_character_card_success_receipts(
