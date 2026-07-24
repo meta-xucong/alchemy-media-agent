@@ -1041,6 +1041,13 @@ class VisualAssetLibraryLifecycleService:
                 and self._expression_mcp_resume_requires_review_only(card, expression=expression)
             ):
                 method_kwargs["review_only_resume"] = True
+            if (
+                resume
+                and stage == "expression_set"
+                and expression is not None
+                and self._expression_mcp_resume_requires_formal_reprojection(card, expression=expression)
+            ):
+                method_kwargs["formal_reprojection_resume"] = True
             result = method(**method_kwargs)
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")
@@ -1101,6 +1108,23 @@ class VisualAssetLibraryLifecycleService:
         if card.last_failed_module != "expression_set" or card.last_failed_slot_key != slot_key:
             return False
         return card.last_failure_code == "mcp_review_pending"
+
+    @staticmethod
+    def _expression_mcp_resume_requires_formal_reprojection(
+        card: CharacterCardState,
+        *,
+        expression: str,
+    ) -> bool:
+        slot_key = f"expression.{expression}"
+        if card.last_failed_module != "expression_set" or card.last_failed_slot_key != slot_key:
+            return False
+        if card.last_failure_code != "character_card_formal_slot_receipt_invalid":
+            return False
+        try:
+            attempt_count = int(card.last_failure_attempt_count or 0)
+        except (TypeError, ValueError):
+            return False
+        return attempt_count == 3
 
     @staticmethod
     def _persist_character_card_success_receipts(

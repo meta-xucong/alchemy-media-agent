@@ -335,6 +335,8 @@ def test_doc240_accepts_existing_generic_visual_review_public_dict_shape() -> No
         score_card={
             "generic_visual_quality": 0.91,
             "identity_or_subject_consistency": 0.9,
+            "prompt_ownership": 1.0,
+            "prompt_owned_channel_obedience": 0.98,
             "face_area_delta_from_front": 0.01,
         },
         issue_codes=[],
@@ -348,8 +350,19 @@ def test_doc240_accepts_existing_generic_visual_review_public_dict_shape() -> No
     assert summary.contract_version == "v3_character_card_generic_slot_review_receipt_v1"
     assert summary.status == "pass"
     assert "generic_visual_quality" in summary.score_dimensions
+    assert "prompt_ownership" in summary.score_dimensions
+    assert "prompt_owned_channel_obedience" in summary.score_dimensions
     assert isinstance(summary.score_dimensions, list)
     assert isinstance(summary.framing_delta_dimensions, list)
+
+
+def test_doc240_shared_review_rejects_noncanonical_prompt_dimension_names() -> None:
+    with pytest.raises(ValidationError, match="public-safe"):
+        FormalSlotSharedReviewSummary(
+            status="pass",
+            evidence_codes=["shared_visual_review_verified"],
+            score_dimensions=["raw_prompt"],
+        )
 
 
 def test_doc240_passing_requirement_requires_evidence_and_dimensions() -> None:

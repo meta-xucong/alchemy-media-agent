@@ -765,6 +765,7 @@ class ProductApiAnchorPackPreparationHost:
         expression: str,
         generation_channel: str = "provider",
         review_only_resume: bool = False,
+        formal_reprojection_resume: bool = False,
     ) -> CharacterCardStageResult:
         front_output_id = str(card.face_slots["face.front"].output_id or "").strip()
         if not front_output_id:
@@ -776,6 +777,16 @@ class ProductApiAnchorPackPreparationHost:
         if not base_intent:
             raise ValueError("character_card_expression_intent_missing")
         user_intent = self._character_card_single_expression_intent(base_intent, expression)
+        if formal_reprojection_resume and generation_channel == "mcp":
+            reprojected = self._reproject_formal_reviewed_character_card_expression_slot(
+                asset=asset,
+                card=card,
+                expression=expression,
+                front_output_id=front_output_id,
+                user_intent=user_intent,
+            )
+            if reprojected is not None:
+                return self._attach_character_card_receipt(reprojected, asset=asset, stage="expression_set")
         if review_only_resume and generation_channel == "mcp":
             collected = self._collect_prior_reviewed_character_card_expression_slot(
                 asset=asset,
@@ -797,6 +808,188 @@ class ProductApiAnchorPackPreparationHost:
             review_only_resume=review_only_resume,
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="expression_set")
+
+    def _reproject_formal_reviewed_character_card_expression_slot(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        expression: str,
+        front_output_id: str,
+        user_intent: str,
+    ) -> CharacterCardStageResult | None:
+        """Rebuild a formal Expression receipt from exactly three reviewed MCP jobs.
+
+        This is a strict recovery seam for the case where the three candidates
+        were already materialized and reviewed, but the formal receipt
+        projection failed.  It never creates jobs, handoffs, candidates, or
+        outputs, and it does not use the target-only compatibility collector.
+        """
+
+        slot_key = f"expression.{expression}"
+        if card.last_failed_module != "expression_set" or card.last_failed_slot_key != slot_key:
+            return None
+        if card.last_failure_code != "character_card_formal_slot_receipt_invalid":
+            return None
+        try:
+            failure_attempt_count = int(card.last_failure_attempt_count or 0)
+        except (TypeError, ValueError):
+            return None
+        if failure_attempt_count != 3:
+            return None
+        try:
+            attempt_round = int((card.slot_retry_rounds or {}).get(slot_key, 1) or 1)
+        except (TypeError, ValueError):
+            attempt_round = 1
+        attempts: list[CharacterCardCandidateAttempt] = []
+        for candidate_index in range(1, CharacterCardPreparationService.CANDIDATE_COUNT + 1):
+            request = CharacterCardCandidateRequest(
+                project_id=f"visual_asset_{asset.visual_asset_id}",
+                people_asset_id=str(asset.visual_asset_id),
+                card_version_id=card.card_version_id,
+                module="expression_set",
+                slot_key=slot_key,  # type: ignore[arg-type]
+                candidate_index=candidate_index,
+                attempt_round=attempt_round,
+                reference_output_ids=[front_output_id],
+                user_intent=user_intent,
+                generation_channel="mcp",
+                review_only_resume=False,
+            )
+            operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
+            if request.attempt_round > 1:
+                operation_id = f"{operation_id}:round{request.attempt_round}"
+            record = self._mcp_resume_character_card_stage_job_record(request, operation_id)
+            if record is None or getattr(record, "generation_result", None) is None:
+                return self._blocked_formal_expression_reprojection(
+                    card=card,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                    attempt_round=attempt_round,
+                    failure_code="character_card_formal_reprojection_missing_job",
+                )
+            candidate, review = self._character_card_candidate_and_review(record.job_id, request)
+            if candidate.module != "expression_set" or candidate.slot_key != slot_key:
+                return self._blocked_formal_expression_reprojection(
+                    card=card,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                    attempt_round=attempt_round,
+                    failure_code="character_card_formal_reprojection_candidate_mismatch",
+                )
+            if candidate.candidate_index != candidate_index:
+                return self._blocked_formal_expression_reprojection(
+                    card=card,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                    attempt_round=attempt_round,
+                    failure_code="character_card_formal_reprojection_candidate_index_mismatch",
+                )
+            if not candidate.output_id or not candidate.prompt_reference_parity_verified:
+                return self._blocked_formal_expression_reprojection(
+                    card=card,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                    attempt_round=attempt_round,
+                    failure_code="character_card_formal_reprojection_candidate_contract_missing",
+                )
+            attempts.append(CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review))
+        try:
+            formal_receipt = CharacterCardPreparationService._formal_expression_slot_receipt(
+                slot_key=slot_key,
+                attempts=attempts,
+            )
+        except ValueError:
+            return self._blocked_formal_expression_reprojection(
+                card=card,
+                slot_key=slot_key,
+                candidate_index=CharacterCardPreparationService.CANDIDATE_COUNT,
+                attempt_round=attempt_round,
+                failure_code="character_card_formal_slot_receipt_invalid",
+            )
+        winner = next(
+            (
+                attempt.candidate
+                for attempt in attempts
+                if attempt.candidate.candidate_id == formal_receipt.winner_candidate_id
+            ),
+            None,
+        )
+        if winner is None:
+            return self._blocked_formal_expression_reprojection(
+                card=card,
+                slot_key=slot_key,
+                candidate_index=CharacterCardPreparationService.CANDIDATE_COUNT,
+                attempt_round=attempt_round,
+                failure_code="character_card_formal_reprojection_winner_missing",
+            )
+        slot = CharacterCardPreparationService._winner_slot(
+            module="expression_set",
+            slot_key=slot_key,
+            winner=winner,
+            formal_slot_receipt=formal_receipt,
+        )
+        updated = card.model_copy(
+            update={
+                "expression_set_status": "partial",
+                "expression_slots": {**card.expression_slots, slot_key: slot},
+                "append_only_revision": card.append_only_revision + 1,
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_attempt_count": 0,
+                "last_review_repair_context": None,
+                "resume_available": False,
+            }
+        )
+        return CharacterCardStageResult(
+            status="review",
+            card=updated,
+            attempts=attempts,
+            winner_output_ids={slot_key: winner.output_id},
+            shared_runtime_receipt=None,
+            formal_slot_receipts={slot_key: formal_receipt},
+            mcp_handoff_ids=[],
+            acceptance_mode="standard_three_candidate",
+        )
+
+    @staticmethod
+    def _blocked_formal_expression_reprojection(
+        *,
+        card: CharacterCardState,
+        slot_key: str,
+        candidate_index: int,
+        attempt_round: int,
+        failure_code: str,
+    ) -> CharacterCardStageResult:
+        updated = card.model_copy(
+            update={
+                "expression_set_status": "blocked",
+                "append_only_revision": card.append_only_revision + 1,
+                "last_failed_module": "expression_set",
+                "last_failed_slot_key": slot_key,
+                "last_failure_code": failure_code,
+                "last_failure_attempt_count": candidate_index,
+                "resume_available": False,
+            }
+        )
+        return CharacterCardStageResult(
+            status="blocked",
+            card=updated,
+            attempts=[],
+            winner_output_ids={},
+            failures=[
+                CharacterCardFailureEvent(
+                    module="expression_set",
+                    slot_key=slot_key,  # type: ignore[arg-type]
+                    candidate_index=candidate_index,
+                    attempt_round=attempt_round,
+                    failure_code=failure_code,
+                )
+            ],
+            mcp_handoff_ids=[],
+            acceptance_mode="standard_three_candidate",
+        )
 
     def _collect_prior_reviewed_character_card_expression_slot(
         self,

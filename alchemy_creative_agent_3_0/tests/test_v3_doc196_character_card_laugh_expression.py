@@ -413,6 +413,7 @@ class _ExplicitSmileStageHost:
         self.expression = None
         self.generation_channel = None
         self.review_only_resume = None
+        self.formal_reprojection_resume = None
 
     @staticmethod
     def _receipt(slot_key: str) -> CharacterCardSharedRuntimeReceipt:
@@ -433,10 +434,12 @@ class _ExplicitSmileStageHost:
         expression,
         generation_channel="provider",
         review_only_resume=False,
+        formal_reprojection_resume=False,
     ):
         self.expression = expression
         self.generation_channel = generation_channel
         self.review_only_resume = review_only_resume
+        self.formal_reprojection_resume = formal_reprojection_resume
         slot_key = f"expression.{expression}"
         output_id = f"{expression}_output"
         candidate_id = f"{expression}_candidate"
@@ -760,6 +763,159 @@ def test_doc238_lifecycle_keeps_non_review_pending_mcp_resume_off_target_collect
     assert host.generation_channel == "mcp"
     assert host.review_only_resume is False
     assert updated.character_card.expression_slots["expression.anger"].output_id == "anger_output"
+
+
+def test_doc238_lifecycle_routes_formal_invalid_three_attempts_to_reprojection_not_generation_resume() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    active_card = _face_ready_card().model_copy(
+        update={
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.anger",
+            "last_failure_code": "character_card_formal_slot_receipt_invalid",
+            "last_failure_attempt_count": 3,
+            "pending_mcp_handoff_ids": [],
+        }
+    )
+    catalog.save(asset.model_copy(update={"character_card": active_card}))
+    host = _ExplicitSmileStageHost()
+    lifecycle = VisualAssetLibraryLifecycleService(catalog, character_card_stage_host=host)
+
+    updated = lifecycle.prepare_character_card_stage(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        stage="expression_set",
+        expression="anger",
+        resume=True,
+        generation_channel="mcp",
+    )
+
+    assert host.expression == "anger"
+    assert host.generation_channel == "mcp"
+    assert host.review_only_resume is False
+    assert host.formal_reprojection_resume is True
+    slot = updated.character_card.expression_slots["expression.anger"]
+    assert slot.output_id == "anger_output"
+    assert slot.formal_slot_receipt is not None
+    assert slot.formal_slot_receipt.acceptance_mode == "standard_three_candidate"
+    assert slot.formal_slot_receipt.reviewed_candidate_count == 3
+
+
+def test_doc238_host_reprojects_existing_three_reviewed_expression_candidates_without_generation(monkeypatch) -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    card = _face_ready_card().model_copy(
+        update={
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.anger",
+            "last_failure_code": "character_card_formal_slot_receipt_invalid",
+            "last_failure_attempt_count": 3,
+            "slot_retry_rounds": {"expression.anger": 2},
+            "pending_mcp_handoff_ids": [],
+        }
+    )
+    host = ProductApiAnchorPackPreparationHost.__new__(ProductApiAnchorPackPreparationHost)
+    calls: list[tuple[int, str]] = []
+
+    def fake_record(request, operation_id):
+        calls.append((request.candidate_index, operation_id))
+        return SimpleNamespace(job_id=f"job_{request.candidate_index}", generation_result=object())
+
+    def fake_candidate_and_review(job_id, request):
+        candidate = CharacterCardCandidateResult(
+            candidate_id=f"candidate_{request.candidate_index}",
+            output_id=f"output_{request.candidate_index}",
+            module="expression_set",
+            slot_key="expression.anger",
+            candidate_index=request.candidate_index,
+            source_candidate_ids=[f"candidate_{request.candidate_index}"],
+            source_output_ids=list(request.reference_output_ids),
+            canonical_prompt_hash=f"sha256:{request.candidate_index}",
+            prompt_compilation_id=f"compile_{request.candidate_index}",
+            prompt_reference_parity_verified=True,
+        )
+        review = _pass_review()
+        return candidate, review
+
+    monkeypatch.setattr(host, "_mcp_resume_character_card_stage_job_record", fake_record)
+    monkeypatch.setattr(host, "_character_card_candidate_and_review", fake_candidate_and_review)
+
+    result = host._reproject_formal_reviewed_character_card_expression_slot(
+        asset=asset,
+        card=card,
+        expression="anger",
+        front_output_id="front_winner",
+        user_intent="explicit anger formal reprojection",
+    )
+
+    assert result is not None
+    assert result.status == "review"
+    assert result.acceptance_mode == "standard_three_candidate"
+    assert result.winner_output_ids == {"expression.anger": "output_1"}
+    receipt = result.formal_slot_receipts["expression.anger"]
+    assert receipt.acceptance_mode == "standard_three_candidate"
+    assert receipt.reviewed_candidate_count == 3
+    assert [candidate.candidate_index for candidate in receipt.candidates] == [1, 2, 3]
+    assert calls == [
+        (1, f"{asset.visual_asset_id}:expression_set:expression.anger:1:round2"),
+        (2, f"{asset.visual_asset_id}:expression_set:expression.anger:2:round2"),
+        (3, f"{asset.visual_asset_id}:expression_set:expression.anger:3:round2"),
+    ]
+
+
+def test_doc238_host_reprojection_fails_closed_when_any_reviewed_candidate_missing(monkeypatch) -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    card = _face_ready_card().model_copy(
+        update={
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.anger",
+            "last_failure_code": "character_card_formal_slot_receipt_invalid",
+            "last_failure_attempt_count": 3,
+            "slot_retry_rounds": {"expression.anger": 2},
+        }
+    )
+    host = ProductApiAnchorPackPreparationHost.__new__(ProductApiAnchorPackPreparationHost)
+
+    def fake_record(request, operation_id):
+        if request.candidate_index == 2:
+            return None
+        return SimpleNamespace(job_id=f"job_{request.candidate_index}", generation_result=object())
+
+    monkeypatch.setattr(host, "_mcp_resume_character_card_stage_job_record", fake_record)
+    monkeypatch.setattr(
+        host,
+        "_character_card_candidate_and_review",
+        lambda job_id, request: (
+            CharacterCardCandidateResult(
+                candidate_id=f"candidate_{request.candidate_index}",
+                output_id=f"output_{request.candidate_index}",
+                module="expression_set",
+                slot_key="expression.anger",
+                candidate_index=request.candidate_index,
+                source_candidate_ids=[f"candidate_{request.candidate_index}"],
+                source_output_ids=list(request.reference_output_ids),
+                canonical_prompt_hash=f"sha256:{request.candidate_index}",
+                prompt_compilation_id=f"compile_{request.candidate_index}",
+                prompt_reference_parity_verified=True,
+            ),
+            _pass_review(),
+        ),
+    )
+
+    result = host._reproject_formal_reviewed_character_card_expression_slot(
+        asset=asset,
+        card=card,
+        expression="anger",
+        front_output_id="front_winner",
+        user_intent="explicit anger formal reprojection",
+    )
+
+    assert result is not None
+    assert result.status == "blocked"
+    assert result.winner_output_ids == {}
+    assert result.formal_slot_receipts == {}
+    assert result.card.last_failure_code == "character_card_formal_reprojection_missing_job"
 
 
 def test_doc196_default_expression_prepare_emits_laugh_before_other_slots() -> None:

@@ -54,6 +54,22 @@ SAFE_PUBLIC_FORBIDDEN_TOKENS = (
     "artifact",
     "handoff",
 )
+SAFE_PUBLIC_PROMPT_DIMENSION_NAMES = frozenset(
+    {
+        "prompt_ownership",
+        "prompt_owned_channel_obedience",
+    }
+)
+SAFE_PUBLIC_DIMENSION_FORBIDDEN_TOKENS = (
+    "raw",
+    "provider_response",
+    "api_key",
+    "secret",
+    "token",
+    "file_path",
+    "path",
+    "handoff",
+)
 _PASSING_REVIEW_STATUSES = frozenset({"pass", "verified"})
 _PASSING_REQUIREMENT_STATUSES = frozenset({"pass"})
 
@@ -95,7 +111,15 @@ def _validate_public_score_dimensions(value: dict[str, float], field_name: str) 
 
 
 def _validate_public_dimension_names(value: list[str], field_name: str) -> list[str]:
-    normalized = [_require_safe_public_label(item, field_name) for item in value]
+    normalized: list[str] = []
+    for item in value:
+        dimension = _require_nonempty_text(item, field_name)
+        lowered = dimension.lower()
+        if "prompt" in lowered and dimension not in SAFE_PUBLIC_PROMPT_DIMENSION_NAMES:
+            raise ValueError(f"{field_name} is not public-safe")
+        if any(token in lowered for token in SAFE_PUBLIC_DIMENSION_FORBIDDEN_TOKENS):
+            raise ValueError(f"{field_name} is not public-safe")
+        normalized.append(dimension)
     if len(normalized) != len(set(normalized)):
         raise ValueError(f"{field_name} must be unique")
     return normalized
