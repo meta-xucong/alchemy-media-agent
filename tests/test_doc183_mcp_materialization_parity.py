@@ -402,6 +402,9 @@ def test_doc222_handoff_store_round_trips_character_card_reference_semantics(tmp
             "sha256": "1" * 64,
             "derivative_kind": "character_card_full_frame_framing_reference",
             "identity_evidence_scope": "card_framing",
+            "identity_evidence_group_id": "portrait_identity::front_output",
+            "character_card_framing_reference_mode": "independent_original_card_framing",
+            "character_card_framing_mirrored": False,
         },
         {
             "asset_id": "front_output",
@@ -433,6 +436,13 @@ def test_doc222_handoff_store_round_trips_character_card_reference_semantics(tmp
         "character_card_full_frame_framing_reference"
     )
     assert readback["reference_assets"][0]["identity_evidence_scope"] == "card_framing"
+    assert readback["reference_assets"][0]["identity_evidence_group_id"] == (
+        "portrait_identity::front_output"
+    )
+    assert readback["reference_assets"][0]["character_card_framing_reference_mode"] == (
+        "independent_original_card_framing"
+    )
+    assert readback["reference_assets"][0]["character_card_framing_mirrored"] is False
     assert ProductApiAnchorPackPreparationHost._character_card_expression_handoff_reference_order_current(  # noqa: SLF001
         readback
     )
@@ -478,6 +488,71 @@ def test_doc222_handoff_semantic_fingerprint_separates_same_bytes_different_role
     assert first["handoff_id"] != second["handoff_id"]
     assert first["reference_asset_hashes"] == second["reference_asset_hashes"]
     assert first["reference_semantic_fingerprint"] != second["reference_semantic_fingerprint"]
+
+
+def test_doc227_handoff_semantic_fingerprint_includes_card_framing_fields(
+    tmp_path: Path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    base_reference = {
+        "asset_id": "front_output",
+        "output_id": "front_output",
+        "sha256": "a" * 64,
+        "derivative_kind": "character_card_full_frame_framing_reference",
+        "identity_evidence_scope": "card_framing",
+        "identity_evidence_group_id": "portrait_identity::front_output",
+        "character_card_framing_reference_mode": "independent_original_card_framing",
+        "character_card_framing_mirrored": False,
+    }
+    changed_mode = {
+        **base_reference,
+        "character_card_framing_reference_mode": "legacy_full_frame_context",
+    }
+    changed_mirrored = {**base_reference, "character_card_framing_mirrored": True}
+    changed_group = {
+        **base_reference,
+        "identity_evidence_group_id": "portrait_identity::other_front_output",
+    }
+
+    first = store.ensure_pending(
+        operation_id="doc227-card-framing-semantics",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[base_reference],
+        rendering_contract={"output_format": "png"},
+    )
+    mode_changed = store.ensure_pending(
+        operation_id="doc227-card-framing-semantics",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[changed_mode],
+        rendering_contract={"output_format": "png"},
+    )
+    mirrored_changed = store.ensure_pending(
+        operation_id="doc227-card-framing-semantics",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[changed_mirrored],
+        rendering_contract={"output_format": "png"},
+    )
+    group_changed = store.ensure_pending(
+        operation_id="doc227-card-framing-semantics",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[changed_group],
+        rendering_contract={"output_format": "png"},
+    )
+
+    assert len(
+        {
+            first["reference_semantic_fingerprint"],
+            mode_changed["reference_semantic_fingerprint"],
+            mirrored_changed["reference_semantic_fingerprint"],
+            group_changed["reference_semantic_fingerprint"],
+        }
+    ) == 4
 
 
 def test_doc222_rendering_contract_mismatch_creates_new_pending_revision(tmp_path: Path) -> None:

@@ -705,6 +705,21 @@ class McpMaterializationHandoffStore:
             reference_truth_layer = str(
                 data.get("reference_truth_layer") or metadata.get("reference_truth_layer") or ""
             ).strip()
+            identity_group_id = str(
+                data.get("identity_evidence_group_id")
+                or metadata.get("identity_evidence_group_id")
+                or ""
+            ).strip()
+            framing_reference_mode = str(
+                data.get("character_card_framing_reference_mode")
+                or metadata.get("character_card_framing_reference_mode")
+                or ""
+            ).strip()
+            framing_mirrored = (
+                data.get("character_card_framing_mirrored")
+                if "character_card_framing_mirrored" in data
+                else metadata.get("character_card_framing_mirrored")
+            )
             safe.append(
                 {
                     "asset_id": str(data.get("asset_id") or data.get("output_id") or ""),
@@ -715,7 +730,10 @@ class McpMaterializationHandoffStore:
                     "role": str(data.get("role") or data.get("source_type") or "reference"),
                     "derivative_kind": derivative_kind or None,
                     "identity_evidence_scope": identity_scope or None,
+                    "identity_evidence_group_id": identity_group_id or None,
                     "reference_truth_layer": reference_truth_layer or None,
+                    "character_card_framing_reference_mode": framing_reference_mode or None,
+                    "character_card_framing_mirrored": framing_mirrored,
                 }
             )
         return safe
@@ -738,6 +756,27 @@ class McpMaterializationHandoffStore:
             reference_truth_layer = str(
                 data.get("reference_truth_layer") or metadata.get("reference_truth_layer") or ""
             ).strip()
+            identity_group_id = str(
+                data.get("identity_evidence_group_id")
+                or metadata.get("identity_evidence_group_id")
+                or ""
+            ).strip()
+            framing_reference_mode = str(
+                data.get("character_card_framing_reference_mode")
+                or metadata.get("character_card_framing_reference_mode")
+                or ""
+            ).strip()
+            framing_mirrored_raw = (
+                data.get("character_card_framing_mirrored")
+                if "character_card_framing_mirrored" in data
+                else metadata.get("character_card_framing_mirrored")
+            )
+            if framing_mirrored_raw is None:
+                framing_mirrored = ""
+            elif isinstance(framing_mirrored_raw, bool):
+                framing_mirrored = str(framing_mirrored_raw).lower()
+            else:
+                framing_mirrored = str(framing_mirrored_raw).strip().lower()
             tokens.append(
                 "\x1f".join(
                     [
@@ -749,6 +788,9 @@ class McpMaterializationHandoffStore:
                         derivative_kind,
                         identity_scope,
                         reference_truth_layer,
+                        identity_group_id,
+                        framing_reference_mode,
+                        framing_mirrored,
                     ]
                 )
             )
