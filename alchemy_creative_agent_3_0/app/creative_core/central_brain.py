@@ -152,6 +152,33 @@ class CentralCreativeBrain:
                 "professional_anchor_initial_multi_source": context.metadata.get(
                     "professional_anchor_initial_multi_source"
                 ),
+                # Character Card stage jobs use the same Provider/MCP
+                # materialization path as anchor-pack stages, but their
+                # stage/slot/round/reference identity is owned by the
+                # Product API lifecycle request.  Keep those immutable fields
+                # on the per-output generation plan so Provider factory,
+                # MCP handoff matching and slot review all read the same
+                # authority instead of falling back to ordinary portrait
+                # reference ordering.
+                "professional_character_card_preparation": context.metadata.get(
+                    "professional_character_card_preparation"
+                ),
+                "professional_character_card_stage": context.metadata.get(
+                    "professional_character_card_stage"
+                ),
+                "professional_character_card_slot": context.metadata.get(
+                    "professional_character_card_slot"
+                ),
+                "professional_character_card_source_class": context.metadata.get(
+                    "professional_character_card_source_class"
+                ),
+                "professional_character_card_attempt_round": context.metadata.get(
+                    "professional_character_card_attempt_round"
+                ),
+                "professional_character_card_reference_output_ids": context.metadata.get(
+                    "professional_character_card_reference_output_ids"
+                ),
+                "professional_planning_metadata": context.metadata.get("professional_planning_metadata"),
                 "visual_auto_retry_active": context.metadata.get("visual_auto_retry_active", False),
                 "visual_auto_retry_attempt": context.metadata.get("visual_auto_retry_attempt"),
                 "retry_attempt": context.metadata.get("retry_attempt"),
@@ -345,6 +372,25 @@ class CentralCreativeBrain:
                 "professional_anchor_initial_multi_source": context.metadata.get(
                     "professional_anchor_initial_multi_source"
                 ),
+                "professional_character_card_preparation": context.metadata.get(
+                    "professional_character_card_preparation"
+                ),
+                "professional_character_card_stage": context.metadata.get(
+                    "professional_character_card_stage"
+                ),
+                "professional_character_card_slot": context.metadata.get(
+                    "professional_character_card_slot"
+                ),
+                "professional_character_card_source_class": context.metadata.get(
+                    "professional_character_card_source_class"
+                ),
+                "professional_character_card_attempt_round": context.metadata.get(
+                    "professional_character_card_attempt_round"
+                ),
+                "professional_character_card_reference_output_ids": context.metadata.get(
+                    "professional_character_card_reference_output_ids"
+                ),
+                "professional_planning_metadata": context.metadata.get("professional_planning_metadata"),
                 "visual_auto_retry_active": context.metadata.get("visual_auto_retry_active", False),
                 "visual_auto_retry_attempt": context.metadata.get("visual_auto_retry_attempt"),
                 "retry_attempt": context.metadata.get("retry_attempt"),

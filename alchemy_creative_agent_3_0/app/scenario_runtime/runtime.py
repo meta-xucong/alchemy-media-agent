@@ -4017,11 +4017,7 @@ class ScenarioRuntime:
             catalog_version=catalog_version,
             activation_mode=mode,
             fallback_used=brain_result.fallback_used,
-            metadata=(
-                dict(request.metadata.get("professional_planning_metadata") or {})
-                if isinstance(request.metadata.get("professional_planning_metadata"), dict)
-                else None
-            ),
+            metadata=self._capability_activation_plan_metadata(request),
         )
         explicit_required = self._required_capability_ids(request)
         missing_required = [item for item in explicit_required if not plan.is_active(item)]
@@ -4030,6 +4026,39 @@ class ScenarioRuntime:
                 "required capability is unavailable or not safely activated: " + ", ".join(missing_required)
             )
         return plan
+
+    @staticmethod
+    def _capability_activation_plan_metadata(
+        request: ScenarioRuntimeRequest,
+    ) -> dict[str, Any] | None:
+        metadata = dict(request.metadata or {})
+        planning_metadata = metadata.get("professional_planning_metadata")
+        frozen_metadata: dict[str, Any] = (
+            dict(planning_metadata)
+            if isinstance(planning_metadata, dict)
+            else {}
+        )
+        if metadata.get("professional_character_card_preparation") is True:
+            if isinstance(planning_metadata, dict):
+                frozen_metadata["professional_planning_metadata"] = dict(planning_metadata)
+            for key in (
+                "professional_mode",
+                "professional_identity_reference_strategy",
+                "professional_reference_stage",
+                "professional_character_card_preparation",
+                "professional_character_card_stage",
+                "professional_character_card_slot",
+                "professional_character_card_source_class",
+                "professional_character_card_attempt_round",
+                "professional_character_card_reference_output_ids",
+                "professional_anchor_reference_assets",
+                "generation_channel",
+                "mcp_operation_id",
+                "mcp_materialization",
+            ):
+                if key in metadata:
+                    frozen_metadata[key] = metadata.get(key)
+        return frozen_metadata or None
 
     def _reuse_or_build_activation_plan(
         self,
@@ -4572,7 +4601,7 @@ class ScenarioRuntime:
     @staticmethod
     def _frozen_professional_provider_metadata(
         preparation: CapabilityPreparationResult,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """Project only validated serial-anchor selectors from the frozen plan.
 
         This helper is deliberately used both before Provider execution and
@@ -4619,6 +4648,48 @@ class ScenarioRuntime:
                 frozen["professional_anchor_initial_multi_source"] = plan_metadata.get(
                     "professional_anchor_initial_multi_source"
                 )
+            return frozen
+        if (
+            plan_metadata.get("professional_character_card_preparation") is True
+            and professional_strategy == "character_card_shared_identity_v1"
+            and professional_stage in {
+                "character_card_expression_set",
+                "character_card_body_silhouette",
+            }
+        ):
+            stage = str(plan_metadata.get("professional_character_card_stage") or "").strip()
+            slot_key = str(plan_metadata.get("professional_character_card_slot") or "").strip()
+            if stage not in {"expression_set", "body_silhouette"} or not slot_key:
+                return {}
+            frozen = {
+                "professional_identity_reference_strategy": professional_strategy,
+                "professional_reference_stage": professional_stage,
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": stage,
+                "professional_character_card_slot": slot_key,
+            }
+            source_class = plan_metadata.get("professional_character_card_source_class")
+            if source_class is not None:
+                frozen["professional_character_card_source_class"] = source_class
+            attempt_round = plan_metadata.get("professional_character_card_attempt_round")
+            if attempt_round is not None:
+                frozen["professional_character_card_attempt_round"] = attempt_round
+            reference_output_ids = plan_metadata.get("professional_character_card_reference_output_ids")
+            if isinstance(reference_output_ids, list):
+                frozen["professional_character_card_reference_output_ids"] = [
+                    str(item).strip()
+                    for item in reference_output_ids
+                    if str(item).strip()
+                ]
+            reference_assets = plan_metadata.get("professional_anchor_reference_assets")
+            if isinstance(reference_assets, list):
+                frozen["professional_anchor_reference_assets"] = reference_assets
+            planning_metadata = plan_metadata.get("professional_planning_metadata")
+            if isinstance(planning_metadata, dict):
+                frozen["professional_planning_metadata"] = dict(planning_metadata)
+            for key in ("generation_channel", "mcp_operation_id", "mcp_materialization"):
+                if key in plan_metadata:
+                    frozen[key] = plan_metadata.get(key)
             return frozen
         return {}
 

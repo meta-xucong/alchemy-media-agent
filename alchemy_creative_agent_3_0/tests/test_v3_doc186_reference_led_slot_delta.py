@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
+from alchemy_creative_agent_3_0.app.generation_router import (
+    McpMaterializationProvider,
+    build_provider_generation_request,
+)
+from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
+    McpMaterializationHandoffStore,
+)
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
@@ -196,6 +204,23 @@ def test_doc186_scenario_runtime_projects_delta_contract_for_character_card_stag
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
     source = tmp_path / "front-winner.png"
     Image.new("RGB", (640, 640), (180, 160, 150)).save(source)
+    source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    front_reference = {
+        "asset_id": "front_winner",
+        "output_id": "front_winner",
+        "role": "face_reference",
+        "source_type": "selected_output",
+        "file_path": str(source),
+        "use_policy": "identity",
+        "strength": "hard",
+        "provider_input_required": True,
+        "source_integrity_id": f"sha256:{source_sha256}",
+        "metadata": {
+            "canonical_output_binding": True,
+            "source_type": "selected_output",
+            "output_id": "front_winner",
+        },
+    }
     brain = EcommerceRemoteBrainTestProvider()
     runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain))
     planning = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
@@ -206,15 +231,7 @@ def test_doc186_scenario_runtime_projects_delta_contract_for_character_card_stag
         {
             "user_input": "Prepare one Character Card expression slot.",
             "scenario_selection": {"scenario_id": "general_creative"},
-            "uploaded_assets": [
-                {
-                    "asset_id": "front_winner",
-                    "role": "face_reference",
-                    "file_path": str(source),
-                    "use_policy": "identity",
-                    "strength": "hard",
-                }
-            ],
+            "uploaded_assets": [front_reference],
             "metadata": {
                 "project_id": "project_doc186",
                 "requested_image_count": 1,
@@ -223,9 +240,13 @@ def test_doc186_scenario_runtime_projects_delta_contract_for_character_card_stag
                 "professional_character_card_preparation": True,
                 "professional_character_card_stage": "expression_set",
                 "professional_character_card_slot": "expression.laugh",
-                "professional_anchor_reference_assets": [
-                    {"asset_id": "front_winner", "role": "portrait_identity"}
-                ],
+                "professional_character_card_source_class": "positive_expression",
+                "professional_character_card_attempt_round": 2,
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+                "professional_reference_stage": "character_card_expression_set",
+                "reference_assets": [front_reference],
+                "professional_anchor_reference_assets": [front_reference],
                 "professional_planning_metadata": planning,
                 "generation_channel": "mcp",
                 "mcp_operation_id": "asset_doc186:expression_set:expression.laugh:1",
@@ -242,6 +263,59 @@ def test_doc186_scenario_runtime_projects_delta_contract_for_character_card_stag
         "concise_positive_renderer_direction"
     )
     assert result.metadata["llm_brain"]["audit"]["reference_led_slot_delta_decision_signed"] is True
+    planning_result = result.planning_result
+    assert planning_result is not None
+    frozen_plan_metadata = planning_result.metadata["capability_activation_plan"]["metadata"]
+    assert frozen_plan_metadata["professional_character_card_preparation"] is True
+    assert frozen_plan_metadata["professional_character_card_stage"] == "expression_set"
+    assert frozen_plan_metadata["professional_character_card_slot"] == "expression.laugh"
+    assert frozen_plan_metadata["professional_character_card_reference_output_ids"] == ["front_winner"]
+    assert frozen_plan_metadata["professional_identity_reference_strategy"] == (
+        "character_card_shared_identity_v1"
+    )
+    assert frozen_plan_metadata["professional_reference_stage"] == "character_card_expression_set"
+    generation_metadata = planning_result.generation_plans[0].metadata
+    assert generation_metadata["professional_character_card_preparation"] is True
+    assert generation_metadata["professional_character_card_stage"] == "expression_set"
+    assert generation_metadata["professional_character_card_slot"] == "expression.laugh"
+    assert generation_metadata["professional_character_card_source_class"] == "positive_expression"
+    assert generation_metadata["professional_character_card_attempt_round"] == 2
+    assert generation_metadata["professional_character_card_reference_output_ids"] == ["front_winner"]
+    assert generation_metadata["professional_identity_reference_strategy"] == "character_card_shared_identity_v1"
+    assert generation_metadata["professional_reference_stage"] == "character_card_expression_set"
+
+    provider_request = build_provider_generation_request(
+        asset_spec=planning_result.series_plan.assets[0],
+        layout_plan=planning_result.layout_plans[0],
+        prompt_compilation=planning_result.prompt_compilations[0],
+        condition_plan=planning_result.condition_plans[0],
+        generation_plan=planning_result.generation_plans[0],
+        job_id=planning_result.creative_job.job_id,
+    )
+    provider = McpMaterializationProvider(
+        handoff_store=McpMaterializationHandoffStore(tmp_path / "mcp-handoffs")
+    )
+    app_request, provider_name, reference_assets = provider._build_app_request(provider_request)  # noqa: SLF001
+    context = dict(app_request.prompt_plan.variables or {})["mcp_materialization_context"]
+    handoff = provider.handoff_store.ensure_pending(
+        operation_id=context["operation_id"],
+        prompt=context["canonical_prompt"],
+        prompt_sha256=context["prompt_sha256"],
+        reference_assets=list(context["reference_assets"]),
+        rendering_contract=dict(context["rendering_contract"]),
+    )
+
+    assert provider_name == "codex_builtin_imagegen"
+    assert [item["derivative_kind"] for item in reference_assets] == [
+        "character_card_full_frame_framing_reference",
+        "portrait_identity_crop",
+        "portrait_identity_pose_geometry_crop",
+    ]
+    assert reference_assets[0]["identity_evidence_scope"] == "card_framing"
+    assert handoff["reference_assets"][0]["derivative_kind"] == "character_card_full_frame_framing_reference"
+    assert handoff["reference_assets"][0]["identity_evidence_scope"] == "card_framing"
+    assert handoff["reference_semantic_fingerprint"]
+    assert handoff["rendering_contract_fingerprint"]
 
 
 def test_doc186_general_mode_does_not_receive_character_card_delta_contract() -> None:
