@@ -218,6 +218,10 @@ Classify each new defect before changing code: winner/slot correctness is
 Core, user-visible quality is Enhanced, and crash/replay/compatibility is
 Auxiliary. Fix the owning layer and keep other layers from changing Core
 semantics. A single-slot receipt must not require unrelated module activation.
+Professional formal-slot Core is module-agnostic: Face Identity, Expression Set,
+and Body slots use `standard_three_candidate` for official entry. Target-only
+collection and 25-35 degree reference bridges are auxiliary modes, never formal
+slot completion. Audit historical slot-specific branches before new work.
 
 Short form:
 
