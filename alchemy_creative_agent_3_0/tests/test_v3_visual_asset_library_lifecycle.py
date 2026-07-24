@@ -16,12 +16,63 @@ from alchemy_creative_agent_3_0.app.visual_assets import (
     PersistentVisualAssetLibraryCatalog,
     RootSourceProvenance,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    FormalSlotCandidateSummary,
+    FormalSlotReceipt,
+    FormalSlotRequirementSummary,
+    FormalSlotSharedReviewSummary,
+)
 
 
 PREPARATION_INTENT = (
     "Establish a reusable, age-appropriate identity asset with natural human "
     "materiality while each future project owns its presentation and styling."
 )
+
+
+def _shared_review() -> FormalSlotSharedReviewSummary:
+    return FormalSlotSharedReviewSummary(
+        status="pass",
+        evidence_codes=["shared_visual_review_verified"],
+        score_dimensions=["identity_or_subject_consistency", "generic_visual_quality"],
+        framing_delta_dimensions=["face_identity_view_framing_delta"],
+    )
+
+
+def _requirement(code: str) -> FormalSlotRequirementSummary:
+    return FormalSlotRequirementSummary(
+        status="pass",
+        evidence_codes=[code],
+        dimensions={"summary_score": 0.93},
+    )
+
+
+def _formal_receipt(role: str) -> FormalSlotReceipt:
+    candidates = [
+        FormalSlotCandidateSummary(
+            candidate_index=index,
+            candidate_id=f"candidate_{role}_{index}",
+            output_id=f"output_{role}_{index}" if index != 3 else f"output_{role}",
+            reviewed=True,
+            selected_as_winner=index == 3,
+            shared_review=_shared_review(),
+        )
+        for index in (1, 2, 3)
+    ]
+    return FormalSlotReceipt(
+        module="face_identity",
+        slot_key=f"face_identity.{role}",
+        acceptance_mode="standard_three_candidate",
+        reviewed_candidate_count=3,
+        candidates=candidates,
+        winner_candidate_id=f"candidate_{role}_3",
+        winner_output_id=f"output_{role}",
+        winner_shared_review=candidates[2].shared_review,
+        framing_summary=_requirement("face_identity_view_profile_reviewed"),
+        parity_summary=_requirement("face_identity_reference_parity_verified"),
+        identity_summary=_requirement("face_identity_shared_identity_review_verified"),
+        reload_public_projection_verified=True,
+    )
 
 
 def _pack(visual_asset_id: str, staging_scope: str, root_source_asset_id: str) -> IdentityAnchorPackVersion:
@@ -34,13 +85,14 @@ def _pack(visual_asset_id: str, staging_scope: str, root_source_asset_id: str) -
                 view_id=f"view_{role}",
                 view_role=role,
                 output_id=f"output_{role}",
-                source_candidate_ids=[f"candidate_{role}"],
+                source_candidate_ids=[f"candidate_{role}_{index}" for index in (1, 2, 3)],
                 identity_scores=IdentityScoreSummary(
                     same_face_score=0.98,
                     distinctive_feature_score=0.96,
                     human_realism_score=0.92,
                     visual_quality_score=0.90,
                 ),
+                formal_slot_receipt=_formal_receipt(role),
             )
             for role in ("standard_front", "three_quarter", "profile")
         ],

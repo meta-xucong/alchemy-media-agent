@@ -19,6 +19,11 @@ from ..shared_capabilities.visual_cluster.expression_review import laugh_express
 from ..shared_capabilities.visual_cluster.review_repair import (
     shared_review_repair_context_from_decision,
 )
+from .formal_slot_acceptance import (
+    FormalSlotReceipt,
+    project_formal_slot_public_summary,
+    validate_formal_slot_receipt_for_activation,
+)
 
 
 FACE_SLOT_KEYS = (
@@ -32,6 +37,16 @@ FACE_SLOT_KEYS = (
     "face.reverse_three_quarter",
     "face.rear_head",
 )
+_FACE_SLOT_TO_FORMAL_VIEW_ROLE = {
+    "face.front": "standard_front",
+    "face.front_three_quarter": "three_quarter",
+    "face.profile": "profile",
+    "face.reverse_three_quarter": "reverse_three_quarter",
+    "face.rear_head": "rear_head",
+}
+_FORMAL_VIEW_ROLE_TO_FACE_SLOT = {
+    view_role: slot_key for slot_key, view_role in _FACE_SLOT_TO_FORMAL_VIEW_ROLE.items()
+}
 EXPRESSION_SLOT_KEYS = ("expression.neutral", "expression.laugh", "expression.anger", "expression.sad")
 LEGACY_EXPRESSION_SLOT_KEYS = ("expression.smile",)
 ALL_EXPRESSION_SLOT_KEYS = (*EXPRESSION_SLOT_KEYS, *LEGACY_EXPRESSION_SLOT_KEYS)
@@ -196,6 +211,10 @@ class CharacterCardSlot(_CharacterCardModel):
     # projected from the shared runtime receipt and contains no prompts, raw
     # provider/MCP response, local path, image bytes or artifact identifiers.
     shared_runtime_receipt: dict[str, Any] | None = None
+    # Module-neutral formal-slot proof for Face Identity slots.  It is the
+    # only Task5 authority for Face slot completion; legacy booleans are kept
+    # for compatibility/display but cannot activate Face slots without it.
+    formal_slot_receipt: FormalSlotReceipt | None = None
     candidate_attempt_count: int = Field(default=0, ge=0, le=4)
     bounded_repair_count: int = Field(default=0, ge=0, le=1)
     explicitly_left_empty: bool = False
@@ -229,6 +248,7 @@ class CharacterCardSlot(_CharacterCardModel):
                     self.review_verified,
                     self.prompt_reference_parity_verified,
                     self.shared_runtime_receipt,
+                    self.formal_slot_receipt,
                     self.is_alias,
                 )
             ):
@@ -238,7 +258,13 @@ class CharacterCardSlot(_CharacterCardModel):
         elif self.state in {"winner_selected", "active"}:
             if not self.is_alias and not self.output_id:
                 raise ValueError("reviewed Character Card winners require an output")
-            if not self.review_verified or not self.prompt_reference_parity_verified:
+            if self.module == "face_identity":
+                self._validate_face_identity_formal_slot_receipt()
+            elif self.formal_slot_receipt is not None:
+                raise ValueError("formal slot receipts are not yet wired for this Character Card module")
+            if self.module != "face_identity" and (
+                not self.review_verified or not self.prompt_reference_parity_verified
+            ):
                 raise ValueError("Character Card winners require shared review and prompt/reference parity")
             if self.shared_runtime_receipt is not None:
                 validate_character_card_slot_success_receipt(
@@ -255,6 +281,8 @@ class CharacterCardSlot(_CharacterCardModel):
                 raise ValueError("expression.neutral alias cannot create a generation job")
             if self.shared_runtime_receipt is not None:
                 raise ValueError("expression.neutral alias cannot contain a generated-slot receipt")
+            if self.formal_slot_receipt is not None:
+                raise ValueError("expression.neutral alias cannot contain a formal slot receipt")
         elif self.slot_key == "expression.neutral" and self.state != "empty":
             raise ValueError("expression.neutral must alias face.front")
         if self.module == "body_silhouette" and self.state != "empty" and self.source_class is None:
@@ -269,6 +297,22 @@ class CharacterCardSlot(_CharacterCardModel):
         if self.bounded_repair_count > self.candidate_attempt_count:
             raise ValueError("bounded repair cannot exceed candidate attempts")
         return self
+
+    def _validate_face_identity_formal_slot_receipt(self) -> None:
+        if self.formal_slot_receipt is None:
+            raise ValueError("Face Identity Character Card slots require a formal slot receipt")
+        view_role = _FACE_SLOT_TO_FORMAL_VIEW_ROLE.get(self.slot_key)
+        if view_role is None:
+            raise ValueError("25-35 degree bridge references cannot be formal Character Card Face slots")
+        receipt = validate_formal_slot_receipt_for_activation(self.formal_slot_receipt)
+        if receipt.module != "face_identity":
+            raise ValueError("Face Identity Character Card receipt module mismatch")
+        if receipt.slot_key != f"face_identity.{view_role}":
+            raise ValueError("Face Identity Character Card receipt slot mismatch")
+        if receipt.winner_output_id != self.output_id:
+            raise ValueError("Face Identity Character Card receipt output mismatch")
+        if self.source_candidate_ids and receipt.winner_candidate_id not in self.source_candidate_ids:
+            raise ValueError("Face Identity Character Card receipt winner is not in source candidates")
 
 
 class CharacterCardState(_CharacterCardModel):
@@ -955,6 +999,19 @@ def validate_character_card_slot_success_receipt(
         "acceptance_mode": acceptance_mode,
         "shared_review_receipts": sanitized_reviews,
     }
+
+
+def character_card_formal_slot_receipt_public_summary(
+    slot: CharacterCardSlot,
+) -> dict[str, Any] | None:
+    """Safe public projection for Face Identity formal-slot receipts."""
+
+    if slot.formal_slot_receipt is None:
+        return None
+    receipt = validate_formal_slot_receipt_for_activation(slot.formal_slot_receipt)
+    if slot.output_id and receipt.winner_output_id != slot.output_id:
+        raise ValueError("Face Identity formal receipt output does not match slot output")
+    return project_formal_slot_public_summary(receipt)
 
 
 def character_card_slot_success_receipt_public_summary(
@@ -1865,10 +1922,8 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
 
     role_to_slot = {
         "standard_front": "face.front",
-        "left_front_25": "face.left_front_25",
         "three_quarter": "face.front_three_quarter",
         "profile": "face.profile",
-        "right_front_25": "face.right_front_25",
         "reverse_three_quarter": "face.reverse_three_quarter",
         "rear_head": "face.rear_head",
     }
@@ -1881,19 +1936,36 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
         for slot_key in FACE_SLOT_KEYS
     }
     for view in getattr(pack, "anchor_views", []):
-        slot_key = role_to_slot.get(str(getattr(view, "view_role", "")))
-        if slot_key is None or not getattr(view, "active", False):
+        view_role = str(getattr(view, "view_role", ""))
+        slot_key = role_to_slot.get(view_role)
+        if not getattr(view, "active", False):
             continue
+        if slot_key is None:
+            continue
+        receipt_payload = getattr(view, "formal_slot_receipt", None)
+        if receipt_payload is None:
+            raise ValueError("Character Card Face projection requires a formal slot receipt")
+        receipt = validate_formal_slot_receipt_for_activation(receipt_payload)
+        if receipt.module != "face_identity":
+            raise ValueError("Character Card Face projection receipt module mismatch")
+        if receipt.slot_key != f"face_identity.{view_role}":
+            raise ValueError("Character Card Face projection receipt slot mismatch")
+        if receipt.winner_output_id != str(getattr(view, "output_id", "")):
+            raise ValueError("Character Card Face projection receipt output mismatch")
+        source_candidate_ids = list(getattr(view, "source_candidate_ids", []) or [])
+        if source_candidate_ids and receipt.winner_candidate_id not in source_candidate_ids:
+            raise ValueError("Character Card Face projection receipt winner candidate mismatch")
         face_slots[slot_key] = CharacterCardSlot(
             slot_key=slot_key,
             module="face_identity",
             state=slot_state,
             output_id=str(view.output_id),
-            source_candidate_ids=list(view.source_candidate_ids),
+            source_candidate_ids=source_candidate_ids,
             lineage_id=f"lineage_{view.view_id}",
             review_verified=True,
             prompt_reference_parity_verified=True,
-            candidate_attempt_count=3,
+            candidate_attempt_count=receipt.reviewed_candidate_count,
+            formal_slot_receipt=receipt,
         )
     active_view_count = sum(1 for view in getattr(pack, "anchor_views", []) if getattr(view, "active", False))
     missing_slot = next(
@@ -1964,6 +2036,7 @@ __all__ = [
     "CharacterCardStageResult",
     "ExpressionPreparationRequest",
     "apply_face_identity_pack_to_card",
+    "character_card_formal_slot_receipt_public_summary",
     "character_card_slot_success_receipt_public_summary",
     "project_character_card_slot_success_receipt",
     "validate_character_card_slot_success_receipt",

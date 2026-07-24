@@ -20,6 +20,7 @@ from ..visual_assets import (
 )
 from ..visual_assets.character_card import BodySilhouettePublicRequest
 from ..visual_assets.character_card import CharacterCardStageHost
+from ..visual_assets.character_card import character_card_formal_slot_receipt_public_summary
 from ..visual_assets.character_card import character_card_slot_success_receipt_public_summary
 from .service import V3ProductApiService
 
@@ -373,6 +374,22 @@ class V3ProductRouteHandlers:
                         "download_url": f"/api/v3/creative-agent/outputs/{encoded}/download",
                     }
                 )
+                if str(getattr(slot, "module", "") or "") == "face_identity":
+                    try:
+                        formal_summary = character_card_formal_slot_receipt_public_summary(slot)
+                    except (TypeError, ValueError):
+                        formal_summary = None
+                        public["formal_slot_receipt_verified"] = False
+                        public["formal_slot_receipt_status"] = "inconsistent"
+                    if formal_summary is not None:
+                        public["formal_slot_receipt"] = formal_summary
+                        public["formal_slot_receipt_verified"] = bool(
+                            formal_summary.get("activation_eligible")
+                        )
+                    elif "formal_slot_receipt_status" not in public:
+                        public["formal_slot_receipt_verified"] = False
+                        public["formal_slot_receipt_status"] = "missing"
+                    return public
                 try:
                     receipt_summary = character_card_slot_success_receipt_public_summary(slot)
                 except (TypeError, ValueError):
