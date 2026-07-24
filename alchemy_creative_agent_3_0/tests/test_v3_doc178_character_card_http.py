@@ -332,6 +332,28 @@ def test_doc178_route_handler_rejects_expression_payload_and_no_host_is_safe() -
         handlers.post_visual_asset_character_card_prepare("asset_1", {"stage": "face_identity"})
 
 
+def test_doc230_route_handler_accepts_explicit_laugh_single_slot_payload() -> None:
+    captured = {}
+
+    class _Lifecycle:
+        def prepare_character_card_stage(self, **kwargs):
+            captured.update(kwargs)
+            return _catalog_asset(VisualAssetLibraryCatalog())
+
+    handlers = V3ProductRouteHandlers(service=V3ProductApiService())
+    handlers.visual_asset_library_service = _Lifecycle()
+
+    handlers.post_visual_asset_character_card_prepare(
+        "asset_laugh",
+        {"stage": "expression_set", "generation_channel": "mcp", "expression": "laugh"},
+    )
+
+    assert captured["visual_asset_id"] == "asset_laugh"
+    assert captured["stage"] == "expression_set"
+    assert captured["expression"] == "laugh"
+    assert captured["generation_channel"] == "mcp"
+
+
 def test_doc202_route_accepts_only_confirmed_failed_slot_retry_without_prompt_injection() -> None:
     captured = {}
 

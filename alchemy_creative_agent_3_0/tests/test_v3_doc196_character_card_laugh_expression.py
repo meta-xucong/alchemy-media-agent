@@ -134,6 +134,13 @@ def _generic_shared_review_receipt() -> dict[str, object]:
     }
 
 
+def _laugh_shared_review_receipt() -> dict[str, object]:
+    return project_laugh_expression_review_receipt(
+        score_card=_laugh_inspection()["score_card"],
+        issue_codes=[],
+    ).to_public_dict()
+
+
 class _OneSlotGenerator:
     def __init__(self) -> None:
         self.requests: list[CharacterCardCandidateRequest] = []
@@ -306,23 +313,41 @@ class _ExplicitSmileStageHost:
         self.generation_channel = None
 
     @staticmethod
-    def _receipt() -> CharacterCardSharedRuntimeReceipt:
+    def _receipt(slot_key: str) -> CharacterCardSharedRuntimeReceipt:
+        shared_receipts = (
+            [_laugh_shared_review_receipt()]
+            if slot_key == "expression.laugh"
+            else [_generic_shared_review_receipt()]
+        )
         return CharacterCardSharedRuntimeReceipt(
             final_winner_selection_verified=True,
             prompt_reference_parity_verified=True,
-            shared_review_receipts=[_generic_shared_review_receipt()],
+            shared_review_receipts=shared_receipts,
         )
 
     def prepare_expression_slot(self, *, asset, card, expression, generation_channel="provider"):
         self.expression = expression
         self.generation_channel = generation_channel
-        smile_slot = CharacterCardSlot(
-            slot_key="expression.smile",
+        slot_key = f"expression.{expression}"
+        output_id = f"{expression}_output"
+        candidate_id = f"{expression}_candidate"
+        shared_review_receipts = (
+            [_laugh_shared_review_receipt()]
+            if slot_key == "expression.laugh"
+            else [_generic_shared_review_receipt()]
+        )
+        evidence_codes = (
+            sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
+            if slot_key == "expression.laugh"
+            else ["shared_visual_review_verified"]
+        )
+        slot = CharacterCardSlot(
+            slot_key=slot_key,  # type: ignore[arg-type]
             module="expression_set",
             state="winner_selected",
-            output_id="smile_output",
-            source_candidate_ids=["smile_candidate"],
-            lineage_id="smile_lineage",
+            output_id=output_id,
+            source_candidate_ids=[candidate_id],
+            lineage_id=f"{expression}_lineage",
             review_verified=True,
             prompt_reference_parity_verified=True,
             candidate_attempt_count=3,
@@ -332,22 +357,22 @@ class _ExplicitSmileStageHost:
             people_asset_id=asset.visual_asset_id,
             card_version_id=card.card_version_id,
             module="expression_set",
-            slot_key="expression.smile",
+            slot_key=slot_key,  # type: ignore[arg-type]
             candidate_index=1,
             reference_output_ids=["front_winner"],
-            user_intent="user explicitly requested a low intensity natural smile",
+            user_intent=f"user explicitly requested expression {expression}",
             generation_channel=generation_channel,
         )
         candidate = CharacterCardCandidateResult(
-            candidate_id="smile_candidate",
-            output_id="smile_output",
+            candidate_id=candidate_id,
+            output_id=output_id,
             module="expression_set",
-            slot_key="expression.smile",
+            slot_key=slot_key,  # type: ignore[arg-type]
             candidate_index=1,
-            source_candidate_ids=["smile_candidate"],
+            source_candidate_ids=[candidate_id],
             source_output_ids=list(request.reference_output_ids),
-            canonical_prompt_hash="sha256:smile_output",
-            prompt_compilation_id="compile_smile_output",
+            canonical_prompt_hash=f"sha256:{output_id}",
+            prompt_compilation_id=f"compile_{output_id}",
             prompt_reference_parity_verified=True,
         )
         review = AnchorReviewDecision(
@@ -357,16 +382,16 @@ class _ExplicitSmileStageHost:
                 distinctive_feature_score=0.9,
                 human_realism_score=0.9,
                 visual_quality_score=0.9,
-                evidence_codes=["shared_visual_review_verified"],
+                evidence_codes=evidence_codes,
             ),
-            shared_review_receipts=[_generic_shared_review_receipt()],
+            shared_review_receipts=shared_review_receipts,
         )
         return CharacterCardStageResult(
             status="review",
             card=card.model_copy(
                 update={
                     "expression_set_status": "partial",
-                    "expression_slots": {**card.expression_slots, "expression.smile": smile_slot},
+                    "expression_slots": {**card.expression_slots, slot_key: slot},
                 }
             ),
             attempts=[
@@ -376,8 +401,8 @@ class _ExplicitSmileStageHost:
                     review=review,
                 )
             ],
-            winner_output_ids={"expression.smile": "smile_output"},
-            shared_runtime_receipt=self._receipt(),
+            winner_output_ids={slot_key: output_id},
+            shared_runtime_receipt=self._receipt(slot_key),
         )
 
 
@@ -413,6 +438,33 @@ def test_doc196_lifecycle_routes_explicit_smile_to_single_slot_host_without_defa
     assert host.generation_channel == "mcp"
     assert updated.character_card.expression_slots["expression.smile"].output_id == "smile_output"
     assert updated.character_card.expression_slots["expression.laugh"].state == "empty"
+
+
+def test_doc230_lifecycle_routes_explicit_laugh_to_single_slot_without_starting_anger_sad() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    active_card = _face_ready_card()
+    catalog.save(asset.model_copy(update={"character_card": active_card}))
+    host = _ExplicitSmileStageHost()
+    lifecycle = VisualAssetLibraryLifecycleService(catalog, character_card_stage_host=host)
+
+    updated = lifecycle.prepare_character_card_stage(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        stage="expression_set",
+        expression="laugh",
+        generation_channel="mcp",
+    )
+
+    assert host.expression == "laugh"
+    assert host.generation_channel == "mcp"
+    assert updated.character_card.expression_slots["expression.laugh"].output_id == "laugh_output"
+    assert updated.character_card.expression_slots["expression.anger"].state == "empty"
+    assert updated.character_card.expression_slots["expression.sad"].state == "empty"
+    assert updated.character_card.expression_set_status == "partial"
+    receipt = updated.character_card.expression_slots["expression.laugh"].shared_runtime_receipt
+    assert receipt is not None
+    assert receipt["slot_key"] == "expression.laugh"
 
 
 def test_doc196_default_expression_prepare_emits_laugh_before_other_slots() -> None:

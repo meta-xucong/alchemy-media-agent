@@ -766,7 +766,7 @@ class ProductApiAnchorPackPreparationHost:
         front_output_id = str(card.face_slots["face.front"].output_id or "").strip()
         if not front_output_id:
             raise ValueError("character_card_expression_front_winner_missing")
-        if expression != "smile":
+        if expression not in {"laugh", "smile"}:
             raise ValueError("character_card_expression_slot_not_explicitly_supported")
         preparation = CharacterCardPreparationService(generator=self, reviewer=self)
         base_intent = str(getattr(asset, "preparation_intent", "") or "").strip()
@@ -774,11 +774,11 @@ class ProductApiAnchorPackPreparationHost:
             raise ValueError("character_card_expression_intent_missing")
         result = preparation.prepare_expression_slot(
             card,
-            expression="smile",
+            expression=expression,  # type: ignore[arg-type]
             front_output_id=front_output_id,
             project_id=f"visual_asset_{asset.visual_asset_id}",
             people_asset_id=asset.visual_asset_id,
-            user_intent=self._character_card_single_expression_intent(base_intent, "smile"),
+            user_intent=self._character_card_single_expression_intent(base_intent, expression),
             generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="expression_set")
@@ -815,6 +815,13 @@ class ProductApiAnchorPackPreparationHost:
     @staticmethod
     def _character_card_single_expression_intent(base_intent: str, expression: str) -> str:
         base = base_intent.strip()
+        if expression == "laugh":
+            return (
+                f"{base}\nExpression slot target: expression.laugh. "
+                f"{laugh_expression_materialization_directive()} "
+                f"{expression_front_card_framing_materialization_directive()} "
+                "Allow only a small amount of natural head-shoulder energy."
+            )
         if expression == "smile":
             return (
                 f"{base}\nExpression slot target: expression.smile. "
