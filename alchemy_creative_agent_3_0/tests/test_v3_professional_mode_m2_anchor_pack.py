@@ -143,6 +143,36 @@ class MissingSharedReceiptReviewer(FakeReviewer):
         return decision.model_copy(update={"shared_review_receipts": []})
 
 
+class SharedReceiptStatusMismatchReviewer(FakeReviewer):
+    def __init__(self, *, outer_status: str, shared_status: str) -> None:
+        super().__init__()
+        self.outer_status = outer_status
+        self.shared_status = shared_status
+
+    def review(self, candidate: AnchorCandidateResult) -> AnchorReviewDecision:
+        decision = super().review(candidate)
+        return decision.model_copy(
+            update={
+                "status": self.outer_status,
+                "issue_codes": [] if self.outer_status == "pass" else ["identity_gate_failed"],
+                "shared_review_receipts": [self._shared_receipt(self.shared_status)],
+            }
+        )
+
+
+class DuplicateCanonicalSharedReceiptReviewer(FakeReviewer):
+    def review(self, candidate: AnchorCandidateResult) -> AnchorReviewDecision:
+        decision = super().review(candidate)
+        return decision.model_copy(
+            update={
+                "shared_review_receipts": [
+                    self._shared_receipt("pass"),
+                    self._shared_receipt("pass"),
+                ]
+            }
+        )
+
+
 def test_m2_generates_three_candidates_per_view_in_serial_identity_order() -> None:
     generator = FakeGenerator()
     reviewer = FakeReviewer()
@@ -214,6 +244,27 @@ def test_m2_missing_shared_review_receipt_blocks_formal_face_slot() -> None:
 
     assert result.status == "blocked"
     assert result.failure_codes == ["formal_face_view_shared_review_receipt_missing"]
+    assert [request.view_role for request in generator.requests] == [
+        "standard_front",
+        "standard_front",
+        "standard_front",
+    ]
+
+
+@pytest.mark.parametrize(
+    "reviewer",
+    [
+        SharedReceiptStatusMismatchReviewer(outer_status="fail", shared_status="pass"),
+        SharedReceiptStatusMismatchReviewer(outer_status="pass", shared_status="fail_retryable"),
+        DuplicateCanonicalSharedReceiptReviewer(),
+    ],
+)
+def test_m2_shared_review_receipt_status_and_uniqueness_are_authoritative(reviewer: FakeReviewer) -> None:
+    generator = FakeGenerator()
+    result = AnchorPackPreparationService(generator=generator, reviewer=reviewer).prepare(_request())
+
+    assert result.status == "blocked"
+    assert result.failure_codes == ["formal_face_view_shared_review_receipt_mismatch"]
     assert [request.view_role for request in generator.requests] == [
         "standard_front",
         "standard_front",

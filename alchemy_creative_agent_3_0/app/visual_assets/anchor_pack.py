@@ -26,6 +26,8 @@ from .contracts import (
     RootSourceProvenance,
 )
 from .formal_slot_acceptance import (
+    FORMAL_SLOT_SHARED_REVIEW_CONTRACT_VERSION,
+    FORMAL_SLOT_SHARED_REVIEW_OWNER,
     FormalSlotAcceptanceCore,
     FormalSlotCandidateSummary,
     FormalSlotReceipt,
@@ -425,6 +427,27 @@ class AnchorPackPreparationService:
                     ),
                 )
 
+            try:
+                self._validate_formal_attempt_shared_review_authority(front_attempts)
+            except ValueError as exc:
+                pack = self._pack(
+                    request,
+                    pack_version_id,
+                    views,
+                    "failed",
+                    auxiliary_references=auxiliary_references,
+                    candidate_failures=generation_failures,
+                )
+                self._persist(pack, "fail")
+                return AnchorPackPreparationResult(
+                    status="blocked",
+                    pack=pack,
+                    attempts=attempts,
+                    generation_failures=generation_failures,
+                    failure_codes=[self._formal_acceptance_failure_code(exc)],
+                    mcp_handoff_ids=[],
+                )
+
             if not any(review.status == "pass" for _, review in front_attempts):
                 pack = self._pack(
                     request,
@@ -611,6 +634,28 @@ class AnchorPackPreparationService:
                         generation_failures,
                         role,
                     ),
+                )
+
+            try:
+                self._validate_formal_attempt_shared_review_authority(supplementary_attempts)
+            except ValueError as exc:
+                pack = self._pack(
+                    request,
+                    pack_version_id,
+                    views,
+                    "failed",
+                    auxiliary_references=auxiliary_references,
+                    candidate_failures=generation_failures,
+                )
+                self._persist(pack, "fail")
+                return AnchorPackPreparationResult(
+                    status="blocked",
+                    pack=pack,
+                    attempts=attempts,
+                    generation_failures=generation_failures,
+                    winner_candidate_id=winner_candidate_id,
+                    failure_codes=[self._formal_acceptance_failure_code(exc)],
+                    mcp_handoff_ids=[],
                 )
 
             if not any(review.status == "pass" for _, review in supplementary_attempts):
@@ -1082,6 +1127,8 @@ class AnchorPackPreparationService:
     @staticmethod
     def _formal_acceptance_failure_code(error: ValueError) -> str:
         message = str(error)
+        if "status mismatch" in message or "multiple canonical shared Vision receipts" in message:
+            return "formal_face_view_shared_review_receipt_mismatch"
         if "canonical shared Vision receipt" in message:
             return "formal_face_view_shared_review_receipt_missing"
         if "reload/public projection" in message:
@@ -1189,13 +1236,34 @@ class AnchorPackPreparationService:
             shared_review=self._formal_shared_review_summary(review),
         )
 
+    def _validate_formal_attempt_shared_review_authority(
+        self,
+        attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
+    ) -> None:
+        for _, review in attempts:
+            self._formal_shared_review_summary(review)
+
     @staticmethod
     def _formal_shared_review_summary(review: AnchorReviewDecision) -> FormalSlotSharedReviewSummary:
+        canonical_receipts: list[FormalSlotSharedReviewSummary] = []
         for receipt in review.shared_review_receipts:
-            try:
-                return FormalSlotSharedReviewSummary.model_validate(receipt)
-            except Exception:
+            if not isinstance(receipt, dict):
                 continue
+            if (
+                receipt.get("owner") != FORMAL_SLOT_SHARED_REVIEW_OWNER
+                or receipt.get("contract_version") != FORMAL_SLOT_SHARED_REVIEW_CONTRACT_VERSION
+            ):
+                continue
+            canonical_receipts.append(FormalSlotSharedReviewSummary.model_validate(receipt))
+        if len(canonical_receipts) > 1:
+            raise ValueError("formal Face Identity candidates cannot carry multiple canonical shared Vision receipts")
+        if canonical_receipts:
+            summary = canonical_receipts[0]
+            if review.status == "pass" and not summary.passed:
+                raise ValueError("formal Face Identity shared Vision receipt status mismatch")
+            if review.status == "fail" and summary.passed:
+                raise ValueError("formal Face Identity shared Vision receipt status mismatch")
+            return summary
         raise ValueError("formal Face Identity candidates require canonical shared Vision receipt")
 
     @staticmethod
