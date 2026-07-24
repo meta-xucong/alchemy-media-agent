@@ -1219,6 +1219,13 @@ class ProductApiAnchorPackPreparationHost:
             return None
         requested_refs = [str(item).strip() for item in request.reference_output_ids]
         requested_handoff = str(request.mcp_handoff_id or "").strip()
+        requested_handoff_payload = (
+            self._mcp_materialization_payload(requested_handoff) if requested_handoff else None
+        )
+        requested_handoff_is_current = (
+            isinstance(requested_handoff_payload, dict)
+            and self._character_card_mcp_handoff_current(request, requested_handoff_payload)
+        )
         for record in candidates:
             if getattr(record, "planning_result", None) is None:
                 continue
@@ -1246,13 +1253,16 @@ class ProductApiAnchorPackPreparationHost:
                     if str(materialization.get("handoff_id") or "").strip() != requested_handoff:
                         continue
                 elif getattr(record, "generation_result", None) is not None:
-                    handoff_payload = self._mcp_materialization_payload(requested_handoff)
+                    handoff_payload = requested_handoff_payload
                     if not isinstance(handoff_payload, dict):
                         continue
                     if str(handoff_payload.get("status") or "").strip().lower() != "consumed":
                         continue
                 else:
-                    continue
+                    if requested_handoff_is_current:
+                        continue
+                    if not self._is_interrupted_mcp_materialization_checkpoint(record):
+                        continue
             if isinstance(materialization, dict):
                 handoff_id = str(materialization.get("handoff_id") or "").strip()
                 payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None

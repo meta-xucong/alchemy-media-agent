@@ -1267,3 +1267,224 @@ def test_doc220_stale_pending_handoff_hint_is_not_copied_into_new_stage_job() ->
 
     assert service.created_payloads
     assert "mcp_materialization" not in service.created_payloads[0]["metadata"]
+
+
+def test_doc221_clean_interrupted_job_wins_over_older_stale_blocked_handoff_job() -> None:
+    operation_id = "people_doc221:expression_set:expression.laugh:2:round5"
+    stale_blocked_record = SimpleNamespace(
+        job_id="job_doc221_stale_blocked",
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {
+                    "handoff_id": "mcp_handoff_doc221_stale_pending",
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                },
+            }
+        ),
+    )
+    clean_generating_record = SimpleNamespace(
+        job_id="job_doc221_clean_generating",
+        status=ProductJobStatusValue.GENERATING,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+            }
+        ),
+    )
+
+    class _Store:
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return [stale_blocked_record, clean_generating_record]
+
+        def save(self, _record) -> None:  # noqa: ANN001
+            return None
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.job_store = _Store()
+            self.generated_calls = []
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "pending",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _stale_crop_first_expression_reference_assets(),
+                }
+            )
+
+        def generate_job(self, job_id, payload):  # noqa: ANN001, ANN201
+            assert job_id == "job_doc221_clean_generating"
+            self.generated_calls.append((job_id, payload))
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+                metadata={
+                    "mcp_materialization": {
+                        "handoff_id": "mcp_handoff_doc221_new_full_frame_first",
+                        "status": "pending",
+                        "generation_channel": "mcp",
+                        "canonical_prompt": _current_laugh_handoff_prompt(),
+                        "reference_assets": _current_expression_reference_assets(),
+                    }
+                },
+            )
+
+        def get_job_record(self, job_id):  # noqa: ANN001, ANN201
+            if job_id == clean_generating_record.job_id:
+                return clean_generating_record
+            if job_id == stale_blocked_record.job_id:
+                return stale_blocked_record
+            return None
+
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc221",
+        people_asset_id="people_doc221",
+        card_version_id="card_doc221",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id="mcp_handoff_doc221_stale_pending",
+    )
+
+    service = _Service()
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert str(exc_info.value) == "mcp_materialization_pending"
+    assert exc_info.value.mcp_handoff_id == "mcp_handoff_doc221_new_full_frame_first"
+    assert service.generated_calls
+    assert service.generated_calls[0][0] == "job_doc221_clean_generating"
+    assert service.generated_calls[0][1]["metadata"]["_v3_resume_interrupted_mcp_materialization"] is True
+    assert service.generated_calls[0][1]["metadata"]["disable_visual_auto_retry"] is True
+
+
+def test_doc221_current_handoff_resume_still_requires_exact_operation_and_refs() -> None:
+    requested_operation = "people_doc221:expression_set:expression.laugh:2:round5"
+    current_handoff = "mcp_handoff_doc221_current"
+    wrong_ref_record = SimpleNamespace(
+        job_id="job_doc221_wrong_refs",
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["other_front"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": requested_operation,
+                "mcp_materialization": {
+                    "handoff_id": current_handoff,
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                },
+            }
+        ),
+    )
+    wrong_operation_record = SimpleNamespace(
+        job_id="job_doc221_wrong_operation",
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": "people_doc221:expression_set:expression.laugh:3:round5",
+                "mcp_materialization": {
+                    "handoff_id": current_handoff,
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                },
+            }
+        ),
+    )
+    exact_record = SimpleNamespace(
+        job_id="job_doc221_exact_current",
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": requested_operation,
+                "mcp_materialization": {
+                    "handoff_id": current_handoff,
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                },
+            }
+        ),
+    )
+
+    class _Store:
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return [wrong_ref_record, wrong_operation_record, exact_record]
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.job_store = _Store()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "pending",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _current_expression_reference_assets(),
+                }
+            )
+
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc221",
+        people_asset_id="people_doc221",
+        card_version_id="card_doc221",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id=current_handoff,
+    )
+
+    resume = ProductApiAnchorPackPreparationHost(_Service())._mcp_resume_character_card_stage_job_record(  # type: ignore[arg-type]  # noqa: SLF001
+        request,
+        requested_operation,
+    )
+
+    assert resume is exact_record
