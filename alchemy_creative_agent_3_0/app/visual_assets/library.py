@@ -1034,7 +1034,12 @@ class VisualAssetLibraryLifecycleService:
                 method_kwargs["expression"] = expression
             if generation_channel == "mcp":
                 method_kwargs["generation_channel"] = "mcp"
-            if resume and stage == "expression_set" and expression is not None:
+            if (
+                resume
+                and stage == "expression_set"
+                and expression is not None
+                and self._expression_mcp_resume_requires_review_only(card, expression=expression)
+            ):
                 method_kwargs["review_only_resume"] = True
             result = method(**method_kwargs)
         if getattr(result, "card", None) is None:
@@ -1075,6 +1080,31 @@ class VisualAssetLibraryLifecycleService:
                     )
                 )
         return saved_asset
+
+    @staticmethod
+    def _expression_mcp_resume_requires_review_only(
+        card: CharacterCardState,
+        *,
+        expression: str,
+    ) -> bool:
+        """Return True only for already-materialized MCP review resumption.
+
+        A plain caller-level ``resume=True`` can mean either "consume the
+        pending/submitted MCP artifact" or "re-run shared Vision for an
+        existing output."  Only the latter may enter Host's review-only
+        target collection path.  Materialization-pending handoffs must stay on
+        the normal MCP resume path so they can be consumed, checkpointed,
+        reviewed, and then considered by the formal three-candidate Core.
+        """
+
+        slot_key = f"expression.{expression}"
+        if card.last_failed_module != "expression_set" or card.last_failed_slot_key != slot_key:
+            return False
+        return card.last_failure_code in {
+            "mcp_review_pending",
+            "mcp_materialization_checkpoint_mismatch",
+            "mcp_materialization_projection_unavailable",
+        }
 
     @staticmethod
     def _persist_character_card_success_receipts(
