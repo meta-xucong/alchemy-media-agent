@@ -1002,6 +1002,20 @@ class ProductApiAnchorPackPreparationHost:
             )
             if orphan_handoff_id:
                 request = request.model_copy(update={"mcp_handoff_id": orphan_handoff_id})
+            elif request.mcp_handoff_id:
+                handoff_payload = self._mcp_materialization_payload(request.mcp_handoff_id)
+                if isinstance(handoff_payload, dict) and not self._character_card_mcp_handoff_current(
+                    request,
+                    handoff_payload,
+                ):
+                    handoff_status = str(handoff_payload.get("status") or "").strip().lower()
+                    if handoff_status == "pending":
+                        request = request.model_copy(update={"mcp_handoff_id": None})
+                    else:
+                        raise AnchorCandidateUnavailable(
+                            "mcp_materialization_reference_mismatch",
+                            mcp_handoff_id=str(request.mcp_handoff_id or "").strip() or None,
+                        )
         resume_record = (
             self._mcp_resume_character_card_stage_job_record(request, operation_id)
             if request.generation_channel == "mcp"

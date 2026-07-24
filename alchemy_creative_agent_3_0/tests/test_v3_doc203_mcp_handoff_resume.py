@@ -385,6 +385,7 @@ def test_doc203_character_card_stage_creation_receives_explicit_mcp_handoff() ->
                     "handoff_id": handoff_id,
                     "status": "pending",
                     "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _current_expression_reference_assets(),
                 }
             )
 
@@ -1193,3 +1194,76 @@ def test_doc219_host_fails_closed_on_stale_crop_first_submitted_expression_hando
             request,
             operation_id,
         )
+
+
+def test_doc220_stale_pending_handoff_hint_is_not_copied_into_new_stage_job() -> None:
+    operation_id = "people_doc220:expression_set:expression.laugh:2:round5"
+
+    class _Store:
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return []
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created_payloads = []
+            self.record = None
+            self.job_store = _Store()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "pending",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _stale_crop_first_expression_reference_assets(),
+                },
+                list_unconsumed_by_operation=lambda _operation_id: [],
+            )
+
+        def create_professional_character_card_stage_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.created_payloads.append(payload)
+            self.record = SimpleNamespace(
+                job_id="job_doc220_new_without_stale_hint",
+                planning_result=object(),
+                generation_result=None,
+                request=SimpleNamespace(metadata=dict(payload.get("metadata") or {})),
+            )
+            return ProductJobStatus(
+                job_id=self.record.job_id,
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, job_id, *_args, **_kwargs):  # noqa: ANN001, ANN201
+            assert job_id == "job_doc220_new_without_stale_hint"
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, _job_id):  # noqa: ANN001, ANN201
+            return self.record
+
+    service = _Service()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc220",
+        people_asset_id="people_doc220",
+        card_version_id="card_doc220",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id="mcp_handoff_doc220_stale_pending",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="character_card_candidate_generation_failed"):
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert service.created_payloads
+    assert "mcp_materialization" not in service.created_payloads[0]["metadata"]
