@@ -344,6 +344,9 @@ def test_doc191_character_card_mcp_stage_resumes_existing_handoff_job() -> None:
         def list_recent(self, _limit):  # noqa: ANN001, ANN201
             return [self.record]
 
+        def list_mcp_operation_records(self, _operation_id):  # noqa: ANN001, ANN201
+            return [self.record]
+
         def save(self, record):  # noqa: ANN001, ANN201
             self.record = record
             return record
@@ -1441,6 +1444,9 @@ def test_doc183_face_anchor_mcp_resume_reuses_planned_handoff_job_before_brain()
         def list_recent(self, _limit):
             return [planned_record]
 
+        def list_mcp_operation_records(self, _operation_id):
+            return [planned_record]
+
     class _Service:
         visual_asset_catalog = None
         job_store = _Store()
@@ -1526,6 +1532,9 @@ def test_doc190_face_anchor_mcp_resume_rejects_stale_reverse45_prompt_contract(t
         def list_recent(self, _limit):
             return [planned_record]
 
+        def list_mcp_operation_records(self, _operation_id):
+            return [planned_record]
+
     class _Service:
         visual_asset_catalog = None
         job_store = _Store()
@@ -1601,6 +1610,9 @@ def test_doc183_face_anchor_mcp_resume_reuses_existing_generation_result_without
 
     class _Store:
         def list_recent(self, _limit):
+            return [planned_record]
+
+        def list_mcp_operation_records(self, _operation_id):
             return [planned_record]
 
     class _Service:
@@ -1684,6 +1696,9 @@ def test_doc193_face_anchor_mcp_resume_recovers_consumed_generated_record_withou
 
     class _Store:
         def list_recent(self, _limit):
+            return [generated_record]
+
+        def list_mcp_operation_records(self, _operation_id):
             return [generated_record]
 
     class _McpStore:
@@ -1809,6 +1824,9 @@ def test_doc190_mcp_resume_reenters_finalizing_review_for_submitted_artifact() -
 
     class _Store:
         def list_recent(self, _limit):
+            return [planned_record]
+
+        def list_mcp_operation_records(self, _operation_id):
             return [planned_record]
 
     class _Service:

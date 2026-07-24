@@ -515,6 +515,20 @@ class InMemoryProductJobStore:
         bounded_limit = max(1, min(int(limit or 20), 100))
         return sorted(self._records.values(), key=lambda record: record.updated_at, reverse=True)[:bounded_limit]
 
+    def list_mcp_operation_records(self, operation_id: str) -> list[ProductJobRecord]:
+        operation = str(operation_id or "").strip()
+        if not operation:
+            return []
+        matches: list[ProductJobRecord] = []
+        for record in self._records.values():
+            metadata = dict(record.request.metadata or {})
+            if str(metadata.get("generation_channel") or "").strip().lower() != "mcp":
+                continue
+            if str(metadata.get("mcp_operation_id") or "").strip() != operation:
+                continue
+            matches.append(record)
+        return sorted(matches, key=lambda record: record.updated_at, reverse=True)
+
     def delete_many(self, job_ids: list[str]) -> int:
         deleted = 0
         for job_id in list(dict.fromkeys(str(item or "").strip() for item in job_ids)):
@@ -572,6 +586,10 @@ class PersistentProductJobStore(InMemoryProductJobStore):
     def list_recent(self, limit: int = 20) -> list[ProductJobRecord]:
         self._load_all_records()
         return super().list_recent(limit)
+
+    def list_mcp_operation_records(self, operation_id: str) -> list[ProductJobRecord]:
+        self._load_all_records()
+        return super().list_mcp_operation_records(operation_id)
 
     def delete_many(self, job_ids: list[str]) -> int:
         deleted = super().delete_many(job_ids)

@@ -693,7 +693,10 @@ class _ReviewService:
                 metadata={"post_generation_review_package": {"inspections": [inspection]}}
             ),
         )
-        self.job_store = SimpleNamespace(list_recent=lambda _limit: [self.record])
+        self.job_store = SimpleNamespace(
+            list_recent=lambda _limit: [self.record],
+            list_mcp_operation_records=lambda _operation_id: [self.record],
+        )
 
     def get_job_record(self, _job_id: str) -> SimpleNamespace:
         return self.record

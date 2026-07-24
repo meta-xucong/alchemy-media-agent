@@ -563,14 +563,8 @@ class ProductApiAnchorPackPreparationHost:
         operation_id = str(request.mcp_operation_id or "").strip()
         if not handoff_id or not operation_id:
             return None
-        job_store = getattr(self.product_service, "job_store", None)
-        list_recent = getattr(job_store, "list_recent", None)
-        if not callable(list_recent):
-            return None
-        try:
-            candidates = list_recent(100)
-        except Exception:
-            return None
+        candidates = self._mcp_operation_job_records(operation_id)
+        matches: list[Any] = []
         for record in candidates:
             if getattr(record, "planning_result", None) is None:
                 continue
@@ -591,7 +585,7 @@ class ProductApiAnchorPackPreparationHost:
                 contract_payload = self._mcp_materialization_payload(handoff_id)
                 if not isinstance(contract_payload, dict):
                     continue
-                if str(contract_payload.get("status") or "").strip().lower() != "consumed":
+                if not self._mcp_handoff_status_can_resume_generated_job(contract_payload):
                     continue
             else:
                 continue
@@ -610,8 +604,35 @@ class ProductApiAnchorPackPreparationHost:
                 contract_payload,
             ):
                 continue
-            return record
-        return None
+            matches.append(record)
+        if len(matches) > 1:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_operation_ambiguous",
+                mcp_handoff_id=handoff_id or None,
+            )
+        return matches[0] if matches else None
+
+    def _mcp_operation_job_records(self, operation_id: str) -> list[Any]:
+        operation = str(operation_id or "").strip()
+        if not operation:
+            return []
+        job_store = getattr(self.product_service, "job_store", None)
+        finder = getattr(job_store, "list_mcp_operation_records", None)
+        if not callable(finder):
+            return []
+        try:
+            return list(finder(operation))
+        except Exception:
+            return []
+
+    @staticmethod
+    def _mcp_handoff_status_can_resume_generated_job(payload: dict[str, Any]) -> bool:
+        return str(payload.get("status") or "").strip().lower() in {
+            "consumed",
+            "consumed_uncheckpointed",
+            "output_checkpointed",
+            "job_checkpointed",
+        }
 
     def _mcp_anchor_handoff_matches_current_contract(
         self,
@@ -1209,14 +1230,7 @@ class ProductApiAnchorPackPreparationHost:
         shared review.  It must not ask Brain for a new prompt first.
         """
 
-        job_store = getattr(self.product_service, "job_store", None)
-        list_recent = getattr(job_store, "list_recent", None)
-        if not callable(list_recent):
-            return None
-        try:
-            candidates = list_recent(200)
-        except Exception:
-            return None
+        candidates = self._mcp_operation_job_records(operation_id)
         requested_refs = [str(item).strip() for item in request.reference_output_ids]
         requested_handoff = str(request.mcp_handoff_id or "").strip()
         requested_handoff_payload = (
@@ -1226,6 +1240,7 @@ class ProductApiAnchorPackPreparationHost:
             isinstance(requested_handoff_payload, dict)
             and self._character_card_mcp_handoff_current(request, requested_handoff_payload)
         )
+        matches: list[Any] = []
         for record in candidates:
             if getattr(record, "planning_result", None) is None:
                 continue
@@ -1256,7 +1271,7 @@ class ProductApiAnchorPackPreparationHost:
                     handoff_payload = requested_handoff_payload
                     if not isinstance(handoff_payload, dict):
                         continue
-                    if str(handoff_payload.get("status") or "").strip().lower() != "consumed":
+                    if not self._mcp_handoff_status_can_resume_generated_job(handoff_payload):
                         continue
                 else:
                     if requested_handoff_is_current:
@@ -1280,8 +1295,13 @@ class ProductApiAnchorPackPreparationHost:
             if getattr(record, "generation_result", None) is None and not isinstance(materialization, dict):
                 if not self._is_interrupted_mcp_materialization_checkpoint(record):
                     continue
-            return record
-        return None
+            matches.append(record)
+        if len(matches) > 1:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_operation_ambiguous",
+                mcp_handoff_id=requested_handoff or None,
+            )
+        return matches[0] if matches else None
 
     @staticmethod
     def _is_interrupted_mcp_materialization_checkpoint(record: Any) -> bool:
