@@ -1086,7 +1086,8 @@ class ProductApiAnchorPackPreparationHost:
             {
                 "quality_mode": "strict",
                 "metadata": {
-                    "max_visual_retry_attempts": 1,
+                    "disable_visual_auto_retry": True,
+                    "max_visual_retry_attempts": 0,
                     **(
                         {"_v3_resume_interrupted_mcp_materialization": True}
                         if resume_interrupted_mcp_materialization

@@ -2588,6 +2588,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         # duplicate source from becoming duplicate crop/original uploads and
         # therefore avoids extra model inputs, cost, and competing evidence.
         assets = self._dedupe_provider_reference_assets(assets)
+        assets = self._character_card_provider_reference_order(request, assets)
         suppressed_original_ids = _dedupe(suppressed_original_ids)
         reference_sanitization_records = self._dedupe_reference_sanitization_records(reference_sanitization_records)
         truth_package = {
@@ -2695,6 +2696,54 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
             retained["provider_input_deduplicated"] = True
         return unique
+
+    @staticmethod
+    def _character_card_provider_reference_order(
+        request: GenerationRequest,
+        assets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Put the front card framing authority first for expression edits.
+
+        Expression Set slots are not new angle captures; they are expression
+        deltas on the approved ``face.front`` card.  If tight identity crops
+        reach the renderer before the full-frame card, both Provider and MCP
+        can over-weight the crop and return a big-head portrait.  Keep the
+        same reference budget and evidence set, but make the framing authority
+        the first native input for this one stage.
+        """
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if (
+            metadata.get("professional_identity_reference_strategy") != "character_card_shared_identity_v1"
+            or str(metadata.get("professional_character_card_stage") or "").strip() != "expression_set"
+        ):
+            return assets
+        framing = [
+            dict(item)
+            for item in assets
+            if str(item.get("identity_evidence_scope") or "").strip() == "card_framing"
+            and str(item.get("derivative_kind") or "").strip()
+            == "character_card_full_frame_framing_reference"
+        ]
+        if not framing:
+            return assets
+        framing_keys = {
+            (
+                str(item.get("source_asset_id") or item.get("asset_id") or "").strip(),
+                str(item.get("derivative_kind") or "original").strip(),
+            )
+            for item in framing
+        }
+        rest = [
+            dict(item)
+            for item in assets
+            if (
+                str(item.get("source_asset_id") or item.get("asset_id") or "").strip(),
+                str(item.get("derivative_kind") or "original").strip(),
+            )
+            not in framing_keys
+        ]
+        return [*framing, *rest]
 
     @staticmethod
     def _dedupe_reference_sanitization_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

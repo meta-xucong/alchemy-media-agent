@@ -827,6 +827,8 @@ def test_doc215_character_card_reenters_same_interrupted_mcp_job_without_replann
         service.generated_calls[0][1]["metadata"]["_v3_resume_interrupted_mcp_materialization"]
         is True
     )
+    assert service.generated_calls[0][1]["metadata"]["disable_visual_auto_retry"] is True
+    assert service.generated_calls[0][1]["metadata"]["max_visual_retry_attempts"] == 0
 
 
 def test_doc215_existing_mcp_handoff_still_uses_normal_handoff_resume_not_reentry() -> None:
@@ -905,3 +907,5 @@ def test_doc215_existing_mcp_handoff_still_uses_normal_handoff_resume_not_reentr
         ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
 
     assert "_v3_resume_interrupted_mcp_materialization" not in service.generated_calls[0][1]["metadata"]
+    assert service.generated_calls[0][1]["metadata"]["disable_visual_auto_retry"] is True
+    assert service.generated_calls[0][1]["metadata"]["max_visual_retry_attempts"] == 0

@@ -963,6 +963,14 @@ class V3ProductApiService:
                 ),
                 "generation_channel": generation_channel,
                 "mcp_operation_id": mcp_operation_id,
+                # Character Card stages own their 3-candidate slot lifecycle
+                # and their bounded manual retry rounds.  The ordinary
+                # post-generation visual auto-retry opens a second job-local
+                # retry state machine; with MCP materialization that can leave
+                # a reviewed failed candidate waiting for another handoff
+                # instead of returning to the Character Card slot loop.
+                "disable_visual_auto_retry": True,
+                "max_visual_retry_attempts": 0,
             }
         else:
             self._bind_professional_mode(

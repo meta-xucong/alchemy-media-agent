@@ -161,6 +161,61 @@ def _reverse_45_request(root: Path, front: Path, profile: Path, right25: Path) -
     return request.model_copy(update={"metadata": metadata})
 
 
+def _expression_request(front: Path) -> GenerationRequest:
+    asset = AssetSpec(
+        asset_id="expression_asset",
+        asset_type=AssetType.SOCIAL_COVER,
+        platform=Platform.GENERIC_SOCIAL,
+        aspect_ratio="2:3",
+        purpose="Professional expression card candidate",
+    )
+    front_reference = {
+        "asset_id": "front_output",
+        "output_id": "front_output",
+        "file_path": str(front),
+        "source_type": "selected_output",
+        "role": "face_reference",
+        "use_policy": "identity",
+        "strength": "hard",
+        "provider_input_required": True,
+        "source_integrity_id": "sha256:front_output",
+        "metadata": {"canonical_output_binding": True},
+    }
+    return GenerationRequest(
+        asset_spec=asset,
+        prompt_compilation=PromptCompilationResult(
+            prompt_compilation_id="prompt_expression_budget",
+            asset_id=asset.asset_id,
+            visual_prompt="Create the same Character Card front portrait with a laugh expression only.",
+            negative_prompt="different crop, different camera distance",
+            text_policy="do_not_render_final_text_in_image_model",
+            style_notes=["inherit approved face.front card"],
+            layout_notes=["2:3 head-neck-upper-shoulders card framing"],
+        ),
+        condition_plan=ConditionPlan(condition_plan_id="condition_expression_budget", asset_id=asset.asset_id),
+        generation_plan=GenerationPlan(
+            generation_plan_id="generation_expression_budget",
+            asset_id=asset.asset_id,
+            provider_strategy=ProviderStrategy.REFERENCE_CONDITIONED_PROVIDER,
+            candidate_count=1,
+            max_refine_rounds=0,
+        ),
+        metadata={
+            "job_id": "job_expression_budget",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "user_input": "Create a front Character Card laugh keyframe.",
+            "professional_mode": "professional",
+            "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "expression_set",
+            "professional_character_card_slot": "expression.laugh",
+            "professional_anchor_reference_assets": [front_reference],
+            "uploaded_assets": [front_reference],
+        },
+    )
+
+
 def test_root_identity_derivative_can_be_reused_without_second_ai_generation(tmp_path: Path) -> None:
     root = _image(tmp_path / "root.png", (220, 180, 160))
     derivatives = prepare_reference_truth_derivatives(
@@ -254,6 +309,24 @@ def test_doc190_character_card_reverse_45_uses_original_front_as_framing_referen
     assert framing_reference["asset_id"] == "front_output"
     assert framing_reference["storage_path"] == str(request.metadata["uploaded_assets"][1]["file_path"])
     assert "horizontal flip" in framing_reference["prompt_constraints"][0]
+
+
+def test_doc216_expression_set_uses_front_full_frame_as_first_provider_reference(
+    tmp_path: Path,
+) -> None:
+    request = _expression_request(_image(tmp_path / "front.png", (220, 181, 160)))
+    provider = ProductionImageGenerationProvider()
+    references = provider._reference_assets(request)  # noqa: SLF001
+    plan = provider._asset_plan(request, references)  # noqa: SLF001
+
+    assert plan["provider_input_plan"]["reference_image_count"] == 3
+    assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
+        ("front_output", "character_card_full_frame_framing_reference"),
+        ("front_output", "portrait_identity_crop"),
+        ("front_output", "portrait_identity_pose_geometry_crop"),
+    ]
+    assert plan["assets"][0]["identity_evidence_scope"] == "card_framing"
+    assert plan["provider_input_plan"]["reference_image_asset_ids"][0] == "front_output"
 
 
 def test_doc190_provider_request_projection_preserves_character_card_reference_scope(
@@ -367,11 +440,11 @@ def test_doc214_character_card_expression_set_uses_full_frame_front_as_framing_a
 
     assert plan["provider_input_plan"]["reference_image_count"] == 3
     assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
+        ("front_output", "character_card_full_frame_framing_reference"),
         ("front_output", "portrait_identity_crop"),
         ("front_output", "portrait_identity_pose_geometry_crop"),
-        ("front_output", "character_card_full_frame_framing_reference"),
     ]
-    framing_reference = plan["assets"][2]
+    framing_reference = plan["assets"][0]
     assert framing_reference["identity_evidence_scope"] == "card_framing"
     assert framing_reference["reference_truth_layer"] == "character_card_framing_truth"
     assert "framing authority" in " ".join(framing_reference["prompt_constraints"])
