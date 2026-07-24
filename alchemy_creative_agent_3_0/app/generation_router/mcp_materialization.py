@@ -10,6 +10,7 @@ candidate or delivery record by itself.
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 from io import BytesIO
 from datetime import datetime, timezone
 import hashlib
@@ -121,6 +122,60 @@ class McpMaterializationHandoffStore:
         self.storage_root = Path(storage_root) if storage_root else _default_root()
         self._lock = threading.RLock()
 
+    @contextmanager
+    def _transaction_lock(self):
+        """Serialize durable handoff state transitions across processes.
+
+        ``threading.RLock`` only protects one Python process.  MCP handoff
+        records are durable state and can be touched by the foreground Codex
+        submitter, a Product API worker, and a resume process at the same time.
+        Hold a small store-level file lock around read-check-write transitions
+        so a second process always observes the latest committed state before
+        deciding whether a transition is idempotent, conflicting, or allowed.
+        """
+
+        with self._lock:
+            self.storage_root.mkdir(parents=True, exist_ok=True)
+            lock_path = self.storage_root / ".mcp_handoff_store.lock"
+            with lock_path.open("a+b") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"0")
+                    handle.flush()
+                handle.seek(0)
+                deadline = time.monotonic() + 10.0
+                locked = False
+                while not locked:
+                    try:
+                        handle.seek(0)
+                        if os.name == "nt":
+                            import msvcrt
+
+                            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        else:  # pragma: no cover - exercised on non-Windows CI.
+                            import fcntl
+
+                            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        locked = True
+                    except OSError as exc:
+                        if time.monotonic() >= deadline:
+                            raise McpMaterializationError(
+                                "mcp_materialization_store_lock_timeout"
+                            ) from exc
+                        time.sleep(0.025)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:  # pragma: no cover - exercised on non-Windows CI.
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
     def ensure_pending(
         self,
         *,
@@ -138,7 +193,7 @@ class McpMaterializationHandoffStore:
         reference_fingerprint = self._reference_semantic_fingerprint(reference_assets, hashes)
         safe_rendering_contract = self._safe_rendering_contract(rendering_contract)
         rendering_fingerprint = self._rendering_contract_fingerprint(safe_rendering_contract)
-        with self._lock:
+        with self._transaction_lock():
             for revision in range(1, 1000):
                 handoff_id = stable_id(
                     "mcp_handoff",
@@ -203,7 +258,7 @@ class McpMaterializationHandoffStore:
             return payload
 
     def get(self, handoff_id: str) -> dict[str, Any] | None:
-        with self._lock:
+        with self._transaction_lock():
             return self._read(handoff_id)
 
     def list_unconsumed_by_operation(self, operation_id: str) -> list[dict[str, Any]]:
@@ -218,7 +273,7 @@ class McpMaterializationHandoffStore:
         operation = str(operation_id or "").strip()
         if not operation:
             return []
-        with self._lock:
+        with self._transaction_lock():
             if not self.storage_root.is_dir():
                 return []
             matches: list[dict[str, Any]] = []
@@ -247,6 +302,10 @@ class McpMaterializationHandoffStore:
         payload = self.get(handoff_id)
         if payload is None:
             raise McpMaterializationError("mcp_materialization_not_found")
+        return self._public_view_from_payload(payload)
+
+    @staticmethod
+    def _public_view_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         # The endpoint is local-only, but still return only the fields Codex
         # needs to call ImageGen and submit one image.  No raw response or
         # internal Provider credentials are part of this contract.
@@ -274,7 +333,7 @@ class McpMaterializationHandoffStore:
         reference_asset_hashes: list[str],
         artifact_bytes: bytes,
     ) -> dict[str, Any]:
-        with self._lock:
+        with self._transaction_lock():
             payload = self._read(handoff_id)
             if payload is None:
                 raise McpMaterializationError("mcp_materialization_not_found")
@@ -285,10 +344,7 @@ class McpMaterializationHandoffStore:
             expected_refs = list(payload.get("reference_asset_hashes") or [])
             if list(reference_asset_hashes or []) != expected_refs:
                 raise McpMaterializationError("mcp_materialization_reference_mismatch")
-            if payload.get("status") == "consumed":
-                raise McpMaterializationError("mcp_materialization_already_consumed")
-            if payload.get("status") == "submitted":
-                return self.public_view(handoff_id)
+            status = str(payload.get("status") or "").strip().lower()
             content = bytes(artifact_bytes or b"")
             if not content or len(content) > self.max_artifact_bytes:
                 raise McpMaterializationError("mcp_materialization_artifact_invalid")
@@ -341,6 +397,19 @@ class McpMaterializationHandoffStore:
                     "result_width": width,
                     "result_height": height,
                 }
+            artifact_sha256 = _sha256(content)
+            if status in {
+                "submitted",
+                "consumed",
+                "consumed_uncheckpointed",
+                "output_checkpointed",
+                "job_checkpointed",
+            }:
+                if str(payload.get("artifact_sha256") or "") == artifact_sha256:
+                    return self._public_view_from_payload(payload)
+                raise McpMaterializationError("mcp_materialization_artifact_conflict")
+            if status != "pending":
+                raise McpMaterializationError("mcp_materialization_status_invalid")
             artifact_path = self._artifact_path(str(payload["handoff_id"]), image_format)
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
             artifact_path.write_bytes(content)
@@ -349,7 +418,7 @@ class McpMaterializationHandoffStore:
                 "status": "submitted",
                 "updated_at": _now_iso(),
                 "artifact_file": str(artifact_path),
-                "artifact_sha256": _sha256(content),
+                "artifact_sha256": artifact_sha256,
                 "artifact_format": image_format,
                 "artifact_mime_type": mime_type,
                 "artifact_width": width,
@@ -364,10 +433,10 @@ class McpMaterializationHandoffStore:
                 ),
             }
             self._write(self._record_path(str(payload["handoff_id"])), updated)
-            return self.public_view(handoff_id)
+            return self._public_view_from_payload(updated)
 
     def consume(self, handoff_id: str, *, expected_checkpoint: dict[str, Any] | None = None) -> dict[str, Any]:
-        with self._lock:
+        with self._transaction_lock():
             payload = self._read(handoff_id)
             if payload is None:
                 raise McpMaterializationError("mcp_materialization_not_found")
@@ -448,7 +517,7 @@ class McpMaterializationHandoffStore:
         output_id: str,
         artifact_sha256: str | None = None,
     ) -> dict[str, Any]:
-        with self._lock:
+        with self._transaction_lock():
             payload = self._read(handoff_id)
             if payload is None:
                 raise McpMaterializationError("mcp_materialization_not_found")
@@ -475,10 +544,11 @@ class McpMaterializationHandoffStore:
                 "status": "job_checkpointed" if status == "job_checkpointed" else "output_checkpointed",
                 "updated_at": _now_iso(),
                 "output_checkpoint": {**checkpoint, **(existing if isinstance(existing, dict) else {})},
-                "mcp_checkpoint": {
-                    **dict(payload.get("mcp_checkpoint") or {}),
-                    **checkpoint,
-                },
+                "mcp_checkpoint": self._merge_checkpoint_without_rollback(
+                    payload,
+                    checkpoint,
+                    preserve_job=status == "job_checkpointed",
+                ),
             }
             self._write(self._record_path(str(payload["handoff_id"])), updated)
             return updated
@@ -492,7 +562,7 @@ class McpMaterializationHandoffStore:
         output_id: str | None = None,
         generation_result_id: str | None = None,
     ) -> dict[str, Any]:
-        with self._lock:
+        with self._transaction_lock():
             payload = self._read(handoff_id)
             if payload is None:
                 raise McpMaterializationError("mcp_materialization_not_found")
@@ -511,6 +581,11 @@ class McpMaterializationHandoffStore:
                     raise McpMaterializationError("mcp_materialization_job_checkpoint_mismatch")
                 if output_id and str(output_checkpoint.get("output_id") or "") != str(output_id):
                     raise McpMaterializationError("mcp_materialization_job_checkpoint_mismatch")
+            existing_job_checkpoint = (
+                dict(payload.get("job_checkpoint"))
+                if isinstance(payload.get("job_checkpoint"), dict)
+                else {}
+            )
             job_checkpoint = {
                 "status": "job_checkpointed",
                 "operation_id": str(payload.get("operation_id") or ""),
@@ -520,18 +595,46 @@ class McpMaterializationHandoffStore:
                 "output_id": str(output_id or output_checkpoint.get("output_id") or ""),
                 "generation_result_id": str(generation_result_id or ""),
             }
+            if existing_job_checkpoint:
+                comparable_keys = {"job_id", "candidate_id", "output_id", "generation_result_id"}
+                for key in comparable_keys:
+                    if (
+                        str(existing_job_checkpoint.get(key) or "")
+                        and str(job_checkpoint.get(key) or "")
+                        and str(existing_job_checkpoint.get(key) or "")
+                        != str(job_checkpoint.get(key) or "")
+                    ):
+                        raise McpMaterializationError("mcp_materialization_job_checkpoint_mismatch")
+                job_checkpoint = {**job_checkpoint, **existing_job_checkpoint}
             updated = {
                 **payload,
                 "status": "job_checkpointed",
                 "updated_at": _now_iso(),
                 "job_checkpoint": job_checkpoint,
-                "mcp_checkpoint": {
-                    **dict(payload.get("mcp_checkpoint") or {}),
-                    **job_checkpoint,
-                },
+                "mcp_checkpoint": self._merge_checkpoint_without_rollback(payload, job_checkpoint),
             }
             self._write(self._record_path(str(payload["handoff_id"])), updated)
             return updated
+
+    @staticmethod
+    def _merge_checkpoint_without_rollback(
+        payload: dict[str, Any],
+        checkpoint: dict[str, Any],
+        *,
+        preserve_job: bool = False,
+    ) -> dict[str, Any]:
+        merged = {
+            **(
+                dict(payload.get("mcp_checkpoint"))
+                if isinstance(payload.get("mcp_checkpoint"), dict)
+                else {}
+            ),
+            **checkpoint,
+        }
+        if preserve_job and isinstance(payload.get("job_checkpoint"), dict):
+            merged.update(dict(payload["job_checkpoint"]))
+            merged["status"] = "job_checkpointed"
+        return merged
 
     def _record_path(self, handoff_id: str) -> Path:
         value = str(handoff_id or "")
@@ -549,8 +652,10 @@ class McpMaterializationHandoffStore:
             return None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError:
             return None
+        except json.JSONDecodeError as exc:
+            raise McpMaterializationError("mcp_materialization_record_corrupt") from exc
         return payload if isinstance(payload, dict) and payload.get("schema_version") == self.schema_version else None
 
     def _write(self, path: Path, payload: dict[str, Any]) -> None:

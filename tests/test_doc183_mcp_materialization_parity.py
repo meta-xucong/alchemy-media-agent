@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 from io import BytesIO
 import hashlib
+import multiprocessing
 from pathlib import Path
+import queue as queue_module
 import threading
 
 import pytest
@@ -49,12 +51,121 @@ from services.alchemy_codex_local_adapter.mcp_server import TOOL_SCHEMAS
 from tests.test_doc130_codex_native_prompt_parity import _canonical_runtime_result
 
 
-def _png_bytes() -> bytes:
+def _png_bytes(color: tuple[int, int, int] = (220, 235, 255)) -> bytes:
     from PIL import Image
 
     buffer = BytesIO()
-    Image.new("RGB", (24, 24), color=(220, 235, 255)).save(buffer, format="PNG")
+    Image.new("RGB", (24, 24), color=color).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def _sha256_for_test(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _doc223b_submit_worker(
+    storage_root: str,
+    handoff_id: str,
+    nonce: str,
+    prompt_sha256: str,
+    reference_asset_hashes: list[str],
+    artifact_bytes: bytes,
+    start_event,
+    result_queue,
+) -> None:
+    start_event.wait(10)
+    store = McpMaterializationHandoffStore(storage_root)
+    try:
+        result = store.submit(
+            handoff_id,
+            nonce=nonce,
+            prompt_sha256=prompt_sha256,
+            reference_asset_hashes=reference_asset_hashes,
+            artifact_bytes=artifact_bytes,
+        )
+        result_queue.put(
+            {
+                "ok": True,
+                "status": result.get("status"),
+                "artifact_sha256": result.get("artifact_sha256"),
+            }
+        )
+    except McpMaterializationError as exc:
+        result_queue.put({"ok": False, "code": exc.code, "message": str(exc)})
+    except BaseException as exc:  # pragma: no cover - child diagnostic.
+        result_queue.put({"ok": False, "code": type(exc).__name__, "message": str(exc)})
+
+
+def _doc223b_consume_worker(
+    storage_root: str,
+    handoff_id: str,
+    expected_checkpoint: dict,
+    start_event,
+    result_queue,
+) -> None:
+    start_event.wait(10)
+    store = McpMaterializationHandoffStore(storage_root)
+    try:
+        result = store.consume(handoff_id, expected_checkpoint=expected_checkpoint)
+        result_queue.put(
+            {
+                "ok": True,
+                "status": result.get("checkpoint_status"),
+                "checkpoint": result.get("expected_checkpoint"),
+                "artifact_sha256": result.get("artifact_sha256"),
+            }
+        )
+    except McpMaterializationError as exc:
+        result_queue.put({"ok": False, "code": exc.code, "message": str(exc)})
+    except BaseException as exc:  # pragma: no cover - child diagnostic.
+        result_queue.put({"ok": False, "code": type(exc).__name__, "message": str(exc)})
+
+
+def _doc223b_checkpoint_worker(
+    storage_root: str,
+    handoff_id: str,
+    action: str,
+    checkpoint: dict,
+    start_event,
+    result_queue,
+) -> None:
+    start_event.wait(10)
+    store = McpMaterializationHandoffStore(storage_root)
+    try:
+        if action == "output":
+            result = store.mark_output_checkpoint(handoff_id, **checkpoint)
+        else:
+            result = store.mark_job_checkpoint(handoff_id, **checkpoint)
+        result_queue.put(
+            {
+                "ok": True,
+                "status": result.get("status"),
+                "mcp_status": (result.get("mcp_checkpoint") or {}).get("status"),
+                "output_id": (result.get("mcp_checkpoint") or {}).get("output_id"),
+            }
+        )
+    except McpMaterializationError as exc:
+        result_queue.put({"ok": False, "code": exc.code, "message": str(exc)})
+    except BaseException as exc:  # pragma: no cover - child diagnostic.
+        result_queue.put({"ok": False, "code": type(exc).__name__, "message": str(exc)})
+
+
+def _doc223b_collect_results(processes: list, result_queue, *, timeout: float = 20.0) -> list[dict]:
+    results: list[dict] = []
+    for _process in processes:
+        try:
+            results.append(result_queue.get(timeout=timeout))
+        except queue_module.Empty:
+            results.append({"ok": False, "code": "worker_timeout", "message": "no result"})
+    for process in processes:
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+            results.append({"ok": False, "code": "worker_still_alive", "message": str(process.pid)})
+        elif process.exitcode != 0:
+            results.append({"ok": False, "code": "worker_exit", "message": str(process.exitcode)})
+    return results
 
 
 def _provider_request() -> object:
@@ -455,6 +566,260 @@ def test_doc223_handoff_store_uses_unique_temp_files_under_concurrent_writes(
     assert errors == []
     assert len(list(tmp_path.glob("mcp_handoff_*.json"))) == 8
     assert list(tmp_path.glob("*.json.tmp")) == []
+
+
+def test_doc223b_cross_process_submit_same_artifact_is_idempotent(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    pending = store.ensure_pending(
+        operation_id="doc223b-submit-same",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[],
+        rendering_contract={"size": "24x24", "output_format": "png"},
+    )
+    artifact = _png_bytes()
+    ctx = multiprocessing.get_context("spawn")
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    processes = [
+        ctx.Process(
+            target=_doc223b_submit_worker,
+            args=(
+                str(tmp_path),
+                pending["handoff_id"],
+                pending["nonce"],
+                pending["prompt_sha256"],
+                pending["reference_asset_hashes"],
+                artifact,
+                start_event,
+                result_queue,
+            ),
+        )
+        for _index in range(2)
+    ]
+
+    for process in processes:
+        process.start()
+    start_event.set()
+    results = _doc223b_collect_results(processes, result_queue)
+
+    assert [result["ok"] for result in results] == [True, True]
+    assert {result["artifact_sha256"] for result in results} == {_sha256_for_test(artifact)}
+    final = store.get(pending["handoff_id"])
+    assert final is not None
+    assert final["status"] == "submitted"
+    assert final["artifact_sha256"] == _sha256_for_test(artifact)
+    assert len(list(tmp_path.glob("mcp_handoff_*.artifact.png"))) == 1
+    assert list(tmp_path.glob("*.json.tmp")) == []
+
+
+def test_doc223b_cross_process_submit_conflict_fails_closed(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    pending = store.ensure_pending(
+        operation_id="doc223b-submit-conflict",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[],
+        rendering_contract={"size": "24x24", "output_format": "png"},
+    )
+    first_artifact = _png_bytes((220, 235, 255))
+    second_artifact = _png_bytes((255, 220, 220))
+    ctx = multiprocessing.get_context("spawn")
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    processes = [
+        ctx.Process(
+            target=_doc223b_submit_worker,
+            args=(
+                str(tmp_path),
+                pending["handoff_id"],
+                pending["nonce"],
+                pending["prompt_sha256"],
+                pending["reference_asset_hashes"],
+                artifact,
+                start_event,
+                result_queue,
+            ),
+        )
+        for artifact in [first_artifact, second_artifact]
+    ]
+
+    for process in processes:
+        process.start()
+    start_event.set()
+    results = _doc223b_collect_results(processes, result_queue)
+
+    assert sum(1 for result in results if result["ok"]) == 1
+    assert [result["code"] for result in results if not result["ok"]] == [
+        "mcp_materialization_artifact_conflict"
+    ]
+    final = store.get(pending["handoff_id"])
+    assert final is not None
+    assert final["status"] == "submitted"
+    assert final["artifact_sha256"] in {
+        _sha256_for_test(first_artifact),
+        _sha256_for_test(second_artifact),
+    }
+    assert len(list(tmp_path.glob("mcp_handoff_*.artifact.png"))) == 1
+
+
+def test_doc223b_cross_process_consume_has_one_authoritative_checkpoint(
+    tmp_path: Path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    pending = store.ensure_pending(
+        operation_id="doc223b-consume",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[],
+        rendering_contract={"size": "24x24", "output_format": "png"},
+    )
+    public = store.public_view(pending["handoff_id"])
+    artifact = _png_bytes()
+    store.submit(
+        pending["handoff_id"],
+        nonce=public["nonce"],
+        prompt_sha256=public["prompt_sha256"],
+        reference_asset_hashes=public["reference_asset_hashes"],
+        artifact_bytes=artifact,
+    )
+    ctx = multiprocessing.get_context("spawn")
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    checkpoints = [
+        {"job_id": "job_doc223b_a", "candidate_id": "candidate_a", "output_id": "output_a"},
+        {"job_id": "job_doc223b_b", "candidate_id": "candidate_b", "output_id": "output_b"},
+    ]
+    processes = [
+        ctx.Process(
+            target=_doc223b_consume_worker,
+            args=(str(tmp_path), pending["handoff_id"], checkpoint, start_event, result_queue),
+        )
+        for checkpoint in checkpoints
+    ]
+
+    for process in processes:
+        process.start()
+    start_event.set()
+    results = _doc223b_collect_results(processes, result_queue)
+
+    assert sum(1 for result in results if result["ok"]) == 1
+    assert [result["code"] for result in results if not result["ok"]] == [
+        "mcp_materialization_checkpoint_mismatch"
+    ]
+    winner = next(result for result in results if result["ok"])
+    final = store.get(pending["handoff_id"])
+    assert final is not None
+    assert final["status"] == "consumed_uncheckpointed"
+    assert final["mcp_checkpoint"]["candidate_id"] == winner["checkpoint"]["candidate_id"]
+    assert final["mcp_checkpoint"]["output_id"] == winner["checkpoint"]["output_id"]
+    assert final["artifact_sha256"] == _sha256_for_test(artifact)
+
+
+def test_doc223b_checkpoint_updates_do_not_rollback_job_checkpoint(
+    tmp_path: Path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    pending = store.ensure_pending(
+        operation_id="doc223b-checkpoint",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[],
+        rendering_contract={"size": "24x24", "output_format": "png"},
+    )
+    public = store.public_view(pending["handoff_id"])
+    artifact = _png_bytes()
+    store.submit(
+        pending["handoff_id"],
+        nonce=public["nonce"],
+        prompt_sha256=public["prompt_sha256"],
+        reference_asset_hashes=public["reference_asset_hashes"],
+        artifact_bytes=artifact,
+    )
+    expected = {"job_id": "job_doc223b", "candidate_id": "candidate_doc223b", "output_id": "output_doc223b"}
+    store.consume(pending["handoff_id"], expected_checkpoint=expected)
+    store.mark_output_checkpoint(
+        pending["handoff_id"],
+        job_id=expected["job_id"],
+        candidate_id=expected["candidate_id"],
+        output_id=expected["output_id"],
+        artifact_sha256=_sha256_for_test(artifact),
+    )
+    ctx = multiprocessing.get_context("spawn")
+    start_event = ctx.Event()
+    result_queue = ctx.Queue()
+    processes = [
+        ctx.Process(
+            target=_doc223b_checkpoint_worker,
+            args=(
+                str(tmp_path),
+                pending["handoff_id"],
+                "job",
+                {
+                    "job_id": expected["job_id"],
+                    "candidate_id": expected["candidate_id"],
+                    "output_id": expected["output_id"],
+                    "generation_result_id": "planning_doc223b",
+                },
+                start_event,
+                result_queue,
+            ),
+        ),
+        ctx.Process(
+            target=_doc223b_checkpoint_worker,
+            args=(
+                str(tmp_path),
+                pending["handoff_id"],
+                "output",
+                {
+                    "job_id": expected["job_id"],
+                    "candidate_id": expected["candidate_id"],
+                    "output_id": expected["output_id"],
+                    "artifact_sha256": _sha256_for_test(artifact),
+                },
+                start_event,
+                result_queue,
+            ),
+        ),
+    ]
+
+    for process in processes:
+        process.start()
+    start_event.set()
+    results = _doc223b_collect_results(processes, result_queue)
+
+    assert [result["ok"] for result in results] == [True, True]
+    final = store.get(pending["handoff_id"])
+    assert final is not None
+    assert final["status"] == "job_checkpointed"
+    assert final["mcp_checkpoint"]["status"] == "job_checkpointed"
+    assert final["job_checkpoint"]["generation_result_id"] == "planning_doc223b"
+    assert final["output_checkpoint"]["output_id"] == expected["output_id"]
+
+
+def test_doc223b_corrupt_handoff_record_fails_closed(tmp_path: Path) -> None:
+    store = McpMaterializationHandoffStore(tmp_path)
+    prompt = "expression laugh handoff"
+    prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+    pending = store.ensure_pending(
+        operation_id="doc223b-corrupt",
+        prompt=prompt,
+        prompt_sha256=prompt_hash,
+        reference_assets=[],
+        rendering_contract={"size": "24x24", "output_format": "png"},
+    )
+    (tmp_path / f"{pending['handoff_id']}.json").write_text("{not valid json", encoding="utf-8")
+
+    with pytest.raises(McpMaterializationError, match="record_corrupt"):
+        store.get(pending["handoff_id"])
 
 
 def test_doc222_handoff_order_current_supports_suffix_fallback_but_rejects_degraded_contract(
