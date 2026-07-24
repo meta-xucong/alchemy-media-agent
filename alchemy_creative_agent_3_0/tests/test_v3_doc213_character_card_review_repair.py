@@ -146,7 +146,11 @@ def test_doc213_failed_character_card_candidate_projects_review_repair_to_next_r
     )
 
     laugh_requests = [request for request in generator.requests if request.slot_key == "expression.laugh"]
-    assert result.status == "review"
+    # Doc240+ formal slot acceptance remains fail-closed unless a full
+    # standard-three-candidate receipt can be built.  This regression only
+    # locks the repair-context projection: the previous failure must not crash
+    # and the next MCP candidate must receive the shared review evidence.
+    assert result.status == "blocked"
     assert laugh_requests[0].prior_review_repair is None
     assert laugh_requests[1].prior_review_repair is not None
     assert "source_hair_overinherited" in laugh_requests[1].prior_review_repair["issue_codes"]

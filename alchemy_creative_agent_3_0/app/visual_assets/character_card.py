@@ -1857,6 +1857,7 @@ class CharacterCardPreparationService:
         selected = acceptance_core.select_winner(passing)
         return selected, slot_attempts, slot_failures, None
 
+    @staticmethod
     def _failure_review_repair_context(
         failures: list[CharacterCardFailureEvent],
     ) -> dict[str, Any] | None:
