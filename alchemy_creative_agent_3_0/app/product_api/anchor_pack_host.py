@@ -41,6 +41,7 @@ from ..visual_assets.character_card import (
     CharacterCardSharedRuntimeFailureReceipt,
     CharacterCardStageResult,
     CharacterCardState,
+    SlotAcceptanceCore,
 )
 from ..visual_assets.contracts import (
     IdentityAnchorPackVersion,
@@ -774,17 +775,125 @@ class ProductApiAnchorPackPreparationHost:
         base_intent = str(getattr(asset, "preparation_intent", "") or "").strip()
         if not base_intent:
             raise ValueError("character_card_expression_intent_missing")
+        user_intent = self._character_card_single_expression_intent(base_intent, expression)
+        if review_only_resume and generation_channel == "mcp":
+            collected = self._collect_prior_reviewed_character_card_expression_slot(
+                asset=asset,
+                card=card,
+                expression=expression,
+                front_output_id=front_output_id,
+                user_intent=user_intent,
+            )
+            if collected is not None:
+                return self._attach_character_card_receipt(collected, asset=asset, stage="expression_set")
         result = preparation.prepare_expression_slot(
             card,
             expression=expression,  # type: ignore[arg-type]
             front_output_id=front_output_id,
             project_id=f"visual_asset_{asset.visual_asset_id}",
             people_asset_id=asset.visual_asset_id,
-            user_intent=self._character_card_single_expression_intent(base_intent, expression),
+            user_intent=user_intent,
             generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
             review_only_resume=review_only_resume,
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="expression_set")
+
+    def _collect_prior_reviewed_character_card_expression_slot(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        expression: str,
+        front_output_id: str,
+        user_intent: str,
+    ) -> CharacterCardStageResult | None:
+        """Collect already-reviewed MCP candidates before a later pending handoff.
+
+        This is the existing-output Core path.  It never creates a job,
+        handoff, candidate, or output.  It only inspects official prior
+        candidates for the same slot/round and selects a winner if shared
+        review already passed.
+        """
+
+        slot_key = f"expression.{expression}"
+        if card.last_failed_module != "expression_set" or card.last_failed_slot_key != slot_key:
+            return None
+        if card.last_failure_code != "mcp_materialization_pending":
+            return None
+        try:
+            failure_index = max(1, min(3, int(card.last_failure_attempt_count or 1)))
+        except (TypeError, ValueError):
+            failure_index = 1
+        if failure_index <= 1:
+            return None
+        try:
+            attempt_round = int((card.slot_retry_rounds or {}).get(slot_key, 1) or 1)
+        except (TypeError, ValueError):
+            attempt_round = 1
+        attempts: list[CharacterCardCandidateAttempt] = []
+        passing: list[tuple[CharacterCardCandidateResult, AnchorReviewDecision]] = []
+        acceptance_core = SlotAcceptanceCore(
+            quality_gate=CharacterCardPreparationService._quality_gate_for_slot(slot_key)
+        )
+        for candidate_index in range(1, failure_index):
+            request = CharacterCardCandidateRequest(
+                project_id=f"visual_asset_{asset.visual_asset_id}",
+                people_asset_id=str(asset.visual_asset_id),
+                card_version_id=card.card_version_id,
+                module="expression_set",
+                slot_key=slot_key,  # type: ignore[arg-type]
+                candidate_index=candidate_index,
+                attempt_round=attempt_round,
+                reference_output_ids=[front_output_id],
+                user_intent=user_intent,
+                generation_channel="mcp",
+                review_only_resume=False,
+            )
+            operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
+            if request.attempt_round > 1:
+                operation_id = f"{operation_id}:round{request.attempt_round}"
+            record = self._mcp_resume_character_card_stage_job_record(request, operation_id)
+            if record is None or getattr(record, "generation_result", None) is None:
+                continue
+            candidate, review = self._character_card_candidate_and_review(record.job_id, request)
+            attempt = CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
+            attempts.append(attempt)
+            if acceptance_core.accepts_review(review):
+                passing.append((candidate, review))
+        if not passing:
+            return None
+        winner = acceptance_core.select_winner(passing)
+        if winner is None:
+            return None
+        slots = dict(card.expression_slots)
+        slots[slot_key] = CharacterCardPreparationService._winner_slot(
+            module="expression_set",
+            slot_key=slot_key,
+            winner=winner,
+        )
+        updated = card.model_copy(
+            update={
+                "expression_slots": slots,
+                "expression_set_status": "partial",
+                "append_only_revision": card.append_only_revision + 1,
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_attempt_count": 0,
+                "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
+                "resume_available": False,
+                "pending_mcp_handoff_ids": [],
+            }
+        )
+        return CharacterCardStageResult(
+            status="review",
+            card=updated,
+            attempts=attempts,
+            winner_output_ids={slot_key: winner.output_id},
+            failures=[],
+            mcp_handoff_ids=[],
+        )
 
     @staticmethod
     def _character_card_expression_slot_intents(base_intent: str) -> dict[str, str]:

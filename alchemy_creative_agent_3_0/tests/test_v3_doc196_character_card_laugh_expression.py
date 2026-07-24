@@ -943,6 +943,7 @@ class _ReviewService:
         reference_count: int = 3,
         operation_id: str = "people_doc196:expression_set:expression.laugh:1",
         reference_output_ids: list[str] | None = None,
+        slot_key: str = "expression.laugh",
     ) -> None:
         reference_output_ids = list(reference_output_ids or ["front_winner"])
         try:
@@ -981,7 +982,7 @@ class _ReviewService:
                         metadata={
                             "professional_character_card_preparation": True,
                             "professional_character_card_stage": "expression_set",
-                            "professional_character_card_slot": "expression.laugh",
+                            "professional_character_card_slot": slot_key,
                             "professional_character_card_source_class": None,
                             "professional_character_card_attempt_round": attempt_round,
                             "professional_character_card_reference_output_ids": reference_output_ids,
@@ -1006,7 +1007,7 @@ class _ReviewService:
                 metadata={
                     "professional_character_card_preparation": True,
                     "professional_character_card_stage": "expression_set",
-                    "professional_character_card_slot": "expression.laugh",
+                    "professional_character_card_slot": slot_key,
                     "professional_character_card_reference_output_ids": reference_output_ids,
                     "generation_channel": "mcp",
                     "mcp_operation_id": operation_id,
@@ -1176,6 +1177,51 @@ def test_doc234_host_projects_generic_verified_review_receipt_for_anger_slot() -
     )
     assert projected["slot_key"] == "expression.anger"
     assert projected["shared_review_receipts"][0]["contract_version"] == (
+        "v3_character_card_generic_slot_review_receipt_v1"
+    )
+
+
+def test_doc235_review_only_collects_prior_verified_anger_candidate_before_pending_handoff() -> None:
+    inspection = _laugh_inspection()
+    inspection["output_id"] = "output_anger_candidate1"
+    inspection["candidate_id"] = "candidate_anger_candidate1"
+    service = _ReviewService(
+        inspection,
+        operation_id="asset_doc235:expression_set:expression.anger:1",
+        slot_key="expression.anger",
+    )
+    service.output.output_id = "output_anger_candidate1"
+    service.output.candidate_id = "candidate_anger_candidate1"
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    card = _face_ready_card().model_copy(
+        update={
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.anger",
+            "last_failure_code": "mcp_materialization_pending",
+            "last_failure_attempt_count": 2,
+            "pending_mcp_handoff_ids": ["mcp_handoff_candidate2_pending"],
+            "resume_available": True,
+        }
+    )
+    asset = SimpleNamespace(
+        visual_asset_id="asset_doc235",
+        preparation_intent="Doc235 existing anger candidate collection",
+    )
+
+    result = host.prepare_expression_slot(
+        asset=asset,
+        card=card,
+        expression="anger",
+        generation_channel="mcp",
+        review_only_resume=True,
+    )
+
+    assert result.status == "review"
+    assert result.winner_output_ids == {"expression.anger": "output_anger_candidate1"}
+    assert result.card.expression_slots["expression.anger"].output_id == "output_anger_candidate1"
+    assert result.shared_runtime_receipt is not None
+    assert result.shared_runtime_receipt.shared_review_receipts[0]["contract_version"] == (
         "v3_character_card_generic_slot_review_receipt_v1"
     )
 
