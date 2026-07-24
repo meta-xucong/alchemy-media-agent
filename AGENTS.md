@@ -163,6 +163,25 @@ Simulate only to discriminate a hypothesis.
 Use real generation only for final guarded acceptance.
 ```
 
+## Core, Enhanced, and Auxiliary Layering
+
+Keep the shortest slot-acceptance path authoritative:
+`candidate(s) -> shared review -> winner -> slot receipt`, or
+`existing output -> shared review -> slot receipt`.
+Quality contracts (framing, identity, affect) may gate a slot when requested;
+MCP recovery, replay, locking, and legacy compatibility must remain adapters
+and must not create a new job or block a complete core target.
+Classify each new defect before changing code: winner/slot correctness is
+Core, user-visible quality is Enhanced, and crash/replay/compatibility is
+Auxiliary. Fix the owning layer and keep other layers from changing Core
+semantics. A single-slot receipt must not require unrelated module activation.
+
+Short form:
+
+```text
+Protect Core. Configure Enhanced. Contain Auxiliary.
+```
+
 ## Workspace Encoding Rules
 
 - Treat all source, config, markdown, JSON, YAML, CSV, and text files as UTF-8 unless a file clearly uses another encoding.
