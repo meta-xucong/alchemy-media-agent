@@ -231,6 +231,7 @@ class OpenAIVisionInspectionProvider:
         return (
             self.api_key
             or _env("V3_VISION_INSPECTION_API_KEY")
+            or _lab_vision_setting("api_key")
             or _settings_value("openai_api_key")
             or _settings_value("lab_openai_api_key")
         )
@@ -239,6 +240,7 @@ class OpenAIVisionInspectionProvider:
         return (
             self.base_url
             or _env("V3_VISION_INSPECTION_BASE_URL")
+            or _lab_vision_setting("base_url")
             or _settings_value("openai_base_url")
             or _settings_value("lab_openai_base_url")
         )
@@ -248,6 +250,7 @@ class OpenAIVisionInspectionProvider:
             metadata.get("vision_model")
             or self.model
             or _env("V3_VISION_INSPECTION_MODEL")
+            or _lab_vision_setting("model")
             or _settings_value("openai_llm_model")
             or _settings_value("default_llm_model")
             or "gpt-5.5"
@@ -270,6 +273,24 @@ def _is_timeout_error(exc: Exception) -> bool:
 
 def create_default_vision_provider() -> VisionInspectionProvider:
     return OpenAIVisionInspectionProvider()
+
+
+def _lab_vision_enabled() -> bool:
+    value = _settings_value("lab_vision_enabled")
+    if value is None:
+        return False
+    return bool(value)
+
+
+def _lab_vision_setting(field: str) -> Any:
+    """Return the configured V3-owned vision route, not the general LLM route."""
+
+    if not _lab_vision_enabled():
+        return None
+    provider = str(_settings_value("lab_vision_provider") or "").strip().lower()
+    if provider in {"doubao", "byteplus", "volcengine"}:
+        return _settings_value(f"lab_doubao_vision_{field}")
+    return None
 
 
 def _inspection_prompt(metadata: dict[str, Any]) -> str:

@@ -16,6 +16,8 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
     McpMaterializationHandoffStore,
 )
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.contracts import (
     CreateCreativeJobRequest,
@@ -63,6 +65,86 @@ from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import CharacterCardCandidateRequest
 from app.providers.base import ProviderRuntimeError
+
+
+class _LocalBrainProvider:
+    provider = "doc203_mcp_resume_test_brain"
+    model = "contract-fixture-v1"
+
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def run(self, request) -> dict:  # noqa: ANN001
+        self.requests.append(request.model_dump(mode="json"))
+        payload = build_fallback_result(request).model_dump(mode="json")
+        count = request.requested_image_count
+        payload["image_set_plan"] = {
+            "set_goal": "Test-only MCP handoff resume plan",
+            "image_count": count,
+            "size": request.requested_image_size,
+            "shot_plan": [
+                f"Complete renderer direction for output {index} while preserving the submitted MCP handoff contract."
+                for index in range(1, count + 1)
+            ],
+            "composition_rules": ["Preserve the frozen renderer and reference contract."],
+            "quality_bar": ["Do not replace an explicit MCP handoff with a local fallback."],
+        }
+        payload["visual_task_profile"] = {
+            "profile_id": f"profile_{request.job_id or 'doc203'}",
+            "project_id": request.project_id,
+            "job_id": request.job_id or "job_doc203",
+            "template_id": request.template_id or "general_template",
+            "scenario_id": request.scenario_id or "general_creative",
+            "output_medium": "image",
+            "rendering_intent": {
+                "rendering_mode": "photoreal",
+                "stylization_scope": "none",
+                "decision_owner": "remote_brain",
+                "evidence_ids": ["test_fixture_remote_rendering_intent"],
+            },
+            "developmental_age_intent": "not_applicable",
+            "reference_channel_ownership_intent": {
+                "applicability": "not_applicable",
+                "decision_owner": "remote_brain",
+                "reference_owned_channels": [],
+                "current_request_owned_channels": [],
+                "evidence_ids": ["test_fixture_no_reference_ownership"],
+                "confidence": 0.99,
+            },
+            "subject_entities": [],
+            "visual_intent_tags": ["mcp_handoff_resume"],
+            "unknown_requirements": [],
+            "confidence": 0.99,
+            "evidence": [],
+        }
+        payload["canonical_provider_prompts"] = [
+            {
+                "output_index": index,
+                "prompt": (
+                    "Complete approved renderer prompt for the requested MCP materialization path, "
+                    "preserving the submitted handoff identity and reference contract."
+                ),
+                "review_status": "approved",
+                "semantic_preflight_status": "approved",
+                "human_naturalness_decision": {
+                    "contract_version": "v3_human_naturalness_decision_v1",
+                    "status": "approved",
+                    "owner": "remote_v3_llm_brain",
+                },
+                "human_developmental_presence_decision": {
+                    "contract_version": "v3_human_developmental_presence_decision_v2",
+                    "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                    "resolution_mode": "holistic_person_and_situation_resolution",
+                    "status": "approved",
+                    "owner": "remote_v3_llm_brain",
+                },
+            }
+            for index in range(1, count + 1)
+        ]
+        return payload
 
 
 def _png_bytes(color: tuple[int, int, int] = (224, 236, 255)) -> bytes:
@@ -883,7 +965,7 @@ def test_doc209_scenario_runtime_preserves_explicit_mcp_handoff_in_frozen_genera
         "resume_required": True,
     }
 
-    result = ScenarioRuntime().plan_job(
+    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=_LocalBrainProvider())).plan_job(
         {
             "user_input": "Create one character-card laugh validation portrait.",
             "scenario_selection": {"scenario_id": "general_creative"},

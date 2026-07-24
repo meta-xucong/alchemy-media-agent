@@ -6,10 +6,13 @@ import time
 from types import SimpleNamespace
 
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.output_resolver import GeneratedOutputResolver
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
+from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.schemas import AssetType, PackagedAsset, Platform
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import GeneratedOutputResolution, VisionOutputInspector
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
@@ -44,7 +47,26 @@ def _asset(output_id: str | None = None, candidate_id: str = "candidate_doc55") 
     )
 
 
+class _LocalBrainProvider:
+    provider = "post_generation_vision_test_brain"
+    model = "contract-fixture-v1"
+
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def run(self, request) -> dict:  # noqa: ANN001
+        self.requests.append(request.model_dump(mode="json"))
+        return build_fallback_result(request).model_dump(mode="json")
+
+
 def _service(tmp_path: Path, **overrides) -> V3ProductApiService:
+    overrides.setdefault(
+        "scenario_runtime",
+        ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=_LocalBrainProvider())),
+    )
     return V3ProductApiService(
         brand_profile_service=BrandProfileService(BrandProfileStore(tmp_path / "brand_memory")),
         **overrides,
@@ -106,6 +128,65 @@ def test_vision_provider_transport_disables_sdk_level_retries(tmp_path, monkeypa
 
     assert payload["status"] == "pass"
     assert captured["max_retries"] == 0
+
+
+def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Shared Vision must not default to the general Brain/LLM route."""
+
+    from app.config import settings
+
+    captured: dict[str, object] = {}
+    original_values = {
+        "lab_vision_enabled": settings.lab_vision_enabled,
+        "lab_vision_provider": settings.lab_vision_provider,
+        "lab_doubao_vision_api_key": settings.lab_doubao_vision_api_key,
+        "lab_doubao_vision_base_url": settings.lab_doubao_vision_base_url,
+        "lab_doubao_vision_model": settings.lab_doubao_vision_model,
+        "openai_api_key": settings.openai_api_key,
+        "openai_base_url": settings.openai_base_url,
+        "openai_llm_model": settings.openai_llm_model,
+    }
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            captured["request"] = kwargs
+            return SimpleNamespace(output_text='{"status":"pass","confidence":0.95,"issue_codes":[]}')
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured["client"] = kwargs
+            self.responses = FakeResponses()
+
+    try:
+        monkeypatch.delenv("V3_VISION_INSPECTION_ENABLED", raising=False)
+        monkeypatch.delenv("V3_VISION_INSPECTION_API_KEY", raising=False)
+        monkeypatch.delenv("V3_VISION_INSPECTION_BASE_URL", raising=False)
+        monkeypatch.delenv("V3_VISION_INSPECTION_MODEL", raising=False)
+        monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+        settings.lab_vision_enabled = True
+        settings.lab_vision_provider = "doubao"
+        settings.lab_doubao_vision_api_key = "sk-lab-vision"
+        settings.lab_doubao_vision_base_url = "https://vision.example.test/v1"
+        settings.lab_doubao_vision_model = "doubao-vision-test"
+        settings.openai_api_key = "sk-general-openai"
+        settings.openai_base_url = "https://general.example.test/v1"
+        settings.openai_llm_model = "gpt-5.5-general"
+
+        provider = OpenAIVisionInspectionProvider()
+
+        assert provider.available(force=True) is True
+        payload = provider.inspect(_ready_resolution(tmp_path))
+    finally:
+        for key, value in original_values.items():
+            setattr(settings, key, value)
+
+    assert payload["status"] == "pass"
+    assert captured["client"]["api_key"] == "sk-lab-vision"
+    assert str(captured["client"]["base_url"]) == "https://vision.example.test/v1"
+    assert captured["request"]["model"] == "doubao-vision-test"
 
 
 def _openai_resolution_with_aigc_metadata(tmp_path: Path) -> GeneratedOutputResolution:
@@ -518,14 +599,6 @@ def test_metadata_only_review_is_non_certifying_and_reports_unverifiable_dimensi
         metadata={"vision_inspection_mode": "metadata_only"},
     )
 
-
-def _internal_generation_metadata(service: V3ProductApiService, job_id: str) -> dict:
-    """Read the durable audit record, not the browser/API projection."""
-
-    record = service.job_store.get(job_id)
-    assert record is not None and record.generation_result is not None
-    return record.generation_result.metadata
-
     assert report.mode == "metadata_only"
     assert report.status == "manual_review"
     assert report.retryable is False
@@ -537,6 +610,14 @@ def _internal_generation_metadata(service: V3ProductApiService, job_id: str) -> 
         "near_duplicate_or_role_collapse",
         "feedback_compliance",
     ]
+
+
+def _internal_generation_metadata(service: V3ProductApiService, job_id: str) -> dict:
+    """Read the durable audit record, not the browser/API projection."""
+
+    record = service.job_store.get(job_id)
+    assert record is not None and record.generation_result is not None
+    return record.generation_result.metadata
 
 
 def test_vision_inspector_fake_provider_error_does_not_retry(tmp_path) -> None:
