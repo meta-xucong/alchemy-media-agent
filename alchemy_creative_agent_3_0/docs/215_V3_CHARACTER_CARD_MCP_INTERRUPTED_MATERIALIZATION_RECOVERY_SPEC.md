@@ -90,4 +90,3 @@ Doc215 is covered in `test_v3_doc203_mcp_handoff_resume.py`:
 - Character Card Host re-enters the same interrupted job without replanning;
 - an existing MCP handoff still uses normal handoff resume and never receives
   the interrupted-job reentry flag.
-
