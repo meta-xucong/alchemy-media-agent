@@ -7,8 +7,12 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.generation_router import (
     GenerationRequest,
+    McpMaterializationProvider,
     ProductionImageGenerationProvider,
     build_provider_generation_request,
+)
+from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
+    McpMaterializationHandoffStore,
 )
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
@@ -355,6 +359,56 @@ def test_doc218_expression_set_reference_order_reads_generation_plan_metadata(
         ("front_output", "portrait_identity_pose_geometry_crop"),
     ]
     assert plan["provider_input_plan"]["reference_image_asset_ids"][0] == "front_output"
+
+
+def test_doc224_expression_set_factory_projection_preserves_mcp_full_frame_first_contract(
+    tmp_path: Path,
+) -> None:
+    request = _expression_request(_image(tmp_path / "front.png", (220, 181, 160)))
+    generation_metadata = dict(request.metadata)
+    generation_metadata["mcp_operation_id"] = "visual_asset_doc224:expression_set:expression.laugh:1:round1"
+    projected = build_provider_generation_request(
+        asset_spec=request.asset_spec,
+        layout_plan=request.layout_plan,
+        prompt_compilation=request.prompt_compilation,
+        condition_plan=request.condition_plan,
+        generation_plan=request.generation_plan.model_copy(update={"metadata": generation_metadata}),
+        job_id="job_doc224_expression_mcp",
+    )
+
+    provider = McpMaterializationProvider(
+        handoff_store=McpMaterializationHandoffStore(tmp_path / "mcp-handoffs")
+    )
+    app_request, provider_name, reference_assets = provider._build_app_request(projected)  # noqa: SLF001
+    variables = dict(app_request.prompt_plan.variables or {})
+    context = variables["mcp_materialization_context"]
+    handoff = provider.handoff_store.ensure_pending(
+        operation_id=context["operation_id"],
+        prompt=context["canonical_prompt"],
+        prompt_sha256=context["prompt_sha256"],
+        reference_assets=list(context["reference_assets"]),
+        rendering_contract=dict(context["rendering_contract"]),
+    )
+
+    assert provider_name == "codex_builtin_imagegen"
+    assert [item["source_asset_id"] for item in reference_assets] == [
+        "front_output",
+        "front_output",
+        "front_output",
+    ]
+    assert [item["derivative_kind"] for item in reference_assets] == [
+        "character_card_full_frame_framing_reference",
+        "portrait_identity_crop",
+        "portrait_identity_pose_geometry_crop",
+    ]
+    assert reference_assets[0]["identity_evidence_scope"] == "card_framing"
+    assert handoff["reference_semantic_fingerprint"]
+    assert handoff["rendering_contract_fingerprint"]
+    assert handoff["reference_assets"][0]["asset_id"] == "front_output"
+    assert handoff["reference_assets"][0]["derivative_kind"] == (
+        "character_card_full_frame_framing_reference"
+    )
+    assert handoff["reference_assets"][0]["identity_evidence_scope"] == "card_framing"
 
 
 def test_doc190_provider_request_projection_preserves_character_card_reference_scope(

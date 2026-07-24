@@ -170,6 +170,14 @@ def build_provider_generation_request(
             "professional_anchor_capture_scope": metadata.get("professional_anchor_capture_scope"),
             "professional_anchor_reference_assets": metadata.get("professional_anchor_reference_assets"),
             "professional_anchor_initial_multi_source": metadata.get("professional_anchor_initial_multi_source"),
+            "professional_character_card_preparation": metadata.get("professional_character_card_preparation"),
+            "professional_character_card_stage": metadata.get("professional_character_card_stage"),
+            "professional_character_card_slot": metadata.get("professional_character_card_slot"),
+            "professional_character_card_source_class": metadata.get("professional_character_card_source_class"),
+            "professional_character_card_attempt_round": metadata.get("professional_character_card_attempt_round"),
+            "professional_character_card_reference_output_ids": metadata.get(
+                "professional_character_card_reference_output_ids"
+            ),
             "visual_auto_retry_active": metadata.get("visual_auto_retry_active", False),
             "visual_auto_retry_attempt": metadata.get("visual_auto_retry_attempt"),
             "retry_attempt": metadata.get("retry_attempt"),
@@ -2930,6 +2938,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "truth_layers": item.get("truth_layers") or [],
                     "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
                     "derivative_kind": item.get("derivative_kind"),
+                    "identity_evidence_scope": item.get("identity_evidence_scope"),
+                    "identity_evidence_group_id": item.get("identity_evidence_group_id"),
+                    "character_card_framing_reference_mode": item.get(
+                        "character_card_framing_reference_mode"
+                    ),
+                    "character_card_framing_mirrored": item.get("character_card_framing_mirrored"),
                 }
             )
         return resolved
