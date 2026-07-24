@@ -311,6 +311,7 @@ class _ExplicitSmileStageHost:
     def __init__(self) -> None:
         self.expression = None
         self.generation_channel = None
+        self.review_only_resume = None
 
     @staticmethod
     def _receipt(slot_key: str) -> CharacterCardSharedRuntimeReceipt:
@@ -325,9 +326,18 @@ class _ExplicitSmileStageHost:
             shared_review_receipts=shared_receipts,
         )
 
-    def prepare_expression_slot(self, *, asset, card, expression, generation_channel="provider"):
+    def prepare_expression_slot(
+        self,
+        *,
+        asset,
+        card,
+        expression,
+        generation_channel="provider",
+        review_only_resume=False,
+    ):
         self.expression = expression
         self.generation_channel = generation_channel
+        self.review_only_resume = review_only_resume
         slot_key = f"expression.{expression}"
         output_id = f"{expression}_output"
         candidate_id = f"{expression}_candidate"
@@ -362,6 +372,7 @@ class _ExplicitSmileStageHost:
             reference_output_ids=["front_winner"],
             user_intent=f"user explicitly requested expression {expression}",
             generation_channel=generation_channel,
+            review_only_resume=review_only_resume,
         )
         candidate = CharacterCardCandidateResult(
             candidate_id=candidate_id,
@@ -436,6 +447,7 @@ def test_doc196_lifecycle_routes_explicit_smile_to_single_slot_host_without_defa
 
     assert host.expression == "smile"
     assert host.generation_channel == "mcp"
+    assert host.review_only_resume is False
     assert updated.character_card.expression_slots["expression.smile"].output_id == "smile_output"
     assert updated.character_card.expression_slots["expression.laugh"].state == "empty"
 
@@ -465,6 +477,29 @@ def test_doc230_lifecycle_routes_explicit_laugh_to_single_slot_without_starting_
     receipt = updated.character_card.expression_slots["expression.laugh"].shared_runtime_receipt
     assert receipt is not None
     assert receipt["slot_key"] == "expression.laugh"
+
+
+def test_doc231_lifecycle_passes_explicit_laugh_resume_as_review_only() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    active_card = _face_ready_card()
+    catalog.save(asset.model_copy(update={"character_card": active_card}))
+    host = _ExplicitSmileStageHost()
+    lifecycle = VisualAssetLibraryLifecycleService(catalog, character_card_stage_host=host)
+
+    updated = lifecycle.prepare_character_card_stage(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        stage="expression_set",
+        expression="laugh",
+        resume=True,
+        generation_channel="mcp",
+    )
+
+    assert host.expression == "laugh"
+    assert host.generation_channel == "mcp"
+    assert host.review_only_resume is True
+    assert updated.character_card.expression_slots["expression.laugh"].output_id == "laugh_output"
 
 
 def test_doc196_default_expression_prepare_emits_laugh_before_other_slots() -> None:

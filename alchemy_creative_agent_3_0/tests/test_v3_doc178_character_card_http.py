@@ -354,6 +354,34 @@ def test_doc230_route_handler_accepts_explicit_laugh_single_slot_payload() -> No
     assert captured["generation_channel"] == "mcp"
 
 
+def test_doc231_route_handler_passes_explicit_laugh_resume_flag() -> None:
+    captured = {}
+
+    class _Lifecycle:
+        def prepare_character_card_stage(self, **kwargs):
+            captured.update(kwargs)
+            return _catalog_asset(VisualAssetLibraryCatalog())
+
+    handlers = V3ProductRouteHandlers(service=V3ProductApiService())
+    handlers.visual_asset_library_service = _Lifecycle()
+
+    handlers.post_visual_asset_character_card_prepare(
+        "asset_laugh_resume",
+        {
+            "stage": "expression_set",
+            "generation_channel": "mcp",
+            "expression": "laugh",
+            "resume": True,
+        },
+    )
+
+    assert captured["visual_asset_id"] == "asset_laugh_resume"
+    assert captured["stage"] == "expression_set"
+    assert captured["expression"] == "laugh"
+    assert captured["generation_channel"] == "mcp"
+    assert captured["resume"] is True
+
+
 def test_doc202_route_accepts_only_confirmed_failed_slot_retry_without_prompt_injection() -> None:
     captured = {}
 

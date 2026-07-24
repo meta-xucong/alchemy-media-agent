@@ -557,6 +557,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     generation_channel: Literal["provider", "mcp"] = "provider"
     mcp_handoff_id: str | None = None
     prior_review_repair: dict[str, Any] | None = None
+    review_only_resume: bool = False
     candidate_count: Literal[3] = 3
 
     @field_validator("project_id", "people_asset_id", "card_version_id", "user_intent")
@@ -1138,6 +1139,7 @@ class CharacterCardPreparationService:
         project_id: str = "project",
         people_asset_id: str = "people_asset",
         generation_channel: Literal["provider", "mcp"] = "provider",
+        review_only_resume: bool = False,
     ) -> CharacterCardStageResult:
         """Prepare one explicit expression slot outside the default set.
 
@@ -1169,6 +1171,7 @@ class CharacterCardPreparationService:
             user_intent=request.user_intent,
             source_class=None,
             generation_channel=generation_channel,
+            review_only_resume=review_only_resume,
             attempts=attempts,
         )
         attempts.extend(expression_attempts)
@@ -1351,6 +1354,7 @@ class CharacterCardPreparationService:
         source_class: BodySourceClass | None,
         consent_provenance_id: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
+        review_only_resume: bool = False,
         attempts: list[CharacterCardCandidateAttempt],
     ) -> tuple[
         CharacterCardCandidateResult | None,
@@ -1368,6 +1372,7 @@ class CharacterCardPreparationService:
             module=module,
             slot_key=slot_key,
             generation_channel=generation_channel,
+            review_only_resume=review_only_resume,
         )
         prior_review_repair: dict[str, Any] | None = self._resumable_review_repair_context(
             card,
@@ -1409,8 +1414,10 @@ class CharacterCardPreparationService:
                     module=module,
                     slot_key=slot_key,
                     candidate_index=candidate_index,
+                    review_only_resume=review_only_resume,
                 ),
                 prior_review_repair=prior_review_repair,
+                review_only_resume=review_only_resume,
             )
             try:
                 candidate = self.generator.generate(request)
@@ -1516,6 +1523,7 @@ class CharacterCardPreparationService:
         module: CharacterCardModule,
         slot_key: str,
         generation_channel: Literal["provider", "mcp"],
+        review_only_resume: bool = False,
     ) -> int:
         if generation_channel != "mcp":
             return 1
@@ -1524,6 +1532,8 @@ class CharacterCardPreparationService:
         failure_count = int(card.last_failure_attempt_count or 0)
         if failure_count < 1:
             return 1
+        if review_only_resume and card.pending_mcp_handoff_ids:
+            return min(cls.CANDIDATE_COUNT, max(1, failure_count))
         if card.last_failure_code in {"mcp_materialization_pending", "mcp_review_pending"}:
             return min(cls.CANDIDATE_COUNT, max(1, failure_count))
         if card.last_failure_code == "character_card_shared_review_failed":
@@ -1553,10 +1563,11 @@ class CharacterCardPreparationService:
         module: CharacterCardModule,
         slot_key: str,
         candidate_index: int,
+        review_only_resume: bool = False,
     ) -> str | None:
         if card.last_failed_module != module or card.last_failed_slot_key != slot_key:
             return None
-        if card.last_failure_code not in {"mcp_materialization_pending", "mcp_review_pending"}:
+        if not review_only_resume and card.last_failure_code not in {"mcp_materialization_pending", "mcp_review_pending"}:
             return None
         if int(card.last_failure_attempt_count or 0) != int(candidate_index):
             return None

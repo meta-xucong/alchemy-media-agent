@@ -265,6 +265,7 @@ class V3ProductRouteHandlers:
                 stage=stage,
                 expression=expression,
                 body_request=body_request,
+                resume=resume,
                 generation_channel=generation_channel,
                 retry_failed_slot=retry_failed_slot,
                 confirm_retry=confirm_retry,

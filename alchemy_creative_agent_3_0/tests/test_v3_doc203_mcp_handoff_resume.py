@@ -3248,7 +3248,136 @@ def test_doc230_checkpoint_mismatch_hard_stops_instead_of_advancing_candidate3()
     assert generator.calls == [2]
     assert result.status == "blocked"
     assert result.card.last_failure_code == "mcp_materialization_checkpoint_mismatch"
-    assert result.card.last_failure_attempt_count == 2
+
+
+def test_doc231_review_only_resume_uses_persisted_handoff_after_checkpoint_mismatch() -> None:
+    handoff_id = "mcp_handoff_doc231_existing"
+    card = CharacterCardState.initial(card_version_id="card_doc231")
+    front = card.face_slots["face.front"].model_copy(
+        update={
+            "state": "active",
+            "output_id": "front_winner",
+            "review_verified": True,
+            "prompt_reference_parity_verified": True,
+        }
+    )
+    card = card.model_copy(
+        update={
+            "face_identity_status": "active",
+            "face_slots": {**card.face_slots, "face.front": front},
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_materialization_checkpoint_mismatch",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": [handoff_id],
+            "slot_retry_rounds": {"expression.laugh": 5},
+        }
+    )
+
+    class _Generator:
+        def __init__(self) -> None:
+            self.requests: list[CharacterCardCandidateRequest] = []
+
+        def generate(self, request):  # noqa: ANN001, ANN201
+            self.requests.append(request)
+            assert request.candidate_index == 2
+            assert request.attempt_round == 5
+            assert request.mcp_handoff_id == handoff_id
+            assert request.review_only_resume is True
+            raise AnchorCandidateUnavailable("mcp_review_pending", mcp_handoff_id=handoff_id)
+
+    class _Reviewer:
+        def review(self, _candidate):  # noqa: ANN001, ANN201
+            raise AssertionError("review-only pending checkpoint must stop before pixel review")
+
+    generator = _Generator()
+    result = CharacterCardPreparationService(generator=generator, reviewer=_Reviewer()).prepare_expression_slot(
+        card,
+        expression="laugh",
+        front_output_id="front_winner",
+        project_id="project_doc231",
+        people_asset_id="people_doc231",
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        review_only_resume=True,
+    )
+
+    assert [request.candidate_index for request in generator.requests] == [2]
+    assert result.status == "blocked"
+    assert result.card.last_failure_code == "mcp_review_pending"
+    assert result.card.pending_mcp_handoff_ids == [handoff_id]
+
+
+def test_doc231_review_only_missing_target_fails_closed_without_creating_job() -> None:
+    handoff_id = "mcp_handoff_doc231_missing"
+    operation_id = "people_doc231:expression_set:expression.laugh:2:round5"
+
+    class _JobStore:
+        def list_mcp_operation_records(self, _operation_id):  # noqa: ANN001, ANN201
+            return []
+
+        def get(self, _job_id):  # noqa: ANN001, ANN201
+            return None
+
+        def save(self, record):  # noqa: ANN001, ANN201
+            return record
+
+    class _MissingTargetService:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created = 0
+            self.job_store = _JobStore()
+            self.output_store = SimpleNamespace()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda _handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "job_checkpointed",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _current_expression_reference_assets(),
+                    "job_checkpoint": {
+                        "status": "job_checkpointed",
+                        "operation_id": operation_id,
+                        "handoff_id": handoff_id,
+                        "job_id": "job_doc231_missing",
+                        "candidate_id": "candidate_doc231_missing",
+                        "output_id": "v3_output_doc231_missing",
+                        "generation_result_id": "generation_result_doc231_missing",
+                    },
+                }
+            )
+
+        def create_professional_character_card_stage_job(self, *_args, **_kwargs):
+            self.created += 1
+            raise AssertionError("review-only collection must not create a replacement job")
+
+        def generate_job(self, *_args, **_kwargs):
+            raise AssertionError("review-only missing target must not generate")
+
+    service = _MissingTargetService()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc231",
+        people_asset_id="people_doc231",
+        card_version_id="card_doc231",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id=handoff_id,
+        review_only_resume=True,
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert exc_info.value.failure_code == "mcp_review_target_not_found"
+    assert exc_info.value.mcp_handoff_id == handoff_id
+    assert service.created == 0
 
 
 def test_doc223c_anchor_pack_recovers_old_handoff_job_beyond_recent_window(

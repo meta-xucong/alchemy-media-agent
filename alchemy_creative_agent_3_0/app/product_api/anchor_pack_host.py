@@ -762,6 +762,7 @@ class ProductApiAnchorPackPreparationHost:
         card: CharacterCardState,
         expression: str,
         generation_channel: str = "provider",
+        review_only_resume: bool = False,
     ) -> CharacterCardStageResult:
         front_output_id = str(card.face_slots["face.front"].output_id or "").strip()
         if not front_output_id:
@@ -780,6 +781,7 @@ class ProductApiAnchorPackPreparationHost:
             people_asset_id=asset.visual_asset_id,
             user_intent=self._character_card_single_expression_intent(base_intent, expression),
             generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
+            review_only_resume=review_only_resume,
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="expression_set")
 
@@ -1276,6 +1278,19 @@ class ProductApiAnchorPackPreparationHost:
         requested_handoff_payload = (
             self._mcp_materialization_payload(requested_handoff) if requested_handoff else None
         )
+        if request.review_only_resume:
+            review_only_record = self._mcp_review_only_character_card_stage_job_record(
+                request,
+                operation_id,
+                requested_handoff_payload=requested_handoff_payload,
+                candidates=candidates,
+            )
+            if review_only_record is None:
+                raise AnchorCandidateUnavailable(
+                    "mcp_review_target_not_found",
+                    mcp_handoff_id=requested_handoff or None,
+                )
+            return review_only_record
         requested_handoff_is_current = (
             isinstance(requested_handoff_payload, dict)
             and self._character_card_mcp_handoff_current(request, requested_handoff_payload)
@@ -1362,6 +1377,115 @@ class ProductApiAnchorPackPreparationHost:
             raise AnchorCandidateUnavailable(
                 "mcp_materialization_operation_ambiguous",
                 mcp_handoff_id=requested_handoff or None,
+            )
+        return matches[0] if matches else None
+
+    def _mcp_review_only_character_card_stage_job_record(
+        self,
+        request: CharacterCardCandidateRequest,
+        operation_id: str,
+        *,
+        requested_handoff_payload: dict[str, Any] | None,
+        candidates: list[Any],
+    ) -> Any | None:
+        """Resolve the one already-materialized Character Card output to review.
+
+        Review-only collection is not a normal preparation run.  Its target is
+        the server-owned MCP checkpoint chain: operation -> handoff -> job ->
+        candidate -> output -> generation_result.  If that chain is absent or
+        inconsistent, the safe behavior is to stop instead of creating another
+        job or handoff for the same slot.
+        """
+
+        payloads: list[dict[str, Any]] = []
+        if isinstance(requested_handoff_payload, dict):
+            payloads.append(requested_handoff_payload)
+        for record in candidates:
+            metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+            materialization = metadata.get("mcp_materialization")
+            handoff_id = (
+                str(materialization.get("handoff_id") or "").strip()
+                if isinstance(materialization, dict)
+                else ""
+            )
+            payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None
+            if isinstance(payload, dict):
+                payloads.append(payload)
+
+        authoritative_job_ids: list[str] = []
+        for payload in payloads:
+            checkpoint = payload.get("job_checkpoint")
+            if not isinstance(checkpoint, dict):
+                continue
+            if str(checkpoint.get("operation_id") or "").strip() != operation_id:
+                continue
+            if not self._character_card_mcp_handoff_current(request, payload):
+                raise AnchorCandidateUnavailable(
+                    "mcp_materialization_reference_mismatch",
+                    mcp_handoff_id=str(payload.get("handoff_id") or "").strip() or None,
+                )
+            job_id = str(checkpoint.get("job_id") or "").strip()
+            if job_id:
+                authoritative_job_ids.append(job_id)
+        authoritative_job_ids = list(dict.fromkeys(authoritative_job_ids))
+        if len(authoritative_job_ids) > 1:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_operation_ambiguous",
+                mcp_handoff_id=str(request.mcp_handoff_id or "").strip() or None,
+            )
+
+        if authoritative_job_ids:
+            record_getter = getattr(self.product_service, "get_job_record", None)
+            record = record_getter(authoritative_job_ids[0]) if callable(record_getter) else None
+            if record is None:
+                job_store = getattr(self.product_service, "job_store", None)
+                store_getter = getattr(job_store, "get", None)
+                record = store_getter(authoritative_job_ids[0]) if callable(store_getter) else None
+            if record is None:
+                return None
+            payload = requested_handoff_payload
+            if not isinstance(payload, dict):
+                metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+                materialization = metadata.get("mcp_materialization")
+                handoff_id = (
+                    str(materialization.get("handoff_id") or "").strip()
+                    if isinstance(materialization, dict)
+                    else ""
+                )
+                payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None
+            if isinstance(payload, dict) and self._character_card_generated_mcp_checkpoint_current(
+                request,
+                record,
+                operation_id,
+                payload,
+            ):
+                return record
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=str(request.mcp_handoff_id or "").strip() or None,
+            )
+
+        matches: list[Any] = []
+        for record in candidates:
+            metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+            materialization = metadata.get("mcp_materialization")
+            handoff_id = (
+                str(materialization.get("handoff_id") or "").strip()
+                if isinstance(materialization, dict)
+                else ""
+            )
+            payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None
+            if isinstance(payload, dict) and self._character_card_generated_mcp_checkpoint_current(
+                request,
+                record,
+                operation_id,
+                payload,
+            ):
+                matches.append(record)
+        if len(matches) > 1:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_operation_ambiguous",
+                mcp_handoff_id=str(request.mcp_handoff_id or "").strip() or None,
             )
         return matches[0] if matches else None
 

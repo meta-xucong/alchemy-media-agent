@@ -929,6 +929,7 @@ class VisualAssetLibraryLifecycleService:
         stage: Literal["expression_set", "body_silhouette"],
         expression: ExpressionKey | None = None,
         body_request: BodySilhouettePublicRequest | None = None,
+        resume: bool = False,
         generation_channel: Literal["provider", "mcp"] = "provider",
         retry_failed_slot: bool = False,
         confirm_retry: bool = False,
@@ -984,6 +985,8 @@ class VisualAssetLibraryLifecycleService:
                 method_kwargs["expression"] = expression
             if generation_channel == "mcp":
                 method_kwargs["generation_channel"] = "mcp"
+            if resume and stage == "expression_set" and expression is not None:
+                method_kwargs["review_only_resume"] = True
             result = method(**method_kwargs)
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")
