@@ -7,6 +7,9 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
+    project_generic_visual_review_receipt,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
     FormalSlotCandidateSummary,
     FormalSlotReceipt,
@@ -22,11 +25,8 @@ def _shared_review(status: str = "pass") -> FormalSlotSharedReviewSummary:
         status=status,  # type: ignore[arg-type]
         evidence_codes=["shared_visual_review_verified"],
         issue_codes=[] if status in {"pass", "verified"} else ["shared_visual_review_rejected"],
-        score_dimensions={
-            "generic_visual_quality": 0.91 if status in {"pass", "verified"} else 0.62,
-            "identity_or_subject_consistency": 0.90 if status in {"pass", "verified"} else 0.58,
-        },
-        framing_delta_dimensions={"frame_delta": 0.02},
+        score_dimensions=["generic_visual_quality", "identity_or_subject_consistency"],
+        framing_delta_dimensions=["frame_delta"],
     )
 
 
@@ -315,19 +315,42 @@ def test_doc240_shared_review_requires_canonical_owner_version_and_passing_evide
             owner="random_review",  # type: ignore[arg-type]
             status="pass",
             evidence_codes=["shared_visual_review_verified"],
-            score_dimensions={"generic_visual_quality": 0.9},
+            score_dimensions=["generic_visual_quality"],
         )
     with pytest.raises(ValidationError):
         FormalSlotSharedReviewSummary(
             contract_version="random_contract",  # type: ignore[arg-type]
             status="pass",
             evidence_codes=["shared_visual_review_verified"],
-            score_dimensions={"generic_visual_quality": 0.9},
+            score_dimensions=["generic_visual_quality"],
         )
     with pytest.raises(ValidationError, match="evidence codes"):
-        FormalSlotSharedReviewSummary(status="pass", score_dimensions={"generic_visual_quality": 0.9})
+        FormalSlotSharedReviewSummary(status="pass", score_dimensions=["generic_visual_quality"])
     with pytest.raises(ValidationError, match="score dimensions"):
         FormalSlotSharedReviewSummary(status="pass", evidence_codes=["shared_visual_review_verified"])
+
+
+def test_doc240_accepts_existing_generic_visual_review_public_dict_shape() -> None:
+    existing_public_receipt = project_generic_visual_review_receipt(
+        score_card={
+            "generic_visual_quality": 0.91,
+            "identity_or_subject_consistency": 0.9,
+            "face_area_delta_from_front": 0.01,
+        },
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        require_front_card_framing=False,
+    ).to_public_dict()
+
+    summary = FormalSlotSharedReviewSummary.model_validate(existing_public_receipt)
+
+    assert summary.owner == "v3_shared_visual_cluster"
+    assert summary.contract_version == "v3_character_card_generic_slot_review_receipt_v1"
+    assert summary.status == "pass"
+    assert "generic_visual_quality" in summary.score_dimensions
+    assert isinstance(summary.score_dimensions, list)
+    assert isinstance(summary.framing_delta_dimensions, list)
 
 
 def test_doc240_passing_requirement_requires_evidence_and_dimensions() -> None:

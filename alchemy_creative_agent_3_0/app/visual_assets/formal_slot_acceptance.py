@@ -91,6 +91,13 @@ def _validate_public_score_dimensions(value: dict[str, float], field_name: str) 
     return normalized
 
 
+def _validate_public_dimension_names(value: list[str], field_name: str) -> list[str]:
+    normalized = [_require_safe_public_label(item, field_name) for item in value]
+    if len(normalized) != len(set(normalized)):
+        raise ValueError(f"{field_name} must be unique")
+    return normalized
+
+
 class FormalSlotSharedReviewSummary(_StrictFormalSlotModel):
     """Public-safe summary of a shared Vision/review decision.
 
@@ -106,8 +113,8 @@ class FormalSlotSharedReviewSummary(_StrictFormalSlotModel):
     status: FormalSlotReviewStatus
     evidence_codes: list[str] = Field(default_factory=list)
     issue_codes: list[str] = Field(default_factory=list)
-    score_dimensions: dict[str, float] = Field(default_factory=dict)
-    framing_delta_dimensions: dict[str, float] = Field(default_factory=dict)
+    score_dimensions: list[str] = Field(default_factory=list)
+    framing_delta_dimensions: list[str] = Field(default_factory=list)
 
     @field_validator("evidence_codes", "issue_codes")
     @classmethod
@@ -119,8 +126,8 @@ class FormalSlotSharedReviewSummary(_StrictFormalSlotModel):
 
     @field_validator("score_dimensions", "framing_delta_dimensions")
     @classmethod
-    def validate_dimensions(cls, value: dict[str, float]) -> dict[str, float]:
-        return _validate_public_score_dimensions(value, "review dimensions")
+    def validate_dimensions(cls, value: list[str]) -> list[str]:
+        return _validate_public_dimension_names(value, "review dimensions")
 
     @model_validator(mode="after")
     def require_passing_evidence(self) -> "FormalSlotSharedReviewSummary":
