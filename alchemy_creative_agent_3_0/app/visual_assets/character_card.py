@@ -9,7 +9,7 @@ provider, review, retry, selector, or image store.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal, Protocol
+from typing import Any, Callable, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -627,23 +627,20 @@ class SlotAcceptanceCore:
 
     This core owns only the canonical decision that turns reviewed candidates
     into one winner.  It deliberately has no knowledge of MCP handoffs,
-    operation indexes, retry rounds, card failure state, storage, or whole
-    module activation; those remain adapter/lifecycle responsibilities.
+    operation indexes, retry rounds, quality specializations, card failure
+    state, storage, or whole module activation; those remain adapter/lifecycle
+    responsibilities.
     """
 
-    def __init__(self, *, slot_key: str) -> None:
-        self.slot_key = str(slot_key or "").strip()
+    def __init__(self, *, quality_gate: Callable[[Any], bool] | None = None) -> None:
+        self.quality_gate = quality_gate
 
     def accepts_review(self, review: Any) -> bool:
         if getattr(review, "status", None) != "pass":
             return False
-        if self.slot_key != POSITIVE_EXPRESSION_SLOT_KEY:
+        if self.quality_gate is None:
             return True
-        scores = getattr(review, "identity_scores", None)
-        return laugh_expression_receipt_allows_slot(
-            evidence_codes=getattr(scores, "evidence_codes", []) or [],
-            issue_codes=getattr(review, "issue_codes", []) or [],
-        )
+        return bool(self.quality_gate(review))
 
     def select_winner(
         self,
@@ -1406,7 +1403,7 @@ class CharacterCardPreparationService:
         slot_attempts: list[CharacterCardCandidateAttempt] = []
         slot_failures: list[CharacterCardFailureEvent] = []
         passing: list[tuple[CharacterCardCandidateResult, Any]] = []
-        acceptance_core = SlotAcceptanceCore(slot_key=slot_key)
+        acceptance_core = SlotAcceptanceCore(quality_gate=self._quality_gate_for_slot(slot_key))
         attempt_round = int(card.slot_retry_rounds.get(slot_key, 1))
         start_candidate_index = self._candidate_start_index(
             card,
@@ -1652,8 +1649,20 @@ class CharacterCardPreparationService:
         return SlotAcceptanceCore.selection_key(review)
 
     @staticmethod
+    def _quality_gate_for_slot(slot_key: str) -> Callable[[Any], bool] | None:
+        if slot_key == POSITIVE_EXPRESSION_SLOT_KEY:
+            return lambda review: CharacterCardPreparationService._review_allows_slot(slot_key, review)
+        return None
+
+    @staticmethod
     def _review_allows_slot(slot_key: str, review: Any) -> bool:
-        return SlotAcceptanceCore(slot_key=slot_key).accepts_review(review)
+        if slot_key != POSITIVE_EXPRESSION_SLOT_KEY:
+            return True
+        scores = getattr(review, "identity_scores", None)
+        return laugh_expression_receipt_allows_slot(
+            evidence_codes=getattr(scores, "evidence_codes", []) or [],
+            issue_codes=getattr(review, "issue_codes", []) or [],
+        )
 
     @staticmethod
     def _winner_slot(

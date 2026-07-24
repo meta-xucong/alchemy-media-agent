@@ -204,7 +204,7 @@ def _doc232_review(score: float, *, evidence_codes: set[str] | None = None) -> A
 
 
 def test_doc232_slot_acceptance_core_selects_reviewed_winner_without_auxiliary_context() -> None:
-    core = SlotAcceptanceCore(slot_key="expression.laugh")
+    core = SlotAcceptanceCore()
     lower = _doc232_candidate("expression.laugh", 1)
     higher = _doc232_candidate("expression.laugh", 2)
     lower_review = _doc232_review(0.86, evidence_codes=LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
@@ -221,11 +221,28 @@ def test_doc232_slot_acceptance_core_selects_reviewed_winner_without_auxiliary_c
         assert "activation" not in signature
 
 
+def test_doc232_slot_acceptance_core_has_no_slot_specific_quality_predicate() -> None:
+    source = inspect.getsource(SlotAcceptanceCore)
+
+    for forbidden in (
+        "laugh",
+        "expression",
+        "POSITIVE_EXPRESSION_SLOT_KEY",
+        "laugh_expression_receipt_allows_slot",
+    ):
+        assert forbidden not in source
+
+
 def test_doc232_slot_acceptance_core_keeps_laugh_quality_contract_scoped_to_laugh() -> None:
-    laugh_core = SlotAcceptanceCore(slot_key="expression.laugh")
-    generic_core = SlotAcceptanceCore(slot_key="body.front_full")
+    laugh_core = SlotAcceptanceCore(
+        quality_gate=CharacterCardPreparationService._quality_gate_for_slot("expression.laugh")
+    )
+    generic_core = SlotAcceptanceCore(
+        quality_gate=CharacterCardPreparationService._quality_gate_for_slot("body.front_full")
+    )
     generic_pass = _doc232_review(0.93)
 
+    assert SlotAcceptanceCore().accepts_review(generic_pass)
     assert not laugh_core.accepts_review(generic_pass)
     assert generic_core.accepts_review(generic_pass)
 
