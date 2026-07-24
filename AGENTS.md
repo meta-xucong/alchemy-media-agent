@@ -95,6 +95,74 @@ Then patch once at the right layer.
 Then test.
 ```
 
+## Complexity Escalation and Root-Cause Recovery Principle
+
+Theory-first correction is the default. Escalate from a local correction to a
+full bottom-up workflow audit when any of these signals appears:
+
+1. Two or more consecutive failures occur in different layers (for example,
+   routing, persistence, review, or slot projection), or a focused fix does not
+   restore the intended behavior.
+2. A validation run creates an unexpected job, candidate, handoff, output, or
+   checkpoint; fails to reuse the exact existing output; or advances after an
+   identity/checkpoint/projection mismatch.
+3. A proposed fix adds repeated metadata copies, status flags, fallback
+   branches, or another special-case state instead of correcting the authority
+   that made the decision.
+4. Progress remains blocked after one complete minimal fix and its focused
+   regression tests.
+
+When escalation triggers:
+
+1. Stop generation, retries, slot writes, activation, and other mutating
+   validation actions. Preserve all existing evidence append-only; do not hide
+   or clean up unexpected records.
+2. Map the intended product flow, the authoritative state source, every state
+   transition, and every read-only projection from the bottom up.
+3. Identify conflicting, duplicated, stale, or wrongly ordered rules and
+   define one minimal complete correction model before editing code.
+4. Write failing regression tests for the observed workflow defect first, then
+   implement one bounded fix and run the relevant regression set before any
+   controlled real validation.
+
+This principle does not authorize a broad refactor by itself. The audit must
+prove the smallest complete repair, preserve the product contract, and keep
+scenario-specific behavior out of shared foundation code. Do not use prompt
+ tweaks, threshold relaxation, extra retries, or image-quality rework to mask a
+ workflow-authority or persistence defect.
+
+Short form:
+
+```text
+Repeated cross-layer drift means stop patching locally.
+Audit the whole flow, repair the authority once, then validate.
+```
+
+## Code-First Audit and Targeted Simulation Principle
+
+For workflow, persistence, routing, review, and slot-projection defects, audit
+the implementation before invoking external providers or real validation.
+
+1. Trace the call graph, predicates, state transitions, identity fields, and
+   authoritative-versus-projected data in code and durable records first.
+2. Use focused unit tests and bounded, deterministic read-only simulations only
+   when they are needed to distinguish a code-path hypothesis. Simulations must
+   not create real jobs, candidates, handoffs, outputs, or slot writes.
+3. Do not use real MCP/provider generation as an exploratory debugger. Start a
+   real run only after the code audit identifies the intended entry point and
+   the run's mutation boundaries are explicit and guarded.
+4. If code contradicts the product contract, correct the contract authority or
+   implementation first; do not tune prompts, thresholds, retries, or image
+   quality to compensate for a control-flow defect.
+
+Short form:
+
+```text
+Read the code and state authority first.
+Simulate only to discriminate a hypothesis.
+Use real generation only for final guarded acceptance.
+```
+
 ## Workspace Encoding Rules
 
 - Treat all source, config, markdown, JSON, YAML, CSV, and text files as UTF-8 unless a file clearly uses another encoding.
