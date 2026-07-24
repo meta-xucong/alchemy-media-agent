@@ -5372,6 +5372,19 @@ function v3CharacterCardSlotPreview(card, slotKey) {
   return "";
 }
 
+function v3CharacterCardNextExpressionSlot(card) {
+  const required = [
+    ["expression.laugh", "laugh"],
+    ["expression.anger", "anger"],
+    ["expression.sad", "sad"],
+  ];
+  const next = required.find(([slotKey]) => {
+    const slot = v3CharacterCardSlot(card, slotKey);
+    return !["winner_selected", "active"].includes(String(slot.state || "empty")) || !slot.available;
+  });
+  return next ? next[1] : "";
+}
+
 function v3CharacterCardStagePrerequisite(card, module) {
   const status = v3CharacterCardModuleStatus(card, module);
   if (module === "face_identity") return { allowed: true, status };
@@ -5532,6 +5545,10 @@ async function runV3CharacterCardStage(module, { runAll = false } = {}) {
   try {
     const statusBefore = v3CharacterCardModuleStatus(card, module);
     const payload = module === "body_silhouette" ? v3CharacterCardBodyPayload() : { stage: module };
+    if (module === "expression_set") {
+      const expression = v3CharacterCardNextExpressionSlot(card);
+      if (expression) payload.expression = expression;
+    }
     payload.generation_channel = v3State.characterCardGenerationChannel === "mcp" ? "mcp" : "provider";
     if (statusBefore === "blocked" || statusBefore === "partial" || statusBefore === "stale") {
       payload.resume = true;
@@ -5539,13 +5556,14 @@ async function runV3CharacterCardStage(module, { runAll = false } = {}) {
     await request(`${v3VisualAssetPath(assetId)}/character-card/prepare`, { method: "POST", body: payload });
     await loadV3VisualAssets({ silent: true, force: true });
     const prepared = v3State.visualAssets.find((item) => item.visual_asset_id === assetId);
-    advanceAfterStage = Boolean(v3State.characterCardRunAll)
-      && v3CharacterCardModuleStatus(v3CharacterCardForAsset(prepared), module) === "active";
     const preparedCard = v3CharacterCardForAsset(prepared);
     const preparedStatus = v3CharacterCardModuleStatus(preparedCard, module);
     const failed = prepared?.lifecycle_status === "blocked"
       || preparedStatus === "blocked"
-      || preparedStatus === "partial";
+      || (preparedStatus === "partial" && preparedCard?.last_failed_module === module);
+    advanceAfterStage = Boolean(v3State.characterCardRunAll)
+      && !failed
+      && !["blocked", "reviewing"].includes(preparedStatus);
     if (failed) {
       updateV3Notice(v3CharacterCardAssetFailureMessage(prepared), "warning");
     } else {

@@ -767,7 +767,7 @@ class ProductApiAnchorPackPreparationHost:
         front_output_id = str(card.face_slots["face.front"].output_id or "").strip()
         if not front_output_id:
             raise ValueError("character_card_expression_front_winner_missing")
-        if expression not in {"laugh", "smile"}:
+        if expression not in {"laugh", "smile", "anger", "sad"}:
             raise ValueError("character_card_expression_slot_not_explicitly_supported")
         preparation = CharacterCardPreparationService(generator=self, reviewer=self)
         base_intent = str(getattr(asset, "preparation_intent", "") or "").strip()
@@ -817,13 +817,8 @@ class ProductApiAnchorPackPreparationHost:
     @staticmethod
     def _character_card_single_expression_intent(base_intent: str, expression: str) -> str:
         base = base_intent.strip()
-        if expression == "laugh":
-            return (
-                f"{base}\nExpression slot target: expression.laugh. "
-                f"{laugh_expression_materialization_directive()} "
-                f"{expression_front_card_framing_materialization_directive()} "
-                "Allow only a small amount of natural head-shoulder energy."
-            )
+        if expression in {"laugh", "anger", "sad"}:
+            return ProductApiAnchorPackPreparationHost._character_card_expression_slot_intents(base)[expression]
         if expression == "smile":
             return (
                 f"{base}\nExpression slot target: expression.smile. "

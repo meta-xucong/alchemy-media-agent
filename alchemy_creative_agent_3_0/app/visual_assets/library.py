@@ -953,7 +953,7 @@ class VisualAssetLibraryLifecycleService:
                 raise ValueError("character_card_body_source_required")
             if body_request.source_class == "observed":
                 self._require_authorized_body_reference(body_request)
-        if stage == "expression_set" and expression is not None and expression not in {"laugh", "smile"}:
+        if stage == "expression_set" and expression is not None and expression not in {"laugh", "smile", "anger", "sad"}:
             raise ValueError("character_card_expression_slot_not_explicitly_supported")
         if retry_failed_slot:
             if expression is not None:

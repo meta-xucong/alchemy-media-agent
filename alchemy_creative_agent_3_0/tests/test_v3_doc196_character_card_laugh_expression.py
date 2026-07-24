@@ -21,6 +21,7 @@ from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
     _character_card_stage_mcp_prompt_current,
 )
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
@@ -60,6 +61,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardState,
     ExpressionPreparationRequest,
     SlotAcceptanceCore,
+    project_character_card_slot_success_receipt,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
@@ -554,6 +556,80 @@ def test_doc230_lifecycle_routes_explicit_laugh_to_single_slot_without_starting_
     receipt = updated.character_card.expression_slots["expression.laugh"].shared_runtime_receipt
     assert receipt is not None
     assert receipt["slot_key"] == "expression.laugh"
+
+
+@pytest.mark.parametrize("expression", ["anger", "sad"])
+def test_doc233_lifecycle_routes_remaining_expression_slots_explicitly(expression: str) -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    active_card = _face_ready_card()
+    laugh_slot = CharacterCardSlot(
+        slot_key="expression.laugh",
+        module="expression_set",
+        state="winner_selected",
+        output_id="laugh_output",
+        source_candidate_ids=["laugh_candidate"],
+        lineage_id="laugh_lineage",
+        review_verified=True,
+        prompt_reference_parity_verified=True,
+        candidate_attempt_count=3,
+        shared_runtime_receipt=project_character_card_slot_success_receipt(
+            _ExplicitSmileStageHost._receipt("expression.laugh"),
+            module="expression_set",
+            slot_key="expression.laugh",
+            output_id="laugh_output",
+            shared_review_receipts=[_laugh_shared_review_receipt()],
+        ),
+    )
+    active_card = active_card.model_copy(
+        update={
+            "expression_set_status": "partial",
+            "expression_slots": {**active_card.expression_slots, "expression.laugh": laugh_slot},
+        }
+    )
+    catalog.save(asset.model_copy(update={"character_card": active_card}))
+    host = _ExplicitSmileStageHost()
+    lifecycle = VisualAssetLibraryLifecycleService(catalog, character_card_stage_host=host)
+
+    updated = lifecycle.prepare_character_card_stage(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        stage="expression_set",
+        expression=expression,  # type: ignore[arg-type]
+        generation_channel="mcp",
+    )
+
+    assert host.expression == expression
+    assert host.generation_channel == "mcp"
+    assert updated.character_card.expression_slots[f"expression.{expression}"].output_id == f"{expression}_output"
+    assert updated.character_card.expression_slots["expression.laugh"].output_id == "laugh_output"
+    other = "sad" if expression == "anger" else "anger"
+    assert updated.character_card.expression_slots[f"expression.{other}"].state == "empty"
+    assert updated.character_card.expression_set_status == "partial"
+
+
+@pytest.mark.parametrize("expression", ["anger", "sad"])
+def test_doc233_route_accepts_remaining_required_expression_slots(expression: str) -> None:
+    catalog = VisualAssetLibraryCatalog()
+    asset = _doc196_catalog_asset(catalog)
+    catalog.save(asset.model_copy(update={"character_card": _face_ready_card()}))
+    host = _ExplicitSmileStageHost()
+    handlers = V3ProductRouteHandlers(
+        visual_asset_library_catalog=catalog,
+        character_card_stage_host=host,
+    )
+
+    response = handlers.post_visual_asset_character_card_prepare(
+        asset.visual_asset_id,
+        {
+            "stage": "expression_set",
+            "expression": expression,
+            "generation_channel": "mcp",
+        },
+    )
+
+    assert host.expression == expression
+    assert response["visual_asset"]["character_card"]["slots"][f"expression.{expression}"]["available"] is True
 
 
 def test_doc231_lifecycle_passes_explicit_laugh_resume_as_review_only() -> None:

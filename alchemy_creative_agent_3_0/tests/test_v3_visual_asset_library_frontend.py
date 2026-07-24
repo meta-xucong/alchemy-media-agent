@@ -284,6 +284,20 @@ def test_doc180_character_card_is_the_single_professional_preparation_surface() 
     assert "v3State.characterCardRunAll" in source
 
 
+def test_doc233_frontend_prepares_next_missing_expression_slot_from_partial_state() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+
+    assert "function v3CharacterCardNextExpressionSlot" in source
+    assert "const expression = v3CharacterCardNextExpressionSlot(card);" in source
+    assert "payload.expression = expression;" in source
+    assert '["expression.laugh", "laugh"]' in source
+    assert '["expression.anger", "anger"]' in source
+    assert '["expression.sad", "sad"]' in source
+    assert 'preparedStatus === "partial"' in source
+    assert "preparedCard?.last_failed_module === module" in source
+    assert "&& !failed" in source
+
+
 def test_doc180_character_card_media_projection_is_server_owned_and_non_secret() -> None:
     handlers = HANDLERS.read_text(encoding="utf-8")
     assert '"preview_url"' in handlers

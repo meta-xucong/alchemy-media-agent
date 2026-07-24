@@ -243,7 +243,7 @@ class V3ProductRouteHandlers:
             if set(payload) - {"stage", "resume", "generation_channel", "expression"}:
                 raise ValueError("character_card_stage_payload_invalid")
             expression = payload.get("expression")
-            if expression not in {"laugh", "smile"}:
+            if expression not in {"laugh", "smile", "anger", "sad"}:
                 raise ValueError("character_card_expression_slot_not_explicitly_supported")
         elif set(payload) - {"stage", "resume", "generation_channel", "retry_failed_slot", "confirm_retry"}:
             # Expression intent remains Brain/host-owned.  A browser may not
