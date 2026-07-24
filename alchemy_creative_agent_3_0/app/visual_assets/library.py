@@ -29,6 +29,7 @@ from .character_card import (
     CharacterCardSlot,
     CharacterCardStageHost,
     CharacterCardState,
+    EXPRESSION_SLOT_KEYS,
     ExpressionKey,
     apply_face_identity_pack_to_card,
     project_character_card_slot_success_receipt,
@@ -39,6 +40,11 @@ from .contracts import (
     IdentityAnchorPackVersion,
     PeopleAsset,
     RootSourceProvenance,
+)
+from .formal_slot_acceptance import (
+    FormalSlotReceipt,
+    mark_formal_slot_receipt_reload_public_projection_verified,
+    validate_formal_slot_receipt_for_activation,
 )
 
 
@@ -1009,9 +1015,21 @@ class VisualAssetLibraryLifecycleService:
             )
         elif getattr(result, "status", None) == "review":
             persisted_card = self._persist_character_card_success_receipts(result, stage=stage)
-        return self.catalog.save(
+        saved_asset = self.catalog.save(
             asset.model_copy(update={"character_card": persisted_card, "updated_at": _utc_now()})
         )
+        if getattr(result, "status", None) == "review" and stage == "expression_set":
+            reloaded_asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+            verified_card = self._mark_expression_formal_receipts_after_projection(
+                reloaded_asset.character_card
+            )
+            if verified_card != reloaded_asset.character_card:
+                saved_asset = self.catalog.save(
+                    reloaded_asset.model_copy(
+                        update={"character_card": verified_card, "updated_at": _utc_now()}
+                    )
+                )
+        return saved_asset
 
     @staticmethod
     def _persist_character_card_success_receipts(
@@ -1062,7 +1080,20 @@ class VisualAssetLibraryLifecycleService:
                 output_id=output_id,
                 shared_review_receipts=shared_review_receipts,
             )
-            updated_slot = slot.model_copy(update={"shared_runtime_receipt": projected})
+            slot_updates: dict[str, Any] = {"shared_runtime_receipt": projected}
+            formal_receipts = dict(getattr(result, "formal_slot_receipts", {}) or {})
+            if stage == "expression_set" and slot_key in EXPRESSION_SLOT_KEYS and slot_key != "expression.neutral":
+                if slot_key not in formal_receipts:
+                    raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_required")
+                formal_receipt = FormalSlotReceipt.model_validate(formal_receipts[slot_key])
+                if formal_receipt.module != "expression_set":
+                    raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_module_mismatch")
+                if formal_receipt.slot_key != slot_key:
+                    raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_slot_mismatch")
+                if formal_receipt.winner_output_id != output_id:
+                    raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_output_mismatch")
+                slot_updates["formal_slot_receipt"] = formal_receipt
+            updated_slot = slot.model_copy(update=slot_updates)
             slots[slot_key] = CharacterCardSlot.model_validate(
                 updated_slot.model_dump(mode="python")
             )
@@ -1073,6 +1104,25 @@ class VisualAssetLibraryLifecycleService:
                 "last_review_repair_context": None,
             }
         )
+
+    @staticmethod
+    def _mark_expression_formal_receipts_after_projection(card: CharacterCardState) -> CharacterCardState:
+        slots = dict(card.expression_slots)
+        changed = False
+        for slot_key, slot in list(slots.items()):
+            receipt = slot.formal_slot_receipt
+            if receipt is None:
+                continue
+            marked = mark_formal_slot_receipt_reload_public_projection_verified(receipt)
+            validate_formal_slot_receipt_for_activation(marked)
+            if marked != receipt:
+                slots[slot_key] = CharacterCardSlot.model_validate(
+                    slot.model_copy(update={"formal_slot_receipt": marked}).model_dump(mode="python")
+                )
+                changed = True
+        if not changed:
+            return card
+        return card.model_copy(update={"expression_slots": slots})
 
     def _require_authorized_body_reference(self, request: BodySilhouettePublicRequest) -> Any:
         """Resolve an observed body source without accepting paths or claims."""

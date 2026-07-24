@@ -374,7 +374,10 @@ class V3ProductRouteHandlers:
                         "download_url": f"/api/v3/creative-agent/outputs/{encoded}/download",
                     }
                 )
-                if str(getattr(slot, "module", "") or "") == "face_identity":
+                if (
+                    getattr(slot, "formal_slot_receipt", None) is not None
+                    or str(getattr(slot, "module", "") or "") == "face_identity"
+                ):
                     try:
                         formal_summary = character_card_formal_slot_receipt_public_summary(slot)
                     except (TypeError, ValueError):

@@ -125,6 +125,7 @@ def _pass_review(*, evidence_codes: set[str] | None = None, issue_codes: list[st
             evidence_codes=sorted(evidence_codes or set()),
         ),
         issue_codes=list(issue_codes or []),
+        shared_review_receipts=[_generic_shared_review_receipt()],
     )
 
 
@@ -396,11 +397,9 @@ class _ExplicitSmileStageHost:
 
     @staticmethod
     def _receipt(slot_key: str) -> CharacterCardSharedRuntimeReceipt:
-        shared_receipts = (
-            [_laugh_shared_review_receipt()]
-            if slot_key == "expression.laugh"
-            else [_generic_shared_review_receipt()]
-        )
+        shared_receipts = [_generic_shared_review_receipt()]
+        if slot_key == "expression.laugh":
+            shared_receipts.append(_laugh_shared_review_receipt())
         return CharacterCardSharedRuntimeReceipt(
             final_winner_selection_verified=True,
             prompt_reference_parity_verified=True,
@@ -422,16 +421,12 @@ class _ExplicitSmileStageHost:
         slot_key = f"expression.{expression}"
         output_id = f"{expression}_output"
         candidate_id = f"{expression}_candidate"
-        shared_review_receipts = (
-            [_laugh_shared_review_receipt()]
-            if slot_key == "expression.laugh"
-            else [_generic_shared_review_receipt()]
-        )
-        evidence_codes = (
-            sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
-            if slot_key == "expression.laugh"
-            else ["shared_visual_review_verified"]
-        )
+        shared_review_receipts = [_generic_shared_review_receipt()]
+        if slot_key == "expression.laugh":
+            shared_review_receipts.append(_laugh_shared_review_receipt())
+        evidence_codes = ["shared_visual_review_verified"]
+        if slot_key == "expression.laugh":
+            evidence_codes.extend(sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES))
         slot = CharacterCardSlot(
             slot_key=slot_key,  # type: ignore[arg-type]
             module="expression_set",
@@ -443,41 +438,58 @@ class _ExplicitSmileStageHost:
             prompt_reference_parity_verified=True,
             candidate_attempt_count=3,
         )
-        request = CharacterCardCandidateRequest(
-            project_id=f"visual_asset_{asset.visual_asset_id}",
-            people_asset_id=asset.visual_asset_id,
-            card_version_id=card.card_version_id,
-            module="expression_set",
-            slot_key=slot_key,  # type: ignore[arg-type]
-            candidate_index=1,
-            reference_output_ids=["front_winner"],
-            user_intent=f"user explicitly requested expression {expression}",
-            generation_channel=generation_channel,
-            review_only_resume=review_only_resume,
-        )
-        candidate = CharacterCardCandidateResult(
-            candidate_id=candidate_id,
-            output_id=output_id,
-            module="expression_set",
-            slot_key=slot_key,  # type: ignore[arg-type]
-            candidate_index=1,
-            source_candidate_ids=[candidate_id],
-            source_output_ids=list(request.reference_output_ids),
-            canonical_prompt_hash=f"sha256:{output_id}",
-            prompt_compilation_id=f"compile_{output_id}",
-            prompt_reference_parity_verified=True,
-        )
-        review = AnchorReviewDecision(
-            status="pass",
-            identity_scores=IdentityScoreSummary(
-                same_face_score=0.9,
-                distinctive_feature_score=0.9,
-                human_realism_score=0.9,
-                visual_quality_score=0.9,
-                evidence_codes=evidence_codes,
-            ),
-            shared_review_receipts=shared_review_receipts,
-        )
+        attempts = []
+        for candidate_index in (1, 2, 3):
+            candidate_output_id = output_id if candidate_index == 3 else f"{output_id}_{candidate_index}"
+            candidate_attempt_id = candidate_id if candidate_index == 3 else f"{candidate_id}_{candidate_index}"
+            request = CharacterCardCandidateRequest(
+                project_id=f"visual_asset_{asset.visual_asset_id}",
+                people_asset_id=asset.visual_asset_id,
+                card_version_id=card.card_version_id,
+                module="expression_set",
+                slot_key=slot_key,  # type: ignore[arg-type]
+                candidate_index=candidate_index,
+                reference_output_ids=["front_winner"],
+                user_intent=f"user explicitly requested expression {expression}",
+                generation_channel=generation_channel,
+                review_only_resume=review_only_resume,
+            )
+            candidate = CharacterCardCandidateResult(
+                candidate_id=candidate_attempt_id,
+                output_id=candidate_output_id,
+                module="expression_set",
+                slot_key=slot_key,  # type: ignore[arg-type]
+                candidate_index=candidate_index,
+                source_candidate_ids=[candidate_attempt_id],
+                source_output_ids=list(request.reference_output_ids),
+                canonical_prompt_hash=f"sha256:{candidate_output_id}",
+                prompt_compilation_id=f"compile_{candidate_output_id}",
+                prompt_reference_parity_verified=True,
+            )
+            review = AnchorReviewDecision(
+                status="pass",
+                identity_scores=IdentityScoreSummary(
+                    same_face_score=0.88 + candidate_index / 100,
+                    distinctive_feature_score=0.88 + candidate_index / 100,
+                    human_realism_score=0.88 + candidate_index / 100,
+                    visual_quality_score=0.88 + candidate_index / 100,
+                    evidence_codes=evidence_codes,
+                ),
+                shared_review_receipts=shared_review_receipts,
+            )
+            attempts.append(
+                CharacterCardCandidateAttempt(
+                    request=request,
+                    candidate=candidate,
+                    review=review,
+                )
+            )
+        formal_slot_receipts = {}
+        if slot_key in EXPRESSION_SLOT_KEYS and slot_key != "expression.neutral":
+            formal_slot_receipts[slot_key] = CharacterCardPreparationService._formal_expression_slot_receipt(
+                slot_key=slot_key,
+                attempts=attempts,
+            )
         return CharacterCardStageResult(
             status="review",
             card=card.model_copy(
@@ -486,15 +498,10 @@ class _ExplicitSmileStageHost:
                     "expression_slots": {**card.expression_slots, slot_key: slot},
                 }
             ),
-            attempts=[
-                CharacterCardCandidateAttempt(
-                    request=request,
-                    candidate=candidate,
-                    review=review,
-                )
-            ],
+            attempts=attempts,
             winner_output_ids={slot_key: output_id},
             shared_runtime_receipt=self._receipt(slot_key),
+            formal_slot_receipts=formal_slot_receipts,
         )
 
 

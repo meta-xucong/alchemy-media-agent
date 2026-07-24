@@ -274,6 +274,7 @@ class FormalSlotCandidateSummary(_StrictFormalSlotModel):
 
 
 FormalSlotRankingKey = Callable[[FormalSlotCandidateSummary], Any]
+FormalSlotCandidateEligibility = Callable[[FormalSlotCandidateSummary], bool]
 
 
 class FormalSlotReceipt(_StrictFormalSlotModel):
@@ -479,6 +480,7 @@ class FormalSlotAcceptanceCore:
         parity_summary: FormalSlotRequirementSummary | dict[str, object],
         identity_summary: FormalSlotRequirementSummary | dict[str, object],
         ranking_key: FormalSlotRankingKey | None = None,
+        candidate_eligibility: FormalSlotCandidateEligibility | None = None,
         retry_count: int = 0,
         repair_count: int = 0,
         reload_public_projection_verified: bool = False,
@@ -490,6 +492,7 @@ class FormalSlotAcceptanceCore:
             acceptance_mode=acceptance_mode,
             candidates=reviewed_candidates,
             ranking_key=ranking_key,
+            candidate_eligibility=candidate_eligibility,
         )
         candidate_receipts = [
             candidate.model_copy(update={"selected_as_winner": candidate.candidate_id == selected.candidate_id})
@@ -539,9 +542,16 @@ class FormalSlotAcceptanceCore:
         acceptance_mode: FormalSlotAcceptanceMode,
         candidates: list[FormalSlotCandidateSummary],
         ranking_key: FormalSlotRankingKey | None,
+        candidate_eligibility: FormalSlotCandidateEligibility | None,
     ) -> FormalSlotCandidateSummary:
         if acceptance_mode == "standard_three_candidate":
-            return self._select_standard_winner(candidates=candidates, ranking_key=ranking_key)
+            return self._select_standard_winner(
+                candidates=candidates,
+                ranking_key=ranking_key,
+                candidate_eligibility=candidate_eligibility,
+            )
+        if candidate_eligibility is not None:
+            candidates = [candidate for candidate in candidates if candidate_eligibility(candidate)]
         if acceptance_mode in {
             "target_only_existing_candidate_collection",
             "auxiliary_first_pass_reference",
@@ -556,10 +566,15 @@ class FormalSlotAcceptanceCore:
         *,
         candidates: list[FormalSlotCandidateSummary],
         ranking_key: FormalSlotRankingKey | None,
+        candidate_eligibility: FormalSlotCandidateEligibility | None,
     ) -> FormalSlotCandidateSummary:
         if len(candidates) != STANDARD_THREE_CANDIDATE_COUNT:
             raise ValueError("standard_three_candidate requires exactly three reviewed candidates")
         eligible = [candidate for candidate in candidates if candidate.shared_review.passed]
+        if candidate_eligibility is not None:
+            eligible = [candidate for candidate in eligible if candidate_eligibility(candidate)]
+            if not eligible:
+                raise ValueError("standard_three_candidate requires at least one external eligibility passing candidate")
         if not eligible:
             raise ValueError("standard_three_candidate requires at least one passing reviewed candidate")
         if ranking_key is None:

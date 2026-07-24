@@ -20,7 +20,12 @@ from ..shared_capabilities.visual_cluster.review_repair import (
     shared_review_repair_context_from_decision,
 )
 from .formal_slot_acceptance import (
+    FormalSlotAcceptanceCore,
+    FormalSlotCandidateEnhancedProofSummary,
+    FormalSlotCandidateSummary,
     FormalSlotReceipt,
+    FormalSlotRequirementSummary,
+    FormalSlotSharedReviewSummary,
     project_formal_slot_public_summary,
     validate_formal_slot_receipt_for_activation,
 )
@@ -61,6 +66,10 @@ EXPRESSION_LABELS = {
     "expression.sad": "悲伤",
     "expression.smile": "微笑（旧版）",
 }
+
+
+def _is_expression_delivery_slot(slot_key: str) -> bool:
+    return slot_key in ALL_EXPRESSION_SLOT_KEYS and slot_key != "expression.neutral"
 CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_VERSION = "v3_character_card_slot_success_receipt_v1"
 _CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_OWNER = "v3_character_card_shared_runtime"
 CharacterCardAcceptanceMode = Literal[
@@ -260,6 +269,9 @@ class CharacterCardSlot(_CharacterCardModel):
                 raise ValueError("reviewed Character Card winners require an output")
             if self.module == "face_identity":
                 self._validate_face_identity_formal_slot_receipt()
+            elif self.module == "expression_set" and _is_expression_delivery_slot(self.slot_key):
+                if self.formal_slot_receipt is not None:
+                    self._validate_expression_formal_slot_receipt(require_activation=self.state == "active")
             elif self.formal_slot_receipt is not None:
                 raise ValueError("formal slot receipts are not yet wired for this Character Card module")
             if self.module != "face_identity" and (
@@ -313,6 +325,19 @@ class CharacterCardSlot(_CharacterCardModel):
             raise ValueError("Face Identity Character Card receipt output mismatch")
         if self.source_candidate_ids and receipt.winner_candidate_id not in self.source_candidate_ids:
             raise ValueError("Face Identity Character Card receipt winner is not in source candidates")
+
+    def _validate_expression_formal_slot_receipt(self, *, require_activation: bool = False) -> None:
+        receipt = (
+            validate_formal_slot_receipt_for_activation(self.formal_slot_receipt)
+            if require_activation
+            else FormalSlotReceipt.model_validate(self.formal_slot_receipt)
+        )
+        if receipt.module != "expression_set":
+            raise ValueError("Expression Character Card formal receipt module mismatch")
+        if receipt.slot_key != self.slot_key:
+            raise ValueError("Expression Character Card formal receipt slot mismatch")
+        if receipt.winner_output_id != self.output_id:
+            raise ValueError("Expression Character Card formal receipt output mismatch")
 
 
 class CharacterCardState(_CharacterCardModel):
@@ -736,6 +761,7 @@ class CharacterCardStageResult(_CharacterCardModel):
     shared_runtime_receipt: "CharacterCardSharedRuntimeReceipt | None" = None
     shared_runtime_failure: "CharacterCardSharedRuntimeFailureReceipt | None" = None
     mcp_handoff_ids: list[str] = Field(default_factory=list)
+    formal_slot_receipts: dict[str, FormalSlotReceipt] = Field(default_factory=dict)
     acceptance_mode: CharacterCardAcceptanceMode = "standard_three_candidate"
 
 
@@ -1217,6 +1243,7 @@ class CharacterCardPreparationService:
         intents = user_intents
         attempts: list[CharacterCardCandidateAttempt] = []
         winners: dict[str, str] = {}
+        formal_slot_receipts: dict[str, FormalSlotReceipt] = {}
         failures: list[CharacterCardFailureEvent] = []
         slots = dict(card.expression_slots)
         neutral = CharacterCardSlot(
@@ -1234,13 +1261,22 @@ class CharacterCardPreparationService:
             existing = slots[slot_key]
             if existing.state in {"winner_selected", "active"} and existing.output_id:
                 winners[slot_key] = existing.output_id
+                if existing.formal_slot_receipt is not None:
+                    receipt = FormalSlotReceipt.model_validate(existing.formal_slot_receipt)
+                    if receipt.module != "expression_set":
+                        raise ValueError("Expression formal receipt module mismatch")
+                    if receipt.slot_key != slot_key:
+                        raise ValueError("Expression formal receipt slot mismatch")
+                    if receipt.winner_output_id != existing.output_id:
+                        raise ValueError("Expression formal receipt output mismatch")
+                    formal_slot_receipts[slot_key] = receipt
                 continue
             request = ExpressionPreparationRequest(
                 expression=expression,
                 front_output_id=front_output_id,
                 user_intent=str(intents.get(expression) or expression),
             )
-            winner, expression_attempts, slot_failures = self._prepare_slot(
+            winner, expression_attempts, slot_failures, formal_receipt = self._prepare_slot(
                 card=card,
                 module="expression_set",
                 slot_key=slot_key,
@@ -1282,8 +1318,13 @@ class CharacterCardPreparationService:
                     mcp_handoff_ids=self._mcp_handoff_ids(failures),
                 )
             slots[slot_key] = self._winner_slot(
-                module="expression_set", slot_key=slot_key, winner=winner
+                module="expression_set",
+                slot_key=slot_key,
+                winner=winner,
+                formal_slot_receipt=formal_receipt,
             )
+            if formal_receipt is not None:
+                formal_slot_receipts[slot_key] = formal_receipt
             winners[slot_key] = winner.output_id
         updated = card.model_copy(
             update={
@@ -1302,7 +1343,14 @@ class CharacterCardPreparationService:
                 "pending_mcp_handoff_ids": [],
             }
         )
-        return CharacterCardStageResult(status="review", card=updated, attempts=attempts, winner_output_ids=winners, failures=failures)
+        return CharacterCardStageResult(
+            status="review",
+            card=updated,
+            attempts=attempts,
+            winner_output_ids=winners,
+            failures=failures,
+            formal_slot_receipts=formal_slot_receipts,
+        )
 
     def prepare_expression_slot(
         self,
@@ -1336,7 +1384,7 @@ class CharacterCardPreparationService:
         slots = dict(card.expression_slots)
         slots.setdefault(slot_key, CharacterCardSlot(slot_key=slot_key, module="expression_set"))  # type: ignore[arg-type]
         attempts: list[CharacterCardCandidateAttempt] = []
-        winner, expression_attempts, slot_failures = self._prepare_slot(
+        winner, expression_attempts, slot_failures, formal_receipt = self._prepare_slot(
             card=card,
             module="expression_set",
             slot_key=slot_key,
@@ -1392,6 +1440,7 @@ class CharacterCardPreparationService:
             module="expression_set",
             slot_key=slot_key,
             winner=winner,
+            formal_slot_receipt=formal_receipt,
         )
         next_status = card.expression_set_status if card.expression_set_status == "active" else "partial"
         updated = card.model_copy(
@@ -1415,6 +1464,7 @@ class CharacterCardPreparationService:
             attempts=attempts,
             winner_output_ids={slot_key: winner.output_id},
             failures=slot_failures,
+            formal_slot_receipts={slot_key: formal_receipt} if formal_receipt is not None else {},
         )
 
     def prepare_body_silhouette(
@@ -1453,7 +1503,7 @@ class CharacterCardPreparationService:
             if existing.state in {"winner_selected", "active"} and existing.output_id:
                 winners[slot_key] = existing.output_id
                 continue
-            winner, slot_attempts, slot_failures = self._prepare_slot(
+            winner, slot_attempts, slot_failures, _formal_receipt = self._prepare_slot(
                 card=card,
                 module="body_silhouette",
                 slot_key=slot_key,
@@ -1535,6 +1585,7 @@ class CharacterCardPreparationService:
         CharacterCardCandidateResult | None,
         list[CharacterCardCandidateAttempt],
         list[CharacterCardFailureEvent],
+        FormalSlotReceipt | None,
     ]:
         from .anchor_pack import AnchorCandidateUnavailable
 
@@ -1570,6 +1621,7 @@ class CharacterCardPreparationService:
                         failure_code=str(card.last_failure_code or "character_card_shared_review_failed"),
                     )
                 ],
+                None,
             )
         for candidate_index in range(start_candidate_index, self.CANDIDATE_COUNT + 1):
             request = CharacterCardCandidateRequest(
@@ -1615,7 +1667,7 @@ class CharacterCardPreparationService:
                     "mcp_materialization_checkpoint_mismatch",
                     "mcp_materialization_projection_unavailable",
                 }:
-                    return None, slot_attempts, slot_failures
+                    return None, slot_attempts, slot_failures, None
                 continue
             review = self.reviewer.review(candidate)
             attempt = CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
@@ -1642,8 +1694,13 @@ class CharacterCardPreparationService:
                             review_repair_context=repair_context,
                         )
                     )
-                    return None, slot_attempts, slot_failures
-        if not passing:
+                    return None, slot_attempts, slot_failures, None
+        expression_formal_ready = (
+            module == "expression_set"
+            and _is_expression_delivery_slot(slot_key)
+            and len(slot_attempts) == self.CANDIDATE_COUNT
+        )
+        if not passing and not expression_formal_ready:
             if not slot_failures:
                 slot_failures = [
                     CharacterCardFailureEvent(
@@ -1655,11 +1712,47 @@ class CharacterCardPreparationService:
                     )
                     for index in range(1, self.CANDIDATE_COUNT + 1)
                 ]
-            return None, slot_attempts, slot_failures
+            return None, slot_attempts, slot_failures, None
+        if module == "expression_set" and _is_expression_delivery_slot(slot_key):
+            try:
+                formal_receipt = self._formal_expression_slot_receipt(
+                    slot_key=slot_key,
+                    attempts=slot_attempts,
+                )
+            except ValueError:
+                slot_failures.append(
+                    CharacterCardFailureEvent(
+                        module=module,
+                        slot_key=slot_key,  # type: ignore[arg-type]
+                        candidate_index=min(self.CANDIDATE_COUNT, max(1, len(slot_attempts) or 1)),
+                        attempt_round=attempt_round,
+                        failure_code="character_card_formal_slot_receipt_invalid",
+                    )
+                )
+                return None, slot_attempts, slot_failures, None
+            selected = next(
+                (
+                    attempt.candidate
+                    for attempt in slot_attempts
+                    if attempt.candidate.candidate_id == formal_receipt.winner_candidate_id
+                ),
+                None,
+            )
+            if selected is None:
+                slot_failures.append(
+                    CharacterCardFailureEvent(
+                        module=module,
+                        slot_key=slot_key,  # type: ignore[arg-type]
+                        candidate_index=min(self.CANDIDATE_COUNT, max(1, len(slot_attempts) or 1)),
+                        attempt_round=attempt_round,
+                        failure_code="character_card_formal_slot_winner_missing",
+                    )
+                )
+                return None, slot_attempts, slot_failures, None
+            return selected, slot_attempts, slot_failures, formal_receipt
         selected = acceptance_core.select_winner(passing)
-        return selected, slot_attempts, slot_failures
+        return selected, slot_attempts, slot_failures, None
 
-    @staticmethod
     def _failure_review_repair_context(
         failures: list[CharacterCardFailureEvent],
     ) -> dict[str, Any] | None:
@@ -1803,6 +1896,121 @@ class CharacterCardPreparationService:
         )
 
     @staticmethod
+    def _formal_shared_review_summary(review: Any) -> FormalSlotSharedReviewSummary:
+        receipts = [
+            item
+            for item in getattr(review, "shared_review_receipts", []) or []
+            if isinstance(item, dict)
+            and item.get("owner") == "v3_shared_visual_cluster"
+            and item.get("contract_version") == "v3_character_card_generic_slot_review_receipt_v1"
+        ]
+        if len(receipts) != 1:
+            raise ValueError("Expression formal slot requires one canonical generic shared review receipt")
+        summary = FormalSlotSharedReviewSummary.model_validate(receipts[0])
+        review_passed = getattr(review, "status", None) == "pass"
+        if summary.passed != review_passed:
+            raise ValueError("Expression formal shared review status does not match candidate review")
+        return summary
+
+    @staticmethod
+    def _formal_requirement_summary(
+        *,
+        passed: bool,
+        evidence_code: str,
+        issue_code: str,
+    ) -> FormalSlotRequirementSummary:
+        return FormalSlotRequirementSummary(
+            status="pass" if passed else "fail",
+            evidence_codes=[evidence_code if passed else issue_code],
+            dimensions={"summary_score": 1.0 if passed else 0.0},
+        )
+
+    @staticmethod
+    def _formal_expression_enhanced_proof(
+        *,
+        slot_key: str,
+        candidate: CharacterCardCandidateResult,
+        review: Any,
+    ) -> FormalSlotCandidateEnhancedProofSummary:
+        eligible = CharacterCardPreparationService._review_allows_slot(slot_key, review)
+        return FormalSlotCandidateEnhancedProofSummary(
+            profile_id="expression_slot_profile_v1",
+            requirement_id=f"{slot_key}.enhanced_profile",
+            candidate_id=candidate.candidate_id,
+            output_id=candidate.output_id,
+            eligible=eligible,
+            status="pass" if eligible else "fail",
+            evidence_codes=["expression_slot_profile_eligible"]
+            if eligible
+            else ["expression_slot_profile_rejected"],
+            issue_codes=[] if eligible else ["expression_slot_profile_not_met"],
+            dimensions={"profile_score": 1.0 if eligible else 0.0},
+        )
+
+    @classmethod
+    def _formal_expression_slot_receipt(
+        cls,
+        *,
+        slot_key: str,
+        attempts: list[CharacterCardCandidateAttempt],
+    ) -> FormalSlotReceipt:
+        slot_attempts = [
+            attempt
+            for attempt in attempts
+            if attempt.candidate.module == "expression_set" and attempt.candidate.slot_key == slot_key
+        ]
+        if len(slot_attempts) != cls.CANDIDATE_COUNT:
+            raise ValueError("Expression formal slot requires exactly three reviewed candidates")
+        selection_keys: dict[str, tuple[Any, ...]] = {}
+        candidates: list[FormalSlotCandidateSummary] = []
+        for attempt in slot_attempts:
+            candidate = attempt.candidate
+            shared_review = cls._formal_shared_review_summary(attempt.review)
+            enhanced_proof = cls._formal_expression_enhanced_proof(
+                slot_key=slot_key,
+                candidate=candidate,
+                review=attempt.review,
+            )
+            selection_keys[candidate.candidate_id] = cls._selection_key(attempt.review)
+            candidates.append(
+                FormalSlotCandidateSummary(
+                    candidate_index=candidate.candidate_index,
+                    candidate_id=candidate.candidate_id,
+                    output_id=candidate.output_id,
+                    reviewed=True,
+                    shared_review=shared_review,
+                    enhanced_proof=enhanced_proof,
+                )
+            )
+        framing_ok = any(candidate.enhanced_proof is not None and candidate.enhanced_proof.eligible for candidate in candidates)
+        parity_ok = all(attempt.candidate.prompt_reference_parity_verified for attempt in slot_attempts)
+        identity_ok = any(candidate.shared_review.passed for candidate in candidates)
+        return FormalSlotAcceptanceCore().accept(
+            module="expression_set",
+            slot_key=slot_key,
+            acceptance_mode="standard_three_candidate",
+            candidates=candidates,
+            framing_summary=cls._formal_requirement_summary(
+                passed=framing_ok,
+                evidence_code="expression_front_card_framing_verified",
+                issue_code="expression_front_card_framing_missing",
+            ),
+            parity_summary=cls._formal_requirement_summary(
+                passed=parity_ok,
+                evidence_code="expression_reference_parity_verified",
+                issue_code="expression_reference_parity_missing",
+            ),
+            identity_summary=cls._formal_requirement_summary(
+                passed=identity_ok,
+                evidence_code="expression_shared_identity_review_verified",
+                issue_code="expression_shared_identity_review_missing",
+            ),
+            ranking_key=lambda candidate: selection_keys[candidate.candidate_id],
+            candidate_eligibility=lambda candidate: candidate.enhanced_proof is not None
+            and candidate.enhanced_proof.eligible,
+        )
+
+    @staticmethod
     def _winner_slot(
         *,
         module: CharacterCardModule,
@@ -1810,6 +2018,7 @@ class CharacterCardPreparationService:
         winner: CharacterCardCandidateResult,
         source_class: BodySourceClass | None = None,
         consent_provenance_id: str | None = None,
+        formal_slot_receipt: FormalSlotReceipt | None = None,
     ) -> CharacterCardSlot:
         review_verified = True
         return CharacterCardSlot(
@@ -1824,6 +2033,7 @@ class CharacterCardPreparationService:
             review_verified=review_verified,
             prompt_reference_parity_verified=winner.prompt_reference_parity_verified,
             candidate_attempt_count=3,
+            formal_slot_receipt=formal_slot_receipt,
         )
 
     @staticmethod
@@ -1835,19 +2045,36 @@ class CharacterCardPreparationService:
             raise ValueError("Expression Set requires the active face.front winner")
 
     @staticmethod
-    def _require_slot_success_receipt(slot: CharacterCardSlot) -> None:
+    def _require_slot_success_receipt(
+        slot: CharacterCardSlot,
+        *,
+        require_standard_three_candidate: bool = False,
+    ) -> None:
         if slot.is_alias:
             return
         if slot.state not in {"winner_selected", "active"} or not slot.output_id:
             raise ValueError("Character Card contains an unreviewed slot")
+        if slot.module == "expression_set" and _is_expression_delivery_slot(slot.slot_key):
+            if slot.formal_slot_receipt is None:
+                raise ValueError("Character Card expression activation requires a formal slot receipt")
+            receipt = validate_formal_slot_receipt_for_activation(slot.formal_slot_receipt)
+            if receipt.module != "expression_set":
+                raise ValueError("Character Card expression formal receipt module mismatch")
+            if receipt.slot_key != slot.slot_key:
+                raise ValueError("Character Card expression formal receipt slot mismatch")
+            if receipt.winner_output_id != slot.output_id:
+                raise ValueError("Character Card expression formal receipt output mismatch")
+            return
         if slot.shared_runtime_receipt is None:
             raise ValueError("Character Card slot activation requires persisted shared runtime receipt")
-        validate_character_card_slot_success_receipt(
+        receipt = validate_character_card_slot_success_receipt(
             slot.shared_runtime_receipt,
             module=slot.module,
             slot_key=slot.slot_key,
             output_id=slot.output_id,
         )
+        if require_standard_three_candidate and receipt.get("acceptance_mode") != "standard_three_candidate":
+            raise ValueError("Character Card module activation requires standard three-candidate slot receipts")
 
     @staticmethod
     def activate_module(
@@ -1872,7 +2099,10 @@ class CharacterCardPreparationService:
                 raise ValueError("Expression Set contains an unreviewed slot")
             for key, slot in slots.items():
                 if key in EXPRESSION_SLOT_KEYS and key != "expression.neutral":
-                    CharacterCardPreparationService._require_slot_success_receipt(slot)
+                    CharacterCardPreparationService._require_slot_success_receipt(
+                        slot,
+                        require_standard_three_candidate=True,
+                    )
             slots = {
                 key: slot.model_copy(update={"state": "active"})
                 if slot.state == "winner_selected"

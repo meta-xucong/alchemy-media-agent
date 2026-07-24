@@ -340,7 +340,6 @@ def test_doc240_accepts_existing_generic_visual_review_public_dict_shape() -> No
         issue_codes=[],
         verified=True,
         raw_status="pass",
-        require_front_card_framing=False,
     ).to_public_dict()
 
     summary = FormalSlotSharedReviewSummary.model_validate(existing_public_receipt)

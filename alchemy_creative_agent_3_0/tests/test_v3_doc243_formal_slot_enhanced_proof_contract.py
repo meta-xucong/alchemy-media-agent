@@ -58,13 +58,19 @@ def _candidate(
     index: int = 1,
     *,
     enhanced_proof: FormalSlotCandidateEnhancedProofSummary | None = None,
+    shared_status: str = "pass",
 ) -> FormalSlotCandidateSummary:
     return FormalSlotCandidateSummary(
         candidate_index=index,
         candidate_id=f"candidate_{index}",
         output_id=f"output_{index}",
         reviewed=True,
-        shared_review=_shared_review(),
+        shared_review=_shared_review()
+        if shared_status == "pass"
+        else FormalSlotSharedReviewSummary(
+            status=shared_status,  # type: ignore[arg-type]
+            issue_codes=["shared_visual_review_rejected"],
+        ),
         enhanced_proof=enhanced_proof,
     )
 
@@ -167,6 +173,107 @@ def test_doc243_core_preserves_enhanced_proof_without_understanding_profile_sema
     assert reloaded.candidates[2].enhanced_proof is not None
     assert reloaded.candidates[2].enhanced_proof.profile_id == "profile_contract_v1"
     assert reloaded.winner_shared_review == reloaded.candidates[2].shared_review
+
+
+def test_doc243_core_filters_winner_by_injected_enhanced_eligibility_before_ranking() -> None:
+    candidates = [
+        _candidate(
+            1,
+            enhanced_proof=_enhanced_proof(candidate_id="candidate_1", output_id="output_1", eligible=False, status="fail"),
+        ),
+        _candidate(
+            2,
+            enhanced_proof=_enhanced_proof(candidate_id="candidate_2", output_id="output_2"),
+        ),
+        _candidate(
+            3,
+            enhanced_proof=_enhanced_proof(candidate_id="candidate_3", output_id="output_3", eligible=False, status="fail"),
+        ),
+    ]
+
+    receipt = FormalSlotAcceptanceCore().accept(
+        module="expression_set",
+        slot_key="expression.profiled_slot",
+        acceptance_mode="standard_three_candidate",
+        candidates=candidates,
+        framing_summary=_requirement(),
+        parity_summary=_requirement(),
+        identity_summary=_requirement(),
+        ranking_key=lambda candidate: candidate.candidate_index,
+        candidate_eligibility=lambda candidate: candidate.enhanced_proof is not None
+        and candidate.enhanced_proof.eligible,
+        reload_public_projection_verified=True,
+    )
+
+    assert receipt.winner_candidate_id == "candidate_2"
+    assert [candidate.selected_as_winner for candidate in receipt.candidates] == [False, True, False]
+
+
+def test_doc243_core_rejects_all_enhanced_ineligible_candidates_when_policy_requires_proof() -> None:
+    candidates = [
+        _candidate(
+            1,
+            enhanced_proof=_enhanced_proof(candidate_id="candidate_1", output_id="output_1", eligible=False, status="fail"),
+        ),
+        _candidate(
+            2,
+            enhanced_proof=_enhanced_proof(candidate_id="candidate_2", output_id="output_2", eligible=False, status="fail"),
+        ),
+        _candidate(
+            3,
+            enhanced_proof=_enhanced_proof(candidate_id="candidate_3", output_id="output_3", eligible=False, status="fail"),
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="external eligibility"):
+        FormalSlotAcceptanceCore().accept(
+            module="expression_set",
+            slot_key="expression.profiled_slot",
+            acceptance_mode="standard_three_candidate",
+            candidates=candidates,
+            framing_summary=_requirement(),
+            parity_summary=_requirement(),
+            identity_summary=_requirement(),
+            ranking_key=lambda candidate: candidate.candidate_index,
+            candidate_eligibility=lambda candidate: candidate.enhanced_proof is not None
+            and candidate.enhanced_proof.eligible,
+            reload_public_projection_verified=True,
+        )
+
+
+def test_doc243_core_does_not_treat_missing_enhanced_proof_as_eligible_when_policy_requires_it() -> None:
+    candidates = [_candidate(1), _candidate(2), _candidate(3)]
+
+    with pytest.raises(ValueError, match="external eligibility"):
+        FormalSlotAcceptanceCore().accept(
+            module="expression_set",
+            slot_key="expression.profiled_slot",
+            acceptance_mode="standard_three_candidate",
+            candidates=candidates,
+            framing_summary=_requirement(),
+            parity_summary=_requirement(),
+            identity_summary=_requirement(),
+            ranking_key=lambda candidate: candidate.candidate_index,
+            candidate_eligibility=lambda candidate: candidate.enhanced_proof is not None
+            and candidate.enhanced_proof.eligible,
+            reload_public_projection_verified=True,
+        )
+
+
+def test_doc243_core_keeps_existing_unprofiled_policy_available_for_face_task4() -> None:
+    receipt = FormalSlotAcceptanceCore().accept(
+        module="face_identity",
+        slot_key="face.front",
+        acceptance_mode="standard_three_candidate",
+        candidates=[_candidate(1), _candidate(2), _candidate(3)],
+        framing_summary=_requirement(),
+        parity_summary=_requirement(),
+        identity_summary=_requirement(),
+        ranking_key=lambda candidate: candidate.candidate_index,
+        reload_public_projection_verified=True,
+    )
+
+    assert receipt.winner_candidate_id == "candidate_3"
 
 
 def test_doc243_enhanced_public_summary_is_safe_and_stable() -> None:
