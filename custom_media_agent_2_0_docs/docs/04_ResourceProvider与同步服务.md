@@ -34,7 +34,7 @@ ResourceProvider 负责把外部案例资源接入 2.0。它不能被写死为�
 ```text
 provider_id: github_evolinkai_gpt_image_cases
 provider_type: github_repository
-source_uri: https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts
+source_uri: https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts
 ```
 
 解析优先级：

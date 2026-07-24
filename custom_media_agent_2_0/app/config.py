@@ -98,7 +98,7 @@ class Settings:
     case_intelligence_provider: str = "rules"
     case_intelligence_model: str | None = None
     provider_seed_path: Path = PROJECT_ROOT / "provider_data" / "evolinkai_seed_cases.json"
-    github_provider_source_uri: str = "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts"
+    github_provider_source_uri: str = "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts"
     enable_remote_github_sync: bool = False
     sync_github_on_startup: bool = True
     resource_sync_interval_minutes: int = 360
@@ -256,7 +256,7 @@ def load_settings() -> Settings:
         ),
         github_provider_source_uri=os.getenv(
             "V2_GITHUB_PROVIDER_SOURCE_URI",
-            "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts",
+            "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts",
         ),
         enable_remote_github_sync=os.getenv("V2_ENABLE_REMOTE_GITHUB_SYNC", "false").lower()
         in {"1", "true", "yes"},

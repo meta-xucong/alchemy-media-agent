@@ -163,6 +163,19 @@ CLAUDE_INLINE_DECISION_SCHEMA: dict[str, Any] = {
     ],
 }
 
+
+def _claude_inline_decision_schema() -> dict[str, Any]:
+    schema = json.loads(json.dumps(CLAUDE_INLINE_DECISION_SCHEMA))
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    final_prompt = properties.get("final_prompt") if isinstance(properties.get("final_prompt"), dict) else {}
+    negative_prompt = properties.get("negative_prompt") if isinstance(properties.get("negative_prompt"), dict) else {}
+    prompt_rationale = properties.get("prompt_rationale") if isinstance(properties.get("prompt_rationale"), dict) else {}
+    final_prompt["maxLength"] = max(80, int(settings.claude_final_prompt_max_chars))
+    negative_prompt["maxLength"] = max(20, int(settings.claude_negative_prompt_max_chars))
+    prompt_rationale["maxLength"] = max(20, int(settings.claude_rationale_max_chars))
+    return schema
+
+
 CLAUDE_INTENT_CHECKPOINT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -554,7 +567,7 @@ def _invoke_claude_checkpoint_mode(
             command=command,
             workspace=workspace,
             stage_name="generation_decision_recovery",
-            schema=CLAUDE_INLINE_DECISION_SCHEMA,
+            schema=_claude_inline_decision_schema(),
             prompt=_build_checkpoint_stage_prompt(
                 workspace,
                 stage_name="generation_decision_recovery",
@@ -600,7 +613,7 @@ def _invoke_claude_checkpoint_mode(
         command=command,
         workspace=workspace,
         stage_name="generation_decision",
-        schema=CLAUDE_INLINE_DECISION_SCHEMA,
+        schema=_claude_inline_decision_schema(),
         prompt=_build_checkpoint_stage_prompt(
             workspace,
             stage_name="generation_decision_micro",
@@ -843,7 +856,11 @@ def _invoke_checkpoint_stage_with_micro(
             return result, attempts
     if last_failure:
         should_try_fallback = _should_try_claude_code_model_fallback(last_failure, after_compression_retries=True)
-        if should_try_fallback and _requires_multimodal_claude_source(source):
+        if (
+            should_try_fallback
+            and _requires_multimodal_claude_source(source)
+            and last_failure != "claude_structured_output_retries_exhausted"
+        ):
             blocked_failure = _multimodal_required_unavailable_code(last_failure)
             trace.append(
                 {
@@ -868,6 +885,35 @@ def _invoke_checkpoint_stage_with_micro(
                 attempt=attempts,
             )
             raise ClaudeInvocationError(blocked_failure)
+        if (
+            should_try_fallback
+            and _requires_multimodal_claude_source(source)
+            and last_failure == "claude_structured_output_retries_exhausted"
+        ):
+            trace.append(
+                {
+                    "stage": stage_name,
+                    "status": "missing_decision",
+                    "provider": primary_provider,
+                    "model": primary_model,
+                    "source_reason": source.reason,
+                    "failure_code": last_failure,
+                    "text_fallback_blocked": True,
+                    "checkpoint_recovery_allowed": True,
+                    "after_compression_retries": True,
+                }
+            )
+            _emit_claude_progress(
+                progress_callback,
+                stage=stage_name,
+                status="missing_decision",
+                provider=primary_provider,
+                model=primary_model,
+                failure_code=last_failure,
+                after_compression_retries=True,
+                attempt=attempts,
+            )
+            return None, attempts
         if should_try_fallback:
             fallback_started = time.perf_counter()
             _emit_claude_progress(

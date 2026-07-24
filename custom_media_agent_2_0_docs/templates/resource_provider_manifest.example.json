@@ -1,7 +1,7 @@
 {
   "provider_id": "github_evolinkai_gpt_image_cases",
   "provider_type": "github_repository",
-  "source_uri": "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts",
+  "source_uri": "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts",
   "display_name": "EvoLinkAI GPT Image Cases",
   "enabled": true,
   "sync_mode": "scheduled_and_manual",

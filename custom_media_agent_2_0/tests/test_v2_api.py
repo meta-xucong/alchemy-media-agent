@@ -2126,6 +2126,20 @@ def test_checkpoint_stage_uses_cli_schema_with_local_retry_control(monkeypatch, 
     assert claude_orchestrator_service._checkpoint_stage_timeout_seconds("intent_ultra_micro_retry_2") == 30.0
 
 
+def test_checkpoint_decision_schema_uses_configured_prompt_budgets() -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_final_prompt_max_chars", 1400)
+    object.__setattr__(settings, "claude_negative_prompt_max_chars", 320)
+    object.__setattr__(settings, "claude_rationale_max_chars", 180)
+
+    schema = claude_orchestrator_service._claude_inline_decision_schema()
+    properties = schema["properties"]
+
+    assert properties["final_prompt"]["maxLength"] == 1400
+    assert properties["negative_prompt"]["maxLength"] == 320
+    assert properties["prompt_rationale"]["maxLength"] == 180
+
+
 def test_checkpoint_generation_decision_uses_configured_soft_timeout(monkeypatch) -> None:
     fresh_client()
     object.__setattr__(settings, "claude_orchestrator_timeout_seconds", 240.0)
@@ -5955,6 +5969,63 @@ def test_checkpoint_stage_required_multimodal_blocks_text_model_fallback_on_reas
     assert all(item.get("provider") != "claude-code-model-fallback" for item in trace)
     assert events[-1]["status"] == "failed"
     assert "多模态主源不可用" in str(events[-1]["message"])
+
+
+def test_checkpoint_stage_required_multimodal_structured_exhaustion_allows_checkpoint_recovery(
+    monkeypatch, tmp_path
+) -> None:
+    fresh_client()
+    object.__setattr__(settings, "claude_checkpoint_max_stage_retries", 1)
+    object.__setattr__(settings, "claude_orchestrator_fallback_base_url", "https://aiself.vip")
+    object.__setattr__(settings, "claude_orchestrator_fallback_auth_token", "sk-test-fallback")
+    object.__setattr__(settings, "claude_orchestrator_fallback_models", ("kimi-for-coding",))
+    (tmp_path / "claude_source_selection.json").write_text(
+        json.dumps(
+            {
+                "provider": "claude-code-primary",
+                "model": "doubao-seed-2-0-lite-260428",
+                "reason": "provider_input_images_required",
+                "multimodal_requested": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[dict[str, object]] = []
+    events: list[dict[str, object]] = []
+
+    def fake_claude_stage(**kwargs):
+        calls.append(
+            {
+                "stage_name": kwargs["stage_name"],
+                "model_override": kwargs.get("model_override"),
+            }
+        )
+        raise claude_orchestrator_service.ClaudeInvocationError("claude_structured_output_retries_exhausted")
+
+    monkeypatch.setattr(claude_orchestrator_service, "_invoke_claude_stage_json", fake_claude_stage)
+    trace: list[dict[str, object]] = []
+
+    result, attempts = claude_orchestrator_service._invoke_checkpoint_stage_with_micro(
+        command=["claude"],
+        workspace=tmp_path,
+        stage_name="generation_decision",
+        schema=claude_orchestrator_service._claude_inline_decision_schema(),
+        prompt="{}",
+        micro_prompt="{}",
+        trace=trace,
+        progress_callback=events.append,
+    )
+
+    assert result is None
+    assert attempts == 2
+    assert calls == [
+        {"stage_name": "generation_decision", "model_override": "doubao-seed-2-0-lite-260428"},
+        {"stage_name": "generation_decision_micro_retry_1", "model_override": "doubao-seed-2-0-lite-260428"},
+    ]
+    assert trace[-1]["text_fallback_blocked"] is True
+    assert trace[-1]["checkpoint_recovery_allowed"] is True
+    assert all(item.get("provider") != "claude-code-model-fallback" for item in trace)
+    assert events[-1]["status"] == "missing_decision"
 
 
 def test_checkpoint_stage_kimi_primary_keeps_kimi_progress_label(monkeypatch, tmp_path) -> None:

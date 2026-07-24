@@ -6,7 +6,7 @@ from urllib.parse import quote, urlparse
 from app.config import settings
 
 
-DEFAULT_GITHUB_PROVIDER_SOURCE_URI = "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts"
+DEFAULT_GITHUB_PROVIDER_SOURCE_URI = "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts"
 DEFAULT_GITHUB_BRANCH = "main"
 
 

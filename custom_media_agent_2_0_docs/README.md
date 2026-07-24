@@ -29,7 +29,7 @@ V2-native provider/storage/history/review
 1. 使用确定性后端 pipeline 承担业务主链路和副作用执行。
 2. 使用 Claude Code Orchestrator 生成结构化创意决策；Kimi / DeepSeek / Doubao 等只作为 Claude Code 模型源。
 3. 使用 OpenAI Agents SDK 作为可选 planner capsule、function-tool boundary、structured output 与 tracing 的未来接入点。
-4. 当前第一个 ResourceProvider 是 `EvoLinkAI/awesome-gpt-image-2-API-and-Prompts`。
+4. 当前第一个 ResourceProvider 是 `meta-xucong/awesome-gpt-image-2-API-and-Prompts`。
 5. 2.0 仅与原版共用域名和前端入口，功能、后端、数据、任务队列、资源同步和运行时全部独立。
 
 ## 快速阅读顺序

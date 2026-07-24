@@ -77,7 +77,7 @@ def test_markdown_case_parser_normalizes_raw_github_preview_to_local_thumbnail()
 
 | Output |
 | :----: |
-| <img src="https://raw.githubusercontent.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg" width="300" alt="Output image"> |
+| <img src="https://raw.githubusercontent.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg" width="300" alt="Output image"> |
 
 **Prompt:**
 ```
@@ -116,11 +116,11 @@ def test_configured_github_source_builds_fork_urls(monkeypatch) -> None:
         object.__setattr__(
             settings,
             "github_provider_source_uri",
-            "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts",
+            "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts",
         )
 
 
-def test_preview_normalizer_accepts_configured_fork_and_original_repo() -> None:
+def test_preview_normalizer_accepts_configured_fork_repo() -> None:
     object.__setattr__(
         settings,
         "github_provider_source_uri",
@@ -133,17 +133,11 @@ def test_preview_normalizer_accepts_configured_fork_and_original_repo() -> None:
             )
             == "/api/v2/case-thumbnails/images/poster_case147/output.jpg"
         )
-        assert (
-            normalize_case_preview_url(
-                "https://raw.githubusercontent.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg"
-            )
-            == "/api/v2/case-thumbnails/images/poster_case147/output.jpg"
-        )
     finally:
         object.__setattr__(
             settings,
             "github_provider_source_uri",
-            "https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts",
+            "https://github.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts",
         )
 
 
@@ -162,7 +156,7 @@ def test_case_index_store_normalizes_legacy_raw_github_previews(tmp_path) -> Non
     index_path = tmp_path / "case_index.json"
     legacy_case = cases[0].model_copy(
         update={
-            "preview_url": "https://raw.githubusercontent.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg"
+            "preview_url": "https://raw.githubusercontent.com/meta-xucong/awesome-gpt-image-2-API-and-Prompts/main/images/poster_case147/output.jpg"
         }
     )
     save_case_index([legacy_case], path=index_path)
