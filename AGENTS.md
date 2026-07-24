@@ -182,6 +182,39 @@ Short form:
 Protect Core. Configure Enhanced. Contain Auxiliary.
 ```
 
+## Phased Acceptance and Final Acceptance Principle
+
+The user's total objective remains authoritative. Phase acceptance is an
+implementation method, not a replacement for the final goal.
+
+Rules:
+
+1. Before starting or resuming a large task, state the total objective and the
+   current phase objective separately.
+2. Passing a phase means only that the project may advance to the next phase.
+   It must not be reported as total completion unless every required phase has
+   passed and the final integrated acceptance flow has also passed.
+3. When a phase completes, update the project state with the next required
+   phase or explicitly mark the remaining phases as out of scope by user
+   instruction. Do not leave optional next actions that make the current phase
+   look like the total objective.
+4. If a phase intentionally narrows scope, report the narrowed scope plainly:
+   what passed, what did not run, and what remains before total acceptance.
+5. A phase-level receipt, winner, test pass, or UI check cannot be used to
+   claim product readiness, module activation, Gate completion, or production
+   availability unless the total acceptance criteria explicitly require only
+   that phase.
+6. If an agent realizes it has treated a phase as the final goal, it must stop,
+   correct the state/progress record, and resume from the next unverified phase
+   rather than continuing under a false done state.
+
+Short form:
+
+```text
+Phase pass advances the plan.
+Only all phases plus final integration pass completes the goal.
+```
+
 ## Workspace Encoding Rules
 
 - Treat all source, config, markdown, JSON, YAML, CSV, and text files as UTF-8 unless a file clearly uses another encoding.
