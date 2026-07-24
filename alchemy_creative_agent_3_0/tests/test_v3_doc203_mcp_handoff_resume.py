@@ -55,6 +55,43 @@ def _current_laugh_handoff_prompt(*, suffix: str = "") -> str:
     ).strip()
 
 
+def _current_expression_reference_assets() -> list[dict]:
+    return [
+        {
+            "asset_id": "front_winner",
+            "derivative_kind": "character_card_full_frame_framing_reference",
+            "identity_evidence_scope": "card_framing",
+            "sha256": "1" * 64,
+        },
+        {
+            "asset_id": "front_winner::portrait_identity_crop",
+            "derivative_kind": "portrait_identity_crop",
+            "sha256": "2" * 64,
+        },
+        {
+            "asset_id": "front_winner::portrait_identity_geometry_crop",
+            "derivative_kind": "portrait_identity_pose_geometry_crop",
+            "sha256": "3" * 64,
+        },
+    ]
+
+
+def _stale_crop_first_expression_reference_assets() -> list[dict]:
+    return [
+        {
+            "asset_id": "front_winner::portrait_identity_crop",
+            "derivative_kind": "portrait_identity_crop",
+            "sha256": "2" * 64,
+        },
+        {
+            "asset_id": "front_winner::portrait_identity_geometry_crop",
+            "derivative_kind": "portrait_identity_pose_geometry_crop",
+            "sha256": "3" * 64,
+        },
+        {"asset_id": "front_winner", "derivative_kind": "portrait_identity", "sha256": "1" * 64},
+    ]
+
+
 def _request_metadata(
     *,
     operation_id: str = "doc203-operation",
@@ -461,7 +498,7 @@ def test_doc205_character_card_recovers_orphan_submitted_handoff_without_replann
         operation_id=operation_id,
         prompt=prompt,
         prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-        reference_assets=[],
+        reference_assets=_current_expression_reference_assets(),
         rendering_contract={
             "renderer": "codex_builtin_imagegen",
             "model": "gpt-image-2",
@@ -562,7 +599,7 @@ def test_doc205_character_card_orphan_handoff_recovery_fails_closed_when_ambiguo
             operation_id=operation_id,
             prompt=prompt,
             prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
-            reference_assets=[],
+            reference_assets=_current_expression_reference_assets(),
             rendering_contract={
                 "renderer": "codex_builtin_imagegen",
                 "model": "gpt-image-2",
@@ -605,7 +642,7 @@ def test_doc207_character_card_orphan_recovery_prefers_submitted_artifact_over_p
         prompt_sha256=hashlib.sha256(
             _current_laugh_handoff_prompt(suffix="pending draft").encode("utf-8")
         ).hexdigest(),
-        reference_assets=[],
+        reference_assets=_current_expression_reference_assets(),
         rendering_contract={
             "renderer": "codex_builtin_imagegen",
             "model": "gpt-image-2",
@@ -622,7 +659,7 @@ def test_doc207_character_card_orphan_recovery_prefers_submitted_artifact_over_p
         prompt_sha256=hashlib.sha256(
             _current_laugh_handoff_prompt(suffix="submitted artifact").encode("utf-8")
         ).hexdigest(),
-        reference_assets=[],
+        reference_assets=_current_expression_reference_assets(),
         rendering_contract={
             "renderer": "codex_builtin_imagegen",
             "model": "gpt-image-2",
@@ -715,7 +752,7 @@ def test_doc208_character_card_request_pending_hint_cannot_override_submitted_ar
         prompt_sha256=hashlib.sha256(
             _current_laugh_handoff_prompt(suffix="pending draft").encode("utf-8")
         ).hexdigest(),
-        reference_assets=[],
+        reference_assets=_current_expression_reference_assets(),
         rendering_contract={
             "renderer": "codex_builtin_imagegen",
             "model": "gpt-image-2",
@@ -732,7 +769,7 @@ def test_doc208_character_card_request_pending_hint_cannot_override_submitted_ar
         prompt_sha256=hashlib.sha256(
             _current_laugh_handoff_prompt(suffix="submitted artifact").encode("utf-8")
         ).hexdigest(),
-        reference_assets=[],
+        reference_assets=_current_expression_reference_assets(),
         rendering_contract={
             "renderer": "codex_builtin_imagegen",
             "model": "gpt-image-2",
@@ -992,6 +1029,7 @@ def test_doc215_existing_mcp_handoff_still_uses_normal_handoff_resume_not_reentr
                     "handoff_id": handoff_id,
                     "status": "pending",
                     "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _current_expression_reference_assets(),
                 }
             )
 
@@ -1028,3 +1066,130 @@ def test_doc215_existing_mcp_handoff_still_uses_normal_handoff_resume_not_reentr
     assert "_v3_resume_interrupted_mcp_materialization" not in service.generated_calls[0][1]["metadata"]
     assert service.generated_calls[0][1]["metadata"]["disable_visual_auto_retry"] is True
     assert service.generated_calls[0][1]["metadata"]["max_visual_retry_attempts"] == 0
+
+
+def test_doc219_host_does_not_resume_stale_crop_first_pending_expression_handoff() -> None:
+    operation_id = "people_doc219:expression_set:expression.laugh:2:round5"
+    pending_record = SimpleNamespace(
+        job_id="job_doc219_stale_pending",
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {
+                    "handoff_id": "mcp_handoff_doc219_stale_pending",
+                    "status": "pending",
+                    "generation_channel": "mcp",
+                },
+            }
+        ),
+    )
+
+    class _Store:
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return [pending_record]
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.job_store = _Store()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "pending",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _stale_crop_first_expression_reference_assets(),
+                }
+            )
+
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc219",
+        people_asset_id="people_doc219",
+        card_version_id="card_doc219",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id="mcp_handoff_doc219_stale_pending",
+    )
+
+    resume = ProductApiAnchorPackPreparationHost(_Service())._mcp_resume_character_card_stage_job_record(  # type: ignore[arg-type]  # noqa: SLF001
+        request,
+        operation_id,
+    )
+
+    assert resume is None
+
+
+def test_doc219_host_fails_closed_on_stale_crop_first_submitted_expression_handoff() -> None:
+    operation_id = "people_doc219:expression_set:expression.laugh:2:round5"
+    submitted_record = SimpleNamespace(
+        job_id="job_doc219_stale_submitted",
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {
+                    "handoff_id": "mcp_handoff_doc219_stale_submitted",
+                    "status": "submitted",
+                    "generation_channel": "mcp",
+                },
+            }
+        ),
+    )
+
+    class _Store:
+        def list_recent(self, _limit):  # noqa: ANN001, ANN201
+            return [submitted_record]
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.job_store = _Store()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "submitted",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
+                    "reference_assets": _stale_crop_first_expression_reference_assets(),
+                }
+            )
+
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc219",
+        people_asset_id="people_doc219",
+        card_version_id="card_doc219",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        mcp_handoff_id="mcp_handoff_doc219_stale_submitted",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable, match="mcp_materialization_reference_mismatch"):
+        ProductApiAnchorPackPreparationHost(_Service())._mcp_resume_character_card_stage_job_record(  # type: ignore[arg-type]  # noqa: SLF001
+            request,
+            operation_id,
+        )

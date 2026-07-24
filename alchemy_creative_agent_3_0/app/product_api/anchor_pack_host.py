@@ -1239,6 +1239,20 @@ class ProductApiAnchorPackPreparationHost:
                         continue
                 else:
                     continue
+            if isinstance(materialization, dict):
+                handoff_id = str(materialization.get("handoff_id") or "").strip()
+                payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None
+                handoff_payload = payload if isinstance(payload, dict) else materialization
+                if not self._character_card_mcp_handoff_current(request, handoff_payload):
+                    handoff_status = str(
+                        handoff_payload.get("status") or materialization.get("status") or ""
+                    ).strip().lower()
+                    if handoff_status == "pending":
+                        continue
+                    raise AnchorCandidateUnavailable(
+                        "mcp_materialization_reference_mismatch",
+                        mcp_handoff_id=handoff_id or None,
+                    )
             if getattr(record, "generation_result", None) is None and not isinstance(materialization, dict):
                 if not self._is_interrupted_mcp_materialization_checkpoint(record):
                     continue
@@ -1291,10 +1305,20 @@ class ProductApiAnchorPackPreparationHost:
         for payload in candidates:
             if not isinstance(payload, dict):
                 continue
-            prompt = str(payload.get("canonical_prompt") or "")
-            if not _character_card_stage_mcp_prompt_current(request.slot_key, prompt):
+            prompt_current = _character_card_stage_mcp_prompt_current(
+                request.slot_key,
+                str(payload.get("canonical_prompt") or ""),
+            )
+            if not prompt_current:
                 continue
-            current.append(payload)
+            if self._character_card_mcp_handoff_current(request, payload):
+                current.append(payload)
+                continue
+            if str(payload.get("status") or "").strip().lower() == "submitted":
+                raise AnchorCandidateUnavailable(
+                    "mcp_materialization_reference_mismatch",
+                    mcp_handoff_id=str(payload.get("handoff_id") or "").strip() or None,
+                )
         if not current:
             return None
         requested_handoff = str(request.mcp_handoff_id or "").strip()
@@ -1316,6 +1340,58 @@ class ProductApiAnchorPackPreparationHost:
             raise AnchorCandidateUnavailable("mcp_materialization_operation_ambiguous")
         handoff_id = str(current[0].get("handoff_id") or "").strip()
         return handoff_id or None
+
+    def _character_card_mcp_handoff_current(
+        self,
+        request: CharacterCardCandidateRequest,
+        payload: dict[str, Any],
+    ) -> bool:
+        if not _character_card_stage_mcp_prompt_current(
+            request.slot_key,
+            str(payload.get("canonical_prompt") or ""),
+        ):
+            return False
+        if request.module != "expression_set":
+            return True
+        return self._character_card_expression_handoff_reference_order_current(payload)
+
+    @staticmethod
+    def _character_card_expression_handoff_reference_order_current(payload: dict[str, Any]) -> bool:
+        references = payload.get("reference_assets")
+        if not isinstance(references, list) or not references:
+            return False
+        first = references[0]
+        if not isinstance(first, dict):
+            return False
+        metadata = first.get("metadata") if isinstance(first.get("metadata"), dict) else {}
+        derivative_kind = str(
+            first.get("derivative_kind")
+            or metadata.get("derivative_kind")
+            or ""
+        ).strip()
+        identity_scope = str(
+            first.get("identity_evidence_scope")
+            or metadata.get("identity_evidence_scope")
+            or ""
+        ).strip()
+        if (
+            derivative_kind == "character_card_full_frame_framing_reference"
+            and identity_scope == "card_framing"
+        ):
+            return True
+        asset_ids = [
+            str(item.get("asset_id") or "").strip()
+            for item in references
+            if isinstance(item, dict)
+        ]
+        first_asset_id = asset_ids[0] if asset_ids else ""
+        if "::portrait_identity_crop" in first_asset_id or "::portrait_identity_geometry_crop" in first_asset_id:
+            return False
+        return (
+            bool(first_asset_id)
+            and any("::portrait_identity_crop" in asset_id for asset_id in asset_ids[1:])
+            and any("::portrait_identity_geometry_crop" in asset_id for asset_id in asset_ids[1:])
+        )
 
     def _mcp_materialization_from_generation_failure(self, generation: Any, job_id: str) -> dict[str, Any] | None:
         """Recover an opaque MCP handoff from public status or the durable job record."""

@@ -376,6 +376,22 @@ def test_doc191_character_card_mcp_stage_resumes_existing_handoff_job() -> None:
             )
             self.job_store = _JobStore(self.record)
             self.output_store = _OutputStore()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=lambda handoff_id: {
+                    "handoff_id": handoff_id,
+                    "status": "pending",
+                    "canonical_prompt": "same character card face with a gentle smile",
+                    "reference_assets": [
+                        {
+                            "asset_id": "front_winner",
+                            "derivative_kind": "character_card_full_frame_framing_reference",
+                            "identity_evidence_scope": "card_framing",
+                        },
+                        {"asset_id": "front_winner::portrait_identity_crop"},
+                        {"asset_id": "front_winner::portrait_identity_geometry_crop"},
+                    ],
+                }
+            )
 
         def create_professional_character_card_stage_job(self, *_args, **_kwargs):
             self.created += 1
