@@ -315,6 +315,68 @@ def test_standard_mode_keeps_both_identity_derivatives(tmp_path: Path) -> None:
     ]
 
 
+def test_doc214_character_card_expression_set_uses_full_frame_front_as_framing_authority(
+    tmp_path: Path,
+) -> None:
+    front = _image(tmp_path / "front.png", (220, 181, 160))
+    request = _request(front, front, front)
+    front_asset = {
+        "asset_id": "front_output",
+        "output_id": "front_output",
+        "file_path": str(front),
+        "source_type": "selected_output",
+        "role": "face_reference",
+        "use_policy": "identity",
+        "strength": "hard",
+        "provider_input_required": True,
+        "source_integrity_id": "sha256:front_output",
+        "metadata": {"canonical_output_binding": True},
+    }
+    metadata = dict(request.metadata)
+    metadata.update(
+        {
+            "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+            "professional_character_card_stage": "expression_set",
+            "professional_character_card_slot": "expression.laugh",
+            "professional_reference_stage": "character_card_expression_set",
+            "professional_anchor_reference_assets": [front_asset],
+            "uploaded_assets": [front_asset],
+            "visual_cluster": {
+                "resolved_reference_policy_package": {
+                    "applies": True,
+                    "policies": [
+                        {
+                            "source_asset_id": "front_output",
+                            "source_role": "portrait_identity_reference",
+                            "identity_geometry": "hard",
+                            "prompt_owned_channels": [
+                                "hair_direction",
+                                "lighting_color",
+                                "scene_background",
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
+    )
+    request = request.model_copy(update={"metadata": metadata})
+    provider = ProductionImageGenerationProvider()
+    references = provider._reference_assets(request)  # noqa: SLF001
+    plan = provider._asset_plan(request, references)  # noqa: SLF001
+
+    assert plan["provider_input_plan"]["reference_image_count"] == 3
+    assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
+        ("front_output", "portrait_identity_crop"),
+        ("front_output", "portrait_identity_pose_geometry_crop"),
+        ("front_output", "character_card_full_frame_framing_reference"),
+    ]
+    framing_reference = plan["assets"][2]
+    assert framing_reference["identity_evidence_scope"] == "card_framing"
+    assert framing_reference["reference_truth_layer"] == "character_card_framing_truth"
+    assert "framing authority" in " ".join(framing_reference["prompt_constraints"])
+
+
 def test_doc176_two_source_professional_front_keeps_the_two_reference_budget(tmp_path: Path) -> None:
     root = _image(tmp_path / "root.png", (220, 180, 160))
     supplement = _image(tmp_path / "supplement.png", (218, 182, 164))

@@ -30,6 +30,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expressio
     LAUGH_EXPRESSION_EVIDENCE_CODES,
     LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION,
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+    expression_front_card_framing_materialization_directive,
     laugh_expression_intent_contract,
     laugh_expression_materialization_directive,
     project_laugh_expression_review_receipt,
@@ -246,6 +247,20 @@ def test_doc196_explicit_user_smile_remains_a_valid_nondefault_expression_reques
     )
 
 
+def test_doc214_expression_laugh_mcp_prompt_current_requires_full_frame_framing_authority() -> None:
+    old_soft_prompt = (
+        "Same person as the approved face.front Character Card winner, preserving front-card framing, "
+        "head-top margin and eye-line placement. Render a clearly readable joyful laugh."
+    )
+    current_prompt = (
+        f"{laugh_expression_materialization_directive()} "
+        f"{expression_front_card_framing_materialization_directive()}"
+    )
+
+    assert not _character_card_stage_mcp_prompt_current("expression.laugh", old_soft_prompt)
+    assert _character_card_stage_mcp_prompt_current("expression.laugh", current_prompt)
+
+
 def test_doc196_explicit_user_smile_has_callable_service_path_but_cannot_satisfy_laugh() -> None:
     service = CharacterCardPreparationService(
         generator=_OneSlotGenerator(),
@@ -417,10 +432,12 @@ def test_doc196_host_default_intents_and_mcp_prompt_contract_use_laugh_not_smile
         "authorized identity preparation intent"
     )
     directive = laugh_expression_materialization_directive(laugh_expression_intent_contract())
+    framing_directive = expression_front_card_framing_materialization_directive()
 
     assert set(intents) == {"laugh", "anger", "sad"}
     assert "Expression slot target: expression.laugh." in intents["laugh"]
     assert directive in intents["laugh"]
+    assert framing_directive in intents["laugh"]
     assert "clearly readable joyful laugh keyframe" in intents["laugh"]
     assert "not merely a polite open-mouth smile" in intents["laugh"]
     assert "engaged, lively gaze as expression evidence only" in intents["laugh"]
@@ -428,7 +445,7 @@ def test_doc196_host_default_intents_and_mcp_prompt_contract_use_laugh_not_smile
     assert "expression.smile" not in "\n".join(intents.values())
     assert _character_card_stage_mcp_prompt_current(
         "expression.laugh",
-        "Same person in a clearly readable joyful laugh keyframe.",
+        f"{directive} {framing_directive}",
     )
     assert not _character_card_stage_mcp_prompt_current(
         "expression.laugh",

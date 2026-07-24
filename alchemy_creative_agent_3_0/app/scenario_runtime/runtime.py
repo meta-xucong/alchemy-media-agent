@@ -62,6 +62,7 @@ from ..shared_capabilities.visual_cluster.human_photorealism import (
     normalize_human_realism_issue_code,
 )
 from ..shared_capabilities.visual_cluster.expression_review import (
+    expression_front_card_framing_materialization_directive,
     laugh_expression_intent_contract,
     laugh_expression_materialization_directive,
 )
@@ -1518,6 +1519,7 @@ class ScenarioRuntime:
             "in the existing vertical 2:3 reference-card frame. "
             "Preserve identity, age coherence, camera-observed skin/material texture, and the approved card's style channels. "
             "Change only the facial expression and a very small amount of natural head-shoulder energy. "
+            f"{expression_front_card_framing_materialization_directive()} "
         )
         endings = {
             "laugh": (

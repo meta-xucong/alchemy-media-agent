@@ -2507,7 +2507,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 framing_derivative_kind = "character_card_full_frame_framing_reference"
                 original_constraint = (
                     (
-                        "Use as an approved Character Card full-frame framing reference only: match the card-family camera distance, "
+                        "Use as the approved Character Card full-frame framing authority only: match the card-family camera distance, "
                         "head size, head-top margin, upper-shoulders crop, shoulder-line white padding, plain white field and clean card boundaries; "
                         + (
                             "for the opposite 45-degree slot, keep this as scale/framing evidence only and generate an independent opposite-side view "
@@ -3294,9 +3294,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _professional_character_card_ordered_generated_reference_ids(self, request: GenerationRequest) -> list[str]:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
-        if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
+        strategy = metadata.get("professional_identity_reference_strategy")
+        if strategy not in {
+            "serial_anchor_pack_root_reuse_v1",
+            "character_card_shared_identity_v1",
+        }:
             return []
-        if metadata.get("professional_anchor_capture_scope") != "character_card_face_identity":
+        if strategy == "serial_anchor_pack_root_reuse_v1" and metadata.get("professional_anchor_capture_scope") != "character_card_face_identity":
             return []
         reference_assets = metadata.get("professional_anchor_reference_assets")
         if not isinstance(reference_assets, list):
@@ -3315,6 +3319,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _professional_character_card_framing_source_id(self, request: GenerationRequest) -> str:
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        if metadata.get("professional_identity_reference_strategy") == "character_card_shared_identity_v1":
+            if str(metadata.get("professional_character_card_stage") or "").strip() != "expression_set":
+                return ""
+            ordered_ids = self._professional_character_card_ordered_generated_reference_ids(request)
+            return ordered_ids[0] if ordered_ids else ""
         stage = str(metadata.get("professional_reference_stage") or "").strip()
         if stage not in {
             "left_front_25",

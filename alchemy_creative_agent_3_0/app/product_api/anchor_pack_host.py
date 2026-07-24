@@ -15,6 +15,7 @@ from typing import Any
 from PIL import Image
 
 from ..shared_capabilities.visual_cluster.expression_review import (
+    expression_front_card_framing_materialization_directive,
     laugh_expression_materialization_directive,
     project_laugh_expression_review_receipt,
 )
@@ -764,7 +765,8 @@ class ProductApiAnchorPackPreparationHost:
             "laugh": (
                 f"{base}\nExpression slot target: expression.laugh. "
                 f"{laugh_expression_materialization_directive()} "
-                "Preserve the approved front-card framing and allow only a small amount of natural head-shoulder energy."
+                f"{expression_front_card_framing_materialization_directive()} "
+                "Allow only a small amount of natural head-shoulder energy."
             ),
             "anger": (
                 f"{base}\nExpression slot target: expression.anger. "
@@ -2313,7 +2315,18 @@ def _character_card_stage_mcp_prompt_current(slot_key: str, prompt: str) -> bool
         "expression.sad": ("sad", "sadness", "pensive", "downcast", "melancholy", "somber", "unhappy"),
     }.get(slot)
     if expression_terms is not None:
-        return any(term in normalized for term in expression_terms)
+        if not any(term in normalized for term in expression_terms):
+            return False
+        if slot == "expression.laugh":
+            framing_terms = (
+                "face.front full-frame",
+                "framing authority",
+                "head-top margin",
+                "eye-line",
+                "upper-shoulder",
+            )
+            return all(term in normalized for term in framing_terms)
+        return True
     return True
 
 

@@ -19,6 +19,10 @@ from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductA
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatus, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
+    expression_front_card_framing_materialization_directive,
+    laugh_expression_materialization_directive,
+)
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -39,6 +43,14 @@ def _png_bytes() -> bytes:
     buffer = BytesIO()
     Image.new("RGB", (32, 48), color=(224, 236, 255)).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def _current_laugh_handoff_prompt(*, suffix: str = "") -> str:
+    return (
+        f"{laugh_expression_materialization_directive()} "
+        f"{expression_front_card_framing_materialization_directive()} "
+        f"{suffix}"
+    ).strip()
 
 
 def _request_metadata(
@@ -215,7 +227,7 @@ def test_doc203_character_card_stage_creation_receives_explicit_mcp_handoff() ->
                 get=lambda handoff_id: {
                     "handoff_id": handoff_id,
                     "status": "pending",
-                    "canonical_prompt": "same person with a joyful laugh expression",
+                    "canonical_prompt": _current_laugh_handoff_prompt(),
                 }
             )
 
@@ -324,7 +336,7 @@ def test_doc209_scenario_runtime_preserves_explicit_mcp_handoff_in_frozen_genera
 def test_doc205_character_card_recovers_orphan_submitted_handoff_without_replanning(tmp_path: Path) -> None:
     operation_id = "people_doc205:expression_set:expression.laugh:2:round3"
     handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
-    prompt = "same face reference with a joyful laugh expression"
+    prompt = _current_laugh_handoff_prompt()
     handoff = handoffs.ensure_pending(
         operation_id=operation_id,
         prompt=prompt,
@@ -422,7 +434,10 @@ def test_doc205_character_card_recovers_orphan_submitted_handoff_without_replann
 def test_doc205_character_card_orphan_handoff_recovery_fails_closed_when_ambiguous(tmp_path: Path) -> None:
     operation_id = "people_doc205:expression_set:expression.laugh:2:round3"
     handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
-    for prompt in ("same face reference with joyful laugh expression", "same face reference with delighted laugh expression"):
+    for prompt in (
+        _current_laugh_handoff_prompt(suffix="candidate A"),
+        _current_laugh_handoff_prompt(suffix="candidate B"),
+    ):
         handoffs.ensure_pending(
             operation_id=operation_id,
             prompt=prompt,
@@ -466,8 +481,10 @@ def test_doc207_character_card_orphan_recovery_prefers_submitted_artifact_over_p
     handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
     pending = handoffs.ensure_pending(
         operation_id=operation_id,
-        prompt="same face reference with a joyful laugh expression pending draft",
-        prompt_sha256=hashlib.sha256(b"pending").hexdigest(),
+        prompt=_current_laugh_handoff_prompt(suffix="pending draft"),
+        prompt_sha256=hashlib.sha256(
+            _current_laugh_handoff_prompt(suffix="pending draft").encode("utf-8")
+        ).hexdigest(),
         reference_assets=[],
         rendering_contract={
             "renderer": "codex_builtin_imagegen",
@@ -481,8 +498,10 @@ def test_doc207_character_card_orphan_recovery_prefers_submitted_artifact_over_p
     )
     submitted = handoffs.ensure_pending(
         operation_id=operation_id,
-        prompt="same face reference with a delighted laugh expression submitted artifact",
-        prompt_sha256=hashlib.sha256(b"submitted").hexdigest(),
+        prompt=_current_laugh_handoff_prompt(suffix="submitted artifact"),
+        prompt_sha256=hashlib.sha256(
+            _current_laugh_handoff_prompt(suffix="submitted artifact").encode("utf-8")
+        ).hexdigest(),
         reference_assets=[],
         rendering_contract={
             "renderer": "codex_builtin_imagegen",
@@ -572,8 +591,10 @@ def test_doc208_character_card_request_pending_hint_cannot_override_submitted_ar
     handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
     pending = handoffs.ensure_pending(
         operation_id=operation_id,
-        prompt="same face reference with a joyful laugh expression pending draft",
-        prompt_sha256=hashlib.sha256(b"pending").hexdigest(),
+        prompt=_current_laugh_handoff_prompt(suffix="pending draft"),
+        prompt_sha256=hashlib.sha256(
+            _current_laugh_handoff_prompt(suffix="pending draft").encode("utf-8")
+        ).hexdigest(),
         reference_assets=[],
         rendering_contract={
             "renderer": "codex_builtin_imagegen",
@@ -587,8 +608,10 @@ def test_doc208_character_card_request_pending_hint_cannot_override_submitted_ar
     )
     submitted = handoffs.ensure_pending(
         operation_id=operation_id,
-        prompt="same face reference with a delighted laugh expression submitted artifact",
-        prompt_sha256=hashlib.sha256(b"submitted").hexdigest(),
+        prompt=_current_laugh_handoff_prompt(suffix="submitted artifact"),
+        prompt_sha256=hashlib.sha256(
+            _current_laugh_handoff_prompt(suffix="submitted artifact").encode("utf-8")
+        ).hexdigest(),
         reference_assets=[],
         rendering_contract={
             "renderer": "codex_builtin_imagegen",

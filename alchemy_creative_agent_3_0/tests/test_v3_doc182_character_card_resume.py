@@ -26,6 +26,8 @@ from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCr
 from alchemy_creative_agent_3_0.app.schemas import ProviderStrategy
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+    expression_front_card_framing_materialization_directive,
+    laugh_expression_materialization_directive,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateResult,
@@ -63,6 +65,14 @@ from alchemy_creative_agent_3_0.app.visual_assets.library import (
 )
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
+
+
+def _current_laugh_handoff_prompt(*, suffix: str = "") -> str:
+    return (
+        f"{laugh_expression_materialization_directive()} "
+        f"{expression_front_card_framing_materialization_directive()} "
+        f"{suffix}"
+    ).strip()
 
 
 def _face_card() -> CharacterCardState:
@@ -670,7 +680,7 @@ def test_doc202_mcp_character_card_operation_id_is_round_scoped_after_confirmed_
                     "mcp_materialization": {
                         "handoff_id": "mcp_handoff_expression_laugh_round2_1",
                         "status": "pending",
-                        "canonical_prompt": "Same person in a clearly readable joyful laugh keyframe.",
+                        "canonical_prompt": _current_laugh_handoff_prompt(),
                     }
                 },
             )

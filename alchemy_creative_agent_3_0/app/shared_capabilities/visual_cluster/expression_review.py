@@ -140,6 +140,18 @@ def laugh_expression_materialization_directive(contract: Any | None = None) -> s
     )
 
 
+def expression_front_card_framing_materialization_directive() -> str:
+    """Project the expression-slot front-card framing contract into renderer language."""
+
+    return (
+        "Use the approved face.front full-frame Character Card image as the framing authority: keep the same "
+        "vertical 2:3 white-background card skeleton, camera distance, subject scale, head-top margin, eye-line "
+        "height, centered head position, neck and upper-shoulder crop, shoulder span, white padding, lighting and "
+        "white balance. Identity/detail crops are only feature evidence; they must not enlarge the face, lower the "
+        "eye line, add extra torso, tighten into a big-head crop, or turn the card into a different portrait crop."
+    )
+
+
 @dataclass(frozen=True)
 class AffectiveExpressionReviewReceipt:
     """Foundation-owned expression receipt consumed by Provider and MCP paths."""
@@ -323,6 +335,7 @@ __all__ = [
     "LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION",
     "LAUGH_EXPRESSION_EVIDENCE_CODES",
     "LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES",
+    "expression_front_card_framing_materialization_directive",
     "laugh_expression_intent_contract",
     "laugh_expression_materialization_directive",
     "laugh_expression_receipt_allows_slot",
