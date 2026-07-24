@@ -52,6 +52,7 @@ CharacterCardAcceptanceMode = Literal[
     "standard_three_candidate",
     "target_only_existing_candidate_collection",
 ]
+_CHARACTER_CARD_LEGACY_UNCLASSIFIED_ACCEPTANCE_MODE = "legacy_unclassified"
 _SAFE_SHARED_REVIEW_RECEIPT_KEYS = (
     "owner",
     "contract_version",
@@ -245,6 +246,7 @@ class CharacterCardSlot(_CharacterCardModel):
                     module=self.module,
                     slot_key=self.slot_key,
                     output_id=str(self.output_id or ""),
+                    allow_legacy_unclassified=True,
                 )
         if self.is_alias:
             if self.slot_key != "expression.neutral" or self.alias_of != "face.front":
@@ -861,6 +863,7 @@ def validate_character_card_slot_success_receipt(
     module: CharacterCardModule,
     slot_key: str,
     output_id: str,
+    allow_legacy_unclassified: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(receipt, dict):
         raise ValueError("Character Card slot shared runtime receipt is required")
@@ -880,14 +883,44 @@ def validate_character_card_slot_success_receipt(
         raise ValueError("Character Card slot shared runtime receipt retry owner is invalid")
     if int(receipt.get("candidate_count") or 0) != 3:
         raise ValueError("Character Card slot shared runtime receipt candidate budget is invalid")
-    reviewed_candidate_count = int(
-        receipt.get("reviewed_candidate_count") or receipt.get("candidate_count") or 0
-    )
+    has_explicit_acceptance_mode = "acceptance_mode" in receipt
+    has_explicit_reviewed_count = "reviewed_candidate_count" in receipt
+    if not has_explicit_acceptance_mode or not has_explicit_reviewed_count:
+        if not allow_legacy_unclassified:
+            raise ValueError("Character Card slot shared runtime receipt acceptance mode is missing")
+        reviewed_candidate_count = 0
+        acceptance_mode = _CHARACTER_CARD_LEGACY_UNCLASSIFIED_ACCEPTANCE_MODE
+    else:
+        reviewed_candidate_count = int(receipt.get("reviewed_candidate_count") or 0)
+        acceptance_mode = str(receipt.get("acceptance_mode") or "").strip()
     if reviewed_candidate_count < 1 or reviewed_candidate_count > 3:
-        raise ValueError("Character Card slot shared runtime receipt reviewed candidate count is invalid")
-    acceptance_mode = str(receipt.get("acceptance_mode") or "standard_three_candidate").strip()
-    if acceptance_mode not in {"standard_three_candidate", "target_only_existing_candidate_collection"}:
+        if acceptance_mode != _CHARACTER_CARD_LEGACY_UNCLASSIFIED_ACCEPTANCE_MODE:
+            raise ValueError("Character Card slot shared runtime receipt reviewed candidate count is invalid")
+    if acceptance_mode not in {
+        "standard_three_candidate",
+        "target_only_existing_candidate_collection",
+        _CHARACTER_CARD_LEGACY_UNCLASSIFIED_ACCEPTANCE_MODE,
+    }:
         raise ValueError("Character Card slot shared runtime receipt acceptance mode is invalid")
+    if acceptance_mode == _CHARACTER_CARD_LEGACY_UNCLASSIFIED_ACCEPTANCE_MODE:
+        if not allow_legacy_unclassified:
+            raise ValueError("Character Card slot shared runtime receipt acceptance mode is missing")
+        if receipt.get("final_winner_selection_verified") is not True:
+            raise ValueError("Character Card slot shared runtime receipt winner selection is missing")
+        if receipt.get("prompt_reference_parity_verified") is not True:
+            raise ValueError("Character Card slot shared runtime receipt prompt/reference parity is missing")
+        sanitized_reviews = [
+            _sanitize_shared_review_receipt(item)
+            for item in receipt.get("shared_review_receipts", [])
+        ]
+        if not sanitized_reviews:
+            raise ValueError("Character Card slot shared runtime receipt review dimensions are missing")
+        return {
+            **receipt,
+            "reviewed_candidate_count": 0,
+            "acceptance_mode": _CHARACTER_CARD_LEGACY_UNCLASSIFIED_ACCEPTANCE_MODE,
+            "shared_review_receipts": sanitized_reviews,
+        }
     if acceptance_mode == "standard_three_candidate" and reviewed_candidate_count != 3:
         raise ValueError("Character Card standard slot receipt requires three reviewed candidates")
     if int(receipt.get("max_bounded_repair_count") or -1) != 1:
@@ -934,7 +967,24 @@ def character_card_slot_success_receipt_public_summary(
         module=slot.module,
         slot_key=slot.slot_key,
         output_id=slot.output_id,
+        allow_legacy_unclassified=True,
     )
+    if receipt["acceptance_mode"] == _CHARACTER_CARD_LEGACY_UNCLASSIFIED_ACCEPTANCE_MODE:
+        return {
+            "verified": False,
+            "status": "legacy_unclassified",
+            "reason": "missing_acceptance_mode",
+            "owner": receipt["owner"],
+            "receipt_version": receipt["receipt_version"],
+            "module": receipt["module"],
+            "slot_key": receipt["slot_key"],
+            "output_id": receipt["output_id"],
+            "review_owner": receipt["review_owner"],
+            "retry_owner": receipt["retry_owner"],
+            "candidate_count": receipt["candidate_count"],
+            "reviewed_candidate_count": receipt["reviewed_candidate_count"],
+            "acceptance_mode": receipt["acceptance_mode"],
+        }
     return {
         "verified": True,
         "owner": receipt["owner"],

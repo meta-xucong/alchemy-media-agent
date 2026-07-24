@@ -381,7 +381,13 @@ class V3ProductRouteHandlers:
                     public["shared_runtime_receipt_status"] = "inconsistent"
                 if receipt_summary is not None:
                     public["shared_runtime_receipt"] = receipt_summary
-                    public["shared_runtime_receipt_verified"] = True
+                    public["shared_runtime_receipt_verified"] = bool(
+                        receipt_summary.get("verified")
+                    )
+                    if not public["shared_runtime_receipt_verified"]:
+                        public["shared_runtime_receipt_status"] = str(
+                            receipt_summary.get("status") or "unverified"
+                        )
                 elif "shared_runtime_receipt_status" not in public:
                     public["shared_runtime_receipt_verified"] = False
                     public["shared_runtime_receipt_status"] = "missing"

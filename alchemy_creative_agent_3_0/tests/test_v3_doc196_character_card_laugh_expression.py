@@ -61,7 +61,9 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardState,
     ExpressionPreparationRequest,
     SlotAcceptanceCore,
+    character_card_slot_success_receipt_public_summary,
     project_character_card_slot_success_receipt,
+    validate_character_card_slot_success_receipt,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
@@ -1179,6 +1181,62 @@ def test_doc236_standard_slot_receipt_requires_three_reviewed_candidates() -> No
             output_id="output_anger_candidate1",
             shared_review_receipts=shared_reviews,
         )
+
+
+def test_doc237_legacy_receipt_missing_acceptance_mode_is_unclassified_not_standard() -> None:
+    legacy_receipt = {
+        "owner": "v3_character_card_shared_runtime",
+        "receipt_version": "v3_character_card_slot_success_receipt_v1",
+        "module": "expression_set",
+        "slot_key": "expression.anger",
+        "output_id": "output_anger_legacy",
+        "review_owner": "v3_shared_vision",
+        "retry_owner": "v3_shared_visual_retry",
+        "candidate_count": 3,
+        "max_bounded_repair_count": 1,
+        "bounded_repair_count": 0,
+        "final_winner_selection_verified": True,
+        "prompt_reference_parity_verified": True,
+        "shared_review_receipts": [
+            {
+                "owner": "v3_shared_visual_cluster",
+                "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
+                "status": "pass",
+                "evidence_codes": ["shared_visual_review_verified", "shared_visual_review_status_pass"],
+                "issue_codes": [],
+                "score_dimensions": ["visual_quality", "same_person_readability"],
+                "framing_delta_dimensions": ["eye_line_delta_from_front"],
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="acceptance mode is missing"):
+        validate_character_card_slot_success_receipt(
+            legacy_receipt,
+            module="expression_set",
+            slot_key="expression.anger",
+            output_id="output_anger_legacy",
+        )
+
+    slot = CharacterCardSlot(
+        slot_key="expression.anger",
+        module="expression_set",
+        state="winner_selected",
+        output_id="output_anger_legacy",
+        source_candidate_ids=["candidate_anger_legacy"],
+        review_verified=True,
+        prompt_reference_parity_verified=True,
+        candidate_attempt_count=3,
+        shared_runtime_receipt=legacy_receipt,
+    )
+    public = character_card_slot_success_receipt_public_summary(slot)
+
+    assert public is not None
+    assert public["verified"] is False
+    assert public["status"] == "legacy_unclassified"
+    assert public["reason"] == "missing_acceptance_mode"
+    assert public["acceptance_mode"] == "legacy_unclassified"
+    assert public["reviewed_candidate_count"] == 0
 
 
 def test_doc234_host_projects_generic_verified_review_receipt_for_anger_slot() -> None:
