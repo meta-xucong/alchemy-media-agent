@@ -1132,6 +1132,55 @@ def test_doc196_host_projects_laugh_score_dimensions_into_shared_evidence_codes(
     assert "eye_line_delta_from_front" in review.shared_review_receipts[0]["framing_delta_dimensions"]
 
 
+def test_doc236_all_expression_slots_inherit_front_card_framing_contract() -> None:
+    base = "approved face.front expression test"
+    directive = expression_front_card_framing_materialization_directive()
+    intents = ProductApiAnchorPackPreparationHost._character_card_expression_slot_intents(base)  # noqa: SLF001
+
+    for slot in ("laugh", "anger", "sad"):
+        assert directive in intents[slot]
+        assert "head-top margin" in intents[slot]
+        assert "eye-line" in intents[slot]
+        assert "upper-shoulder crop" in intents[slot]
+
+    smile_intent = ProductApiAnchorPackPreparationHost._character_card_single_expression_intent(  # noqa: SLF001
+        base,
+        "smile",
+    )
+    assert directive in smile_intent
+    assert "must not replace the default expression.laugh slot" in smile_intent
+
+
+def test_doc236_standard_slot_receipt_requires_three_reviewed_candidates() -> None:
+    shared_reviews = [
+        {
+            "owner": "v3_shared_visual_cluster",
+            "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
+            "status": "pass",
+            "evidence_codes": ["shared_visual_review_verified", "shared_visual_review_status_pass"],
+            "issue_codes": [],
+            "score_dimensions": ["visual_quality", "same_person_readability"],
+            "framing_delta_dimensions": ["eye_line_delta_from_front"],
+        }
+    ]
+    receipt = CharacterCardSharedRuntimeReceipt(
+        reviewed_candidate_count=1,
+        acceptance_mode="standard_three_candidate",
+        final_winner_selection_verified=True,
+        prompt_reference_parity_verified=True,
+        shared_review_receipts=shared_reviews,
+    )
+
+    with pytest.raises(ValueError, match="standard slot receipt requires three reviewed candidates"):
+        project_character_card_slot_success_receipt(
+            receipt,
+            module="expression_set",
+            slot_key="expression.anger",
+            output_id="output_anger_candidate1",
+            shared_review_receipts=shared_reviews,
+        )
+
+
 def test_doc234_host_projects_generic_verified_review_receipt_for_anger_slot() -> None:
     host = ProductApiAnchorPackPreparationHost(
         _ReviewService(
@@ -1163,6 +1212,7 @@ def test_doc234_host_projects_generic_verified_review_receipt_for_anger_slot() -
                 )
             ],
             winner_output_ids={"expression.anger": candidate.output_id},
+            acceptance_mode="target_only_existing_candidate_collection",
         ),
         asset=type("Asset", (), {"visual_asset_id": "asset_doc234"})(),
         stage="expression_set",
@@ -1221,9 +1271,21 @@ def test_doc235_review_only_collects_prior_verified_anger_candidate_before_pendi
     assert result.winner_output_ids == {"expression.anger": "output_anger_candidate1"}
     assert result.card.expression_slots["expression.anger"].output_id == "output_anger_candidate1"
     assert result.shared_runtime_receipt is not None
+    assert result.shared_runtime_receipt.acceptance_mode == "target_only_existing_candidate_collection"
+    assert result.shared_runtime_receipt.reviewed_candidate_count == 1
     assert result.shared_runtime_receipt.shared_review_receipts[0]["contract_version"] == (
         "v3_character_card_generic_slot_review_receipt_v1"
     )
+    projected = project_character_card_slot_success_receipt(
+        result.shared_runtime_receipt,
+        module="expression_set",
+        slot_key="expression.anger",
+        output_id="output_anger_candidate1",
+        shared_review_receipts=result.shared_runtime_receipt.shared_review_receipts,
+    )
+    assert projected["candidate_count"] == 3
+    assert projected["reviewed_candidate_count"] == 1
+    assert projected["acceptance_mode"] == "target_only_existing_candidate_collection"
 
 
 def test_doc198_expression_candidate_parity_accepts_front_crop_geometry_and_full_frame_package() -> None:

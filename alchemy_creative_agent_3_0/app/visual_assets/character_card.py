@@ -48,6 +48,10 @@ EXPRESSION_LABELS = {
 }
 CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_VERSION = "v3_character_card_slot_success_receipt_v1"
 _CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_OWNER = "v3_character_card_shared_runtime"
+CharacterCardAcceptanceMode = Literal[
+    "standard_three_candidate",
+    "target_only_existing_candidate_collection",
+]
 _SAFE_SHARED_REVIEW_RECEIPT_KEYS = (
     "owner",
     "contract_version",
@@ -68,6 +72,8 @@ _CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_KEYS = {
     "review_owner",
     "retry_owner",
     "candidate_count",
+    "reviewed_candidate_count",
+    "acceptance_mode",
     "max_bounded_repair_count",
     "bounded_repair_count",
     "final_winner_selection_verified",
@@ -684,6 +690,7 @@ class CharacterCardStageResult(_CharacterCardModel):
     shared_runtime_receipt: "CharacterCardSharedRuntimeReceipt | None" = None
     shared_runtime_failure: "CharacterCardSharedRuntimeFailureReceipt | None" = None
     mcp_handoff_ids: list[str] = Field(default_factory=list)
+    acceptance_mode: CharacterCardAcceptanceMode = "standard_three_candidate"
 
 
 class CharacterCardSharedRuntimeReceipt(_CharacterCardModel):
@@ -692,6 +699,8 @@ class CharacterCardSharedRuntimeReceipt(_CharacterCardModel):
     review_owner: Literal["v3_shared_vision"] = "v3_shared_vision"
     retry_owner: Literal["v3_shared_visual_retry"] = "v3_shared_visual_retry"
     candidate_count: Literal[3] = 3
+    reviewed_candidate_count: int = Field(default=3, ge=1, le=3)
+    acceptance_mode: CharacterCardAcceptanceMode = "standard_three_candidate"
     max_bounded_repair_count: Literal[1] = 1
     retry_count: int = Field(default=0, ge=0, le=1)
     final_winner_selection_verified: bool = False
@@ -821,7 +830,7 @@ def project_character_card_slot_success_receipt(
             for item in laugh_receipts
         ):
             raise ValueError("Character Card laugh slot receipt lacks affect/framing evidence")
-    return {
+    projected = {
         "owner": _CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_OWNER,
         "receipt_version": CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_VERSION,
         "module": module,
@@ -830,12 +839,20 @@ def project_character_card_slot_success_receipt(
         "review_owner": stage_receipt.review_owner,
         "retry_owner": stage_receipt.retry_owner,
         "candidate_count": int(stage_receipt.candidate_count),
+        "reviewed_candidate_count": int(stage_receipt.reviewed_candidate_count),
+        "acceptance_mode": stage_receipt.acceptance_mode,
         "max_bounded_repair_count": int(stage_receipt.max_bounded_repair_count),
         "bounded_repair_count": int(stage_receipt.retry_count),
         "final_winner_selection_verified": bool(stage_receipt.final_winner_selection_verified),
         "prompt_reference_parity_verified": bool(stage_receipt.prompt_reference_parity_verified),
         "shared_review_receipts": slot_reviews,
     }
+    return validate_character_card_slot_success_receipt(
+        projected,
+        module=module,
+        slot_key=slot_key,
+        output_id=output_id,
+    )
 
 
 def validate_character_card_slot_success_receipt(
@@ -863,6 +880,16 @@ def validate_character_card_slot_success_receipt(
         raise ValueError("Character Card slot shared runtime receipt retry owner is invalid")
     if int(receipt.get("candidate_count") or 0) != 3:
         raise ValueError("Character Card slot shared runtime receipt candidate budget is invalid")
+    reviewed_candidate_count = int(
+        receipt.get("reviewed_candidate_count") or receipt.get("candidate_count") or 0
+    )
+    if reviewed_candidate_count < 1 or reviewed_candidate_count > 3:
+        raise ValueError("Character Card slot shared runtime receipt reviewed candidate count is invalid")
+    acceptance_mode = str(receipt.get("acceptance_mode") or "standard_three_candidate").strip()
+    if acceptance_mode not in {"standard_three_candidate", "target_only_existing_candidate_collection"}:
+        raise ValueError("Character Card slot shared runtime receipt acceptance mode is invalid")
+    if acceptance_mode == "standard_three_candidate" and reviewed_candidate_count != 3:
+        raise ValueError("Character Card standard slot receipt requires three reviewed candidates")
     if int(receipt.get("max_bounded_repair_count") or -1) != 1:
         raise ValueError("Character Card slot shared runtime receipt repair budget is invalid")
     if int(receipt.get("bounded_repair_count") or 0) < 0 or int(receipt.get("bounded_repair_count") or 0) > 1:
@@ -891,6 +918,8 @@ def validate_character_card_slot_success_receipt(
             raise ValueError("Character Card laugh slot shared runtime receipt is incomplete")
     return {
         **receipt,
+        "reviewed_candidate_count": reviewed_candidate_count,
+        "acceptance_mode": acceptance_mode,
         "shared_review_receipts": sanitized_reviews,
     }
 
@@ -916,6 +945,8 @@ def character_card_slot_success_receipt_public_summary(
         "review_owner": receipt["review_owner"],
         "retry_owner": receipt["retry_owner"],
         "candidate_count": receipt["candidate_count"],
+        "reviewed_candidate_count": receipt["reviewed_candidate_count"],
+        "acceptance_mode": receipt["acceptance_mode"],
         "max_bounded_repair_count": receipt["max_bounded_repair_count"],
         "bounded_repair_count": receipt["bounded_repair_count"],
         "final_winner_selection_verified": receipt["final_winner_selection_verified"],

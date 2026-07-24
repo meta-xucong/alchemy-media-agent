@@ -893,6 +893,7 @@ class ProductApiAnchorPackPreparationHost:
             winner_output_ids={slot_key: winner.output_id},
             failures=[],
             mcp_handoff_ids=[],
+            acceptance_mode="target_only_existing_candidate_collection",
         )
 
     @staticmethod
@@ -905,22 +906,25 @@ class ProductApiAnchorPackPreparationHost:
         """
 
         base = base_intent.strip()
+        front_card_framing = expression_front_card_framing_materialization_directive()
         return {
             "laugh": (
                 f"{base}\nExpression slot target: expression.laugh. "
                 f"{laugh_expression_materialization_directive()} "
-                f"{expression_front_card_framing_materialization_directive()} "
+                f"{front_card_framing} "
                 "Allow only a small amount of natural head-shoulder energy."
             ),
             "anger": (
                 f"{base}\nExpression slot target: expression.anger. "
                 "Render the same person with a mild, age-appropriate annoyed or serious expression; "
-                "avoid adult aggression, shouting, or theatrical anger."
+                "avoid adult aggression, shouting, or theatrical anger. "
+                f"{front_card_framing}"
             ),
             "sad": (
                 f"{base}\nExpression slot target: expression.sad. "
                 "Render the same person with a quiet, age-appropriate sad or pensive expression; "
-                "avoid tears, drama, or a distressed scene."
+                "avoid tears, drama, or a distressed scene. "
+                f"{front_card_framing}"
             ),
         }
 
@@ -930,10 +934,11 @@ class ProductApiAnchorPackPreparationHost:
         if expression in {"laugh", "anger", "sad"}:
             return ProductApiAnchorPackPreparationHost._character_card_expression_slot_intents(base)[expression]
         if expression == "smile":
+            front_card_framing = expression_front_card_framing_materialization_directive()
             return (
                 f"{base}\nExpression slot target: expression.smile. "
                 "Render the same person in an explicitly requested low-intensity natural smile, "
-                "preserving the approved front-card framing, identity, lighting, white background, and crop. "
+                f"{front_card_framing} "
                 "This is an optional extension expression and must not replace the default expression.laugh slot."
             )
         raise ValueError("character_card_expression_slot_not_explicitly_supported")
@@ -1018,6 +1023,8 @@ class ProductApiAnchorPackPreparationHost:
             update={
                 "shared_runtime_receipt": CharacterCardSharedRuntimeReceipt(
                     retry_count=retry_count,
+                    reviewed_candidate_count=max(1, min(3, len(result.attempts) or 3)),
+                    acceptance_mode=result.acceptance_mode,
                     final_winner_selection_verified=bool(result.winner_output_ids),
                     prompt_reference_parity_verified=all(
                         attempt.candidate.prompt_reference_parity_verified
