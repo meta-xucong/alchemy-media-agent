@@ -195,6 +195,53 @@ class _SuccessfulExpressionHost:
         )
 
 
+class _SingleLaughSlotHost:
+    production_shared_runtime = True
+
+    def prepare_expression_slot(
+        self,
+        *,
+        asset,  # noqa: ANN001
+        card,
+        expression: str,
+        generation_channel="provider",
+        review_only_resume: bool = False,
+    ):  # noqa: ANN201
+        assert expression == "laugh"
+        receipt = _laugh_shared_review_receipt()
+        output_id = "output_laugh_doc232"
+        slot = CharacterCardSlot(
+            slot_key="expression.laugh",
+            module="expression_set",
+            state="winner_selected",
+            output_id=output_id,
+            source_candidate_ids=["candidate_expression_laugh_doc232"],
+            lineage_id="lineage_expression_laugh_doc232",
+            review_verified=True,
+            prompt_reference_parity_verified=True,
+            candidate_attempt_count=3,
+        )
+        return CharacterCardStageResult(
+            status="review",
+            card=card.model_copy(
+                update={
+                    "expression_set_status": "partial",
+                    "expression_slots": {**card.expression_slots, "expression.laugh": slot},
+                    "last_shared_runtime_failure": None,
+                }
+            ),
+            attempts=[
+                _attempt(
+                    slot_key="expression.laugh",
+                    output_id=output_id,
+                    shared_review_receipts=[receipt],
+                )
+            ],
+            winner_output_ids={"expression.laugh": output_id},
+            shared_runtime_receipt=_stage_receipt([receipt]),
+        )
+
+
 def test_doc223d_prepare_persists_slot_success_receipt_across_catalog_reload(tmp_path) -> None:
     catalog = PersistentVisualAssetLibraryCatalog(tmp_path)
     asset = _catalog_asset(catalog)
@@ -230,6 +277,37 @@ def test_doc223d_prepare_persists_slot_success_receipt_across_catalog_reload(tmp
         slot_key="expression.laugh",
         output_id="output_laugh_doc223d",
     )
+
+
+def test_doc232_laugh_slot_receipt_does_not_require_unrelated_module_activation(tmp_path) -> None:
+    catalog = PersistentVisualAssetLibraryCatalog(tmp_path)
+    asset = _catalog_asset(catalog)
+    catalog.save(asset.model_copy(update={"character_card": _face_ready_card()}))
+    lifecycle = VisualAssetLibraryLifecycleService(
+        catalog,
+        character_card_stage_host=_SingleLaughSlotHost(),
+    )
+
+    updated = lifecycle.prepare_character_card_stage(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        stage="expression_set",
+        expression="laugh",
+    )
+
+    reloaded = catalog.get(owner_scope="local_default", visual_asset_id=asset.visual_asset_id)
+    card = reloaded.character_card
+    laugh = card.expression_slots["expression.laugh"]
+    assert updated.character_card.expression_set_status == "partial"
+    assert laugh.state == "winner_selected"
+    assert laugh.output_id == "output_laugh_doc232"
+    assert laugh.shared_runtime_receipt is not None
+    assert laugh.shared_runtime_receipt["slot_key"] == "expression.laugh"
+    assert laugh.shared_runtime_receipt["output_id"] == "output_laugh_doc232"
+    assert card.expression_slots["expression.anger"].state == "empty"
+    assert card.expression_slots["expression.sad"].state == "empty"
+    with pytest.raises(ValueError, match="Expression Set contains an unreviewed slot"):
+        CharacterCardPreparationService.activate_module(card, module="expression_set", confirmed=True)
 
 
 def test_doc223d_public_projection_exposes_only_safe_success_receipt_summary(tmp_path) -> None:
