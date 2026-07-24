@@ -862,36 +862,39 @@ class ProductApiAnchorPackPreparationHost:
                 passing.append((candidate, review))
         if not passing:
             return None
-        winner = acceptance_core.select_winner(passing)
-        if winner is None:
-            return None
-        slots = dict(card.expression_slots)
-        slots[slot_key] = CharacterCardPreparationService._winner_slot(
-            module="expression_set",
-            slot_key=slot_key,
-            winner=winner,
-        )
+        # Doc240/Task8: this recovery seam can only collect candidates that
+        # existed before a later pending handoff.  At this point it is an
+        # auxiliary target-only evidence path, not the official
+        # standard_three_candidate slot-completion path.  Do not select a
+        # winner or write a slot from one/two prior candidates; the formal
+        # slot writer requires an explicit FormalSlotReceipt produced from
+        # three reviewed candidates.
         updated = card.model_copy(
             update={
-                "expression_slots": slots,
-                "expression_set_status": "partial",
+                "expression_set_status": "blocked",
                 "append_only_revision": card.append_only_revision + 1,
-                "last_failed_module": None,
-                "last_failed_slot_key": None,
-                "last_failure_code": None,
-                "last_failure_attempt_count": 0,
-                "last_shared_runtime_failure": None,
+                "last_failed_module": "expression_set",
+                "last_failed_slot_key": slot_key,
+                "last_failure_code": "target_only_existing_candidate_collection_not_formal",
+                "last_failure_attempt_count": len(attempts),
                 "last_review_repair_context": None,
                 "resume_available": False,
-                "pending_mcp_handoff_ids": [],
             }
         )
         return CharacterCardStageResult(
-            status="review",
+            status="blocked",
             card=updated,
             attempts=attempts,
-            winner_output_ids={slot_key: winner.output_id},
-            failures=[],
+            winner_output_ids={},
+            failures=[
+                CharacterCardFailureEvent(
+                    module="expression_set",
+                    slot_key=slot_key,
+                    candidate_index=failure_index,
+                    attempt_round=attempt_round,
+                    failure_code="target_only_existing_candidate_collection_not_formal",
+                )
+            ],
             mcp_handoff_ids=[],
             acceptance_mode="target_only_existing_candidate_collection",
         )
@@ -2138,7 +2141,12 @@ class ProductApiAnchorPackPreparationHost:
             issue_codes=issue_codes,
             verified=verified,
             raw_status=raw_status,
+            require_front_card_framing=request.module == "expression_set",
         )
+        evidence_codes.extend(generic_receipt.evidence_codes)
+        if generic_receipt.status != "pass":
+            expression_gate_issues.extend(generic_receipt.issue_codes)
+        issue_codes.extend(generic_receipt.issue_codes)
         if request.module == "expression_set" and request.slot_key == "expression.laugh":
             expression_receipt = project_laugh_expression_review_receipt(
                 score_card=score_card,
@@ -2155,6 +2163,7 @@ class ProductApiAnchorPackPreparationHost:
                 if verified
                 and raw_status in {"pass", "warning"}
                 and parity
+                and generic_receipt.status == "pass"
                 and not expression_gate_issues
                 else "fail"
             ),

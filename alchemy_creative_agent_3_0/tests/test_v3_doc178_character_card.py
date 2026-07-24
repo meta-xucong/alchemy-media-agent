@@ -13,9 +13,11 @@ from pydantic import ValidationError
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     EXPRESSION_FRAMING_DELTA_MAX,
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+    project_generic_visual_review_receipt,
     project_laugh_expression_review_receipt,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+    BODY_ENHANCED_PROFILE_EVIDENCE_CODE,
     BODY_SOURCE_CLASSES,
     BODY_SLOT_KEYS,
     EXPRESSION_SLOT_KEYS,
@@ -28,6 +30,13 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BodyPreparationRequest,
     CharacterCardCandidateResult,
     project_character_card_slot_success_receipt,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    FormalSlotAcceptanceCore,
+    FormalSlotCandidateEnhancedProofSummary,
+    FormalSlotCandidateSummary,
+    FormalSlotRequirementSummary,
+    mark_formal_slot_receipt_reload_public_projection_verified,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateResult,
@@ -241,6 +250,7 @@ class _Doc178FaceReviewer:
                 if getattr(candidate, "slot_key", "") == "expression.laugh"
                 else [],
             ),
+            shared_review_receipts=[_doc178_generic_review_receipt()],
         )
 
 
@@ -273,35 +283,43 @@ def test_doc178_face_extension_reuses_existing_serial_host_for_two_new_slots() -
     result = CharacterCardPreparationService.prepare_face_identity_extension(service, _doc178_face_request())
 
     assert result.status == "review"
-    assert len(result.attempts) == 21
+    assert len(result.attempts) == 17
     assert [view.view_role for view in result.pack.anchor_views] == [
         "standard_front",
-        "left_front_25",
         "three_quarter",
         "profile",
-        "right_front_25",
         "reverse_three_quarter",
         "rear_head",
+    ]
+    assert [reference.reference_role for reference in result.pack.auxiliary_references] == [
+        "left_front_25",
+        "right_front_25",
     ]
     reverse_request = next(
         request for request in generator.requests if request.view_role == "reverse_three_quarter"
     )
     assert reverse_request.reference_evidence_ids == [
         "root_1",
-        "output_standard_front_3",
-        "output_profile_3",
-        "output_right_front_25_3",
+        "output_standard_front_1",
+        "output_profile_1",
+        "output_right_front_25_1",
     ]
     assert generator.requests[-1].reference_evidence_ids == [
         "root_1",
-        "output_standard_front_3",
-        "output_profile_3",
-        "output_reverse_three_quarter_3",
+        "output_standard_front_1",
+        "output_profile_1",
+        "output_reverse_three_quarter_1",
     ]
 
 
 def _doc178_face_ready_card() -> CharacterCardState:
     card = CharacterCardState.initial(card_version_id="card_1")
+    formal_receipt = _doc178_formal_slot_receipt(
+        module="face_identity",
+        slot_key="face_identity.standard_front",
+        winner_output_id="front_winner",
+        winner_candidate_id="front_candidate_1",
+    )
     front = CharacterCardSlot(
         slot_key="face.front",
         module="face_identity",
@@ -312,6 +330,7 @@ def _doc178_face_ready_card() -> CharacterCardState:
         review_verified=True,
         prompt_reference_parity_verified=True,
         candidate_attempt_count=3,
+        formal_slot_receipt=formal_receipt,
     )
     return card.model_copy(update={"face_identity_status": "active", "face_slots": {**card.face_slots, "face.front": front}})
 
@@ -338,23 +357,105 @@ def _doc178_laugh_review_receipt() -> dict[str, object]:
 
 
 def _doc178_generic_review_receipt() -> dict[str, object]:
-    return {
-        "owner": "v3_shared_visual_cluster",
-        "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
-        "status": "pass",
-        "evidence_codes": ["shared_visual_review_verified"],
-        "issue_codes": [],
-        "score_dimensions": ["identity_fidelity", "visual_quality"],
-        "framing_delta_dimensions": [],
+    score_card = {
+        "identity_fidelity": 0.9,
+        "visual_quality": 0.9,
+        "same_person_readability": 0.9,
+        "front_card_framing_parity": 0.91,
     }
+    for dimension in EXPRESSION_FRAMING_DELTA_MAX:
+        score_card[dimension] = 0.01
+    return project_generic_visual_review_receipt(
+        score_card=score_card,
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        require_front_card_framing=True,
+    ).to_public_dict()
+
+
+def _doc178_requirement_summary(evidence_code: str) -> FormalSlotRequirementSummary:
+    return FormalSlotRequirementSummary(
+        status="pass",
+        evidence_codes=[evidence_code],
+        dimensions={"summary_score": 1.0},
+    )
+
+
+def _doc178_enhanced_proof(
+    *,
+    candidate_id: str,
+    output_id: str,
+    profile_id: str,
+    evidence_code: str,
+) -> FormalSlotCandidateEnhancedProofSummary:
+    return FormalSlotCandidateEnhancedProofSummary(
+        profile_id=profile_id,
+        requirement_id=f"{profile_id}.required",
+        candidate_id=candidate_id,
+        output_id=output_id,
+        eligible=True,
+        status="pass",
+        evidence_codes=[evidence_code],
+        dimensions={"profile_score": 1.0},
+    )
+
+
+def _doc178_formal_slot_receipt(
+    *,
+    module: str,
+    slot_key: str,
+    winner_output_id: str,
+    winner_candidate_id: str,
+    enhanced_profile_id: str | None = None,
+    enhanced_evidence_code: str = "doc178_enhanced_profile_eligible",
+):
+    candidates = []
+    for index in (1, 2, 3):
+        candidate_id = winner_candidate_id if index == 1 else f"{winner_candidate_id}_alt_{index}"
+        output_id = winner_output_id if index == 1 else f"{winner_output_id}_alt_{index}"
+        enhanced_proof = (
+            _doc178_enhanced_proof(
+                candidate_id=candidate_id,
+                output_id=output_id,
+                profile_id=enhanced_profile_id,
+                evidence_code=enhanced_evidence_code,
+            )
+            if enhanced_profile_id is not None
+            else None
+        )
+        candidates.append(
+            FormalSlotCandidateSummary(
+                candidate_index=index,
+                candidate_id=candidate_id,
+                output_id=output_id,
+                reviewed=True,
+                shared_review=_doc178_generic_review_receipt(),
+                enhanced_proof=enhanced_proof,
+            )
+        )
+    return FormalSlotAcceptanceCore().accept(
+        module=module,
+        slot_key=slot_key,
+        acceptance_mode="standard_three_candidate",
+        candidates=candidates,
+        framing_summary=_doc178_requirement_summary("doc178_framing_verified"),
+        parity_summary=_doc178_requirement_summary("doc178_parity_verified"),
+        identity_summary=_doc178_requirement_summary("doc178_identity_verified"),
+        ranking_key=lambda candidate: 1 if candidate.candidate_id == winner_candidate_id else 0,
+        candidate_eligibility=(
+            (lambda candidate: candidate.enhanced_proof is not None and candidate.enhanced_proof.eligible)
+            if enhanced_profile_id is not None
+            else None
+        ),
+        reload_public_projection_verified=True,
+    )
 
 
 def _doc178_slot_success_receipt(slot_key: str, output_id: str) -> dict[str, object]:
-    review_receipts = [
-        _doc178_laugh_review_receipt()
-        if slot_key == "expression.laugh"
-        else _doc178_generic_review_receipt()
-    ]
+    review_receipts = [_doc178_generic_review_receipt()]
+    if slot_key == "expression.laugh":
+        review_receipts.append(_doc178_laugh_review_receipt())
     module = (
         "expression_set"
         if slot_key.startswith("expression.")
@@ -396,6 +497,11 @@ class _Doc178ExpressionBodyGenerator:
 
 class _Doc178ExpressionBodyReviewer:
     def review(self, candidate):
+        evidence_codes: list[str] = []
+        if getattr(candidate, "slot_key", "") == "expression.laugh":
+            evidence_codes.extend(sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES))
+        if getattr(candidate, "module", "") == "body_silhouette":
+            evidence_codes.append(BODY_ENHANCED_PROFILE_EVIDENCE_CODE)
         return AnchorReviewDecision(
             status="pass",
             identity_scores=IdentityScoreSummary(
@@ -403,10 +509,9 @@ class _Doc178ExpressionBodyReviewer:
                 distinctive_feature_score=0.9,
                 human_realism_score=0.9,
                 visual_quality_score=0.9,
-                evidence_codes=sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
-                if getattr(candidate, "slot_key", "") == "expression.laugh"
-                else [],
+                evidence_codes=evidence_codes,
             ),
+            shared_review_receipts=[_doc178_generic_review_receipt()],
         )
 
 
@@ -432,6 +537,9 @@ def test_doc178_expression_and_body_are_independent_three_candidate_stages() -> 
         slot = expression_slots[slot_key]
         expression_slots[slot_key] = slot.model_copy(
             update={
+                "formal_slot_receipt": mark_formal_slot_receipt_reload_public_projection_verified(
+                    slot.formal_slot_receipt
+                ),
                 "shared_runtime_receipt": _doc178_slot_success_receipt(
                     slot_key,
                     str(slot.output_id),

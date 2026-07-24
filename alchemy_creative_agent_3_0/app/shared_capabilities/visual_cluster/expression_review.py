@@ -80,6 +80,12 @@ LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES = frozenset(
         "shared_affective_expression_review_receipt_verified",
     }
 )
+EXPRESSION_FRONT_CARD_FRAMING_EVIDENCE_CODES = frozenset(
+    {
+        "front_card_framing_parity_verified",
+        "front_card_framing_delta_receipt_verified",
+    }
+)
 
 LAUGH_EXPRESSION_SCORE_FLOORS = {
     "mouth_eye_coherence": 0.82,
@@ -270,6 +276,7 @@ def project_generic_visual_review_receipt(
     issue_codes: list[str] | tuple[str, ...] | set[str],
     verified: bool,
     raw_status: str,
+    require_front_card_framing: bool = False,
 ) -> GenericVisualReviewReceipt:
     """Project shared Vision's generic pass/fail facts into a safe receipt.
 
@@ -283,17 +290,26 @@ def project_generic_visual_review_receipt(
     normalized_issues = tuple(
         dict.fromkeys(str(item or "").strip() for item in issue_codes if str(item or "").strip())
     )
-    status = "pass" if verified and str(raw_status or "").strip().lower() in {"pass", "warning"} else "fail"
+    framing_issues = _front_card_framing_gate_issues(normalized_scores) if require_front_card_framing else []
+    status = (
+        "pass"
+        if verified
+        and str(raw_status or "").strip().lower() in {"pass", "warning"}
+        and not framing_issues
+        else "fail"
+    )
     evidence_codes = ["shared_visual_review_verified" if verified else "shared_visual_review_unverified"]
     if status == "pass":
         evidence_codes.append("shared_visual_review_status_pass")
+        if require_front_card_framing:
+            evidence_codes.extend(sorted(EXPRESSION_FRONT_CARD_FRAMING_EVIDENCE_CODES))
     framing_dimensions = tuple(
         sorted(dimension for dimension in EXPRESSION_FRAMING_DELTA_MAX if dimension in normalized_scores)
     )
     return GenericVisualReviewReceipt(
         status=status,
         evidence_codes=tuple(dict.fromkeys(evidence_codes)),
-        issue_codes=normalized_issues,
+        issue_codes=tuple(dict.fromkeys([*normalized_issues, *framing_issues])),
         score_dimensions=tuple(sorted(normalized_scores)),
         framing_delta_dimensions=framing_dimensions,
     )
@@ -362,6 +378,47 @@ def laugh_expression_receipt_allows_slot(
     return LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES.issubset(normalized_evidence)
 
 
+def expression_front_card_framing_receipt_allows_slot(
+    shared_review_receipts: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+) -> bool:
+    """Return whether a shared expression receipt preserves face.front framing."""
+
+    for receipt in shared_review_receipts or []:
+        if not isinstance(receipt, dict):
+            continue
+        if receipt.get("owner") != "v3_shared_visual_cluster":
+            continue
+        if receipt.get("contract_version") != GENERIC_SLOT_REVIEW_RECEIPT_CONTRACT_VERSION:
+            continue
+        if receipt.get("status") != "pass":
+            continue
+        issues = {str(item or "").strip() for item in receipt.get("issue_codes", [])}
+        if {
+            "shared_affective_expression_framing_receipt_missing",
+            "shared_affective_expression_framing_drift",
+        }.intersection(issues):
+            continue
+        evidence = {str(item or "").strip() for item in receipt.get("evidence_codes", [])}
+        if not EXPRESSION_FRONT_CARD_FRAMING_EVIDENCE_CODES.issubset(evidence):
+            continue
+        if not receipt.get("framing_delta_dimensions"):
+            continue
+        return True
+    return False
+
+
+def _front_card_framing_gate_issues(score_card: dict[str, float]) -> list[str]:
+    issues: list[str] = []
+    if _score_below_floor(
+        score_card,
+        "expression_framing_parity",
+        EXPRESSION_FRAMING_PARITY_FLOOR,
+    ):
+        issues.append("shared_affective_expression_framing_drift")
+    issues.extend(_expression_framing_delta_issues(score_card))
+    return list(dict.fromkeys(issues))
+
+
 def _expression_framing_delta_issues(score_card: dict[str, float]) -> list[str]:
     missing: list[str] = []
     drifting: list[str] = []
@@ -399,6 +456,7 @@ def _score_below_floor(score_card: dict[str, float], dimension: str, floor: floa
 __all__ = [
     "AffectiveExpressionReviewReceipt",
     "EXPRESSION_FRAMING_DELTA_MAX",
+    "EXPRESSION_FRONT_CARD_FRAMING_EVIDENCE_CODES",
     "EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES",
     "GENERIC_SLOT_REVIEW_RECEIPT_CONTRACT_VERSION",
     "GenericVisualReviewReceipt",
@@ -406,6 +464,7 @@ __all__ = [
     "LAUGH_EXPRESSION_EVIDENCE_CODES",
     "LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES",
     "expression_front_card_framing_materialization_directive",
+    "expression_front_card_framing_receipt_allows_slot",
     "laugh_expression_intent_contract",
     "laugh_expression_materialization_directive",
     "laugh_expression_receipt_allows_slot",

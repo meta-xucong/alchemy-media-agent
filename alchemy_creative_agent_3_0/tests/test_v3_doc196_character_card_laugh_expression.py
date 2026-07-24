@@ -134,10 +134,29 @@ def _generic_shared_review_receipt() -> dict[str, object]:
         "owner": "v3_shared_visual_cluster",
         "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
         "status": "pass",
-        "evidence_codes": ["shared_visual_review_verified"],
+        "evidence_codes": [
+            "front_card_framing_delta_receipt_verified",
+            "front_card_framing_parity_verified",
+            "shared_visual_review_status_pass",
+            "shared_visual_review_verified",
+        ],
         "issue_codes": [],
-        "score_dimensions": ["identity_fidelity", "visual_quality"],
-        "framing_delta_dimensions": [],
+        "score_dimensions": [
+            "expression_framing_parity",
+            "identity_fidelity",
+            "same_person_readability",
+            "visual_quality",
+        ],
+        "framing_delta_dimensions": [
+            "bottom_margin_delta_from_front",
+            "center_x_delta_from_front",
+            "eye_line_delta_from_front",
+            "face_area_delta_from_front",
+            "head_pitch_delta_from_front",
+            "head_yaw_delta_from_front",
+            "shoulder_span_delta_from_front",
+            "top_margin_delta_from_front",
+        ],
     }
 
 
@@ -587,7 +606,7 @@ def test_doc233_lifecycle_routes_remaining_expression_slots_explicitly(expressio
             module="expression_set",
             slot_key="expression.laugh",
             output_id="laugh_output",
-            shared_review_receipts=[_laugh_shared_review_receipt()],
+            shared_review_receipts=[_generic_shared_review_receipt(), _laugh_shared_review_receipt()],
         ),
     )
     active_card = active_card.model_copy(
@@ -1332,25 +1351,16 @@ def test_doc235_review_only_collects_prior_verified_anger_candidate_before_pendi
         review_only_resume=True,
     )
 
-    assert result.status == "review"
-    assert result.winner_output_ids == {"expression.anger": "output_anger_candidate1"}
-    assert result.card.expression_slots["expression.anger"].output_id == "output_anger_candidate1"
-    assert result.shared_runtime_receipt is not None
-    assert result.shared_runtime_receipt.acceptance_mode == "target_only_existing_candidate_collection"
-    assert result.shared_runtime_receipt.reviewed_candidate_count == 1
-    assert result.shared_runtime_receipt.shared_review_receipts[0]["contract_version"] == (
+    assert result.status == "blocked"
+    assert result.winner_output_ids == {}
+    assert result.card.expression_slots["expression.anger"].output_id is None
+    assert result.card.last_failure_code == "target_only_existing_candidate_collection_not_formal"
+    assert result.shared_runtime_failure is not None
+    assert result.shared_runtime_failure.reviewed_attempt_count == 1
+    assert result.shared_runtime_failure.shared_review_receipts[0]["contract_version"] == (
         "v3_character_card_generic_slot_review_receipt_v1"
     )
-    projected = project_character_card_slot_success_receipt(
-        result.shared_runtime_receipt,
-        module="expression_set",
-        slot_key="expression.anger",
-        output_id="output_anger_candidate1",
-        shared_review_receipts=result.shared_runtime_receipt.shared_review_receipts,
-    )
-    assert projected["candidate_count"] == 3
-    assert projected["reviewed_candidate_count"] == 1
-    assert projected["acceptance_mode"] == "target_only_existing_candidate_collection"
+    assert not result.formal_slot_receipts
 
 
 def test_doc198_expression_candidate_parity_accepts_front_crop_geometry_and_full_frame_package() -> None:

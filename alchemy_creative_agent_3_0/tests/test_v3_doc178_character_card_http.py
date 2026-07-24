@@ -11,9 +11,11 @@ from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiServi
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     EXPRESSION_FRAMING_DELTA_MAX,
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+    project_generic_visual_review_receipt,
     project_laugh_expression_review_receipt,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+    BODY_ENHANCED_PROFILE_EVIDENCE_CODE,
     BodySilhouettePublicRequest,
     CharacterCardCandidateAttempt,
     CharacterCardCandidateRequest,
@@ -24,6 +26,12 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardStageResult,
     CharacterCardState,
     CharacterCardSlot,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    FormalSlotAcceptanceCore,
+    FormalSlotCandidateEnhancedProofSummary,
+    FormalSlotCandidateSummary,
+    FormalSlotRequirementSummary,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorPackPreparationResult, AnchorReviewDecision
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityAnchorPackVersion, IdentityScoreSummary, RootSourceProvenance
@@ -121,6 +129,70 @@ class _SharedStageHost:
         self.body_request = None
 
     @staticmethod
+    def _formal_requirement_summary(evidence_code: str) -> FormalSlotRequirementSummary:
+        return FormalSlotRequirementSummary(
+            status="pass",
+            evidence_codes=[evidence_code],
+            dimensions={"summary_score": 1.0},
+        )
+
+    @classmethod
+    def _formal_receipt(
+        cls,
+        *,
+        module: str,
+        slot_key: str,
+        winner_output_id: str,
+        winner_candidate_id: str,
+        enhanced_profile_id: str | None = None,
+        enhanced_evidence_code: str = "doc178_enhanced_profile_eligible",
+    ):
+        candidates = []
+        for index in (1, 2, 3):
+            candidate_id = winner_candidate_id if index == 1 else f"{winner_candidate_id}_alt_{index}"
+            output_id = winner_output_id if index == 1 else f"{winner_output_id}_alt_{index}"
+            enhanced_proof = (
+                FormalSlotCandidateEnhancedProofSummary(
+                    profile_id=enhanced_profile_id,
+                    requirement_id=f"{enhanced_profile_id}.required",
+                    candidate_id=candidate_id,
+                    output_id=output_id,
+                    eligible=True,
+                    status="pass",
+                    evidence_codes=[enhanced_evidence_code],
+                    dimensions={"profile_score": 1.0},
+                )
+                if enhanced_profile_id is not None
+                else None
+            )
+            candidates.append(
+                FormalSlotCandidateSummary(
+                    candidate_index=index,
+                    candidate_id=candidate_id,
+                    output_id=output_id,
+                    reviewed=True,
+                    shared_review=cls._shared_review_receipt(slot_key=slot_key),
+                    enhanced_proof=enhanced_proof,
+                )
+            )
+        return FormalSlotAcceptanceCore().accept(
+            module=module,
+            slot_key=slot_key,
+            acceptance_mode="standard_three_candidate",
+            candidates=candidates,
+            framing_summary=cls._formal_requirement_summary("doc178_framing_verified"),
+            parity_summary=cls._formal_requirement_summary("doc178_parity_verified"),
+            identity_summary=cls._formal_requirement_summary("doc178_identity_verified"),
+            ranking_key=lambda candidate: 1 if candidate.candidate_id == winner_candidate_id else 0,
+            candidate_eligibility=(
+                (lambda candidate: candidate.enhanced_proof is not None and candidate.enhanced_proof.eligible)
+                if enhanced_profile_id is not None
+                else None
+            ),
+            reload_public_projection_verified=True,
+        )
+
+    @staticmethod
     def _laugh_review_receipt() -> dict[str, object]:
         score_card = {
             "mouth_eye_coherence": 0.9,
@@ -145,15 +217,21 @@ class _SharedStageHost:
     def _shared_review_receipt(cls, *, slot_key: str = "") -> dict[str, object]:
         if slot_key == "expression.laugh":
             return cls._laugh_review_receipt()
-        return {
-            "owner": "v3_shared_visual_cluster",
-            "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
-            "status": "pass",
-            "evidence_codes": ["shared_visual_review_verified"],
-            "issue_codes": [],
-            "score_dimensions": ["identity_fidelity", "visual_quality"],
-            "framing_delta_dimensions": [],
+        score_card = {
+            "identity_fidelity": 0.9,
+            "visual_quality": 0.9,
+            "same_person_readability": 0.9,
+            "front_card_framing_parity": 0.91,
         }
+        for dimension in EXPRESSION_FRAMING_DELTA_MAX:
+            score_card[dimension] = 0.01
+        return project_generic_visual_review_receipt(
+            score_card=score_card,
+            issue_codes=[],
+            verified=True,
+            raw_status="pass",
+            require_front_card_framing=True,
+        ).to_public_dict()
 
     @classmethod
     def _receipt(cls, *, slot_key: str = "") -> CharacterCardSharedRuntimeReceipt:
@@ -200,6 +278,8 @@ class _SharedStageHost:
                 visual_quality_score=0.9,
                 evidence_codes=sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
                 if slot_key == "expression.laugh"
+                else [BODY_ENHANCED_PROFILE_EVIDENCE_CODE]
+                if module == "body_silhouette"
                 else ["shared_visual_review_verified"],
             ),
             shared_review_receipts=[cls._shared_review_receipt(slot_key=slot_key)],
@@ -208,6 +288,14 @@ class _SharedStageHost:
 
     def prepare_expression_set(self, *, asset, card):
         output_id = "expression_laugh_doc178"
+        formal_receipt = self._formal_receipt(
+            module="expression_set",
+            slot_key="expression.laugh",
+            winner_output_id=output_id,
+            winner_candidate_id="candidate_expression_laugh",
+            enhanced_profile_id="expression_slot_profile_v1",
+            enhanced_evidence_code="expression_slot_profile_eligible",
+        )
         laugh_slot = CharacterCardSlot(
             slot_key="expression.laugh",
             module="expression_set",
@@ -218,6 +306,7 @@ class _SharedStageHost:
             review_verified=True,
             prompt_reference_parity_verified=True,
             candidate_attempt_count=3,
+            formal_slot_receipt=formal_receipt,
         )
         return CharacterCardStageResult(
             status="review",
@@ -235,12 +324,21 @@ class _SharedStageHost:
                 )
             ],
             winner_output_ids={"expression.laugh": output_id},
+            formal_slot_receipts={"expression.laugh": formal_receipt},
             shared_runtime_receipt=self._receipt(slot_key="expression.laugh"),
         )
 
     def prepare_body_silhouette(self, *, asset, card, request=None):
         self.body_request = request
         output_id = "body_front_doc178"
+        formal_receipt = self._formal_receipt(
+            module="body_silhouette",
+            slot_key="body.front_full",
+            winner_output_id=output_id,
+            winner_candidate_id="candidate_body_front",
+            enhanced_profile_id="body_silhouette_slot_profile_v1",
+            enhanced_evidence_code=BODY_ENHANCED_PROFILE_EVIDENCE_CODE,
+        )
         body_slot = CharacterCardSlot(
             slot_key="body.front_full",
             module="body_silhouette",
@@ -253,6 +351,7 @@ class _SharedStageHost:
             review_verified=True,
             prompt_reference_parity_verified=True,
             candidate_attempt_count=3,
+            formal_slot_receipt=formal_receipt,
         )
         return CharacterCardStageResult(
             status="review",
@@ -264,6 +363,7 @@ class _SharedStageHost:
             ),
             attempts=[self._attempt(slot_key="body.front_full", output_id=output_id)],
             winner_output_ids={"body.front_full": output_id},
+            formal_slot_receipts={"body.front_full": formal_receipt},
             shared_runtime_receipt=self._receipt(),
         )
 
@@ -475,8 +575,15 @@ def test_doc180_public_character_card_projection_exposes_only_server_owned_media
         module="face_identity",
         state="winner_selected",
         output_id="output_front_1",
+        source_candidate_ids=["candidate_front_1"],
         review_verified=True,
         prompt_reference_parity_verified=True,
+        formal_slot_receipt=_SharedStageHost._formal_receipt(
+            module="face_identity",
+            slot_key="face_identity.standard_front",
+            winner_output_id="output_front_1",
+            winner_candidate_id="candidate_front_1",
+        ),
     )
     updated = asset.model_copy(
         update={
