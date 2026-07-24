@@ -61,6 +61,36 @@ Each parallel task owns one worktree and one branch.
 Sync early, test before integrating, and protect other worktrees.
 ```
 
+## Current Mainline Workspace Anchor
+
+For the current Professional Character Card / visual-asset acceptance work,
+the authoritative mainline checkout is:
+
+```text
+D:\AI\w\main-codex-reference-parity-integration
+```
+
+This checkout must be on `main`, and its `HEAD` must match `origin/main`
+before controlled validation or feature work continues. If an agent starts in
+`D:\AI\Alchemy Media Agent System` or another historical/archive worktree, it
+must treat that location as non-authoritative for current execution, stop, and
+rerun commands from the mainline checkout above unless the user explicitly
+assigns a different worktree.
+
+The original root directory may keep global AGENTS guidance and historical
+artifacts, but it must not be used for current Character Card validation,
+Provider/MCP runs, slot writes, or mainline commits while it is on an archive
+branch or has unrelated local artifacts. Current controlled evidence for the
+six-year-old Character Card acceptance lives under the mainline checkout's
+`.controlled-validation/` directory and remains append-only.
+
+Short form:
+
+```text
+Current execution root: D:\AI\w\main-codex-reference-parity-integration.
+Original root is historical unless explicitly reassigned.
+```
+
 ## Theory-First Correction Principle
 
 When a development task produces behavior that differs from the expected
