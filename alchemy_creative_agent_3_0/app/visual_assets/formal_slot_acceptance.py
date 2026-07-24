@@ -9,7 +9,8 @@ must prove before it can be treated as standard completion.
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Callable, Iterable
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -199,6 +200,9 @@ class FormalSlotCandidateSummary(_StrictFormalSlotModel):
         return self
 
 
+FormalSlotRankingKey = Callable[[FormalSlotCandidateSummary], Any]
+
+
 class FormalSlotReceipt(_StrictFormalSlotModel):
     """Durable, public-safe receipt for Professional slot acceptance modes."""
 
@@ -383,6 +387,118 @@ class FormalSlotPublicSummary(_StrictFormalSlotModel):
             retry_count=receipt.retry_count,
             repair_count=receipt.repair_count,
         )
+
+
+class FormalSlotAcceptanceCore:
+    """Module-neutral candidate-to-winner formal slot acceptance core.
+
+    The core accepts already-reviewed candidate summaries plus externally
+    supplied requirement summaries.  It has no knowledge of module names,
+    view roles, emotion profiles, execution adapters, or recovery mechanics.
+    """
+
+    def accept(
+        self,
+        *,
+        module: str,
+        slot_key: str,
+        acceptance_mode: FormalSlotAcceptanceMode,
+        candidates: Iterable[FormalSlotCandidateSummary | dict[str, object]],
+        framing_summary: FormalSlotRequirementSummary | dict[str, object],
+        parity_summary: FormalSlotRequirementSummary | dict[str, object],
+        identity_summary: FormalSlotRequirementSummary | dict[str, object],
+        ranking_key: FormalSlotRankingKey | None = None,
+        retry_count: int = 0,
+        repair_count: int = 0,
+        reload_public_projection_verified: bool = True,
+    ) -> FormalSlotReceipt:
+        """Build and validate a formal-slot receipt without module branches."""
+
+        reviewed_candidates = self._coerce_candidates(candidates)
+        selected = self._select_winner(
+            acceptance_mode=acceptance_mode,
+            candidates=reviewed_candidates,
+            ranking_key=ranking_key,
+        )
+        candidate_receipts = [
+            candidate.model_copy(update={"selected_as_winner": candidate.candidate_id == selected.candidate_id})
+            for candidate in reviewed_candidates
+        ]
+        return FormalSlotReceipt(
+            module=module,
+            slot_key=slot_key,
+            acceptance_mode=acceptance_mode,
+            slot_scope=self._slot_scope_for_mode(acceptance_mode),
+            reviewed_candidate_count=len(candidate_receipts),
+            candidates=candidate_receipts,
+            winner_candidate_id=selected.candidate_id,
+            winner_output_id=selected.output_id,
+            winner_shared_review=selected.shared_review,
+            framing_summary=self._coerce_requirement_summary(framing_summary),
+            parity_summary=self._coerce_requirement_summary(parity_summary),
+            identity_summary=self._coerce_requirement_summary(identity_summary),
+            retry_count=retry_count,
+            repair_count=repair_count,
+            reload_public_projection_verified=reload_public_projection_verified,
+        )
+
+    def _coerce_candidates(
+        self,
+        candidates: Iterable[FormalSlotCandidateSummary | dict[str, object]],
+    ) -> list[FormalSlotCandidateSummary]:
+        reviewed_candidates = [
+            candidate
+            if isinstance(candidate, FormalSlotCandidateSummary)
+            else FormalSlotCandidateSummary.model_validate(candidate)
+            for candidate in candidates
+        ]
+        if not reviewed_candidates:
+            raise ValueError("formal slot acceptance requires reviewed candidates")
+        return reviewed_candidates
+
+    def _coerce_requirement_summary(
+        self,
+        summary: FormalSlotRequirementSummary | dict[str, object],
+    ) -> FormalSlotRequirementSummary:
+        return summary if isinstance(summary, FormalSlotRequirementSummary) else FormalSlotRequirementSummary.model_validate(summary)
+
+    def _select_winner(
+        self,
+        *,
+        acceptance_mode: FormalSlotAcceptanceMode,
+        candidates: list[FormalSlotCandidateSummary],
+        ranking_key: FormalSlotRankingKey | None,
+    ) -> FormalSlotCandidateSummary:
+        if acceptance_mode == "standard_three_candidate":
+            return self._select_standard_winner(candidates=candidates, ranking_key=ranking_key)
+        if acceptance_mode in {
+            "target_only_existing_candidate_collection",
+            "auxiliary_first_pass_reference",
+        }:
+            if len(candidates) != 1:
+                raise ValueError(f"{acceptance_mode} requires exactly one reviewed target")
+            return candidates[0]
+        raise ValueError(f"unsupported acceptance mode: {acceptance_mode}")
+
+    def _select_standard_winner(
+        self,
+        *,
+        candidates: list[FormalSlotCandidateSummary],
+        ranking_key: FormalSlotRankingKey | None,
+    ) -> FormalSlotCandidateSummary:
+        if len(candidates) != STANDARD_THREE_CANDIDATE_COUNT:
+            raise ValueError("standard_three_candidate requires exactly three reviewed candidates")
+        eligible = [candidate for candidate in candidates if candidate.shared_review.passed]
+        if not eligible:
+            raise ValueError("standard_three_candidate requires at least one passing reviewed candidate")
+        if ranking_key is None:
+            return min(eligible, key=lambda candidate: candidate.candidate_index)
+        return max(eligible, key=lambda candidate: (ranking_key(candidate), -candidate.candidate_index))
+
+    def _slot_scope_for_mode(self, acceptance_mode: FormalSlotAcceptanceMode) -> FormalSlotArtifactScope:
+        if acceptance_mode == "auxiliary_first_pass_reference":
+            return "auxiliary_reference"
+        return "formal_slot"
 
 
 def project_formal_slot_public_summary(receipt: FormalSlotReceipt | dict[str, object]) -> dict[str, object]:
