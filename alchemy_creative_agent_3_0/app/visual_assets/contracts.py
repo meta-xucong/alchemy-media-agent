@@ -13,6 +13,11 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from .character_card import CharacterCardState
+from .formal_slot_acceptance import (
+    FormalSlotReceipt,
+    project_formal_slot_public_summary,
+    validate_formal_slot_receipt_for_activation,
+)
 
 
 FaceViewRole = Literal[
@@ -35,6 +40,16 @@ FACE_IDENTITY_CHANNELS = (
     "face_feature_relationships",
 )
 REQUIRED_FACE_VIEW_ROLES = frozenset({"standard_front", "three_quarter", "profile"})
+FACE_AUXILIARY_BRIDGE_ROLES = frozenset({"left_front_25", "right_front_25"})
+FORMAL_FACE_VIEW_ROLES = frozenset(
+    {
+        "standard_front",
+        "three_quarter",
+        "profile",
+        "reverse_three_quarter",
+        "rear_head",
+    }
+)
 CHARACTER_CARD_FACE_VIEW_ROLES = frozenset(
     {
         "standard_front",
@@ -147,7 +162,59 @@ class AnchorView(_StrictVisualAssetModel):
     output_id: str
     source_candidate_ids: list[str] = Field(min_length=1)
     identity_scores: IdentityScoreSummary
+    formal_slot_receipt: FormalSlotReceipt | None = None
     active: bool = True
+
+    @model_validator(mode="after")
+    def validate_formal_view_receipt(self) -> "AnchorView":
+        if self.formal_slot_receipt is not None:
+            if self.view_role in FACE_AUXILIARY_BRIDGE_ROLES:
+                raise ValueError("25-35 degree bridge references cannot carry formal AnchorView receipts")
+            receipt = self.formal_slot_receipt
+            if receipt.module != "face_identity":
+                raise ValueError("Face Identity AnchorView receipt must belong to face_identity")
+            if receipt.slot_key != f"face_identity.{self.view_role}":
+                raise ValueError("Face Identity AnchorView receipt slot does not match view role")
+            if receipt.winner_output_id != self.output_id:
+                raise ValueError("Face Identity AnchorView receipt output does not match view output")
+            if self.source_candidate_ids and receipt.winner_candidate_id not in self.source_candidate_ids:
+                raise ValueError("Face Identity AnchorView receipt winner is not in source candidates")
+        return self
+
+    def formal_slot_public_summary(self) -> dict[str, object] | None:
+        if self.formal_slot_receipt is None:
+            return None
+        return project_formal_slot_public_summary(self.formal_slot_receipt)
+
+
+class AnchorAuxiliaryReference(_StrictVisualAssetModel):
+    reference_id: str
+    reference_role: FaceViewRole
+    output_id: str
+    source_candidate_ids: list[str] = Field(min_length=1)
+    identity_scores: IdentityScoreSummary
+    formal_slot_receipt: FormalSlotReceipt
+    active: bool = True
+
+    @model_validator(mode="after")
+    def validate_auxiliary_reference_receipt(self) -> "AnchorAuxiliaryReference":
+        if self.reference_role not in FACE_AUXILIARY_BRIDGE_ROLES:
+            raise ValueError("only 25-35 degree bridge roles may be auxiliary references")
+        receipt = self.formal_slot_receipt
+        if receipt.module != "face_identity":
+            raise ValueError("Face Identity auxiliary receipt must belong to face_identity")
+        if receipt.slot_key != f"face_identity_bridge.{self.reference_role}":
+            raise ValueError("Face Identity auxiliary receipt slot does not match bridge role")
+        if receipt.acceptance_mode != "auxiliary_first_pass_reference" or receipt.slot_scope != "auxiliary_reference":
+            raise ValueError("Face Identity bridge requires auxiliary_first_pass_reference receipt")
+        if receipt.winner_output_id != self.output_id:
+            raise ValueError("Face Identity auxiliary receipt output does not match bridge output")
+        if self.source_candidate_ids and receipt.winner_candidate_id not in self.source_candidate_ids:
+            raise ValueError("Face Identity auxiliary receipt winner is not in source candidates")
+        return self
+
+    def formal_slot_public_summary(self) -> dict[str, object]:
+        return project_formal_slot_public_summary(self.formal_slot_receipt)
 
 
 class AnchorCandidateFailureReceipt(_StrictVisualAssetModel):
@@ -188,6 +255,7 @@ class IdentityAnchorPackVersion(_StrictVisualAssetModel):
     people_asset_id: str
     status: PackStatus = "preparing"
     anchor_views: list[AnchorView] = Field(default_factory=list)
+    auxiliary_references: list[AnchorAuxiliaryReference] = Field(default_factory=list)
     candidate_failures: list[AnchorCandidateFailureReceipt] = Field(default_factory=list)
     root_source_provenance: RootSourceProvenance
     user_activation_confirmed: bool = False
@@ -197,6 +265,9 @@ class IdentityAnchorPackVersion(_StrictVisualAssetModel):
         view_ids = [item.view_id for item in self.anchor_views]
         if len(view_ids) != len(set(view_ids)):
             raise ValueError("anchor view IDs must be unique")
+        auxiliary_ids = [item.reference_id for item in self.auxiliary_references]
+        if len(auxiliary_ids) != len(set(auxiliary_ids)):
+            raise ValueError("auxiliary reference IDs must be unique")
         failure_keys = [
             (item.view_role, item.candidate_index, item.mcp_handoff_id or "")
             for item in self.candidate_failures
@@ -210,6 +281,13 @@ class IdentityAnchorPackVersion(_StrictVisualAssetModel):
                 raise ValueError("active pack requires user activation")
             if missing:
                 raise ValueError(f"active pack is missing required face views: {sorted(missing)}")
+            for view in self.anchor_views:
+                if view.active:
+                    if view.view_role in FACE_AUXILIARY_BRIDGE_ROLES:
+                        raise ValueError("active Face Identity packs cannot activate 25-35 degree bridge references")
+                    if view.formal_slot_receipt is None:
+                        raise ValueError("active Face Identity views require formal slot receipts")
+                    validate_formal_slot_receipt_for_activation(view.formal_slot_receipt)
         return self
 
 

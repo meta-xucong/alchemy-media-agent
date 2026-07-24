@@ -154,17 +154,22 @@ def test_doc241_standard_mode_requires_explicit_ranking_key() -> None:
 
 
 def test_doc241_core_does_not_default_reload_public_projection_to_true() -> None:
-    with pytest.raises(ValidationError, match="reload/public projection"):
-        _core().accept(
-            module="expression_set",
-            slot_key="expression.anger",
-            acceptance_mode="standard_three_candidate",
-            candidates=[_candidate(1), _candidate(2), _candidate(3)],
-            framing_summary=_requirement(),
-            parity_summary=_requirement(),
-            identity_summary=_requirement(),
-            ranking_key=lambda candidate: candidate.candidate_index,
-        )
+    receipt = _core().accept(
+        module="expression_set",
+        slot_key="expression.anger",
+        acceptance_mode="standard_three_candidate",
+        candidates=[_candidate(1), _candidate(2), _candidate(3)],
+        framing_summary=_requirement(),
+        parity_summary=_requirement(),
+        identity_summary=_requirement(),
+        ranking_key=lambda candidate: candidate.candidate_index,
+    )
+
+    assert receipt.reload_public_projection_verified is False
+    assert receipt.formal_completion_verified is False
+    assert receipt.activation_eligible is False
+    with pytest.raises(ValueError, match="standard_three_candidate"):
+        validate_formal_slot_receipt_for_activation(receipt)
 
 
 def test_doc241_candidate_reviewed_must_be_explicit_true() -> None:

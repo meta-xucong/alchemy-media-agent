@@ -18,6 +18,9 @@ from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     RootSourceProvenance,
     IdentityScoreSummary,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    FormalSlotSharedReviewSummary,
+)
 
 
 PREPARATION_INTENT = (
@@ -54,6 +57,10 @@ def _request() -> AnchorPackPreparationRequest:
     )
 
 
+def _character_card_request() -> AnchorPackPreparationRequest:
+    return _request().model_copy(update={"face_view_scope": "character_card"})
+
+
 class FakeGenerator:
     def __init__(self) -> None:
         self.requests: list[AnchorGenerationRequest] = []
@@ -81,6 +88,16 @@ class FakeReviewer:
         self.failing_roles = failing_roles or set()
         self.reviews: list[AnchorCandidateResult] = []
 
+    @staticmethod
+    def _shared_receipt(status: str) -> dict[str, object]:
+        return FormalSlotSharedReviewSummary(
+            status=status,  # type: ignore[arg-type]
+            evidence_codes=["shared_visual_review_verified"] if status == "pass" else [],
+            issue_codes=[] if status == "pass" else ["shared_visual_review_failed"],
+            score_dimensions=["identity_or_subject_consistency", "generic_visual_quality"] if status == "pass" else [],
+            framing_delta_dimensions=["face_identity_view_framing_delta"] if status == "pass" else [],
+        ).model_dump(mode="json")
+
     def review(self, candidate: AnchorCandidateResult) -> AnchorReviewDecision:
         self.reviews.append(candidate)
         # Candidate 3 is the most recognizable person even though it has a
@@ -103,6 +120,7 @@ class FakeReviewer:
                     evidence_codes=["same_face_failed"],
                 ),
                 issue_codes=["identity_gate_failed"],
+                shared_review_receipts=[self._shared_receipt("fail")],
             )
         return AnchorReviewDecision(
             status="pass",
@@ -115,7 +133,14 @@ class FakeReviewer:
                 ai_overperfection_penalty=overperfection,
                 evidence_codes=["same_face_passed", "distinctive_features_reviewed"],
             ),
+            shared_review_receipts=[self._shared_receipt("pass")],
         )
+
+
+class MissingSharedReceiptReviewer(FakeReviewer):
+    def review(self, candidate: AnchorCandidateResult) -> AnchorReviewDecision:
+        decision = super().review(candidate)
+        return decision.model_copy(update={"shared_review_receipts": []})
 
 
 def test_m2_generates_three_candidates_per_view_in_serial_identity_order() -> None:
@@ -144,6 +169,112 @@ def test_m2_generates_three_candidates_per_view_in_serial_identity_order() -> No
         "output_three_quarter_3",
         "output_profile_3",
     ]
+    assert all(view.formal_slot_receipt is not None for view in result.pack.anchor_views)
+    assert all(view.formal_slot_receipt.acceptance_mode == "standard_three_candidate" for view in result.pack.anchor_views)
+    assert all(view.formal_slot_receipt.reviewed_candidate_count == 3 for view in result.pack.anchor_views)
+    assert all(view.formal_slot_receipt.reload_public_projection_verified is False for view in result.pack.anchor_views)
+
+
+def test_m2_without_catalog_cannot_activate_unverified_formal_receipts() -> None:
+    generator = FakeGenerator()
+    reviewer = FakeReviewer()
+    service = AnchorPackPreparationService(generator=generator, reviewer=reviewer)
+    result = service.prepare(_request())
+
+    assert result.status == "review"
+    assert all(view.formal_slot_receipt is not None for view in result.pack.anchor_views)
+    assert all(view.formal_slot_receipt.activation_eligible is False for view in result.pack.anchor_views)
+    with pytest.raises(ValueError, match="standard_three_candidate receipt"):
+        service.activate(result.pack, confirmed=True)
+
+
+def test_m2_catalog_reload_verifies_formal_receipts_before_activation(tmp_path) -> None:
+    generator = FakeGenerator()
+    reviewer = FakeReviewer()
+    catalog = PersistentVisualAssetCatalog(tmp_path)
+    service = AnchorPackPreparationService(generator=generator, reviewer=reviewer, catalog=catalog)
+    result = service.prepare(_request())
+
+    assert result.status == "review"
+    reloaded = catalog.get_pack("project_1", "person_1", result.pack.pack_version_id)
+    assert reloaded is not None
+    assert all(view.formal_slot_receipt is not None for view in reloaded.anchor_views)
+    assert all(view.formal_slot_receipt.reload_public_projection_verified is True for view in reloaded.anchor_views)
+    assert all(view.formal_slot_public_summary()["activation_eligible"] is True for view in reloaded.anchor_views)
+    active = service.activate(reloaded, confirmed=True)
+    assert active.status == "active"
+
+
+def test_m2_missing_shared_review_receipt_blocks_formal_face_slot() -> None:
+    generator = FakeGenerator()
+    result = AnchorPackPreparationService(
+        generator=generator,
+        reviewer=MissingSharedReceiptReviewer(),
+    ).prepare(_request())
+
+    assert result.status == "blocked"
+    assert result.failure_codes == ["formal_face_view_shared_review_receipt_missing"]
+    assert [request.view_role for request in generator.requests] == [
+        "standard_front",
+        "standard_front",
+        "standard_front",
+    ]
+
+
+def test_m2_character_card_bridge_is_auxiliary_and_formal_views_still_use_three_candidates(tmp_path) -> None:
+    generator = FakeGenerator()
+    reviewer = FakeReviewer()
+    catalog = PersistentVisualAssetCatalog(tmp_path)
+    service = AnchorPackPreparationService(generator=generator, reviewer=reviewer, catalog=catalog)
+    result = service.prepare(_character_card_request())
+
+    assert result.status == "review"
+    assert [request.view_role for request in generator.requests] == [
+        "standard_front",
+        "standard_front",
+        "standard_front",
+        "left_front_25",
+        "three_quarter",
+        "three_quarter",
+        "three_quarter",
+        "profile",
+        "profile",
+        "profile",
+        "right_front_25",
+        "reverse_three_quarter",
+        "reverse_three_quarter",
+        "reverse_three_quarter",
+        "rear_head",
+        "rear_head",
+        "rear_head",
+    ]
+    assert {view.view_role for view in result.pack.anchor_views} == {
+        "standard_front",
+        "three_quarter",
+        "profile",
+        "reverse_three_quarter",
+        "rear_head",
+    }
+    assert {reference.reference_role for reference in result.pack.auxiliary_references} == {
+        "left_front_25",
+        "right_front_25",
+    }
+    assert all(
+        view.formal_slot_receipt is not None
+        and view.formal_slot_receipt.acceptance_mode == "standard_three_candidate"
+        and view.formal_slot_receipt.reviewed_candidate_count == 3
+        and view.formal_slot_receipt.activation_eligible is True
+        for view in result.pack.anchor_views
+    )
+    assert all(
+        reference.formal_slot_receipt.acceptance_mode == "auxiliary_first_pass_reference"
+        and reference.formal_slot_receipt.slot_scope == "auxiliary_reference"
+        and reference.formal_slot_receipt.reviewed_candidate_count == 1
+        and reference.formal_slot_receipt.activation_eligible is False
+        for reference in result.pack.auxiliary_references
+    )
+    active = service.activate(result.pack, confirmed=True)
+    assert active.status == "active"
 
 
 def test_m2_supplementary_requests_reference_the_winning_front() -> None:
@@ -172,7 +303,7 @@ def test_m2_front_failure_blocks_before_supplementary_generation() -> None:
     assert result.failure_codes == ["no_passing_front_candidate"]
 
 
-def test_m2_one_provider_terminal_failure_does_not_abort_remaining_bounded_candidates() -> None:
+def test_m2_one_provider_terminal_failure_does_not_abort_remaining_bounded_candidates_but_blocks_formal_receipt() -> None:
     class PartiallyUnavailableGenerator(FakeGenerator):
         def generate(self, request: AnchorGenerationRequest) -> AnchorCandidateResult:
             self.requests.append(request)
@@ -185,12 +316,13 @@ def test_m2_one_provider_terminal_failure_does_not_abort_remaining_bounded_candi
     generator = PartiallyUnavailableGenerator()
     result = AnchorPackPreparationService(generator=generator, reviewer=FakeReviewer()).prepare(_request())
 
-    assert result.status == "review"
-    assert len(generator.requests) == 9
+    assert result.status == "blocked"
+    assert len(generator.requests) == 3
+    assert result.failure_codes == ["formal_face_view_requires_three_reviewed_candidates"]
     assert [(item.view_role, item.candidate_index, item.failure_code) for item in result.generation_failures] == [
         ("standard_front", 2, "provider_policy_blocked")
     ]
-    assert len(result.attempts) == 8
+    assert len(result.attempts) == 2
 
 
 def test_m2_supplementary_failure_blocks_activation() -> None:
@@ -261,10 +393,14 @@ def test_m2_generation_contract_accepts_the_serial_profile_chain() -> None:
     assert request.reference_evidence_ids == ["asset_root_1", "output_front_3", "output_three_quarter_2"]
 
 
-def test_m2_activation_requires_explicit_user_confirmation() -> None:
+def test_m2_activation_requires_explicit_user_confirmation(tmp_path) -> None:
     generator = FakeGenerator()
     reviewer = FakeReviewer()
-    service = AnchorPackPreparationService(generator=generator, reviewer=reviewer)
+    service = AnchorPackPreparationService(
+        generator=generator,
+        reviewer=reviewer,
+        catalog=PersistentVisualAssetCatalog(tmp_path),
+    )
     result = service.prepare(_request())
 
     with pytest.raises(ValueError, match="explicit user confirmation"):
@@ -374,6 +510,7 @@ def test_m2_persists_review_and_activation_history_when_catalog_is_injected(tmp_
     active = service.activate(result.pack, confirmed=True)
     assert active.status == "active"
     assert [item.event_type for item in catalog.list_pack_history("project_1", "person_1")] == [
+        "review",
         "review",
         "activate",
     ]

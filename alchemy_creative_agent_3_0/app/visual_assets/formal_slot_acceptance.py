@@ -316,8 +316,6 @@ class FormalSlotReceipt(_StrictFormalSlotModel):
             raise ValueError(f"{mode_label} requires passing parity summary")
         if not self.identity_summary.passed:
             raise ValueError(f"{mode_label} requires passing identity summary")
-        if not self.reload_public_projection_verified:
-            raise ValueError(f"{mode_label} requires reload/public projection verification")
 
     @property
     def formal_completion_verified(self) -> bool:
@@ -517,3 +515,18 @@ def validate_formal_slot_receipt_for_activation(
     if not validated.activation_eligible:
         raise ValueError("formal slot activation requires standard_three_candidate receipt")
     return validated
+
+
+def mark_formal_slot_receipt_reload_public_projection_verified(
+    receipt: FormalSlotReceipt | dict[str, object],
+) -> FormalSlotReceipt:
+    """Return a receipt after an external durable reload/public projection check.
+
+    The helper deliberately lives in the module-neutral contract layer so
+    adapters do not set ``reload_public_projection_verified=True`` by local
+    convention.  Callers must perform the actual save -> reload -> safe public
+    projection roundtrip before invoking it.
+    """
+
+    validated = receipt if isinstance(receipt, FormalSlotReceipt) else FormalSlotReceipt.model_validate(receipt)
+    return validated.model_copy(update={"reload_public_projection_verified": True})

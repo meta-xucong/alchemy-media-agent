@@ -14,14 +14,25 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from .contracts import (
+    AnchorAuxiliaryReference,
     AnchorCandidateFailureReceipt,
     AnchorView,
+    FACE_AUXILIARY_BRIDGE_ROLES,
     FaceViewRole,
     FaceIdentityModule,
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
     PeopleAsset,
     RootSourceProvenance,
+)
+from .formal_slot_acceptance import (
+    FormalSlotAcceptanceCore,
+    FormalSlotCandidateSummary,
+    FormalSlotReceipt,
+    FormalSlotRequirementSummary,
+    FormalSlotSharedReviewSummary,
+    mark_formal_slot_receipt_reload_public_projection_verified,
+    validate_formal_slot_receipt_for_activation,
 )
 
 
@@ -272,6 +283,7 @@ class AnchorPackPreparationService:
         self.generator = generator
         self.reviewer = reviewer
         self.catalog = catalog
+        self.acceptance_core = FormalSlotAcceptanceCore()
 
     def prepare(
         self,
@@ -290,16 +302,19 @@ class AnchorPackPreparationService:
         pack_version_id = f"pack_{uuid4().hex}"
         attempts: list[AnchorCandidateAttempt] = []
         generation_failures: list[AnchorCandidateFailure] = []
-        passing_fronts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
+        front_attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
         prior_views = self._resume_views(request, resume_from_pack)
+        prior_auxiliary_references = self._resume_auxiliary_references(request, resume_from_pack)
         prior_failures_by_key = {
             (item.view_role, item.candidate_index): item
             for item in self._resume_failures(request, resume_from_pack)
         }
         views = list(prior_views)
+        auxiliary_references = list(prior_auxiliary_references)
         selected_evidence_ids = [
             request.root_source_provenance.source_asset_id,
             *[view.output_id for view in prior_views],
+            *[reference.output_id for reference in prior_auxiliary_references],
         ]
         front_view = next((view for view in prior_views if view.view_role == "standard_front"), None)
         winner_candidate_id = front_view.source_candidate_ids[0] if front_view is not None else None
@@ -354,6 +369,7 @@ class AnchorPackPreparationService:
                             pack_version_id,
                             views,
                             "failed",
+                            auxiliary_references=auxiliary_references,
                             candidate_failures=generation_failures,
                         )
                         self._persist(pack, "fail")
@@ -372,10 +388,9 @@ class AnchorPackPreparationService:
                 attempts.append(
                     AnchorCandidateAttempt(stage="front", request=generation_request, candidate=candidate, review=review)
                 )
+                front_attempts.append((candidate, review))
                 if review.status == "pass":
-                    passing_fronts.append((candidate, review))
-                    if request.generation_channel == "mcp":
-                        break
+                    pass
                 else:
                     generation_failures.append(
                         AnchorCandidateFailure(
@@ -388,12 +403,35 @@ class AnchorPackPreparationService:
                         )
                     )
 
-            if not passing_fronts:
+            if len(front_attempts) != self.FRONT_CANDIDATE_COUNT:
                 pack = self._pack(
                     request,
                     pack_version_id,
                     views,
                     "failed",
+                    auxiliary_references=auxiliary_references,
+                    candidate_failures=generation_failures,
+                )
+                self._persist(pack, "fail")
+                return AnchorPackPreparationResult(
+                    status="blocked",
+                    pack=pack,
+                    attempts=attempts,
+                    generation_failures=generation_failures,
+                    failure_codes=["formal_face_view_requires_three_reviewed_candidates"],
+                    mcp_handoff_ids=self._mcp_handoff_ids_for_view(
+                        generation_failures,
+                        "standard_front",
+                    ),
+                )
+
+            if not any(review.status == "pass" for _, review in front_attempts):
+                pack = self._pack(
+                    request,
+                    pack_version_id,
+                    views,
+                    "failed",
+                    auxiliary_references=auxiliary_references,
                     candidate_failures=generation_failures,
                 )
                 self._persist(pack, "fail")
@@ -409,14 +447,38 @@ class AnchorPackPreparationService:
                     ),
                 )
 
-            winner, winner_review = self._select_winner(passing_fronts)
-            views.append(self._view(winner, winner_review))
-            selected_evidence_ids = [request.root_source_provenance.source_asset_id, winner.output_id]
-            winner_candidate_id = winner.candidate_id
+            try:
+                front_view = self._formal_view_from_attempts("standard_front", front_attempts)
+            except ValueError as exc:
+                pack = self._pack(
+                    request,
+                    pack_version_id,
+                    views,
+                    "failed",
+                    auxiliary_references=auxiliary_references,
+                    candidate_failures=generation_failures,
+                )
+                self._persist(pack, "fail")
+                return AnchorPackPreparationResult(
+                    status="blocked",
+                    pack=pack,
+                    attempts=attempts,
+                    generation_failures=generation_failures,
+                    failure_codes=[self._formal_acceptance_failure_code(exc)],
+                    mcp_handoff_ids=[],
+                )
+            views.append(front_view)
+            selected_evidence_ids = [request.root_source_provenance.source_asset_id, front_view.output_id]
+            winner_candidate_id = (
+                front_view.formal_slot_receipt.winner_candidate_id
+                if front_view.formal_slot_receipt is not None
+                else front_view.source_candidate_ids[0]
+            )
             self._persist_resume_checkpoint(
                 request,
                 pack_version_id,
                 views,
+                auxiliary_references=auxiliary_references,
                 candidate_failures=generation_failures,
             )
 
@@ -426,10 +488,17 @@ class AnchorPackPreparationService:
             else self.SUPPLEMENTARY_ROLES
         )
         for role in supplementary_roles:
-            if any(view.view_role == role for view in views):
+            if any(view.view_role == role for view in views) or any(
+                reference.reference_role == role for reference in auxiliary_references
+            ):
                 continue
-            passing_supplementary: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
-            for candidate_index in range(1, self.SUPPLEMENTARY_CANDIDATE_COUNT + 1):
+            supplementary_attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]] = []
+            candidate_total = (
+                1
+                if request.face_view_scope == "character_card" and role in FACE_AUXILIARY_BRIDGE_ROLES
+                else self.SUPPLEMENTARY_CANDIDATE_COUNT
+            )
+            for candidate_index in range(1, candidate_total + 1):
                 prior_failure = prior_failures_by_key.get((role, candidate_index))
                 resumable_handoff_id = self._resumable_mcp_handoff_id(request, prior_failure)
                 if (
@@ -440,7 +509,7 @@ class AnchorPackPreparationService:
                         prior_failures_by_key,
                         role,
                         candidate_index,
-                        self.SUPPLEMENTARY_CANDIDATE_COUNT,
+                        candidate_total,
                     )
                 ):
                     generation_failures.append(prior_failure)
@@ -453,6 +522,7 @@ class AnchorPackPreparationService:
                     reference_evidence_ids=self._reference_evidence_ids_for_view(
                         request,
                         views,
+                        auxiliary_references,
                         role,
                     ),
                     mcp_handoff_id=resumable_handoff_id,
@@ -479,6 +549,7 @@ class AnchorPackPreparationService:
                             pack_version_id,
                             views,
                             "failed",
+                            auxiliary_references=auxiliary_references,
                             candidate_failures=generation_failures,
                         )
                         self._persist(pack, "fail")
@@ -500,10 +571,9 @@ class AnchorPackPreparationService:
                         stage="supplementary", request=generation_request, candidate=candidate, review=review
                     )
                 )
+                supplementary_attempts.append((candidate, review))
                 if review.status == "pass":
-                    passing_supplementary.append((candidate, review))
-                    if request.generation_channel == "mcp":
-                        break
+                    pass
                 else:
                     generation_failures.append(
                         AnchorCandidateFailure(
@@ -516,12 +586,40 @@ class AnchorPackPreparationService:
                         )
                     )
 
-            if not passing_supplementary:
+            if len(supplementary_attempts) != candidate_total:
                 pack = self._pack(
                     request,
                     pack_version_id,
                     views,
                     "failed",
+                    auxiliary_references=auxiliary_references,
+                    candidate_failures=generation_failures,
+                )
+                self._persist(pack, "fail")
+                return AnchorPackPreparationResult(
+                    status="blocked",
+                    pack=pack,
+                    attempts=attempts,
+                    generation_failures=generation_failures,
+                    winner_candidate_id=winner_candidate_id,
+                    failure_codes=[
+                        "auxiliary_bridge_requires_one_reviewed_candidate"
+                        if role in FACE_AUXILIARY_BRIDGE_ROLES
+                        else "formal_face_view_requires_three_reviewed_candidates"
+                    ],
+                    mcp_handoff_ids=self._mcp_handoff_ids_for_view(
+                        generation_failures,
+                        role,
+                    ),
+                )
+
+            if not any(review.status == "pass" for _, review in supplementary_attempts):
+                pack = self._pack(
+                    request,
+                    pack_version_id,
+                    views,
+                    "failed",
+                    auxiliary_references=auxiliary_references,
                     candidate_failures=generation_failures,
                 )
                 self._persist(pack, "fail")
@@ -538,16 +636,60 @@ class AnchorPackPreparationService:
                     ),
                 )
 
-            supplementary_winner, supplementary_review = self._select_winner(passing_supplementary)
-            views.append(self._view(supplementary_winner, supplementary_review))
+            if request.face_view_scope == "character_card" and role in FACE_AUXILIARY_BRIDGE_ROLES:
+                try:
+                    auxiliary_references.append(self._auxiliary_reference_from_attempts(role, supplementary_attempts))
+                except ValueError as exc:
+                    pack = self._pack(
+                        request,
+                        pack_version_id,
+                        views,
+                        "failed",
+                        auxiliary_references=auxiliary_references,
+                        candidate_failures=generation_failures,
+                    )
+                    self._persist(pack, "fail")
+                    return AnchorPackPreparationResult(
+                        status="blocked",
+                        pack=pack,
+                        attempts=attempts,
+                        generation_failures=generation_failures,
+                        winner_candidate_id=winner_candidate_id,
+                        failure_codes=[self._formal_acceptance_failure_code(exc)],
+                        mcp_handoff_ids=[],
+                    )
+            else:
+                try:
+                    views.append(self._formal_view_from_attempts(role, supplementary_attempts))
+                except ValueError as exc:
+                    pack = self._pack(
+                        request,
+                        pack_version_id,
+                        views,
+                        "failed",
+                        auxiliary_references=auxiliary_references,
+                        candidate_failures=generation_failures,
+                    )
+                    self._persist(pack, "fail")
+                    return AnchorPackPreparationResult(
+                        status="blocked",
+                        pack=pack,
+                        attempts=attempts,
+                        generation_failures=generation_failures,
+                        winner_candidate_id=winner_candidate_id,
+                        failure_codes=[self._formal_acceptance_failure_code(exc)],
+                        mcp_handoff_ids=[],
+                    )
             selected_evidence_ids = [
                 request.root_source_provenance.source_asset_id,
                 *[view.output_id for view in views],
+                *[reference.output_id for reference in auxiliary_references],
             ]
             self._persist_resume_checkpoint(
                 request,
                 pack_version_id,
                 views,
+                auxiliary_references=auxiliary_references,
                 candidate_failures=generation_failures,
             )
             if (
@@ -560,6 +702,7 @@ class AnchorPackPreparationService:
                     pack_version_id,
                     views,
                     "failed",
+                    auxiliary_references=auxiliary_references,
                     candidate_failures=generation_failures,
                 )
                 self._persist(pack, "fail")
@@ -573,8 +716,15 @@ class AnchorPackPreparationService:
                     mcp_handoff_ids=[],
                 )
 
-        pack = self._pack(request, pack_version_id, views, "review", candidate_failures=generation_failures)
-        self._persist(pack, "review")
+        pack = self._pack(
+            request,
+            pack_version_id,
+            views,
+            "review",
+            auxiliary_references=auxiliary_references,
+            candidate_failures=generation_failures,
+        )
+        pack = self._persist_review_pack_with_verified_projection(pack)
         return AnchorPackPreparationResult(
             status="review",
             pack=pack,
@@ -588,10 +738,12 @@ class AnchorPackPreparationService:
     def _reference_evidence_ids_for_view(
         request: AnchorPackPreparationRequest,
         views: list[AnchorView],
+        auxiliary_references: list[AnchorAuxiliaryReference],
         view_role: FaceViewRole,
     ) -> list[str]:
         root = request.root_source_provenance.source_asset_id
         by_role = {view.view_role: view.output_id for view in views if view.active}
+        by_role.update({reference.reference_role: reference.output_id for reference in auxiliary_references if reference.active})
 
         if request.face_view_scope != "character_card":
             return [root, *[view.output_id for view in views if view.active]]
@@ -687,15 +839,38 @@ class AnchorPackPreparationService:
         ):
             raise ValueError("character_card_resume_binding_mismatch")
         roles = (
-            ("standard_front", *AnchorPackPreparationService.CHARACTER_CARD_SUPPLEMENTARY_ROLES)
+            ("standard_front", "three_quarter", "profile", "reverse_three_quarter", "rear_head")
             if request.face_view_scope == "character_card"
             else ("standard_front", *AnchorPackPreparationService.SUPPLEMENTARY_ROLES)
         )
-        views = [view for view in resume_from_pack.anchor_views if view.active]
+        views = [
+            view
+            for view in resume_from_pack.anchor_views
+            if view.active and view.view_role not in FACE_AUXILIARY_BRIDGE_ROLES
+        ]
         view_roles = [view.view_role for view in views]
         if len(view_roles) != len(set(view_roles)) or tuple(view_roles) != roles[: len(view_roles)]:
             raise ValueError("character_card_resume_checkpoint_invalid")
         return views
+
+    @staticmethod
+    def _resume_auxiliary_references(
+        request: AnchorPackPreparationRequest,
+        resume_from_pack: IdentityAnchorPackVersion | None,
+    ) -> list[AnchorAuxiliaryReference]:
+        if resume_from_pack is None:
+            return []
+        if request.face_view_scope != "character_card":
+            return []
+        if resume_from_pack.status != "failed":
+            return []
+        references = [reference for reference in getattr(resume_from_pack, "auxiliary_references", []) if reference.active]
+        roles = [reference.reference_role for reference in references]
+        if len(roles) != len(set(roles)):
+            raise ValueError("character_card_resume_auxiliary_checkpoint_invalid")
+        if any(role not in FACE_AUXILIARY_BRIDGE_ROLES for role in roles):
+            raise ValueError("character_card_resume_auxiliary_checkpoint_invalid")
+        return references
 
     @staticmethod
     def _resume_failures(
@@ -749,12 +924,72 @@ class AnchorPackPreparationService:
         if self.catalog is not None:
             self.catalog.save_pack(pack, project_id=pack.root_source_provenance.project_id, event_type=event_type)
 
+    def _persist_review_pack_with_verified_projection(
+        self,
+        pack: IdentityAnchorPackVersion,
+    ) -> IdentityAnchorPackVersion:
+        if self.catalog is None:
+            return pack
+        self._persist(pack, "review")
+        reloaded = self._reload_pack(pack)
+        verified = self._mark_formal_receipts_after_projection(reloaded)
+        self._persist(verified, "review")
+        reloaded_verified = self._reload_pack(verified)
+        for view in reloaded_verified.anchor_views:
+            if view.active and view.formal_slot_receipt is not None:
+                view.formal_slot_public_summary()
+                validate_formal_slot_receipt_for_activation(view.formal_slot_receipt)
+        for reference in reloaded_verified.auxiliary_references:
+            if reference.active:
+                reference.formal_slot_public_summary()
+        return reloaded_verified
+
+    def _reload_pack(self, pack: IdentityAnchorPackVersion) -> IdentityAnchorPackVersion:
+        if self.catalog is None or not hasattr(self.catalog, "get_pack"):
+            raise ValueError("formal Face Identity receipt verification requires a reloadable catalog")
+        reloaded = self.catalog.get_pack(  # type: ignore[attr-defined]
+            pack.root_source_provenance.project_id,
+            pack.people_asset_id,
+            pack.pack_version_id,
+        )
+        if reloaded is None:
+            raise ValueError("formal Face Identity receipt verification failed to reload pack")
+        return reloaded
+
+    @staticmethod
+    def _mark_formal_receipts_after_projection(pack: IdentityAnchorPackVersion) -> IdentityAnchorPackVersion:
+        views: list[AnchorView] = []
+        for view in pack.anchor_views:
+            receipt = view.formal_slot_receipt
+            views.append(
+                view.model_copy(
+                    update={
+                        "formal_slot_receipt": mark_formal_slot_receipt_reload_public_projection_verified(receipt)
+                        if receipt is not None
+                        else None
+                    }
+                )
+            )
+        auxiliary_references: list[AnchorAuxiliaryReference] = []
+        for reference in pack.auxiliary_references:
+            auxiliary_references.append(
+                reference.model_copy(
+                    update={
+                        "formal_slot_receipt": mark_formal_slot_receipt_reload_public_projection_verified(
+                            reference.formal_slot_receipt
+                        )
+                    }
+                )
+            )
+        return pack.model_copy(update={"anchor_views": views, "auxiliary_references": auxiliary_references})
+
     def _persist_resume_checkpoint(
         self,
         request: AnchorPackPreparationRequest,
         pack_version_id: str,
         views: list[AnchorView],
         *,
+        auxiliary_references: list[AnchorAuxiliaryReference] | None = None,
         candidate_failures: list[AnchorCandidateFailure] | None = None,
     ) -> None:
         if self.catalog is None:
@@ -766,6 +1001,7 @@ class AnchorPackPreparationService:
             pack_version_id,
             list(views),
             "failed",
+            auxiliary_references=list(auxiliary_references or []),
             candidate_failures=candidate_failures,
         )
         self._persist(checkpoint, "fail")
@@ -844,13 +1080,165 @@ class AnchorPackPreparationService:
         return "shared_visual_review_failed"
 
     @staticmethod
-    def _view(candidate: AnchorCandidateResult, review: AnchorReviewDecision) -> AnchorView:
+    def _formal_acceptance_failure_code(error: ValueError) -> str:
+        message = str(error)
+        if "canonical shared Vision receipt" in message:
+            return "formal_face_view_shared_review_receipt_missing"
+        if "reload/public projection" in message:
+            return "formal_face_view_reload_public_projection_missing"
+        if "standard_three_candidate" in message or "exactly three" in message:
+            return "formal_face_view_three_candidate_contract_failed"
+        if "auxiliary_first_pass_reference" in message or "bridge" in message:
+            return "formal_face_auxiliary_reference_contract_failed"
+        return "formal_face_view_acceptance_contract_failed"
+
+    def _formal_view_from_attempts(
+        self,
+        view_role: FaceViewRole,
+        attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
+    ) -> AnchorView:
+        receipt = self._formal_receipt_for_attempts(
+            view_role=view_role,
+            attempts=attempts,
+            acceptance_mode="standard_three_candidate",
+        )
+        winner_candidate, winner_review = self._candidate_by_id(attempts, receipt.winner_candidate_id)
         return AnchorView(
-            view_id=candidate.view_id,
-            view_role=candidate.view_role,
+            view_id=winner_candidate.view_id,
+            view_role=winner_candidate.view_role,
+            output_id=winner_candidate.output_id,
+            source_candidate_ids=[candidate.candidate_id for candidate, _ in attempts],
+            identity_scores=winner_review.identity_scores,
+            formal_slot_receipt=receipt,
+        )
+
+    def _auxiliary_reference_from_attempts(
+        self,
+        view_role: FaceViewRole,
+        attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
+    ) -> AnchorAuxiliaryReference:
+        receipt = self._formal_receipt_for_attempts(
+            view_role=view_role,
+            attempts=attempts,
+            acceptance_mode="auxiliary_first_pass_reference",
+        )
+        winner_candidate, winner_review = self._candidate_by_id(attempts, receipt.winner_candidate_id)
+        return AnchorAuxiliaryReference(
+            reference_id=f"aux_{winner_candidate.view_id}",
+            reference_role=winner_candidate.view_role,
+            output_id=winner_candidate.output_id,
+            source_candidate_ids=[candidate.candidate_id for candidate, _ in attempts],
+            identity_scores=winner_review.identity_scores,
+            formal_slot_receipt=receipt,
+        )
+
+    def _formal_receipt_for_attempts(
+        self,
+        *,
+        view_role: FaceViewRole,
+        attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
+        acceptance_mode: Literal["standard_three_candidate", "auxiliary_first_pass_reference"],
+    ) -> FormalSlotReceipt:
+        score_by_candidate_id = {
+            candidate.candidate_id: review.identity_scores.selection_key()
+            for candidate, review in attempts
+        }
+        slot_key = (
+            f"face_identity_bridge.{view_role}"
+            if acceptance_mode == "auxiliary_first_pass_reference"
+            else f"face_identity.{view_role}"
+        )
+        return self.acceptance_core.accept(
+            module="face_identity",
+            slot_key=slot_key,
+            acceptance_mode=acceptance_mode,
+            candidates=[
+                self._formal_candidate_summary(candidate, review)
+                for candidate, review in attempts
+            ],
+            framing_summary=self._formal_requirement_summary("framing", attempts),
+            parity_summary=self._formal_requirement_summary("parity", attempts),
+            identity_summary=self._formal_requirement_summary("identity", attempts),
+            ranking_key=(
+                (lambda candidate: score_by_candidate_id[candidate.candidate_id])
+                if acceptance_mode == "standard_three_candidate"
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _candidate_by_id(
+        attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
+        candidate_id: str | None,
+    ) -> tuple[AnchorCandidateResult, AnchorReviewDecision]:
+        for candidate, review in attempts:
+            if candidate.candidate_id == candidate_id:
+                return candidate, review
+        raise ValueError("formal Face Identity winner does not match reviewed candidates")
+
+    def _formal_candidate_summary(
+        self,
+        candidate: AnchorCandidateResult,
+        review: AnchorReviewDecision,
+    ) -> FormalSlotCandidateSummary:
+        return FormalSlotCandidateSummary(
+            candidate_index=candidate.candidate_index,
+            candidate_id=candidate.candidate_id,
             output_id=candidate.output_id,
-            source_candidate_ids=list(candidate.source_candidate_ids),
-            identity_scores=review.identity_scores,
+            reviewed=True,
+            shared_review=self._formal_shared_review_summary(review),
+        )
+
+    @staticmethod
+    def _formal_shared_review_summary(review: AnchorReviewDecision) -> FormalSlotSharedReviewSummary:
+        for receipt in review.shared_review_receipts:
+            try:
+                return FormalSlotSharedReviewSummary.model_validate(receipt)
+            except Exception:
+                continue
+        raise ValueError("formal Face Identity candidates require canonical shared Vision receipt")
+
+    @staticmethod
+    def _formal_requirement_summary(
+        requirement: Literal["framing", "parity", "identity"],
+        attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
+    ) -> FormalSlotRequirementSummary:
+        passing_reviews = [review for _, review in attempts if review.status == "pass"]
+        all_parity_verified = all(candidate.prompt_reference_parity_verified for candidate, _ in attempts)
+        if requirement == "parity":
+            return FormalSlotRequirementSummary(
+                status="pass" if all_parity_verified else "fail",
+                evidence_codes=["face_identity_reference_parity_verified"] if all_parity_verified else [],
+                dimensions={"reference_parity": 1.0 if all_parity_verified else 0.0} if all_parity_verified else {},
+            )
+        if requirement == "framing":
+            best_pose_score = max(
+                (review.identity_scores.pose_compliance_score for review in passing_reviews),
+                default=0.0,
+            )
+            return FormalSlotRequirementSummary(
+                status="pass" if passing_reviews else "fail",
+                evidence_codes=["face_identity_view_profile_reviewed"] if passing_reviews else [],
+                dimensions={"pose_compliance_score": best_pose_score} if passing_reviews else {},
+            )
+        best_same_face_score = max(
+            (review.identity_scores.same_face_score for review in passing_reviews),
+            default=0.0,
+        )
+        evidence_codes = sorted(
+            {
+                code
+                for review in passing_reviews
+                for code in review.identity_scores.evidence_codes
+                if str(code or "").strip()
+            }
+        )
+        if passing_reviews and not evidence_codes:
+            evidence_codes = ["face_identity_shared_identity_review_verified"]
+        return FormalSlotRequirementSummary(
+            status="pass" if passing_reviews else "fail",
+            evidence_codes=evidence_codes,
+            dimensions={"same_face_score": best_same_face_score} if passing_reviews else {},
         )
 
     @staticmethod
@@ -860,6 +1248,7 @@ class AnchorPackPreparationService:
         views: list[AnchorView],
         status: Literal["review", "failed"],
         *,
+        auxiliary_references: list[AnchorAuxiliaryReference] | None = None,
         candidate_failures: list[AnchorCandidateFailure] | None = None,
     ) -> IdentityAnchorPackVersion:
         return IdentityAnchorPackVersion(
@@ -867,6 +1256,7 @@ class AnchorPackPreparationService:
             people_asset_id=request.asset.people_asset_id,
             status=status,
             anchor_views=views,
+            auxiliary_references=list(auxiliary_references or []),
             candidate_failures=list(candidate_failures or []),
             root_source_provenance=request.root_source_provenance,
             user_activation_confirmed=False,
