@@ -1532,7 +1532,11 @@ class CharacterCardPreparationService:
         failure_count = int(card.last_failure_attempt_count or 0)
         if failure_count < 1:
             return 1
-        if review_only_resume and card.pending_mcp_handoff_ids:
+        if review_only_resume and card.last_failure_code in {
+            "mcp_review_pending",
+            "mcp_materialization_checkpoint_mismatch",
+            "mcp_materialization_projection_unavailable",
+        }:
             return min(cls.CANDIDATE_COUNT, max(1, failure_count))
         if card.last_failure_code in {"mcp_materialization_pending", "mcp_review_pending"}:
             return min(cls.CANDIDATE_COUNT, max(1, failure_count))
@@ -1566,6 +1570,8 @@ class CharacterCardPreparationService:
         review_only_resume: bool = False,
     ) -> str | None:
         if card.last_failed_module != module or card.last_failed_slot_key != slot_key:
+            return None
+        if review_only_resume and card.last_failure_code != "mcp_review_pending":
             return None
         if not review_only_resume and card.last_failure_code not in {"mcp_materialization_pending", "mcp_review_pending"}:
             return None

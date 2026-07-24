@@ -1036,7 +1036,7 @@ class ProductApiAnchorPackPreparationHost:
         operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
         if request.attempt_round > 1:
             operation_id = f"{operation_id}:round{request.attempt_round}"
-        if request.generation_channel == "mcp":
+        if request.generation_channel == "mcp" and not request.review_only_resume:
             orphan_handoff_id = self._recover_unconsumed_character_card_mcp_handoff_id(
                 request,
                 operation_id,
@@ -1062,6 +1062,15 @@ class ProductApiAnchorPackPreparationHost:
             if request.generation_channel == "mcp"
             else None
         )
+        if (
+            request.review_only_resume
+            and resume_record is not None
+            and request.generation_channel == "mcp"
+            and not str(request.mcp_handoff_id or "").strip()
+        ):
+            resume_handoff_id = self._character_card_resume_record_handoff_id(resume_record)
+            if resume_handoff_id:
+                request = request.model_copy(update={"mcp_handoff_id": resume_handoff_id})
         if resume_record is None:
             request_metadata: dict[str, Any] = {
                 "project_id": request.project_id,
@@ -1412,7 +1421,7 @@ class ProductApiAnchorPackPreparationHost:
             if isinstance(payload, dict):
                 payloads.append(payload)
 
-        authoritative_job_ids: list[str] = []
+        authoritative_payload_by_job_id: dict[str, dict[str, Any]] = {}
         for payload in payloads:
             checkpoint = payload.get("job_checkpoint")
             if not isinstance(checkpoint, dict):
@@ -1426,8 +1435,18 @@ class ProductApiAnchorPackPreparationHost:
                 )
             job_id = str(checkpoint.get("job_id") or "").strip()
             if job_id:
-                authoritative_job_ids.append(job_id)
-        authoritative_job_ids = list(dict.fromkeys(authoritative_job_ids))
+                existing = authoritative_payload_by_job_id.get(job_id)
+                if isinstance(existing, dict):
+                    existing_handoff = str(existing.get("handoff_id") or "").strip()
+                    current_handoff = str(payload.get("handoff_id") or "").strip()
+                    if existing_handoff and current_handoff and existing_handoff != current_handoff:
+                        raise AnchorCandidateUnavailable(
+                            "mcp_materialization_operation_ambiguous",
+                            mcp_handoff_id=str(request.mcp_handoff_id or "").strip() or None,
+                        )
+                    continue
+                authoritative_payload_by_job_id[job_id] = payload
+        authoritative_job_ids = list(authoritative_payload_by_job_id.keys())
         if len(authoritative_job_ids) > 1:
             raise AnchorCandidateUnavailable(
                 "mcp_materialization_operation_ambiguous",
@@ -1443,16 +1462,7 @@ class ProductApiAnchorPackPreparationHost:
                 record = store_getter(authoritative_job_ids[0]) if callable(store_getter) else None
             if record is None:
                 return None
-            payload = requested_handoff_payload
-            if not isinstance(payload, dict):
-                metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
-                materialization = metadata.get("mcp_materialization")
-                handoff_id = (
-                    str(materialization.get("handoff_id") or "").strip()
-                    if isinstance(materialization, dict)
-                    else ""
-                )
-                payload = self._mcp_materialization_payload(handoff_id) if handoff_id else None
+            payload = authoritative_payload_by_job_id.get(authoritative_job_ids[0])
             if isinstance(payload, dict) and self._character_card_generated_mcp_checkpoint_current(
                 request,
                 record,
@@ -1569,6 +1579,21 @@ class ProductApiAnchorPackPreparationHost:
                     "candidate_id": candidate_id,
                 }
         return {}
+
+    def _character_card_resume_record_handoff_id(self, record: Any) -> str:
+        metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+        materialization = metadata.get("mcp_materialization")
+        handoff_id = (
+            str(materialization.get("handoff_id") or "").strip()
+            if isinstance(materialization, dict)
+            else ""
+        )
+        if handoff_id:
+            return handoff_id
+        identity = self._character_card_generation_result_mcp_identity(
+            getattr(record, "generation_result", None)
+        )
+        return str(identity.get("handoff_id") or "").strip()
 
     def _character_card_planning_metadata_current(
         self,

@@ -3250,8 +3250,8 @@ def test_doc230_checkpoint_mismatch_hard_stops_instead_of_advancing_candidate3()
     assert result.card.last_failure_code == "mcp_materialization_checkpoint_mismatch"
 
 
-def test_doc231_review_only_resume_uses_persisted_handoff_after_checkpoint_mismatch() -> None:
-    handoff_id = "mcp_handoff_doc231_existing"
+def test_doc231_review_only_resume_does_not_forward_stale_pending_handoff_after_checkpoint_mismatch() -> None:
+    handoff_id = "mcp_handoff_doc231_stale"
     card = CharacterCardState.initial(card_version_id="card_doc231")
     front = card.face_slots["face.front"].model_copy(
         update={
@@ -3284,9 +3284,9 @@ def test_doc231_review_only_resume_uses_persisted_handoff_after_checkpoint_misma
             self.requests.append(request)
             assert request.candidate_index == 2
             assert request.attempt_round == 5
-            assert request.mcp_handoff_id == handoff_id
+            assert request.mcp_handoff_id is None
             assert request.review_only_resume is True
-            raise AnchorCandidateUnavailable("mcp_review_pending", mcp_handoff_id=handoff_id)
+            raise AnchorCandidateUnavailable("mcp_review_pending")
 
     class _Reviewer:
         def review(self, _candidate):  # noqa: ANN001, ANN201
@@ -3305,6 +3305,60 @@ def test_doc231_review_only_resume_uses_persisted_handoff_after_checkpoint_misma
     )
 
     assert [request.candidate_index for request in generator.requests] == [2]
+    assert result.status == "blocked"
+    assert result.card.last_failure_code == "mcp_review_pending"
+    assert result.card.pending_mcp_handoff_ids == []
+
+
+def test_doc231_review_only_resume_preserves_review_pending_handoff() -> None:
+    handoff_id = "mcp_handoff_doc231_existing"
+    card = CharacterCardState.initial(card_version_id="card_doc231_review_pending")
+    front = card.face_slots["face.front"].model_copy(
+        update={
+            "state": "active",
+            "output_id": "front_winner",
+            "review_verified": True,
+            "prompt_reference_parity_verified": True,
+        }
+    )
+    card = card.model_copy(
+        update={
+            "face_identity_status": "active",
+            "face_slots": {**card.face_slots, "face.front": front},
+            "expression_set_status": "blocked",
+            "last_failed_module": "expression_set",
+            "last_failed_slot_key": "expression.laugh",
+            "last_failure_code": "mcp_review_pending",
+            "last_failure_attempt_count": 2,
+            "resume_available": True,
+            "pending_mcp_handoff_ids": [handoff_id],
+            "slot_retry_rounds": {"expression.laugh": 5},
+        }
+    )
+
+    class _Generator:
+        def generate(self, request):  # noqa: ANN001, ANN201
+            assert request.candidate_index == 2
+            assert request.attempt_round == 5
+            assert request.mcp_handoff_id == handoff_id
+            assert request.review_only_resume is True
+            raise AnchorCandidateUnavailable("mcp_review_pending", mcp_handoff_id=handoff_id)
+
+    class _Reviewer:
+        def review(self, _candidate):  # noqa: ANN001, ANN201
+            raise AssertionError("review-only pending checkpoint must stop before pixel review")
+
+    result = CharacterCardPreparationService(generator=_Generator(), reviewer=_Reviewer()).prepare_expression_slot(
+        card,
+        expression="laugh",
+        front_output_id="front_winner",
+        project_id="project_doc231",
+        people_asset_id="people_doc231",
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        review_only_resume=True,
+    )
+
     assert result.status == "blocked"
     assert result.card.last_failure_code == "mcp_review_pending"
     assert result.card.pending_mcp_handoff_ids == [handoff_id]
@@ -3378,6 +3432,201 @@ def test_doc231_review_only_missing_target_fails_closed_without_creating_job() -
     assert exc_info.value.failure_code == "mcp_review_target_not_found"
     assert exc_info.value.mcp_handoff_id == handoff_id
     assert service.created == 0
+
+
+def test_doc231_review_only_ignores_orphan_pending_handoff_and_uses_job_checkpoint() -> None:
+    job_id = "job_doc231_review_only_checkpoint"
+    output_id = "v3_output_doc231_existing"
+    candidate_id = "candidate_doc231_existing"
+    checkpoint_handoff_id = "mcp_handoff_doc231_checkpointed"
+    stale_pending_handoff_id = "mcp_handoff_doc231_stale_pending"
+    operation_id = "people_doc231:expression_set:expression.laugh:2:round5"
+
+    stale_planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        handoff={
+            "handoff_id": checkpoint_handoff_id,
+            "status": "job_checkpointed",
+            "generation_channel": "mcp",
+        },
+    )
+    stale_planning_metadata["professional_anchor_reference_assets"] = [{"asset_id": "front_winner"}]
+    generation = _with_review_package(
+        _attach_output_checkpoint(
+            _minimal_planning_result(
+                job_id,
+                generation_metadata=stale_planning_metadata,
+            ),
+            output_id=output_id,
+            candidate_id=candidate_id,
+            handoff_id=checkpoint_handoff_id,
+            provider_prompt_sha256="sha256:doc231",
+            prompt_compilation_id="prompt_doc231",
+        ),
+        _provider_timeout_review_package(
+            job_id=job_id,
+            output_id=output_id,
+            candidate_id=candidate_id,
+        ),
+    )
+    record = SimpleNamespace(
+        job_id=job_id,
+        status=ProductJobStatusValue.BLOCKED,
+        planning_result=generation,
+        generation_result=generation,
+        request=SimpleNamespace(
+            metadata={
+                "project_id": "project_doc231",
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "expression_set",
+                "professional_character_card_slot": "expression.laugh",
+                "professional_character_card_reference_output_ids": ["front_winner"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {
+                    "handoff_id": checkpoint_handoff_id,
+                    "status": "job_checkpointed",
+                    "generation_channel": "mcp",
+                    "resume_required": True,
+                },
+                "mcp_review_status": {
+                    "status": "pending",
+                    "reason_code": "provider_timeout",
+                    "handoff_id": checkpoint_handoff_id,
+                    "output_id": output_id,
+                    "candidate_id": candidate_id,
+                    "review_owner": "v3_shared_visual_cluster",
+                },
+            }
+        ),
+    )
+
+    def _handoff_payload(handoff_id):  # noqa: ANN001, ANN202
+        if handoff_id == stale_pending_handoff_id:
+            return {
+                "handoff_id": stale_pending_handoff_id,
+                "status": "pending",
+                "canonical_prompt": _current_laugh_handoff_prompt(),
+                "reference_assets": _current_expression_reference_assets(),
+            }
+        if handoff_id == checkpoint_handoff_id:
+            return {
+                "handoff_id": checkpoint_handoff_id,
+                "status": "job_checkpointed",
+                "canonical_prompt": _current_laugh_handoff_prompt(),
+                "reference_assets": _current_expression_reference_assets(),
+                "job_checkpoint": {
+                    "status": "job_checkpointed",
+                    "operation_id": operation_id,
+                    "handoff_id": checkpoint_handoff_id,
+                    "job_id": job_id,
+                    "candidate_id": candidate_id,
+                    "output_id": output_id,
+                    "generation_result_id": generation.planning_result_id,
+                },
+            }
+        return None
+
+    class _JobStore:
+        def list_mcp_operation_records(self, _operation_id):  # noqa: ANN001, ANN201
+            return [record]
+
+        def save(self, new_record):  # noqa: ANN001, ANN201
+            return new_record
+
+    class _ResumeReviewService:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.created = 0
+            self.generated_calls = []
+            self.output_store = SimpleNamespace(
+                list_by_job=lambda _job_id: [
+                    SimpleNamespace(
+                        output_id=output_id,
+                        candidate_id=candidate_id,
+                        metadata={
+                            "provider_prompt_sha256": "sha256:doc231",
+                            "prompt_compilation_id": "prompt_doc231",
+                            "provider_reference_image_count": 3,
+                            "reference_asset_count": 3,
+                            "provider_reference_assets": _current_expression_reference_assets(),
+                            "prompt_reference_parity": {"verified": True},
+                            "reference_evidence_parity": {"verified": True},
+                        },
+                    )
+                ]
+            )
+            self.job_store = _JobStore()
+            self.mcp_materialization_store = SimpleNamespace(
+                get=_handoff_payload,
+                list_unconsumed_by_operation=lambda _operation_id: [
+                    _handoff_payload(stale_pending_handoff_id)
+                ],
+            )
+
+        def create_professional_character_card_stage_job(self, *_args, **_kwargs):
+            self.created += 1
+            raise AssertionError("review-only must not recover a stale pending handoff or create a new job")
+
+        def generate_job(self, job_id_arg, request):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            self.generated_calls.append((job_id_arg, request))
+            assert request["metadata"]["_v3_resume_finalizing_review"] is True
+            package = {
+                "package_id": "review_doc231_host_pass",
+                "job_id": job_id,
+                "inspections": [
+                    {
+                        "inspection_id": "visual_inspection_doc231_host_pass",
+                        "job_id": job_id,
+                        "candidate_id": candidate_id,
+                        "output_id": output_id,
+                        "mode": "hybrid",
+                        "status": "pass",
+                        "verification_state": "verified",
+                        "confidence": 0.94,
+                        "score_card": _laugh_pass_score_card(),
+                        "detected_issues": [],
+                        "issue_codes": [],
+                    }
+                ],
+                "metadata": {"post_generation": True, "inspection_count": 1},
+            }
+            record.generation_result = _with_review_package(record.generation_result, package)
+            record.status = ProductJobStatusValue.GENERATED
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.GENERATED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def get_job_record(self, job_id_arg):  # noqa: ANN001, ANN201
+            assert job_id_arg == job_id
+            return record
+
+    service = _ResumeReviewService()
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc231",
+        people_asset_id="people_doc231",
+        card_version_id="card_doc231",
+        module="expression_set",
+        slot_key="expression.laugh",
+        candidate_index=2,
+        attempt_round=5,
+        reference_output_ids=["front_winner"],
+        user_intent="positive expression keyframe",
+        generation_channel="mcp",
+        review_only_resume=True,
+    )
+
+    candidate = ProductApiAnchorPackPreparationHost(service).generate(request)  # type: ignore[arg-type]
+
+    assert service.created == 0
+    assert service.generated_calls[0][0] == job_id
+    assert candidate.output_id == output_id
+    assert candidate.candidate_id == candidate_id
 
 
 def test_doc223c_anchor_pack_recovers_old_handoff_job_beyond_recent_window(
