@@ -622,6 +622,46 @@ class CharacterCardCandidateAttempt(_CharacterCardModel):
     review: Any
 
 
+class SlotAcceptanceCore:
+    """Pure Character Card slot acceptance.
+
+    This core owns only the canonical decision that turns reviewed candidates
+    into one winner.  It deliberately has no knowledge of MCP handoffs,
+    operation indexes, retry rounds, card failure state, storage, or whole
+    module activation; those remain adapter/lifecycle responsibilities.
+    """
+
+    def __init__(self, *, slot_key: str) -> None:
+        self.slot_key = str(slot_key or "").strip()
+
+    def accepts_review(self, review: Any) -> bool:
+        if getattr(review, "status", None) != "pass":
+            return False
+        if self.slot_key != POSITIVE_EXPRESSION_SLOT_KEY:
+            return True
+        scores = getattr(review, "identity_scores", None)
+        return laugh_expression_receipt_allows_slot(
+            evidence_codes=getattr(scores, "evidence_codes", []) or [],
+            issue_codes=getattr(review, "issue_codes", []) or [],
+        )
+
+    def select_winner(
+        self,
+        reviewed_candidates: Iterable[tuple[CharacterCardCandidateResult, Any]],
+    ) -> CharacterCardCandidateResult | None:
+        passing = list(reviewed_candidates)
+        if not passing:
+            return None
+        return max(passing, key=lambda item: self.selection_key(item[1]))[0]
+
+    @staticmethod
+    def selection_key(review: Any) -> tuple[Any, ...]:
+        scores = getattr(review, "identity_scores", None)
+        if scores is not None and hasattr(scores, "selection_key"):
+            return tuple(scores.selection_key())
+        return (0,)
+
+
 class CharacterCardFailureEvent(_CharacterCardModel):
     """Safe per-candidate failure evidence retained for manual continuation."""
 
@@ -1366,6 +1406,7 @@ class CharacterCardPreparationService:
         slot_attempts: list[CharacterCardCandidateAttempt] = []
         slot_failures: list[CharacterCardFailureEvent] = []
         passing: list[tuple[CharacterCardCandidateResult, Any]] = []
+        acceptance_core = SlotAcceptanceCore(slot_key=slot_key)
         attempt_round = int(card.slot_retry_rounds.get(slot_key, 1))
         start_candidate_index = self._candidate_start_index(
             card,
@@ -1444,7 +1485,7 @@ class CharacterCardPreparationService:
             review = self.reviewer.review(candidate)
             attempt = CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
             slot_attempts.append(attempt)
-            if getattr(review, "status", None) == "pass" and self._review_allows_slot(slot_key, review):
+            if acceptance_core.accepts_review(review):
                 passing.append((candidate, review))
             else:
                 repair_context = shared_review_repair_context_from_decision(
@@ -1480,8 +1521,8 @@ class CharacterCardPreparationService:
                     for index in range(1, self.CANDIDATE_COUNT + 1)
                 ]
             return None, slot_attempts, slot_failures
-        selected = max(passing, key=lambda item: self._selection_key(item[1]))
-        return selected[0], slot_attempts, slot_failures
+        selected = acceptance_core.select_winner(passing)
+        return selected, slot_attempts, slot_failures
 
     @staticmethod
     def _failure_review_repair_context(
@@ -1608,20 +1649,11 @@ class CharacterCardPreparationService:
 
     @staticmethod
     def _selection_key(review: Any) -> tuple[Any, ...]:
-        scores = getattr(review, "identity_scores", None)
-        if scores is not None and hasattr(scores, "selection_key"):
-            return tuple(scores.selection_key())
-        return (0,)
+        return SlotAcceptanceCore.selection_key(review)
 
     @staticmethod
     def _review_allows_slot(slot_key: str, review: Any) -> bool:
-        if slot_key != POSITIVE_EXPRESSION_SLOT_KEY:
-            return True
-        scores = getattr(review, "identity_scores", None)
-        return laugh_expression_receipt_allows_slot(
-            evidence_codes=getattr(scores, "evidence_codes", []) or [],
-            issue_codes=getattr(review, "issue_codes", []) or [],
-        )
+        return SlotAcceptanceCore(slot_key=slot_key).accepts_review(review)
 
     @staticmethod
     def _winner_slot(

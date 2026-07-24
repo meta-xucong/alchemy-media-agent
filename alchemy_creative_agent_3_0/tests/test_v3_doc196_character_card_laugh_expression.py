@@ -6,6 +6,7 @@ validation resumes.  They do not generate images.
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -58,6 +59,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardSlot,
     CharacterCardState,
     ExpressionPreparationRequest,
+    SlotAcceptanceCore,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
@@ -168,6 +170,64 @@ class _StaticReviewer:
 
     def review(self, _candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
         return self.decision
+
+
+def _doc232_candidate(slot_key: str, index: int) -> CharacterCardCandidateResult:
+    token = f"{slot_key}_{index}".replace(".", "_")
+    return CharacterCardCandidateResult(
+        candidate_id=f"candidate_{token}",
+        output_id=f"output_{token}",
+        module="expression_set",
+        slot_key=slot_key,
+        candidate_index=index,
+        source_candidate_ids=[f"candidate_{token}"],
+        source_output_ids=["front_winner"],
+        canonical_prompt_hash=f"sha256:{token}",
+        prompt_compilation_id=f"compile_{token}",
+        prompt_reference_parity_verified=True,
+    )
+
+
+def _doc232_review(score: float, *, evidence_codes: set[str] | None = None) -> AnchorReviewDecision:
+    return AnchorReviewDecision(
+        status="pass",
+        identity_scores=IdentityScoreSummary(
+            same_face_score=score,
+            distinctive_feature_score=score,
+            human_realism_score=score,
+            visual_quality_score=score,
+            pose_compliance_score=score,
+            evidence_codes=sorted(evidence_codes or set()),
+        ),
+        issue_codes=[],
+    )
+
+
+def test_doc232_slot_acceptance_core_selects_reviewed_winner_without_auxiliary_context() -> None:
+    core = SlotAcceptanceCore(slot_key="expression.laugh")
+    lower = _doc232_candidate("expression.laugh", 1)
+    higher = _doc232_candidate("expression.laugh", 2)
+    lower_review = _doc232_review(0.86, evidence_codes=LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
+    higher_review = _doc232_review(0.94, evidence_codes=LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
+
+    assert core.accepts_review(lower_review)
+    assert core.select_winner([(lower, lower_review), (higher, higher_review)]) == higher
+
+    for method_name in ("accepts_review", "select_winner"):
+        signature = str(inspect.signature(getattr(core, method_name)))
+        assert "mcp" not in signature
+        assert "operation" not in signature
+        assert "retry" not in signature
+        assert "activation" not in signature
+
+
+def test_doc232_slot_acceptance_core_keeps_laugh_quality_contract_scoped_to_laugh() -> None:
+    laugh_core = SlotAcceptanceCore(slot_key="expression.laugh")
+    generic_core = SlotAcceptanceCore(slot_key="body.front_full")
+    generic_pass = _doc232_review(0.93)
+
+    assert not laugh_core.accepts_review(generic_pass)
+    assert generic_core.accepts_review(generic_pass)
 
 
 def test_doc196_new_character_cards_default_positive_slot_to_laugh_not_smile() -> None:
