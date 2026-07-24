@@ -122,6 +122,18 @@ def _pass_review(*, evidence_codes: set[str] | None = None, issue_codes: list[st
     )
 
 
+def _generic_shared_review_receipt() -> dict[str, object]:
+    return {
+        "owner": "v3_shared_visual_cluster",
+        "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
+        "status": "pass",
+        "evidence_codes": ["shared_visual_review_verified"],
+        "issue_codes": [],
+        "score_dimensions": ["identity_fidelity", "visual_quality"],
+        "framing_delta_dimensions": [],
+    }
+
+
 class _OneSlotGenerator:
     def __init__(self) -> None:
         self.requests: list[CharacterCardCandidateRequest] = []
@@ -298,6 +310,7 @@ class _ExplicitSmileStageHost:
         return CharacterCardSharedRuntimeReceipt(
             final_winner_selection_verified=True,
             prompt_reference_parity_verified=True,
+            shared_review_receipts=[_generic_shared_review_receipt()],
         )
 
     def prepare_expression_slot(self, *, asset, card, expression, generation_channel="provider"):
@@ -314,6 +327,40 @@ class _ExplicitSmileStageHost:
             prompt_reference_parity_verified=True,
             candidate_attempt_count=3,
         )
+        request = CharacterCardCandidateRequest(
+            project_id=f"visual_asset_{asset.visual_asset_id}",
+            people_asset_id=asset.visual_asset_id,
+            card_version_id=card.card_version_id,
+            module="expression_set",
+            slot_key="expression.smile",
+            candidate_index=1,
+            reference_output_ids=["front_winner"],
+            user_intent="user explicitly requested a low intensity natural smile",
+            generation_channel=generation_channel,
+        )
+        candidate = CharacterCardCandidateResult(
+            candidate_id="smile_candidate",
+            output_id="smile_output",
+            module="expression_set",
+            slot_key="expression.smile",
+            candidate_index=1,
+            source_candidate_ids=["smile_candidate"],
+            source_output_ids=list(request.reference_output_ids),
+            canonical_prompt_hash="sha256:smile_output",
+            prompt_compilation_id="compile_smile_output",
+            prompt_reference_parity_verified=True,
+        )
+        review = AnchorReviewDecision(
+            status="pass",
+            identity_scores=IdentityScoreSummary(
+                same_face_score=0.9,
+                distinctive_feature_score=0.9,
+                human_realism_score=0.9,
+                visual_quality_score=0.9,
+                evidence_codes=["shared_visual_review_verified"],
+            ),
+            shared_review_receipts=[_generic_shared_review_receipt()],
+        )
         return CharacterCardStageResult(
             status="review",
             card=card.model_copy(
@@ -322,6 +369,13 @@ class _ExplicitSmileStageHost:
                     "expression_slots": {**card.expression_slots, "expression.smile": smile_slot},
                 }
             ),
+            attempts=[
+                CharacterCardCandidateAttempt(
+                    request=request,
+                    candidate=candidate,
+                    review=review,
+                )
+            ],
             winner_output_ids={"expression.smile": "smile_output"},
             shared_runtime_receipt=self._receipt(),
         )

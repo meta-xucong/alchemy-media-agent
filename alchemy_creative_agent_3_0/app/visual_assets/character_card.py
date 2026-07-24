@@ -46,6 +46,34 @@ EXPRESSION_LABELS = {
     "expression.sad": "悲伤",
     "expression.smile": "微笑（旧版）",
 }
+CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_VERSION = "v3_character_card_slot_success_receipt_v1"
+_CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_OWNER = "v3_character_card_shared_runtime"
+_SAFE_SHARED_REVIEW_RECEIPT_KEYS = (
+    "owner",
+    "contract_version",
+    "status",
+    "expression",
+    "framing_baseline",
+    "evidence_codes",
+    "issue_codes",
+    "score_dimensions",
+    "framing_delta_dimensions",
+)
+_CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_KEYS = {
+    "owner",
+    "receipt_version",
+    "module",
+    "slot_key",
+    "output_id",
+    "review_owner",
+    "retry_owner",
+    "candidate_count",
+    "max_bounded_repair_count",
+    "bounded_repair_count",
+    "final_winner_selection_verified",
+    "prompt_reference_parity_verified",
+    "shared_review_receipts",
+}
 
 CharacterCardSlotKey = Literal[
     "face.front",
@@ -157,6 +185,10 @@ class CharacterCardSlot(_CharacterCardModel):
     dependency_version_ids: list[str] = Field(default_factory=list)
     review_verified: bool = False
     prompt_reference_parity_verified: bool = False
+    # Doc223-D: sanitized success proof for this exact slot/output.  It is
+    # projected from the shared runtime receipt and contains no prompts, raw
+    # provider/MCP response, local path, image bytes or artifact identifiers.
+    shared_runtime_receipt: dict[str, Any] | None = None
     candidate_attempt_count: int = Field(default=0, ge=0, le=4)
     bounded_repair_count: int = Field(default=0, ge=0, le=1)
     explicitly_left_empty: bool = False
@@ -189,6 +221,7 @@ class CharacterCardSlot(_CharacterCardModel):
                     self.lineage_id,
                     self.review_verified,
                     self.prompt_reference_parity_verified,
+                    self.shared_runtime_receipt,
                     self.is_alias,
                 )
             ):
@@ -200,11 +233,20 @@ class CharacterCardSlot(_CharacterCardModel):
                 raise ValueError("reviewed Character Card winners require an output")
             if not self.review_verified or not self.prompt_reference_parity_verified:
                 raise ValueError("Character Card winners require shared review and prompt/reference parity")
+            if self.shared_runtime_receipt is not None:
+                validate_character_card_slot_success_receipt(
+                    self.shared_runtime_receipt,
+                    module=self.module,
+                    slot_key=self.slot_key,
+                    output_id=str(self.output_id or ""),
+                )
         if self.is_alias:
             if self.slot_key != "expression.neutral" or self.alias_of != "face.front":
                 raise ValueError("only expression.neutral may alias face.front")
             if self.output_id or self.candidate_attempt_count or self.bounded_repair_count:
                 raise ValueError("expression.neutral alias cannot create a generation job")
+            if self.shared_runtime_receipt is not None:
+                raise ValueError("expression.neutral alias cannot contain a generated-slot receipt")
         elif self.slot_key == "expression.neutral" and self.state != "empty":
             raise ValueError("expression.neutral must alias face.front")
         if self.module == "body_silhouette" and self.state != "empty" and self.source_class is None:
@@ -646,6 +688,202 @@ class CharacterCardSharedRuntimeFailureReceipt(_CharacterCardModel):
             if not isinstance(receipt, dict) or str(receipt.get("owner") or "") != "v3_shared_visual_cluster":
                 raise ValueError("shared Character Card failure receipt contains an invalid review receipt")
         return self
+
+
+def _safe_receipt_token(value: Any) -> str:
+    token = str(value or "").strip()
+    if not token:
+        return ""
+    return token[:160]
+
+
+def _safe_receipt_list(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    cleaned = [_safe_receipt_token(item) for item in value]
+    return list(dict.fromkeys(item for item in cleaned if item))
+
+
+def _sanitize_shared_review_receipt(receipt: Any) -> dict[str, Any]:
+    if not isinstance(receipt, dict):
+        raise ValueError("Character Card shared review receipt must be a public dictionary")
+    public: dict[str, Any] = {}
+    for key in _SAFE_SHARED_REVIEW_RECEIPT_KEYS:
+        if key not in receipt:
+            continue
+        value = receipt.get(key)
+        if key in {
+            "evidence_codes",
+            "issue_codes",
+            "score_dimensions",
+            "framing_delta_dimensions",
+        }:
+            public[key] = _safe_receipt_list(value)
+        else:
+            public[key] = _safe_receipt_token(value)
+    if public.get("owner") != "v3_shared_visual_cluster":
+        raise ValueError("Character Card shared review receipt owner is invalid")
+    if public.get("status") != "pass":
+        raise ValueError("Character Card success receipt requires a passing shared review")
+    if not public.get("contract_version"):
+        raise ValueError("Character Card shared review receipt contract version is required")
+    if not public.get("score_dimensions"):
+        raise ValueError("Character Card shared review receipt dimensions are required")
+    public.setdefault("evidence_codes", [])
+    public.setdefault("issue_codes", [])
+    public.setdefault("framing_delta_dimensions", [])
+    return public
+
+
+def project_character_card_slot_success_receipt(
+    receipt: CharacterCardSharedRuntimeReceipt | dict[str, Any],
+    *,
+    module: CharacterCardModule,
+    slot_key: str,
+    output_id: str,
+    shared_review_receipts: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    """Build the persisted, per-slot success receipt from a shared stage receipt.
+
+    The stage host owns review/retry/final-winner evidence.  This function only
+    projects that proof onto the exact winner slot/output and strips everything
+    that is not safe for durable catalog/public status readback.
+    """
+
+    output_id = _safe_receipt_token(output_id)
+    if not output_id:
+        raise ValueError("Character Card slot success receipt requires an output")
+    stage_receipt = (
+        receipt
+        if isinstance(receipt, CharacterCardSharedRuntimeReceipt)
+        else CharacterCardSharedRuntimeReceipt.model_validate(receipt)
+    )
+    if not stage_receipt.final_winner_selection_verified:
+        raise ValueError("Character Card slot success receipt requires winner selection")
+    if not stage_receipt.prompt_reference_parity_verified:
+        raise ValueError("Character Card slot success receipt requires prompt/reference parity")
+    slot_reviews = [_sanitize_shared_review_receipt(item) for item in shared_review_receipts]
+    if not slot_reviews:
+        raise ValueError("Character Card slot success receipt requires shared review dimensions")
+    if slot_key == POSITIVE_EXPRESSION_SLOT_KEY:
+        laugh_receipts = [
+            item
+            for item in slot_reviews
+            if item.get("expression") == "laugh"
+            and item.get("contract_version") == "v3_affective_expression_review_receipt_v1"
+        ]
+        if not laugh_receipts:
+            raise ValueError("Character Card laugh slot requires shared affective expression receipt")
+        if not any(
+            laugh_expression_receipt_allows_slot(
+                evidence_codes=item.get("evidence_codes", []),
+                issue_codes=item.get("issue_codes", []),
+            )
+            and bool(item.get("framing_delta_dimensions"))
+            for item in laugh_receipts
+        ):
+            raise ValueError("Character Card laugh slot receipt lacks affect/framing evidence")
+    return {
+        "owner": _CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_OWNER,
+        "receipt_version": CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_VERSION,
+        "module": module,
+        "slot_key": slot_key,
+        "output_id": output_id,
+        "review_owner": stage_receipt.review_owner,
+        "retry_owner": stage_receipt.retry_owner,
+        "candidate_count": int(stage_receipt.candidate_count),
+        "max_bounded_repair_count": int(stage_receipt.max_bounded_repair_count),
+        "bounded_repair_count": int(stage_receipt.retry_count),
+        "final_winner_selection_verified": bool(stage_receipt.final_winner_selection_verified),
+        "prompt_reference_parity_verified": bool(stage_receipt.prompt_reference_parity_verified),
+        "shared_review_receipts": slot_reviews,
+    }
+
+
+def validate_character_card_slot_success_receipt(
+    receipt: Any,
+    *,
+    module: CharacterCardModule,
+    slot_key: str,
+    output_id: str,
+) -> dict[str, Any]:
+    if not isinstance(receipt, dict):
+        raise ValueError("Character Card slot shared runtime receipt is required")
+    if set(receipt) - _CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_KEYS:
+        raise ValueError("Character Card slot shared runtime receipt contains unsafe fields")
+    if receipt.get("owner") != _CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_OWNER:
+        raise ValueError("Character Card slot shared runtime receipt owner is invalid")
+    if receipt.get("receipt_version") != CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_VERSION:
+        raise ValueError("Character Card slot shared runtime receipt version is invalid")
+    if receipt.get("module") != module or receipt.get("slot_key") != slot_key:
+        raise ValueError("Character Card slot shared runtime receipt ownership mismatch")
+    if receipt.get("output_id") != output_id:
+        raise ValueError("Character Card slot shared runtime receipt output mismatch")
+    if receipt.get("review_owner") != "v3_shared_vision":
+        raise ValueError("Character Card slot shared runtime receipt review owner is invalid")
+    if receipt.get("retry_owner") != "v3_shared_visual_retry":
+        raise ValueError("Character Card slot shared runtime receipt retry owner is invalid")
+    if int(receipt.get("candidate_count") or 0) != 3:
+        raise ValueError("Character Card slot shared runtime receipt candidate budget is invalid")
+    if int(receipt.get("max_bounded_repair_count") or -1) != 1:
+        raise ValueError("Character Card slot shared runtime receipt repair budget is invalid")
+    if int(receipt.get("bounded_repair_count") or 0) < 0 or int(receipt.get("bounded_repair_count") or 0) > 1:
+        raise ValueError("Character Card slot shared runtime receipt repair count is invalid")
+    if receipt.get("final_winner_selection_verified") is not True:
+        raise ValueError("Character Card slot shared runtime receipt winner selection is missing")
+    if receipt.get("prompt_reference_parity_verified") is not True:
+        raise ValueError("Character Card slot shared runtime receipt prompt/reference parity is missing")
+    sanitized_reviews = [
+        _sanitize_shared_review_receipt(item)
+        for item in receipt.get("shared_review_receipts", [])
+    ]
+    if not sanitized_reviews:
+        raise ValueError("Character Card slot shared runtime receipt review dimensions are missing")
+    if slot_key == POSITIVE_EXPRESSION_SLOT_KEY:
+        if not any(
+            item.get("expression") == "laugh"
+            and item.get("contract_version") == "v3_affective_expression_review_receipt_v1"
+            and bool(item.get("framing_delta_dimensions"))
+            and laugh_expression_receipt_allows_slot(
+                evidence_codes=item.get("evidence_codes", []),
+                issue_codes=item.get("issue_codes", []),
+            )
+            for item in sanitized_reviews
+        ):
+            raise ValueError("Character Card laugh slot shared runtime receipt is incomplete")
+    return {
+        **receipt,
+        "shared_review_receipts": sanitized_reviews,
+    }
+
+
+def character_card_slot_success_receipt_public_summary(
+    slot: CharacterCardSlot,
+) -> dict[str, Any] | None:
+    if slot.shared_runtime_receipt is None or not slot.output_id:
+        return None
+    receipt = validate_character_card_slot_success_receipt(
+        slot.shared_runtime_receipt,
+        module=slot.module,
+        slot_key=slot.slot_key,
+        output_id=slot.output_id,
+    )
+    return {
+        "verified": True,
+        "owner": receipt["owner"],
+        "receipt_version": receipt["receipt_version"],
+        "module": receipt["module"],
+        "slot_key": receipt["slot_key"],
+        "output_id": receipt["output_id"],
+        "review_owner": receipt["review_owner"],
+        "retry_owner": receipt["retry_owner"],
+        "candidate_count": receipt["candidate_count"],
+        "max_bounded_repair_count": receipt["max_bounded_repair_count"],
+        "bounded_repair_count": receipt["bounded_repair_count"],
+        "final_winner_selection_verified": receipt["final_winner_selection_verified"],
+        "prompt_reference_parity_verified": receipt["prompt_reference_parity_verified"],
+        "shared_review_receipts": receipt["shared_review_receipts"],
+    }
 
 
 class ExpressionPreparationRequest(_CharacterCardModel):
@@ -1399,6 +1637,21 @@ class CharacterCardPreparationService:
             raise ValueError("Expression Set requires the active face.front winner")
 
     @staticmethod
+    def _require_slot_success_receipt(slot: CharacterCardSlot) -> None:
+        if slot.is_alias:
+            return
+        if slot.state not in {"winner_selected", "active"} or not slot.output_id:
+            raise ValueError("Character Card contains an unreviewed slot")
+        if slot.shared_runtime_receipt is None:
+            raise ValueError("Character Card slot activation requires persisted shared runtime receipt")
+        validate_character_card_slot_success_receipt(
+            slot.shared_runtime_receipt,
+            module=slot.module,
+            slot_key=slot.slot_key,
+            output_id=slot.output_id,
+        )
+
+    @staticmethod
     def activate_module(
         card: CharacterCardState,
         *,
@@ -1419,6 +1672,9 @@ class CharacterCardPreparationService:
                 if key in EXPRESSION_SLOT_KEYS and key != "expression.neutral"
             ):
                 raise ValueError("Expression Set contains an unreviewed slot")
+            for key, slot in slots.items():
+                if key in EXPRESSION_SLOT_KEYS and key != "expression.neutral":
+                    CharacterCardPreparationService._require_slot_success_receipt(slot)
             slots = {
                 key: slot.model_copy(update={"state": "active"})
                 if slot.state == "winner_selected"
@@ -1439,6 +1695,8 @@ class CharacterCardPreparationService:
             raise ValueError("Body Silhouette is not ready for activation")
         if any(slot.state not in {"winner_selected", "active"} for slot in card.body_slots.values()):
             raise ValueError("Body Silhouette contains an unreviewed slot")
+        for slot in card.body_slots.values():
+            CharacterCardPreparationService._require_slot_success_receipt(slot)
         slots = {
             key: slot.model_copy(update={"state": "active"})
             if slot.state == "winner_selected"
@@ -1550,6 +1808,7 @@ __all__ = [
     "EXPRESSION_SLOT_KEYS",
     "EXPRESSION_LABELS",
     "FACE_SLOT_KEYS",
+    "CHARACTER_CARD_SLOT_SUCCESS_RECEIPT_VERSION",
     "BodyPreparationRequest",
     "CharacterCardCandidateAttempt",
     "CharacterCardCandidateRequest",
@@ -1564,4 +1823,7 @@ __all__ = [
     "CharacterCardStageResult",
     "ExpressionPreparationRequest",
     "apply_face_identity_pack_to_card",
+    "character_card_slot_success_receipt_public_summary",
+    "project_character_card_slot_success_receipt",
+    "validate_character_card_slot_success_receipt",
 ]

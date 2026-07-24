@@ -25,10 +25,13 @@ from .character_card import (
     BodySilhouettePublicRequest,
     CharacterCardPreparationService,
     CharacterCardRuntimeUnavailable,
+    CharacterCardSharedRuntimeReceipt,
+    CharacterCardSlot,
     CharacterCardStageHost,
     CharacterCardState,
     ExpressionKey,
     apply_face_identity_pack_to_card,
+    project_character_card_slot_success_receipt,
 )
 from .contracts import (
     FACE_IDENTITY_CHANNELS,
@@ -1002,9 +1005,70 @@ class VisualAssetLibraryLifecycleService:
                 }
             )
         elif getattr(result, "status", None) == "review":
-            persisted_card = persisted_card.model_copy(update={"last_shared_runtime_failure": None})
+            persisted_card = self._persist_character_card_success_receipts(result, stage=stage)
         return self.catalog.save(
             asset.model_copy(update={"character_card": persisted_card, "updated_at": _utc_now()})
+        )
+
+    @staticmethod
+    def _persist_character_card_success_receipts(
+        result: Any,
+        *,
+        stage: Literal["expression_set", "body_silhouette"],
+    ) -> CharacterCardState:
+        receipt = CharacterCardSharedRuntimeReceipt.model_validate(result.shared_runtime_receipt)
+        winners = {
+            str(slot_key): str(output_id)
+            for slot_key, output_id in dict(getattr(result, "winner_output_ids", {}) or {}).items()
+            if str(slot_key).strip() and str(output_id).strip()
+        }
+        if not winners:
+            raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_winner_required")
+        card: CharacterCardState = result.card
+        if stage == "expression_set":
+            slots_field = "expression_slots"
+            slots = dict(card.expression_slots)
+        else:
+            slots_field = "body_slots"
+            slots = dict(card.body_slots)
+        for slot_key, output_id in winners.items():
+            slot = slots.get(slot_key)
+            if slot is None or slot.module != stage:
+                raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_slot_mismatch")
+            if slot.output_id != output_id or slot.state not in {"winner_selected", "active"}:
+                raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_output_mismatch")
+            attempt = next(
+                (
+                    item
+                    for item in getattr(result, "attempts", []) or []
+                    if getattr(getattr(item, "candidate", None), "slot_key", None) == slot_key
+                    and getattr(getattr(item, "candidate", None), "output_id", None) == output_id
+                ),
+                None,
+            )
+            if attempt is None:
+                if slot.shared_runtime_receipt is not None:
+                    CharacterCardSlot.model_validate(slot.model_dump(mode="python"))
+                    continue
+                raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_receipt_attempt_missing")
+            shared_review_receipts = getattr(getattr(attempt, "review", None), "shared_review_receipts", []) or []
+            projected = project_character_card_slot_success_receipt(
+                receipt,
+                module=stage,
+                slot_key=slot_key,
+                output_id=output_id,
+                shared_review_receipts=shared_review_receipts,
+            )
+            updated_slot = slot.model_copy(update={"shared_runtime_receipt": projected})
+            slots[slot_key] = CharacterCardSlot.model_validate(
+                updated_slot.model_dump(mode="python")
+            )
+        return card.model_copy(
+            update={
+                slots_field: slots,
+                "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
+            }
         )
 
     def _require_authorized_body_reference(self, request: BodySilhouettePublicRequest) -> Any:

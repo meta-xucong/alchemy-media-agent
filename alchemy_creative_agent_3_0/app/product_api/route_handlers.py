@@ -18,8 +18,9 @@ from ..visual_assets import (
     VisualAssetLibraryCatalog,
     VisualAssetLibraryLifecycleService,
 )
-from ..visual_assets.character_card import CharacterCardStageHost
 from ..visual_assets.character_card import BodySilhouettePublicRequest
+from ..visual_assets.character_card import CharacterCardStageHost
+from ..visual_assets.character_card import character_card_slot_success_receipt_public_summary
 from .service import V3ProductApiService
 
 
@@ -371,6 +372,18 @@ class V3ProductRouteHandlers:
                         "download_url": f"/api/v3/creative-agent/outputs/{encoded}/download",
                     }
                 )
+                try:
+                    receipt_summary = character_card_slot_success_receipt_public_summary(slot)
+                except (TypeError, ValueError):
+                    receipt_summary = None
+                    public["shared_runtime_receipt_verified"] = False
+                    public["shared_runtime_receipt_status"] = "inconsistent"
+                if receipt_summary is not None:
+                    public["shared_runtime_receipt"] = receipt_summary
+                    public["shared_runtime_receipt_verified"] = True
+                elif "shared_runtime_receipt_status" not in public:
+                    public["shared_runtime_receipt_verified"] = False
+                    public["shared_runtime_receipt_status"] = "missing"
             return public
 
         def _anchor_candidate_history_public(candidate: Any) -> dict[str, Any]:

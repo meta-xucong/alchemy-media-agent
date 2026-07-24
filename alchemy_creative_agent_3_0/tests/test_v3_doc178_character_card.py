@@ -11,7 +11,9 @@ import pytest
 from pydantic import ValidationError
 
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
+    EXPRESSION_FRAMING_DELTA_MAX,
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+    project_laugh_expression_review_receipt,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BODY_SOURCE_CLASSES,
@@ -21,9 +23,11 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardPreparationService,
     CharacterCardSlot,
     CharacterCardState,
+    CharacterCardSharedRuntimeReceipt,
     ExpressionPreparationRequest,
     BodyPreparationRequest,
     CharacterCardCandidateResult,
+    project_character_card_slot_success_receipt,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateResult,
@@ -312,6 +316,63 @@ def _doc178_face_ready_card() -> CharacterCardState:
     return card.model_copy(update={"face_identity_status": "active", "face_slots": {**card.face_slots, "face.front": front}})
 
 
+def _doc178_laugh_review_receipt() -> dict[str, object]:
+    score_card = {
+        "mouth_eye_coherence": 0.9,
+        "gaze_engagement": 0.88,
+        "periocular_affect": 0.86,
+        "cheek_jaw_coupling": 0.87,
+        "jaw_relaxation": 0.82,
+        "arousal_intensity_coherence": 0.86,
+        "spontaneity_asymmetry": 0.76,
+        "expression_age_coherence": 0.86,
+        "expression_identity_preservation": 0.88,
+        "expression_framing_parity": 0.91,
+    }
+    for dimension in EXPRESSION_FRAMING_DELTA_MAX:
+        score_card[dimension] = 0.01
+    return project_laugh_expression_review_receipt(
+        score_card=score_card,
+        issue_codes=[],
+    ).to_public_dict()
+
+
+def _doc178_generic_review_receipt() -> dict[str, object]:
+    return {
+        "owner": "v3_shared_visual_cluster",
+        "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
+        "status": "pass",
+        "evidence_codes": ["shared_visual_review_verified"],
+        "issue_codes": [],
+        "score_dimensions": ["identity_fidelity", "visual_quality"],
+        "framing_delta_dimensions": [],
+    }
+
+
+def _doc178_slot_success_receipt(slot_key: str, output_id: str) -> dict[str, object]:
+    review_receipts = [
+        _doc178_laugh_review_receipt()
+        if slot_key == "expression.laugh"
+        else _doc178_generic_review_receipt()
+    ]
+    module = (
+        "expression_set"
+        if slot_key.startswith("expression.")
+        else "body_silhouette"
+    )
+    return project_character_card_slot_success_receipt(
+        CharacterCardSharedRuntimeReceipt(
+            final_winner_selection_verified=True,
+            prompt_reference_parity_verified=True,
+            shared_review_receipts=review_receipts,
+        ),
+        module=module,  # type: ignore[arg-type]
+        slot_key=slot_key,
+        output_id=output_id,
+        shared_review_receipts=review_receipts,
+    )
+
+
 class _Doc178ExpressionBodyGenerator:
     def __init__(self) -> None:
         self.requests = []
@@ -366,8 +427,20 @@ def test_doc178_expression_and_body_are_independent_three_candidate_stages() -> 
     assert len(generator.requests) == 9
     assert all(request.reference_output_ids == ["front_winner"] for request in generator.requests)
 
+    expression_slots = dict(expression.card.expression_slots)
+    for slot_key in ("expression.laugh", "expression.anger", "expression.sad"):
+        slot = expression_slots[slot_key]
+        expression_slots[slot_key] = slot.model_copy(
+            update={
+                "shared_runtime_receipt": _doc178_slot_success_receipt(
+                    slot_key,
+                    str(slot.output_id),
+                )
+            }
+        )
+    expression_card = expression.card.model_copy(update={"expression_slots": expression_slots})
     activated_expression = service.activate_module(
-        expression.card,
+        expression_card,
         module="expression_set",
         confirmed=True,
     )

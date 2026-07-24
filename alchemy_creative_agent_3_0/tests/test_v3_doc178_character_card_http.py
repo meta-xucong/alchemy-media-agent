@@ -8,8 +8,16 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
+    EXPRESSION_FRAMING_DELTA_MAX,
+    LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
+    project_laugh_expression_review_receipt,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BodySilhouettePublicRequest,
+    CharacterCardCandidateAttempt,
+    CharacterCardCandidateRequest,
+    CharacterCardCandidateResult,
     CharacterCardPreparationService,
     CharacterCardRuntimeUnavailable,
     CharacterCardSharedRuntimeReceipt,
@@ -17,8 +25,8 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardState,
     CharacterCardSlot,
 )
-from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorPackPreparationResult
-from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityAnchorPackVersion, RootSourceProvenance
+from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorPackPreparationResult, AnchorReviewDecision
+from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityAnchorPackVersion, IdentityScoreSummary, RootSourceProvenance
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryRootSourceProvenance,
     LibraryVisualAssetCreateRequest,
@@ -113,24 +121,149 @@ class _SharedStageHost:
         self.body_request = None
 
     @staticmethod
-    def _receipt() -> CharacterCardSharedRuntimeReceipt:
+    def _laugh_review_receipt() -> dict[str, object]:
+        score_card = {
+            "mouth_eye_coherence": 0.9,
+            "gaze_engagement": 0.88,
+            "periocular_affect": 0.86,
+            "cheek_jaw_coupling": 0.87,
+            "jaw_relaxation": 0.82,
+            "arousal_intensity_coherence": 0.86,
+            "spontaneity_asymmetry": 0.76,
+            "expression_age_coherence": 0.86,
+            "expression_identity_preservation": 0.88,
+            "expression_framing_parity": 0.91,
+        }
+        for dimension in EXPRESSION_FRAMING_DELTA_MAX:
+            score_card[dimension] = 0.01
+        return project_laugh_expression_review_receipt(
+            score_card=score_card,
+            issue_codes=[],
+        ).to_public_dict()
+
+    @classmethod
+    def _shared_review_receipt(cls, *, slot_key: str = "") -> dict[str, object]:
+        if slot_key == "expression.laugh":
+            return cls._laugh_review_receipt()
+        return {
+            "owner": "v3_shared_visual_cluster",
+            "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
+            "status": "pass",
+            "evidence_codes": ["shared_visual_review_verified"],
+            "issue_codes": [],
+            "score_dimensions": ["identity_fidelity", "visual_quality"],
+            "framing_delta_dimensions": [],
+        }
+
+    @classmethod
+    def _receipt(cls, *, slot_key: str = "") -> CharacterCardSharedRuntimeReceipt:
         return CharacterCardSharedRuntimeReceipt(
             final_winner_selection_verified=True,
             prompt_reference_parity_verified=True,
+            shared_review_receipts=[cls._shared_review_receipt(slot_key=slot_key)],
         )
 
+    @classmethod
+    def _attempt(cls, *, slot_key: str, output_id: str, module: str = "body_silhouette") -> CharacterCardCandidateAttempt:
+        request = CharacterCardCandidateRequest(
+            project_id="project_doc178",
+            people_asset_id="people_doc178",
+            card_version_id="card_ready",
+            module=module,  # type: ignore[arg-type]
+            slot_key=slot_key,  # type: ignore[arg-type]
+            candidate_index=1,
+            reference_output_ids=["front", "profile", "rear"]
+            if module == "body_silhouette"
+            else ["front_winner"],
+            user_intent="shared-runtime-owned test intent",
+            source_class="observed" if module == "body_silhouette" else None,
+            consent_provenance_id="body-consent" if module == "body_silhouette" else None,
+        )
+        candidate = CharacterCardCandidateResult(
+            candidate_id=f"candidate_{slot_key}",
+            output_id=output_id,
+            module=module,  # type: ignore[arg-type]
+            slot_key=slot_key,
+            candidate_index=1,
+            source_candidate_ids=[f"candidate_{slot_key}"],
+            source_output_ids=list(request.reference_output_ids),
+            canonical_prompt_hash=f"sha256:{slot_key}",
+            prompt_compilation_id=f"compile_{slot_key}",
+            prompt_reference_parity_verified=True,
+        )
+        review = AnchorReviewDecision(
+            status="pass",
+            identity_scores=IdentityScoreSummary(
+                same_face_score=0.9,
+                distinctive_feature_score=0.9,
+                human_realism_score=0.9,
+                visual_quality_score=0.9,
+                evidence_codes=sorted(LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES)
+                if slot_key == "expression.laugh"
+                else ["shared_visual_review_verified"],
+            ),
+            shared_review_receipts=[cls._shared_review_receipt(slot_key=slot_key)],
+        )
+        return CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
+
     def prepare_expression_set(self, *, asset, card):
+        output_id = "expression_laugh_doc178"
+        laugh_slot = CharacterCardSlot(
+            slot_key="expression.laugh",
+            module="expression_set",
+            state="winner_selected",
+            output_id=output_id,
+            source_candidate_ids=["candidate_expression_laugh"],
+            lineage_id="lineage_expression_laugh",
+            review_verified=True,
+            prompt_reference_parity_verified=True,
+            candidate_attempt_count=3,
+        )
         return CharacterCardStageResult(
             status="review",
-            card=card.model_copy(update={"expression_set_status": "reviewing"}),
-            shared_runtime_receipt=self._receipt(),
+            card=card.model_copy(
+                update={
+                    "expression_set_status": "partial",
+                    "expression_slots": {**card.expression_slots, "expression.laugh": laugh_slot},
+                }
+            ),
+            attempts=[
+                self._attempt(
+                    slot_key="expression.laugh",
+                    output_id=output_id,
+                    module="expression_set",
+                )
+            ],
+            winner_output_ids={"expression.laugh": output_id},
+            shared_runtime_receipt=self._receipt(slot_key="expression.laugh"),
         )
 
     def prepare_body_silhouette(self, *, asset, card, request=None):
         self.body_request = request
+        output_id = "body_front_doc178"
+        body_slot = CharacterCardSlot(
+            slot_key="body.front_full",
+            module="body_silhouette",
+            state="winner_selected",
+            output_id=output_id,
+            source_candidate_ids=["candidate_body_front"],
+            source_class="observed",
+            consent_provenance_id="body-consent",
+            lineage_id="lineage_body_front",
+            review_verified=True,
+            prompt_reference_parity_verified=True,
+            candidate_attempt_count=3,
+        )
         return CharacterCardStageResult(
             status="review",
-            card=card.model_copy(update={"body_silhouette_status": "reviewing"}),
+            card=card.model_copy(
+                update={
+                    "body_silhouette_status": "reviewing",
+                    "body_slots": {**card.body_slots, "body.front_full": body_slot},
+                }
+            ),
+            attempts=[self._attempt(slot_key="body.front_full", output_id=output_id)],
+            winner_output_ids={"body.front_full": output_id},
             shared_runtime_receipt=self._receipt(),
         )
 
