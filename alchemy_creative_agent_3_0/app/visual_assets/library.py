@@ -37,9 +37,11 @@ from .character_card import (
 from .contracts import (
     FACE_IDENTITY_CHANNELS,
     FaceIdentityModule,
+    HistoricalIdentityContext,
     IdentityAnchorPackVersion,
     PeopleAsset,
     RootSourceProvenance,
+    historical_identity_context_from_anchor_pack_payload,
 )
 from .formal_slot_acceptance import (
     FormalSlotReceipt,
@@ -112,6 +114,10 @@ class VisualAssetVersion(_StrictLibraryModel):
     # not an alternate pixel store.  It lets the generic library lifecycle
     # reuse the shared three-view preparation and explicit activation host.
     anchor_pack: IdentityAnchorPackVersion | None = None
+    # Explicit read-only compatibility context extracted from old active Face
+    # packs that predate FormalSlotReceipt.  It is safe identity input only:
+    # never Face activation proof, never a formal receipt, and never a winner.
+    historical_identity_context: HistoricalIdentityContext | None = None
     # Safe operator-facing classification for a failed preparation.  This is
     # deliberately not a provider error body, prompt, endpoint, or job ID.
     failure_code: str | None = None
@@ -490,7 +496,10 @@ class PersistentVisualAssetLibraryCatalog(VisualAssetLibraryCatalog):
             try:
                 asset = VisualAsset.model_validate(item)
             except Exception:
-                continue
+                try:
+                    asset = _visual_asset_with_historical_identity_context(item)
+                except Exception:
+                    continue
             if asset.owner_scope == owner_scope:
                 self._assets[(owner_scope, asset.visual_asset_id)] = asset
 
@@ -507,6 +516,40 @@ class PersistentVisualAssetLibraryCatalog(VisualAssetLibraryCatalog):
     def _scope_path(self, owner_scope: str) -> Path:
         _validate_storage_component(owner_scope, "owner_scope")
         return self.storage_root / "library" / owner_scope / "visual_assets.json"
+
+
+def _visual_asset_with_historical_identity_context(payload: Any) -> VisualAsset:
+    """Load a legacy VisualAsset by extracting invalid old AnchorPacks as context.
+
+    This is intentionally scoped to persistent readback.  It keeps ordinary
+    ``IdentityAnchorPackVersion(status='active')`` strict while allowing old
+    library records to provide read-only identity context to later modules.
+    """
+
+    if not isinstance(payload, dict):
+        raise ValueError("legacy visual asset payload must be an object")
+    adapted = dict(payload)
+    versions = []
+    changed = False
+    for raw_version in adapted.get("versions", []) or []:
+        if not isinstance(raw_version, dict):
+            versions.append(raw_version)
+            continue
+        version = dict(raw_version)
+        raw_anchor_pack = version.get("anchor_pack")
+        if raw_anchor_pack is not None:
+            try:
+                IdentityAnchorPackVersion.model_validate(raw_anchor_pack)
+            except Exception:
+                context = historical_identity_context_from_anchor_pack_payload(raw_anchor_pack)
+                version["historical_identity_context"] = context.model_dump(mode="python")
+                version["anchor_pack"] = None
+                changed = True
+        versions.append(version)
+    if not changed:
+        raise ValueError("visual asset has no recoverable historical identity context")
+    adapted["versions"] = versions
+    return VisualAsset.model_validate(adapted)
 
 
 class ProjectVisualAssetBindingService:

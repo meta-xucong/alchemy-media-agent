@@ -11,6 +11,10 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     apply_face_identity_pack_to_card,
     character_card_formal_slot_receipt_public_summary,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.library import (
+    PersistentVisualAssetLibraryCatalog,
+    VisualAssetLibraryLifecycleService,
+)
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     AnchorAuxiliaryReference,
@@ -388,6 +392,93 @@ def test_task5_historical_context_rejects_missing_output_or_identity_evidence() 
     ).model_dump(mode="python")
     with pytest.raises(ValidationError, match="historical identity context requires identity evidence"):
         historical_identity_context_from_anchor_pack_payload(payload)
+
+
+def test_task5_persistent_catalog_loads_legacy_anchor_pack_as_context_only(tmp_path) -> None:
+    root = tmp_path / "visual-asset-library"
+    scope_dir = root / "library" / "local_default"
+    scope_dir.mkdir(parents=True)
+    anchor_pack = {
+        "pack_version_id": "pack_legacy",
+        "people_asset_id": "visual_asset_legacy",
+        "status": "active",
+        "anchor_views": [
+            {
+                "view_id": f"view_{role}",
+                "view_role": role,
+                "output_id": f"output_{role}",
+                "source_candidate_ids": [f"candidate_{role}_1"],
+                "identity_scores": _identity_scores().model_dump(mode="python"),
+                "formal_slot_receipt": None,
+                "active": True,
+            }
+            for role in ("standard_front", "three_quarter", "profile")
+        ],
+        "root_source_provenance": {
+            "source_type": "uploaded_portrait",
+            "source_asset_id": "asset_root_1",
+            "project_id": "project_1",
+        },
+        "user_activation_confirmed": True,
+    }
+    payload = [
+        {
+            "visual_asset_id": "visual_asset_legacy",
+            "asset_type": "people",
+            "display_name": "Legacy Character",
+            "owner_scope": "local_default",
+            "lifecycle_status": "active",
+            "root_source_provenance": {
+                "source_asset_id": "asset_root_1",
+                "consent_reference": "consent_1",
+            },
+            "preparation_intent": "legacy character card",
+            "active_version_id": "version_legacy",
+            "versions": [
+                {
+                    "version_id": "version_legacy",
+                    "visual_asset_id": "visual_asset_legacy",
+                    "module_type": "face_identity",
+                    "lifecycle_status": "active",
+                    "owned_channels": [
+                        "face_geometry",
+                        "face_feature_relationships",
+                        "same_person_continuity",
+                    ],
+                    "approved_evidence_ids": ["legacy_face_reviewed"],
+                    "activation_confirmed": True,
+                    "immutable_source_provenance": {
+                        "source_asset_id": "asset_root_1",
+                        "consent_reference": "consent_1",
+                    },
+                    "anchor_pack": anchor_pack,
+                }
+            ],
+            "created_at": "2026-07-24T00:00:00Z",
+            "updated_at": "2026-07-24T00:00:00Z",
+        }
+    ]
+    (scope_dir / "visual_assets.json").write_text(__import__("json").dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="active Face Identity views require formal slot receipts"):
+        IdentityAnchorPackVersion.model_validate(anchor_pack)
+
+    catalog = PersistentVisualAssetLibraryCatalog(root)
+    assets = catalog.list_assets(owner_scope="local_default")
+    service = VisualAssetLibraryLifecycleService(catalog)
+    loaded = service.get(owner_scope="local_default", visual_asset_id="visual_asset_legacy")
+    version = loaded.active_version()
+
+    assert len(assets) == 1
+    assert version is not None
+    assert version.anchor_pack is None
+    assert version.historical_identity_context is not None
+    assert version.historical_identity_context.context_mode == HISTORICAL_IDENTITY_CONTEXT_ONLY
+    assert [view.view_role for view in version.historical_identity_context.views] == [
+        "standard_front",
+        "three_quarter",
+        "profile",
+    ]
 
 
 def test_task5_catalog_style_reload_preserves_face_formal_receipt_and_public_summary_is_safe() -> None:
