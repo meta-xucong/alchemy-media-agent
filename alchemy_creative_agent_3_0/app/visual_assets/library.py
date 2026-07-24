@@ -1018,10 +1018,11 @@ class VisualAssetLibraryLifecycleService:
         saved_asset = self.catalog.save(
             asset.model_copy(update={"character_card": persisted_card, "updated_at": _utc_now()})
         )
-        if getattr(result, "status", None) == "review" and stage == "expression_set":
+        if getattr(result, "status", None) == "review" and stage in {"expression_set", "body_silhouette"}:
             reloaded_asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
-            verified_card = self._mark_expression_formal_receipts_after_projection(
-                reloaded_asset.character_card
+            verified_card = self._mark_formal_receipts_after_projection(
+                reloaded_asset.character_card,
+                stage=stage,
             )
             if verified_card != reloaded_asset.character_card:
                 saved_asset = self.catalog.save(
@@ -1082,11 +1083,15 @@ class VisualAssetLibraryLifecycleService:
             )
             slot_updates: dict[str, Any] = {"shared_runtime_receipt": projected}
             formal_receipts = dict(getattr(result, "formal_slot_receipts", {}) or {})
-            if stage == "expression_set" and slot_key in EXPRESSION_SLOT_KEYS and slot_key != "expression.neutral":
+            if (
+                stage == "expression_set"
+                and slot_key in EXPRESSION_SLOT_KEYS
+                and slot_key != "expression.neutral"
+            ) or stage == "body_silhouette":
                 if slot_key not in formal_receipts:
                     raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_required")
                 formal_receipt = FormalSlotReceipt.model_validate(formal_receipts[slot_key])
-                if formal_receipt.module != "expression_set":
+                if formal_receipt.module != stage:
                     raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_module_mismatch")
                 if formal_receipt.slot_key != slot_key:
                     raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_slot_mismatch")
@@ -1106,10 +1111,16 @@ class VisualAssetLibraryLifecycleService:
         )
 
     @staticmethod
-    def _mark_expression_formal_receipts_after_projection(card: CharacterCardState) -> CharacterCardState:
-        slots = dict(card.expression_slots)
+    def _mark_formal_receipts_after_projection(
+        card: CharacterCardState,
+        *,
+        stage: Literal["expression_set", "body_silhouette"],
+    ) -> CharacterCardState:
+        slots = dict(card.expression_slots if stage == "expression_set" else card.body_slots)
         changed = False
         for slot_key, slot in list(slots.items()):
+            if stage == "expression_set" and slot_key == "expression.neutral":
+                continue
             receipt = slot.formal_slot_receipt
             if receipt is None:
                 continue
@@ -1122,7 +1133,16 @@ class VisualAssetLibraryLifecycleService:
                 changed = True
         if not changed:
             return card
-        return card.model_copy(update={"expression_slots": slots})
+        return card.model_copy(
+            update={"expression_slots" if stage == "expression_set" else "body_slots": slots}
+        )
+
+    @staticmethod
+    def _mark_expression_formal_receipts_after_projection(card: CharacterCardState) -> CharacterCardState:
+        return VisualAssetLibraryLifecycleService._mark_formal_receipts_after_projection(
+            card,
+            stage="expression_set",
+        )
 
     def _require_authorized_body_reference(self, request: BodySilhouettePublicRequest) -> Any:
         """Resolve an observed body source without accepting paths or claims."""
