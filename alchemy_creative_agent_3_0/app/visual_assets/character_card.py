@@ -26,6 +26,7 @@ from .formal_slot_acceptance import (
     FormalSlotReceipt,
     FormalSlotRequirementSummary,
     FormalSlotSharedReviewSummary,
+    HISTORICAL_IDENTITY_CONTEXT_ONLY,
     project_formal_slot_public_summary,
     validate_formal_slot_receipt_for_activation,
 )
@@ -238,6 +239,24 @@ class CharacterCardSlot(_CharacterCardModel):
     is_alias: bool = False
     alias_of: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def tolerate_legacy_slot_readback_noise(cls, data: Any) -> Any:
+        """Keep older persisted slots readable without upgrading their proof.
+
+        Pre-formal Character Card records may contain fields that were never
+        slot authority.  Dropping those fields lets downstream stages reference
+        an already-slotted winner image, while the formal receipt validators
+        below still fail closed for activation/completion proof.
+        """
+
+        if not isinstance(data, dict):
+            return data
+        cleaned = dict(data)
+        if cleaned.get("failure_reason") is None:
+            cleaned.pop("failure_reason", None)
+        return cleaned
+
     @field_validator("source_candidate_ids", "dependency_version_ids")
     @classmethod
     def unique_ids(cls, value: list[str]) -> list[str]:
@@ -276,7 +295,10 @@ class CharacterCardSlot(_CharacterCardModel):
             if not self.is_alias and not self.output_id:
                 raise ValueError("reviewed Character Card winners require an output")
             if self.module == "face_identity":
-                self._validate_face_identity_formal_slot_receipt()
+                if self.formal_slot_receipt is not None:
+                    self._validate_face_identity_formal_slot_receipt()
+                elif not self.historical_identity_context_only():
+                    raise ValueError("Face Identity Character Card slots require a formal slot receipt")
             elif self.module == "expression_set" and _is_expression_delivery_slot(self.slot_key):
                 if self.formal_slot_receipt is not None:
                     self._validate_expression_formal_slot_receipt(require_activation=self.state == "active")
@@ -320,6 +342,27 @@ class CharacterCardSlot(_CharacterCardModel):
         if self.bounded_repair_count > self.candidate_attempt_count:
             raise ValueError("bounded repair cannot exceed candidate attempts")
         return self
+
+    def historical_identity_context_only(self) -> bool:
+        """Return True only for old Face winners usable as read-only identity context.
+
+        This compatibility mode is deliberately not formal slot proof: it does
+        not create a receipt, does not prove Face activation, and must not be
+        copied into downstream Expression/Body receipts or winners.
+        """
+
+        return (
+            self.module == "face_identity"
+            and self.output_id is not None
+            and self.review_verified is True
+            and self.prompt_reference_parity_verified is True
+            and self.candidate_attempt_count >= 1
+        )
+
+    def reference_context_mode(self) -> str | None:
+        if self.historical_identity_context_only() and self.formal_slot_receipt is None:
+            return HISTORICAL_IDENTITY_CONTEXT_ONLY
+        return None
 
     def _validate_face_identity_formal_slot_receipt(self) -> None:
         if self.formal_slot_receipt is None:

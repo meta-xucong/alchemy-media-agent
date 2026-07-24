@@ -15,6 +15,7 @@ from ..schemas.models import V3BaseModel
 from .character_card import CharacterCardState
 from .formal_slot_acceptance import (
     FormalSlotReceipt,
+    HISTORICAL_IDENTITY_CONTEXT_ONLY,
     project_formal_slot_public_summary,
     validate_formal_slot_receipt_for_activation,
 )
@@ -186,6 +187,13 @@ class AnchorView(_StrictVisualAssetModel):
             return None
         return project_formal_slot_public_summary(self.formal_slot_receipt)
 
+    def reference_context_mode(self) -> str | None:
+        """Read-only compatibility marker for old views without formal receipts."""
+
+        if self.active and self.formal_slot_receipt is None:
+            return HISTORICAL_IDENTITY_CONTEXT_ONLY
+        return None
+
 
 class AnchorAuxiliaryReference(_StrictVisualAssetModel):
     reference_id: str
@@ -283,11 +291,10 @@ class IdentityAnchorPackVersion(_StrictVisualAssetModel):
                 raise ValueError(f"active pack is missing required face views: {sorted(missing)}")
             for view in self.anchor_views:
                 if view.active:
-                    if view.view_role in FACE_AUXILIARY_BRIDGE_ROLES:
-                        raise ValueError("active Face Identity packs cannot activate 25-35 degree bridge references")
-                    if view.formal_slot_receipt is None:
-                        raise ValueError("active Face Identity views require formal slot receipts")
-                    validate_formal_slot_receipt_for_activation(view.formal_slot_receipt)
+                    if view.formal_slot_receipt is not None:
+                        if view.view_role in FACE_AUXILIARY_BRIDGE_ROLES:
+                            raise ValueError("active Face Identity packs cannot activate 25-35 degree bridge references")
+                        validate_formal_slot_receipt_for_activation(view.formal_slot_receipt)
         return self
 
 

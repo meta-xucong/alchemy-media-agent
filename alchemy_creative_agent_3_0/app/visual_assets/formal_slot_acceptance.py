@@ -21,6 +21,7 @@ FORMAL_SLOT_RECEIPT_VERSION = "v3_formal_slot_acceptance_receipt_v1"
 FORMAL_SLOT_RECEIPT_OWNER = "v3_professional_formal_slot_acceptance_core"
 FORMAL_SLOT_SHARED_REVIEW_OWNER = "v3_shared_visual_cluster"
 FORMAL_SLOT_SHARED_REVIEW_CONTRACT_VERSION = "v3_character_card_generic_slot_review_receipt_v1"
+HISTORICAL_IDENTITY_CONTEXT_ONLY = "historical_identity_context_only"
 
 FormalSlotAcceptanceMode = Literal[
     "standard_three_candidate",

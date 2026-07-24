@@ -24,6 +24,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import 
     FormalSlotReceipt,
     FormalSlotRequirementSummary,
     FormalSlotSharedReviewSummary,
+    HISTORICAL_IDENTITY_CONTEXT_ONLY,
 )
 
 
@@ -242,18 +243,97 @@ def test_task5_face_projection_requires_matching_standard_formal_receipt(
         apply_face_identity_pack_to_card(card, pack)
 
 
-def test_task5_old_boolean_face_slot_without_formal_receipt_fails_closed() -> None:
+def test_task5_legacy_face_winner_without_formal_receipt_remains_reference_readable() -> None:
+    slot = CharacterCardSlot(
+        slot_key="face.front",
+        module="face_identity",
+        state="active",
+        output_id="output_legacy",
+        source_candidate_ids=["candidate_1", "candidate_2", "candidate_3"],
+        review_verified=True,
+        prompt_reference_parity_verified=True,
+        candidate_attempt_count=3,
+    )
+    card = CharacterCardState.model_validate(
+        {
+            **CharacterCardState.initial(card_version_id="card_1").model_dump(mode="python"),
+            "face_identity_status": "active",
+            "face_slots": {
+                **CharacterCardState.initial(card_version_id="card_1").face_slots,
+                "face.front": slot,
+            },
+            "expression_slots": {
+                "expression.neutral": {
+                    "slot_key": "expression.neutral",
+                    "module": "expression_set",
+                    "state": "empty",
+                    "failure_reason": None,
+                }
+            },
+        }
+    )
+
+    assert card.face_slots["face.front"].formal_slot_receipt is None
+    assert card.face_slots["face.front"].output_id == "output_legacy"
+    assert card.face_slots["face.front"].reference_context_mode() == HISTORICAL_IDENTITY_CONTEXT_ONLY
+    assert character_card_formal_slot_receipt_public_summary(card.face_slots["face.front"]) is None
+
+
+def test_task5_legacy_face_winner_still_requires_review_and_parity() -> None:
     with pytest.raises(ValidationError):
         CharacterCardSlot(
             slot_key="face.front",
             module="face_identity",
             state="active",
             output_id="output_legacy",
-            source_candidate_ids=["candidate_1", "candidate_2", "candidate_3"],
-            review_verified=True,
-            prompt_reference_parity_verified=True,
             candidate_attempt_count=3,
         )
+
+
+def test_task5_legacy_active_anchor_pack_without_formal_receipt_is_readable_not_projectable() -> None:
+    legacy_view = AnchorView(
+        view_id="view_legacy_standard_front",
+        view_role="standard_front",
+        output_id="output_legacy_front",
+        source_candidate_ids=["candidate_1", "candidate_2", "candidate_3"],
+        identity_scores=_identity_scores(),
+        formal_slot_receipt=None,
+    )
+    legacy_bridge = AnchorView(
+        view_id="view_legacy_left_front_25",
+        view_role="left_front_25",
+        output_id="output_legacy_bridge",
+        source_candidate_ids=["candidate_bridge"],
+        identity_scores=_identity_scores(),
+        formal_slot_receipt=None,
+    )
+    pack = IdentityAnchorPackVersion(
+        pack_version_id="pack_legacy",
+        people_asset_id="person_1",
+        status="active",
+        anchor_views=[
+            legacy_view,
+            legacy_bridge,
+            _view("three_quarter"),
+            _view("profile"),
+            _view("reverse_three_quarter"),
+            _view("rear_head"),
+        ],
+        root_source_provenance=RootSourceProvenance(
+            source_type="uploaded_portrait",
+            source_asset_id="asset_root_1",
+            project_id="project_1",
+        ),
+        user_activation_confirmed=True,
+    )
+
+    assert pack.anchor_views[0].formal_slot_receipt is None
+    assert pack.anchor_views[0].reference_context_mode() == HISTORICAL_IDENTITY_CONTEXT_ONLY
+    assert pack.anchor_views[1].view_role == "left_front_25"
+    assert pack.anchor_views[1].reference_context_mode() == HISTORICAL_IDENTITY_CONTEXT_ONLY
+    assert pack.anchor_views[0].formal_slot_public_summary() is None
+    with pytest.raises((ValueError, ValidationError)):
+        apply_face_identity_pack_to_card(CharacterCardState.initial(card_version_id="card_1"), pack)
 
 
 def test_task5_catalog_style_reload_preserves_face_formal_receipt_and_public_summary_is_safe() -> None:
