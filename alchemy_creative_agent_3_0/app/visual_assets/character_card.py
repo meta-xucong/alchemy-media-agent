@@ -30,6 +30,7 @@ from .formal_slot_acceptance import (
     project_formal_slot_public_summary,
     validate_formal_slot_receipt_for_activation,
 )
+from .expression_model_card_framing import compose_expression_model_card_enhanced_summary
 
 
 FACE_SLOT_KEYS = (
@@ -745,11 +746,23 @@ class CharacterCardCandidateResult(_CharacterCardModel):
     module: Literal["expression_set", "body_silhouette"]
     slot_key: str
     candidate_index: int = Field(ge=1, le=3)
+    operation_id: str | None = None
+    round_id: str | None = None
     source_candidate_ids: list[str] = Field(min_length=1)
     source_output_ids: list[str] = Field(min_length=1)
     canonical_prompt_hash: str
     prompt_compilation_id: str
     prompt_reference_parity_verified: bool
+
+    @field_validator("operation_id", "round_id")
+    @classmethod
+    def validate_optional_binding_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        normalized = str(value).strip()
+        if not normalized:
+            raise ValueError("Character Card candidate binding label must be nonempty")
+        return normalized
 
     @model_validator(mode="after")
     def require_parity(self) -> "CharacterCardCandidateResult":
@@ -2043,6 +2056,54 @@ class CharacterCardPreparationService:
         candidate: CharacterCardCandidateResult,
         review: Any,
     ) -> FormalSlotCandidateEnhancedProofSummary:
+        expression_model_card_proofs = (
+            review.get("expression_model_card_proofs")
+            if isinstance(review, Mapping)
+            else getattr(review, "expression_model_card_proofs", None)
+        )
+        if isinstance(expression_model_card_proofs, Mapping):
+            operation_id = str(getattr(candidate, "operation_id", "") or "").strip()
+            round_id = str(getattr(candidate, "round_id", "") or "").strip()
+            if not operation_id or not round_id:
+                return FormalSlotCandidateEnhancedProofSummary(
+                    profile_id="expression_model_card_delivery_v1",
+                    requirement_id="expression_model_card_framing_and_affect_v1",
+                    candidate_id=candidate.candidate_id,
+                    output_id=candidate.output_id,
+                    eligible=False,
+                    status="fail",
+                    evidence_codes=["expression_model_card_profile_rejected"],
+                    issue_codes=["expression_model_card_binding_missing"],
+                    dimensions={"profile_score": 0.0},
+                )
+            model_card_summary = compose_expression_model_card_enhanced_summary(
+                module=candidate.module,
+                slot=slot_key,
+                candidate_id=candidate.candidate_id,
+                output_id=candidate.output_id,
+                operation_id=operation_id,
+                round_id=round_id,
+                card_family_framing=expression_model_card_proofs.get("card_family_framing"),
+                affect_proof=expression_model_card_proofs.get("affect_proof"),
+            )
+            evidence_codes = ["expression_model_card_profile_passed"] if model_card_summary.eligible else [
+                "expression_model_card_profile_rejected"
+            ]
+            evidence_codes.extend(model_card_summary.evidence_codes)
+            dimensions = dict(model_card_summary.dimensions)
+            dimensions["profile_score"] = 1.0 if model_card_summary.eligible else 0.0
+            return FormalSlotCandidateEnhancedProofSummary(
+                profile_id=model_card_summary.profile_id,
+                requirement_id=model_card_summary.requirement_id,
+                candidate_id=candidate.candidate_id,
+                output_id=candidate.output_id,
+                eligible=model_card_summary.eligible,
+                status=model_card_summary.status,
+                evidence_codes=list(dict.fromkeys(evidence_codes)),
+                issue_codes=list(model_card_summary.issue_codes),
+                dimensions=dimensions,
+            )
+
         eligible = CharacterCardPreparationService._review_allows_slot(slot_key, review)
         return FormalSlotCandidateEnhancedProofSummary(
             profile_id="expression_slot_profile_v1",

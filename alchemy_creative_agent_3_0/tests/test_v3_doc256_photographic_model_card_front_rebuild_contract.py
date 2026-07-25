@@ -12,6 +12,7 @@ import importlib
 import inspect
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,10 @@ def _expression_module():
     return importlib.import_module(
         "alchemy_creative_agent_3_0.app.visual_assets.expression_model_card_framing"
     )
+
+
+def _character_card_module():
+    return importlib.import_module("alchemy_creative_agent_3_0.app.visual_assets.character_card")
 
 
 def _anchor_pack_module():
@@ -876,6 +881,116 @@ def test_doc256_expression_requires_card_family_and_affect_authority_and_binding
     assert "expression_affect_binding_mismatch" in summary.issue_codes
     assert "expression_affect_owner_invalid" in summary.issue_codes
     assert "expression_affect_profile_invalid" in summary.issue_codes
+
+
+def _doc256_expression_candidate(**overrides: object) -> SimpleNamespace:
+    payload = {
+        "candidate_id": "candidate_1",
+        "output_id": "output_1",
+        "module": "expression_set",
+        "slot_key": "expression.anger",
+        "candidate_index": 1,
+        "operation_id": "op_expression_round1",
+        "round_id": "round1",
+    }
+    payload.update(overrides)
+    return SimpleNamespace(**payload)
+
+
+def _doc256_expression_review(
+    *,
+    card_family_framing: dict[str, object] | None = None,
+    affect_proof: dict[str, object] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        status="pass",
+        expression_model_card_proofs={
+            "card_family_framing": card_family_framing
+            if card_family_framing is not None
+            else _expression_framing_pass(),
+            "affect_proof": affect_proof if affect_proof is not None else _affect_pass(),
+        },
+    )
+
+
+def test_doc256_phase3b_expression_candidate_contract_carries_operation_round_binding() -> None:
+    character_card = _character_card_module()
+
+    candidate = character_card.CharacterCardCandidateResult(
+        candidate_id="candidate_1",
+        output_id="output_1",
+        module="expression_set",
+        slot_key="expression.anger",
+        candidate_index=1,
+        source_candidate_ids=["candidate_1"],
+        source_output_ids=["output_1"],
+        canonical_prompt_hash="prompt_hash_1",
+        prompt_compilation_id="prompt_compile_1",
+        prompt_reference_parity_verified=True,
+        operation_id="op_expression_round1",
+        round_id="round1",
+    )
+
+    assert candidate.operation_id == "op_expression_round1"
+    assert candidate.round_id == "round1"
+
+
+def test_doc256_phase3b_expression_formal_proof_uses_card_family_and_affect_summary() -> None:
+    character_card = _character_card_module()
+
+    summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=_doc256_expression_review(),
+    )
+
+    assert summary.profile_id == "expression_model_card_delivery_v1"
+    assert summary.requirement_id == "expression_model_card_framing_and_affect_v1"
+    assert summary.eligible is True
+    assert "expression_model_card_profile_passed" in summary.evidence_codes
+    assert not hasattr(summary, "winner_candidate_id")
+    assert not hasattr(summary, "formal_slot_receipt")
+
+
+def test_doc256_phase3b_expression_framing_and_affect_do_not_compensate_each_other() -> None:
+    character_card = _character_card_module()
+
+    framing_failed = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=_doc256_expression_review(card_family_framing=_expression_framing_pass(status="fail")),
+    )
+    affect_failed = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=_doc256_expression_review(affect_proof=_affect_pass(status="fail")),
+    )
+
+    assert framing_failed.eligible is False
+    assert "card_family_framing_failed" in framing_failed.issue_codes
+    assert affect_failed.eligible is False
+    assert "expression_affect_profile_failed" in affect_failed.issue_codes
+
+
+def test_doc256_phase3b_expression_formal_proof_requires_operation_round_binding() -> None:
+    character_card = _character_card_module()
+
+    missing_binding = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(operation_id=None),
+        review=_doc256_expression_review(),
+    )
+    mismatched_binding = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(operation_id="wrong_operation"),
+        review=_doc256_expression_review(),
+    )
+
+    assert missing_binding.eligible is False
+    assert "expression_model_card_binding_missing" in missing_binding.issue_codes
+    assert mismatched_binding.eligible is False
+    assert "expression_card_family_binding_mismatch" in mismatched_binding.issue_codes
+    assert "expression_affect_binding_mismatch" in mismatched_binding.issue_codes
 
 
 def test_doc256_expression_adapter_does_not_import_face_local_front_module() -> None:
