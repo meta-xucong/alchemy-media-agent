@@ -27,6 +27,7 @@ from .providers import (
     BrainExecutionBudgetExceeded,
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
+    BrainPromptContractInvalid,
     BrainProfessionalAnchorViewDecisionMissing,
     BrainProviderAdmissionDecisionMissing,
     BrainProviderError,
@@ -236,7 +237,7 @@ class V3LLMBrainAdapter:
         prompts_raw = data.get("canonical_provider_prompts") if isinstance(data, dict) else None
         expected_count = request.requested_image_count
         if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
-            raise BrainProviderError("Remote Brain returned an invalid canonical provider-prompt contract.")
+            raise BrainPromptContractInvalid("Remote Brain returned an invalid canonical provider-prompt contract.")
         semantic_preflight_required = _requires_human_semantic_preflight(request)
         if semantic_preflight_required and not _matches_human_semantic_preflight_receipts(
             prompts_raw,
@@ -344,7 +345,7 @@ class V3LLMBrainAdapter:
         try:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
-            raise BrainProviderError("Remote Brain returned an invalid canonical provider-prompt contract.") from exc
+            raise BrainPromptContractInvalid("Remote Brain returned an invalid canonical provider-prompt contract.") from exc
         return (
             prompts,
             {

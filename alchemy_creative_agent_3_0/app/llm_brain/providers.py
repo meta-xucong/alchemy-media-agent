@@ -23,6 +23,10 @@ class BrainProviderError(RuntimeError):
     """Raised when a configured remote brain provider fails."""
 
 
+class BrainPromptContractInvalid(BrainProviderError):
+    """The remote Brain returned a malformed canonical provider-prompt contract."""
+
+
 class BrainExecutionBudgetExceeded(BrainProviderError):
     """The shared logical Brain budget ended before another remote call."""
 

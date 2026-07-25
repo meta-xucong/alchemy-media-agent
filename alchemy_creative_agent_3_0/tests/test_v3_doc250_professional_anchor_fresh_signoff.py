@@ -70,6 +70,8 @@ class _Doc250FreshBrainProvider(EcommerceRemoteBrainTestProvider):
                     )
         elif self.finalizer_fault == "duplicate_prompt":
             prompts.append(deepcopy(prompts[0]))
+        elif self.finalizer_fault == "generic_provider_failure":
+            raise RuntimeError("upstream fixture transport failed")
         return payload
 
 
@@ -230,3 +232,18 @@ def test_doc250_capability_activation_projection_missing_is_not_reported_as_brai
     assert "professional_anchor_pack_preparation_contract_invalid" in result.warnings[-1]
     assert not provider.finalizer_metadata
     assert "remote_creative_brain_outcome" not in result.metadata
+
+
+def test_doc250_non_contract_provider_failure_is_not_misclassified_as_prompt_contract_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    provider = _Doc250FreshBrainProvider(finalizer_fault="generic_provider_failure")
+
+    result = _runtime(provider).plan_job(_standard_front_request(tmp_path))
+
+    assert result.status.value == "blocked"
+    outcome = result.metadata.get("remote_creative_brain_outcome")
+    assert isinstance(outcome, dict)
+    assert outcome["reason_code"] == "remote_creative_brain_prompt_signoff_unavailable"
