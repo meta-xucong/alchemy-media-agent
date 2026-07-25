@@ -1,4 +1,5 @@
 import base64
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -1121,6 +1122,84 @@ def test_v3_output_store_creates_preview_thumbnail_and_download(tmp_path) -> Non
     assert store.file_for_variant(record.output_id, "download")[1] == "image/png"
     assert store.file_for_variant(record.output_id, "preview")[1] == "image/png"
     assert store.file_for_variant(record.output_id, "thumbnail")[1] == "image/png"
+
+
+def test_v3_output_store_serves_canonical_files_when_migrated_record_paths_are_stale(tmp_path) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = store.save_base64_output(
+        job_id="job_migrated_output",
+        candidate_id="candidate_migrated_output",
+        asset_id="asset_migrated_output",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(128, 96),
+        mime_type="image/png",
+        output_format="png",
+        output_id="v3_output_abcd1234abcd1234abcd",
+    )
+    output_dir = Path(record.preview_path).parent
+    stale_root = tmp_path / "old_evidence_root"
+    payload = json.loads((output_dir / "output.json").read_text(encoding="utf-8"))
+    payload["file_path"] = str(stale_root / record.output_id / "original.png")
+    payload["preview_path"] = str(stale_root / record.output_id / "preview.png")
+    payload["thumbnail_path"] = str(stale_root / record.output_id / "thumbnail.png")
+    (output_dir / "output.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    migrated_reader = V3GeneratedOutputStore(tmp_path / "outputs")
+
+    assert migrated_reader.file_for_variant(record.output_id, "download")[0] == output_dir / "original.png"
+    assert migrated_reader.file_for_variant(record.output_id, "preview")[0] == output_dir / "preview.png"
+    assert migrated_reader.file_for_variant(record.output_id, "thumbnail")[0] == output_dir / "thumbnail.png"
+
+
+def test_v3_output_store_rejects_canonical_fallback_when_original_file_is_missing(tmp_path) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = store.save_base64_output(
+        job_id="job_missing_output_file",
+        candidate_id="candidate_missing_output_file",
+        asset_id="asset_missing_output_file",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(128, 96),
+        mime_type="image/png",
+        output_format="png",
+        output_id="v3_output_bbbb1234bbbb1234bbbb",
+    )
+    output_dir = Path(record.preview_path).parent
+    payload = json.loads((output_dir / "output.json").read_text(encoding="utf-8"))
+    stale_root = tmp_path / "old_evidence_root"
+    payload["preview_path"] = str(stale_root / record.output_id / "preview.png")
+    (output_dir / "output.json").write_text(json.dumps(payload), encoding="utf-8")
+    (output_dir / "original.png").unlink()
+
+    migrated_reader = V3GeneratedOutputStore(tmp_path / "outputs")
+
+    assert migrated_reader.file_for_variant(record.output_id, "preview") is None
+
+
+def test_v3_output_store_rejects_canonical_fallback_when_original_sha_mismatches(tmp_path) -> None:
+    store = V3GeneratedOutputStore(tmp_path / "outputs")
+    record = store.save_base64_output(
+        job_id="job_mismatched_output_sha",
+        candidate_id="candidate_mismatched_output_sha",
+        asset_id="asset_mismatched_output_sha",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(128, 96),
+        mime_type="image/png",
+        output_format="png",
+        output_id="v3_output_cccc1234cccc1234cccc",
+    )
+    output_dir = Path(record.preview_path).parent
+    payload = json.loads((output_dir / "output.json").read_text(encoding="utf-8"))
+    stale_root = tmp_path / "old_evidence_root"
+    payload["preview_path"] = str(stale_root / record.output_id / "preview.png")
+    payload["metadata"]["content_sha256"] = "0" * 64
+    (output_dir / "output.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    migrated_reader = V3GeneratedOutputStore(tmp_path / "outputs")
+
+    assert migrated_reader.file_for_variant(record.output_id, "preview") is None
 
 
 def test_v3_output_store_reuses_cached_index_until_the_storage_revision_changes(tmp_path, monkeypatch) -> None:

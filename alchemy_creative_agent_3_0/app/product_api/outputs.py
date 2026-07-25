@@ -158,20 +158,31 @@ class V3GeneratedOutputStore:
         record = self.get_output(output_id)
         if record is None:
             return None
+        output_dir = self.storage_root / output_id
         if variant == "download":
             path = Path(record.file_path)
             media_type = record.mime_type
             filename = f"{output_id}.{_extension(record.output_format)}"
+            fallback_path = output_dir / f"original{_FORMAT_SUFFIXES.get(record.output_format, '.png')}"
         elif variant == "preview":
             path = Path(record.preview_path)
             media_type = "image/png"
             filename = f"{output_id}_preview.png"
+            fallback_path = output_dir / "preview.png"
         elif variant == "thumbnail":
             path = Path(record.thumbnail_path)
             media_type = "image/png"
             filename = f"{output_id}_thumbnail.png"
+            fallback_path = output_dir / "thumbnail.png"
         else:
             return None
+        if (
+            (not path.exists() or not path.is_file())
+            and fallback_path.exists()
+            and fallback_path.is_file()
+            and _canonical_output_files_match_record(record, output_dir)
+        ):
+            path = fallback_path
         if not path.exists() or not path.is_file():
             return None
         return path, media_type, filename
@@ -304,6 +315,45 @@ def _now_iso() -> str:
 
 def _valid_output_id(output_id: str) -> bool:
     return bool(_OUTPUT_ID_PATTERN.match(str(output_id or "")))
+
+
+def _canonical_output_files_match_record(record: V3GeneratedOutputRecord, output_dir: Path) -> bool:
+    if output_dir.name != record.output_id:
+        return False
+    original_path = output_dir / f"original{_FORMAT_SUFFIXES.get(record.output_format, '.png')}"
+    if not original_path.exists() or not original_path.is_file():
+        return False
+    expected_sha = _expected_output_content_sha256(record)
+    if expected_sha:
+        try:
+            return hashlib.sha256(original_path.read_bytes()).hexdigest() == expected_sha
+        except OSError:
+            return False
+    try:
+        width, height = _validate_image(original_path.read_bytes())
+    except ValueError:
+        return False
+    if record.width is not None and int(record.width) != int(width):
+        return False
+    if record.height is not None and int(record.height) != int(height):
+        return False
+    return True
+
+
+def _expected_output_content_sha256(record: V3GeneratedOutputRecord) -> str:
+    metadata = record.metadata or {}
+    for key in (
+        "artifact_sha256",
+        "content_sha256",
+        "output_sha256",
+        "original_sha256",
+    ):
+        value = str(metadata.get(key) or "").strip().lower()
+        if value.startswith("sha256:"):
+            value = value.split(":", 1)[1].strip()
+        if re.fullmatch(r"[a-f0-9]{64}", value):
+            return value
+    return ""
 
 
 def _safe_remove_tree(root: Path, target: Path) -> None:

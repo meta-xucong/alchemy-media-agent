@@ -5295,13 +5295,11 @@ const v3CharacterCardModuleOrder = ["face_identity", "expression_set", "body_sil
 const v3CharacterCardModuleMeta = {
   face_identity: {
     title: "人物脸部基础",
-    detail: "建立同一个人物在不同角度下仍然稳定的脸部与头部参考。",
+    detail: "建立同一个人物在正面、45°、侧面和背面等正式角度下仍然稳定的脸部与头部参考。",
     slots: [
       ["face.front", "正面"],
-      ["face.left_front_25", "左前25°"],
       ["face.front_three_quarter", "左前45°"],
       ["face.profile", "侧面"],
-      ["face.right_front_25", "右前25°"],
       ["face.reverse_three_quarter", "右前45°"],
       ["face.rear_head", "后脑 / 背面"],
     ],

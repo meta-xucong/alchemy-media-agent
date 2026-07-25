@@ -129,7 +129,29 @@ def test_doc247_character_card_slot_status_labels_completed_winner_selected() ->
     assert 'empty: "尚未建立"' in helper
     assert 'blocked: "需要重新处理"' in helper
     assert '}[status] || "等待处理";' in helper
-    assert "app.js?v=20260725-character-card-slot-status" in index
+    assert "app.js?v=20260725-formal-face-slots" in index
+
+
+def test_doc247_character_card_ui_excludes_auxiliary_25_degree_face_references() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    module_start = source.index("const v3CharacterCardModuleMeta")
+    module_end = source.index("function v3CharacterCardForAsset", module_start)
+    module_meta = source[module_start:module_end]
+    face_start = module_meta.index("face_identity:")
+    expression_start = module_meta.index("expression_set:", face_start)
+    face_meta = module_meta[face_start:expression_start]
+
+    assert '"face.front"' in face_meta
+    assert '"face.front_three_quarter"' in face_meta
+    assert '"face.profile"' in face_meta
+    assert '"face.reverse_three_quarter"' in face_meta
+    assert '"face.rear_head"' in face_meta
+    assert "左前45°" in face_meta
+    assert "右前45°" in face_meta
+    assert "face.left_front_25" not in face_meta
+    assert "face.right_front_25" not in face_meta
+    assert "左前25°" not in face_meta
+    assert "右前25°" not in face_meta
 
 
 def test_doc173_project_binding_is_explicit_and_never_silent_fallback() -> None:
