@@ -1292,6 +1292,7 @@ class VisualAssetLibraryLifecycleService:
         visual_asset_id: str,
         resume: bool = False,
         generation_channel: Literal["provider", "mcp"] = "provider",
+        absolute_portrait_realism_required: bool = False,
     ) -> VisualAsset:
         """Prepare all five Face Identity slots through the existing host."""
 
@@ -1342,6 +1343,8 @@ class VisualAssetLibraryLifecycleService:
             "people_asset": people_asset,
             "root_source_provenance": people_asset.root_source_provenance,
         }
+        if absolute_portrait_realism_required:
+            method_kwargs["absolute_portrait_realism_required"] = True
         if resume_pack is not None:
             method_kwargs["resume_from_pack"] = resume_pack
         if generation_channel == "mcp":

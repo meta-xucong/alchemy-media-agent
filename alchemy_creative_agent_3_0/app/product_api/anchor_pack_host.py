@@ -174,6 +174,7 @@ class ProductApiAnchorPackPreparationHost:
         resume_from_pack: IdentityAnchorPackVersion | None = None,
         generation_channel: str = "provider",
         pending_mcp_handoff_ids: list[str] | None = None,
+        absolute_portrait_realism_required: bool = False,
     ) -> AnchorPackPreparationResult:
         """Reuse the same host for the two additive Doc178 Face slots."""
 
@@ -189,6 +190,7 @@ class ProductApiAnchorPackPreparationHost:
                 face_view_scope="character_card",
                 generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
                 pending_mcp_handoff_ids=list(pending_mcp_handoff_ids or []),
+                absolute_portrait_realism_required=absolute_portrait_realism_required,
             ),
             resume_from_pack=safe_resume_from_pack,
         )

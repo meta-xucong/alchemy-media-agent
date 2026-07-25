@@ -13,6 +13,10 @@ from uuid import uuid4
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
+from ..shared_capabilities.visual_cluster.absolute_portrait_realism import (
+    evaluate_absolute_portrait_realism,
+    project_absolute_portrait_realism_enhanced_proof,
+)
 from .contracts import (
     AnchorAuxiliaryReference,
     AnchorCandidateFailureReceipt,
@@ -137,6 +141,7 @@ class AnchorPackPreparationRequest(V3BaseModel):
     face_view_scope: Literal["base", "character_card"] = "base"
     generation_channel: Literal["provider", "mcp"] = "provider"
     pending_mcp_handoff_ids: list[str] = Field(default_factory=list)
+    absolute_portrait_realism_required: bool = False
 
     @field_validator("brain_plan_id", "canonical_prompt_hash", "preparation_intent")
     @classmethod
@@ -471,7 +476,11 @@ class AnchorPackPreparationService:
                 )
 
             try:
-                front_view = self._formal_view_from_attempts("standard_front", front_attempts)
+                front_view = self._formal_view_from_attempts(
+                    "standard_front",
+                    front_attempts,
+                    absolute_portrait_realism_required=request.absolute_portrait_realism_required,
+                )
             except ValueError as exc:
                 pack = self._pack(
                     request,
@@ -1143,11 +1152,14 @@ class AnchorPackPreparationService:
         self,
         view_role: FaceViewRole,
         attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
+        *,
+        absolute_portrait_realism_required: bool = False,
     ) -> AnchorView:
         receipt = self._formal_receipt_for_attempts(
             view_role=view_role,
             attempts=attempts,
             acceptance_mode="standard_three_candidate",
+            absolute_portrait_realism_required=absolute_portrait_realism_required,
         )
         winner_candidate, winner_review = self._candidate_by_id(attempts, receipt.winner_candidate_id)
         return AnchorView(
@@ -1185,7 +1197,13 @@ class AnchorPackPreparationService:
         view_role: FaceViewRole,
         attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
         acceptance_mode: Literal["standard_three_candidate", "auxiliary_first_pass_reference"],
+        absolute_portrait_realism_required: bool = False,
     ) -> FormalSlotReceipt:
+        require_absolute_realism = (
+            absolute_portrait_realism_required
+            and acceptance_mode == "standard_three_candidate"
+            and view_role == "standard_front"
+        )
         score_by_candidate_id = {
             candidate.candidate_id: review.identity_scores.selection_key()
             for candidate, review in attempts
@@ -1200,7 +1218,11 @@ class AnchorPackPreparationService:
             slot_key=slot_key,
             acceptance_mode=acceptance_mode,
             candidates=[
-                self._formal_candidate_summary(candidate, review)
+                self._formal_candidate_summary(
+                    candidate,
+                    review,
+                    absolute_portrait_realism_required=require_absolute_realism,
+                )
                 for candidate, review in attempts
             ],
             framing_summary=self._formal_requirement_summary("framing", attempts),
@@ -1209,6 +1231,11 @@ class AnchorPackPreparationService:
             ranking_key=(
                 (lambda candidate: score_by_candidate_id[candidate.candidate_id])
                 if acceptance_mode == "standard_three_candidate"
+                else None
+            ),
+            candidate_eligibility=(
+                (lambda candidate: candidate.enhanced_proof is not None and candidate.enhanced_proof.eligible)
+                if require_absolute_realism
                 else None
             ),
         )
@@ -1227,6 +1254,8 @@ class AnchorPackPreparationService:
         self,
         candidate: AnchorCandidateResult,
         review: AnchorReviewDecision,
+        *,
+        absolute_portrait_realism_required: bool = False,
     ) -> FormalSlotCandidateSummary:
         return FormalSlotCandidateSummary(
             candidate_index=candidate.candidate_index,
@@ -1234,7 +1263,40 @@ class AnchorPackPreparationService:
             output_id=candidate.output_id,
             reviewed=True,
             shared_review=self._formal_shared_review_summary(review),
+            enhanced_proof=(
+                self._absolute_portrait_realism_enhanced_proof(candidate, review)
+                if absolute_portrait_realism_required
+                else None
+            ),
         )
+
+    @staticmethod
+    def _absolute_portrait_realism_enhanced_proof(
+        candidate: AnchorCandidateResult,
+        review: AnchorReviewDecision,
+    ):
+        evidence_codes = [str(code or "").strip() for code in review.identity_scores.evidence_codes if str(code or "").strip()]
+        evidence_set = set(evidence_codes)
+        dimensions = {
+            "eye_gaze_alignment": 1.0 if "absolute_eye_gaze_alignment_verified" in evidence_set else 0.0,
+            "facial_micro_asymmetry": 1.0 if "absolute_facial_micro_asymmetry_verified" in evidence_set else 0.0,
+            "skin_micro_texture": 1.0 if "absolute_skin_micro_texture_verified" in evidence_set else 0.0,
+            "hair_strand_randomness": 1.0 if "absolute_hair_strand_randomness_verified" in evidence_set else 0.0,
+            "ear_anatomy_clarity": 1.0 if "absolute_ear_anatomy_clarity_verified" in evidence_set else 0.0,
+            "natural_light_transition": 1.0 if "absolute_natural_light_transition_verified" in evidence_set else 0.0,
+            "camera_texture_response": 1.0 if "absolute_camera_texture_response_verified" in evidence_set else 0.0,
+            "commercial_beauty_preserved": 1.0 if "absolute_commercial_beauty_preserved" in evidence_set else 0.0,
+        }
+        proof = evaluate_absolute_portrait_realism(
+            candidate_id=candidate.candidate_id,
+            output_id=candidate.output_id,
+            dimensions=dimensions,
+            evidence_codes=[
+                code for code in evidence_codes if code.startswith("absolute_")
+            ] or ["absolute_portrait_realism_reviewed"],
+            issue_codes=getattr(review, "issue_codes", []) or [],
+        )
+        return project_absolute_portrait_realism_enhanced_proof(proof)
 
     def _validate_formal_attempt_shared_review_authority(
         self,

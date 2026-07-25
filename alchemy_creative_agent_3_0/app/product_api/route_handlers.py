@@ -224,7 +224,23 @@ class V3ProductRouteHandlers:
             raise ValueError("character_card_failed_slot_retry_flag_invalid")
         body_request = None
         expression = None
-        if stage == "body_silhouette":
+        absolute_portrait_realism_required = False
+        if stage == "face_identity":
+            allowed = {
+                "stage",
+                "resume",
+                "generation_channel",
+                "retry_failed_slot",
+                "confirm_retry",
+                "absolute_portrait_realism_required",
+            }
+            if not set(payload).issubset(allowed):
+                raise ValueError("character_card_stage_payload_invalid")
+            absolute_realism_flag = payload.get("absolute_portrait_realism_required", False)
+            if not isinstance(absolute_realism_flag, bool):
+                raise ValueError("character_card_absolute_realism_flag_invalid")
+            absolute_portrait_realism_required = absolute_realism_flag
+        elif stage == "body_silhouette":
             allowed = {
                 "stage",
                 "resume",
@@ -258,6 +274,7 @@ class V3ProductRouteHandlers:
                 visual_asset_id=visual_asset_id,
                 resume=resume,
                 generation_channel=generation_channel,
+                absolute_portrait_realism_required=absolute_portrait_realism_required,
             )
         else:
             asset = self.visual_asset_library_service.prepare_character_card_stage(
