@@ -952,6 +952,17 @@ class V3ProductApiService:
                 "generation_channel": generation_channel,
                 "mcp_operation_id": mcp_operation_id,
             }
+            if generation_channel == "mcp":
+                metadata = dict(create_request.metadata or {})
+                requested_size = str(metadata.get("requested_image_size") or "1024x1536").strip()
+                quality_mode = str(metadata.get("quality_mode") or "strict").strip()
+                metadata["requested_image_size"] = requested_size or "1024x1536"
+                metadata["quality_mode"] = quality_mode or "strict"
+                metadata["professional_anchor_rendering_contract"] = (
+                    self._professional_anchor_rendering_contract(metadata)
+                    or "size:1024x1536|quality:strict|reference_card"
+                )
+                create_request.metadata = metadata
         elif trusted_professional_character_card:
             if professional_character_card_stage not in {"expression_set", "body_silhouette"}:
                 raise ValueError("professional_character_card_stage_invalid")
@@ -1129,6 +1140,12 @@ class V3ProductApiService:
                 for key in self._SERVER_OWNED_RUNTIME_METADATA
                 if key in source_metadata
             }
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                **reusable,
+                "capability_plan_reuse_source_job_id": source_job_id,
+                "professional_anchor_stage_plan_reuse": True,
+            }
             # Doc249 signed-decision reuse is an exact-bound MCP continuation
             # adapter.  Ordinary Provider stage-plan continuation keeps the
             # pre-existing capability-plan reuse behavior and must not be
@@ -1147,9 +1164,6 @@ class V3ProductApiService:
             )
             create_request.metadata = {
                 **dict(create_request.metadata or {}),
-                **reusable,
-                "capability_plan_reuse_source_job_id": source_job_id,
-                "professional_anchor_stage_plan_reuse": True,
                 **(
                     {
                         "trusted_professional_anchor_view_decision_reuse": anchor_view_reuse,
@@ -8557,6 +8571,7 @@ class V3ProductApiService:
             "professional_anchor_capture_scope",
             "professional_absolute_portrait_realism_required",
             "professional_absolute_portrait_realism_provenance",
+            "professional_anchor_rendering_contract",
             "professional_anchor_stage_plan_reuse",
             "trusted_professional_anchor_view_decision_reuse",
             "professional_anchor_view_decision_current_binding",
