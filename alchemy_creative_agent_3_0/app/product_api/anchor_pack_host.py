@@ -430,6 +430,8 @@ class ProductApiAnchorPackPreparationHost:
                 "professional_anchor_candidate_index": request.candidate_index,
             },
         }
+        if request.absolute_portrait_realism_required and request.view_role == "standard_front":
+            job_request["metadata"]["professional_absolute_portrait_realism_required"] = True
         job_kwargs = {
             "view_role": request.view_role,
             "reference_evidence_ids": list(request.reference_evidence_ids),
@@ -2671,11 +2673,45 @@ class ProductApiAnchorPackPreparationHost:
                         if framing_parity_verified
                         else ["face_view_framing_parity_unverified"]
                     ),
+                    *self._absolute_portrait_realism_evidence_codes(request, score_card),
                 ] if parity_verified else ["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"],
             ),
             issue_codes=list(dict.fromkeys(issue_codes)),
         )
         return candidate, decision
+
+    @staticmethod
+    def _absolute_portrait_realism_evidence_codes(
+        request: AnchorGenerationRequest,
+        score_card: dict[str, float],
+    ) -> list[str]:
+        if not request.absolute_portrait_realism_required or request.view_role != "standard_front":
+            return []
+        thresholds = {
+            "eye_gaze_alignment": 0.72,
+            "facial_micro_asymmetry": 0.72,
+            "skin_micro_texture": 0.72,
+            "hair_strand_randomness": 0.72,
+            "ear_anatomy_clarity": 0.72,
+            "natural_light_transition": 0.72,
+            "camera_texture_response": 0.72,
+            "commercial_beauty_preserved": 0.78,
+        }
+        evidence_by_dimension = {
+            "eye_gaze_alignment": "absolute_eye_gaze_alignment_verified",
+            "facial_micro_asymmetry": "absolute_facial_micro_asymmetry_verified",
+            "skin_micro_texture": "absolute_skin_micro_texture_verified",
+            "hair_strand_randomness": "absolute_hair_strand_randomness_verified",
+            "ear_anatomy_clarity": "absolute_ear_anatomy_clarity_verified",
+            "natural_light_transition": "absolute_natural_light_transition_verified",
+            "camera_texture_response": "absolute_camera_texture_response_verified",
+            "commercial_beauty_preserved": "absolute_commercial_beauty_preserved",
+        }
+        return [
+            evidence_by_dimension[dimension]
+            for dimension, threshold in thresholds.items()
+            if float(score_card.get(dimension, 0.0)) >= threshold
+        ]
 
     def _character_card_score_below_floor(self, score_card: dict[str, float], dimension: str, floor: float) -> bool:
         value = score_card.get(dimension, -1.0)

@@ -71,6 +71,7 @@ class AnchorGenerationRequest(V3BaseModel):
     generation_channel: Literal["provider", "mcp"] = "provider"
     mcp_operation_id: str | None = None
     mcp_handoff_id: str | None = None
+    absolute_portrait_realism_required: bool = False
     # The shared execution path needs to know which geometric contract owns
     # this capture. Character Card face views are face/head evidence only;
     # the ordinary Anchor Pack keeps its historical whole-person contract.
@@ -1096,6 +1097,7 @@ class AnchorPackPreparationService:
                 if request.generation_channel == "mcp" and str(mcp_handoff_id or "").strip()
                 else None
             ),
+            absolute_portrait_realism_required=request.absolute_portrait_realism_required,
             capture_scope=(
                 "character_card_face_identity"
                 if request.face_view_scope == "character_card"

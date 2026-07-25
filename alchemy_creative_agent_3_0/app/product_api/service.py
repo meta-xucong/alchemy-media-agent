@@ -8523,6 +8523,7 @@ class V3ProductApiService:
             "professional_anchor_reference_assets",
             "professional_anchor_initial_multi_source",
             "professional_anchor_capture_scope",
+            "professional_absolute_portrait_realism_required",
             "professional_anchor_stage_plan_reuse",
             "professional_character_card_preparation",
             "professional_character_card_stage",

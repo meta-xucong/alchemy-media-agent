@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..apparel_construction import apparel_construction_review_contract
+from .absolute_portrait_realism import REQUIRED_REALISM_DIMENSIONS
 from .contracts import GeneratedOutputResolution
 from .expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
@@ -854,6 +855,10 @@ def _professional_identity_quality_contract(
         and str(contract.get("body_silhouette_contract") or "").strip()
         == "preserve_identity_scale_and_age_appropriate_body_proportion"
     )
+    absolute_portrait_realism_applies = bool(
+        metadata.get("professional_absolute_portrait_realism_required") is True
+        and scope == "character_card_face_identity"
+    )
     capture_presentation = contract.get("capture_presentation")
     applies = bool(
         isinstance(contract, dict)
@@ -916,6 +921,16 @@ def _professional_identity_quality_contract(
     body_silhouette_issue_codes = [
         "body_silhouette_framing_drift",
         "body_silhouette_full_body_framing_missing",
+    ]
+    absolute_portrait_realism_issue_codes = [
+        "absolute_eye_gaze_alignment_failed",
+        "absolute_facial_micro_asymmetry_failed",
+        "absolute_skin_micro_texture_failed",
+        "absolute_hair_strand_randomness_failed",
+        "absolute_ear_anatomy_clarity_failed",
+        "absolute_natural_light_transition_failed",
+        "absolute_camera_texture_response_failed",
+        "absolute_commercial_beauty_preservation_failed",
     ]
     return {
         "applies": applies,
@@ -982,6 +997,7 @@ def _professional_identity_quality_contract(
                     *base_score_dimensions,
                     *(expression_score_dimensions if expression_review_applies else []),
                     *(body_silhouette_score_dimensions if body_silhouette_review_applies else []),
+                    *(REQUIRED_REALISM_DIMENSIONS if absolute_portrait_realism_applies else []),
                 ]
             )
         ) if applies else [],
@@ -991,9 +1007,27 @@ def _professional_identity_quality_contract(
                     *base_issue_codes,
                     *(expression_issue_codes if expression_review_applies else []),
                     *(body_silhouette_issue_codes if body_silhouette_review_applies else []),
+                    *(
+                        absolute_portrait_realism_issue_codes
+                        if absolute_portrait_realism_applies
+                        else []
+                    ),
                 ]
             )
         ) if applies else [],
+        "absolute_portrait_realism": (
+            {
+                "applies": True,
+                "source": "professional_absolute_portrait_realism_required",
+                "profile_id": "absolute_portrait_realism_v1",
+                "score_dimensions": list(REQUIRED_REALISM_DIMENSIONS),
+                "issue_codes": list(absolute_portrait_realism_issue_codes),
+                "beauty_preservation_required": True,
+                "detector_evasion_objective": False,
+            }
+            if absolute_portrait_realism_applies
+            else {"applies": False}
+        ),
         "expression_review": (
             {
                 "applies": True,
