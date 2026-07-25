@@ -35,6 +35,12 @@ def _expression_module():
     )
 
 
+def _expression_review_module():
+    return importlib.import_module(
+        "alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review"
+    )
+
+
 def _character_card_module():
     return importlib.import_module("alchemy_creative_agent_3_0.app.visual_assets.character_card")
 
@@ -206,6 +212,30 @@ def _expression_framing_pass(**overrides: object) -> dict[str, object]:
         view_role="expression.anger",
         operation_id="op_expression_round1",
     )
+    payload.update(overrides)
+    return payload
+
+
+def _expression_projector_score_card(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "model_card_crop_closeness": 0.9,
+        "shoulder_collar_context": 0.86,
+        "headroom_commercial_balance": 0.88,
+        "camera_distance_consistency": 0.91,
+        "expression_affect_readability": 0.9,
+        "expression_identity_preserved_under_affect": 0.91,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _expression_review_binding(**overrides: object) -> dict[str, object]:
+    payload = {
+        "candidate_id": "candidate_1",
+        "output_id": "output_1",
+        "operation_id": "op_expression_round1",
+        "round_id": "round1",
+    }
     payload.update(overrides)
     return payload
 
@@ -991,6 +1021,180 @@ def test_doc256_phase3b_expression_formal_proof_requires_operation_round_binding
     assert mismatched_binding.eligible is False
     assert "expression_card_family_binding_mismatch" in mismatched_binding.issue_codes
     assert "expression_affect_binding_mismatch" in mismatched_binding.issue_codes
+
+
+def test_doc256_expression_review_projector_supplies_proofs_to_existing_consumer() -> None:
+    expression_review = _expression_review_module()
+    character_card = _character_card_module()
+
+    proofs = expression_review.project_expression_model_card_proofs(
+        slot_key="expression.anger",
+        candidate_id="candidate_1",
+        output_id="output_1",
+        operation_id="op_expression_round1",
+        round_id="round1",
+        review_binding=_expression_review_binding(),
+        score_card=_expression_projector_score_card(),
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        acceptance_mode="standard_three_candidate",
+    )
+    summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=SimpleNamespace(status="pass", expression_model_card_proofs=proofs),
+    )
+
+    assert set(proofs) == {"card_family_framing", "affect_proof"}
+    assert proofs["card_family_framing"]["owner"] == "shared_card_family_framing"
+    assert proofs["affect_proof"]["owner"] == "expression_affect_profile"
+    assert summary.profile_id == "expression_model_card_delivery_v1"
+    assert summary.eligible is True
+
+
+def test_doc256_expression_review_projector_fails_when_proof_missing_or_binding_mismatches() -> None:
+    expression_review = _expression_review_module()
+    character_card = _character_card_module()
+
+    missing_framing = expression_review.project_expression_model_card_proofs(
+        slot_key="expression.anger",
+        candidate_id="candidate_1",
+        output_id="output_1",
+        operation_id="op_expression_round1",
+        round_id="round1",
+        review_binding=_expression_review_binding(),
+        score_card=_expression_projector_score_card(model_card_crop_closeness=None),
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        acceptance_mode="standard_three_candidate",
+    )
+    mismatched_binding = expression_review.project_expression_model_card_proofs(
+        slot_key="expression.anger",
+        candidate_id="candidate_1",
+        output_id="output_1",
+        operation_id="op_expression_round1",
+        round_id="round1",
+        review_binding=_expression_review_binding(output_id="other_output"),
+        score_card=_expression_projector_score_card(),
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        acceptance_mode="standard_three_candidate",
+    )
+
+    missing_summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=SimpleNamespace(status="pass", expression_model_card_proofs=missing_framing),
+    )
+    mismatched_summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=SimpleNamespace(status="pass", expression_model_card_proofs=mismatched_binding),
+    )
+
+    assert missing_summary.eligible is False
+    assert "card_family_framing_failed" in missing_summary.issue_codes
+    assert mismatched_summary.eligible is False
+    assert "expression_card_family_binding_mismatch" in mismatched_summary.issue_codes
+    assert "expression_affect_binding_mismatch" in mismatched_summary.issue_codes
+
+
+def test_doc256_expression_review_projector_rejects_warning_status() -> None:
+    expression_review = _expression_review_module()
+    character_card = _character_card_module()
+
+    proofs = expression_review.project_expression_model_card_proofs(
+        slot_key="expression.anger",
+        candidate_id="candidate_1",
+        output_id="output_1",
+        operation_id="op_expression_round1",
+        round_id="round1",
+        review_binding=_expression_review_binding(),
+        score_card=_expression_projector_score_card(),
+        issue_codes=[],
+        verified=True,
+        raw_status="warning",
+        acceptance_mode="standard_three_candidate",
+    )
+    summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=SimpleNamespace(status="warning", expression_model_card_proofs=proofs),
+    )
+
+    assert proofs["card_family_framing"]["status"] == "fail"
+    assert proofs["affect_proof"]["status"] == "fail"
+    assert "expression_model_card_shared_review_not_pass" in proofs["card_family_framing"]["issue_codes"]
+    assert summary.eligible is False
+    assert "card_family_framing_failed" in summary.issue_codes
+
+
+def test_doc256_expression_review_projector_requires_nonempty_expected_binding() -> None:
+    expression_review = _expression_review_module()
+    character_card = _character_card_module()
+
+    proofs = expression_review.project_expression_model_card_proofs(
+        slot_key="expression.anger",
+        candidate_id="candidate_1",
+        output_id="output_1",
+        operation_id="",
+        round_id="round1",
+        review_binding=_expression_review_binding(operation_id=""),
+        score_card=_expression_projector_score_card(),
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        acceptance_mode="standard_three_candidate",
+    )
+    summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(operation_id=""),
+        review=SimpleNamespace(status="pass", expression_model_card_proofs=proofs),
+    )
+
+    assert "expression_model_card_review_binding_mismatch" in proofs["card_family_framing"]["issue_codes"]
+    assert "expression_model_card_review_binding_mismatch" in proofs["affect_proof"]["issue_codes"]
+    assert summary.eligible is False
+    assert "expression_model_card_binding_missing" in summary.issue_codes
+
+
+def test_doc256_expression_review_projector_does_not_upgrade_legacy_target_only() -> None:
+    expression_review = _expression_review_module()
+    character_card = _character_card_module()
+
+    proofs = expression_review.project_expression_model_card_proofs(
+        slot_key="expression.anger",
+        candidate_id="candidate_1",
+        output_id="output_1",
+        operation_id="op_expression_round1",
+        round_id="round1",
+        review_binding=_expression_review_binding(),
+        score_card=_expression_projector_score_card(),
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        acceptance_mode="target_only_existing_candidate_collection",
+    )
+    doc256_summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=SimpleNamespace(status="pass", expression_model_card_proofs=proofs),
+    )
+    legacy_summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=_doc256_expression_candidate(),
+        review=SimpleNamespace(status="pass"),
+    )
+
+    assert doc256_summary.eligible is False
+    assert "legacy_target_only_not_doc256_completion" in proofs["card_family_framing"]["issue_codes"]
+    assert "legacy_target_only_not_doc256_completion" in proofs["affect_proof"]["issue_codes"]
+    assert "card_family_framing_failed" in doc256_summary.issue_codes
+    assert "expression_affect_profile_failed" in doc256_summary.issue_codes
+    assert legacy_summary.profile_id == "expression_slot_profile_v1"
 
 
 def test_doc256_expression_adapter_does_not_import_face_local_front_module() -> None:

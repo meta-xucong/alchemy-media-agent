@@ -8,7 +8,9 @@ private expression scores, issue gates, or framing tolerances.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any, Literal
 
 
@@ -118,6 +120,19 @@ BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS = (
     "centerline_delta",
 )
 EXPRESSION_SCORE_FLOOR_EPSILON = 0.005
+DOC256_EXPRESSION_CARD_FAMILY_DIMENSIONS = (
+    "model_card_crop_closeness",
+    "shoulder_collar_context",
+    "headroom_commercial_balance",
+    "camera_distance_consistency",
+)
+DOC256_EXPRESSION_AFFECT_DIMENSIONS = (
+    "expression_affect_readability",
+    "expression_identity_preserved_under_affect",
+)
+DOC256_EXPRESSION_DELIVERY_SLOTS = frozenset(
+    {"expression.anger", "expression.sad", "expression.laugh"}
+)
 
 
 def laugh_expression_intent_contract() -> dict[str, Any]:
@@ -426,6 +441,113 @@ def expression_front_card_framing_receipt_allows_slot(
     return False
 
 
+def project_expression_model_card_proofs(
+    *,
+    slot_key: str,
+    candidate_id: str,
+    output_id: str,
+    operation_id: str,
+    round_id: str,
+    review_binding: Mapping[str, Any],
+    score_card: Any,
+    issue_codes: list[str] | tuple[str, ...] | set[str],
+    verified: bool,
+    raw_status: str,
+    acceptance_mode: str,
+) -> dict[str, dict[str, Any]]:
+    """Project canonical Expression review facts into Doc256 consumer proofs.
+
+    The projector only packages already-reviewed shared Vision facts.  It does
+    not select a winner, write a receipt, infer missing framing/affect proof,
+    or upgrade target-only/legacy collection into Doc256 completion.
+    """
+
+    normalized_scores = normalize_affective_expression_score_card(score_card)
+    binding = _doc256_expression_review_binding(
+        review_binding,
+        candidate_id=candidate_id,
+        output_id=output_id,
+        operation_id=operation_id,
+        round_id=round_id,
+    )
+    normalized_issues = [
+        str(item or "").strip()
+        for item in issue_codes
+        if str(item or "").strip()
+    ]
+    status_allowed = bool(verified) and str(raw_status or "").strip().lower() == "pass"
+    standard_mode = str(acceptance_mode or "").strip() == "standard_three_candidate"
+    valid_slot = slot_key in DOC256_EXPRESSION_DELIVERY_SLOTS
+
+    shared_issues: list[str] = []
+    if not valid_slot:
+        shared_issues.append("expression_model_card_scope_invalid")
+    if not standard_mode:
+        shared_issues.append("legacy_target_only_not_doc256_completion")
+    if not status_allowed:
+        shared_issues.append("expression_model_card_shared_review_not_pass")
+    if _doc256_binding_has_missing_or_mismatch(
+        binding,
+        candidate_id=candidate_id,
+        output_id=output_id,
+        operation_id=operation_id,
+        round_id=round_id,
+    ):
+        shared_issues.append("expression_model_card_review_binding_mismatch")
+    shared_issues.extend(normalized_issues)
+
+    framing_dimensions = _doc256_finite_dimensions(
+        normalized_scores,
+        DOC256_EXPRESSION_CARD_FAMILY_DIMENSIONS,
+    )
+    affect_dimensions = _doc256_finite_dimensions(
+        normalized_scores,
+        DOC256_EXPRESSION_AFFECT_DIMENSIONS,
+    )
+
+    framing_issues = list(shared_issues)
+    if set(framing_dimensions) != set(DOC256_EXPRESSION_CARD_FAMILY_DIMENSIONS):
+        framing_issues.append("card_family_framing_evidence_missing")
+    affect_issues = list(shared_issues)
+    if set(affect_dimensions) != set(DOC256_EXPRESSION_AFFECT_DIMENSIONS):
+        affect_issues.append("expression_affect_evidence_missing")
+
+    return {
+        "card_family_framing": {
+            "owner": "shared_card_family_framing",
+            "contract_version": "v3_card_family_framing_contract_v1",
+            "profile_id": "card_family_framing_v1",
+            "requirement_id": "close_photographic_model_card_framing_v1",
+            "status": "fail" if framing_issues else "pass",
+            "module": "expression_set",
+            "slot": slot_key,
+            "view_role": slot_key,
+            "slot_scope": "formal_slot",
+            **binding,
+            "evidence_codes": ["close_model_card_crop_verified"] if not framing_issues else [],
+            "issue_codes": list(dict.fromkeys(framing_issues)),
+            "dimensions": framing_dimensions,
+        },
+        "affect_proof": {
+            "owner": "expression_affect_profile",
+            "profile_id": f"{slot_key}_affect_v1",
+            "status": "fail" if affect_issues else "pass",
+            "module": "expression_set",
+            "slot": slot_key,
+            **binding,
+            "evidence_codes": ["expression_affect_delta_verified"] if not affect_issues else [],
+            "issue_codes": list(dict.fromkeys(affect_issues)),
+            "dimensions": {
+                "affect_readability": affect_dimensions.get("expression_affect_readability", 0.0),
+                "identity_preserved_under_affect": affect_dimensions.get(
+                    "expression_identity_preserved_under_affect",
+                    0.0,
+                ),
+            },
+        },
+    }
+
+
 def _front_card_framing_gate_issues(score_card: dict[str, float]) -> list[str]:
     issues: list[str] = []
     if _score_below_floor(
@@ -472,6 +594,67 @@ def _score_below_floor(score_card: dict[str, float], dimension: str, floor: floa
     return numeric + EXPRESSION_SCORE_FLOOR_EPSILON < floor
 
 
+def _doc256_expression_review_binding(
+    review_binding: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    output_id: str,
+    operation_id: str,
+    round_id: str,
+) -> dict[str, str]:
+    if isinstance(review_binding, Mapping):
+        return {
+            "candidate_id": str(review_binding.get("candidate_id") or ""),
+            "output_id": str(review_binding.get("output_id") or ""),
+            "operation_id": str(review_binding.get("operation_id") or ""),
+            "round_id": str(review_binding.get("round_id") or ""),
+        }
+    return {
+        "candidate_id": "",
+        "output_id": "",
+        "operation_id": "",
+        "round_id": "",
+    }
+
+
+def _doc256_binding_has_missing_or_mismatch(
+    binding: Mapping[str, str],
+    *,
+    candidate_id: str,
+    output_id: str,
+    operation_id: str,
+    round_id: str,
+) -> bool:
+    expected_values = (candidate_id, output_id, operation_id, round_id)
+    if any(not str(value or "").strip() for value in expected_values):
+        return True
+    for key, expected in (
+        ("candidate_id", candidate_id),
+        ("output_id", output_id),
+        ("operation_id", operation_id),
+        ("round_id", round_id),
+    ):
+        if str(binding.get(key) or "") != str(expected or ""):
+            return True
+    return False
+
+
+def _doc256_finite_dimensions(
+    score_card: Mapping[str, float],
+    dimensions: tuple[str, ...],
+) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for dimension in dimensions:
+        raw_value = score_card.get(dimension)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and 0.0 <= value <= 1.0:
+            values[dimension] = value
+    return values
+
+
 __all__ = [
     "AffectiveExpressionReviewReceipt",
     "BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS",
@@ -489,6 +672,7 @@ __all__ = [
     "laugh_expression_materialization_directive",
     "laugh_expression_receipt_allows_slot",
     "normalize_affective_expression_score_card",
+    "project_expression_model_card_proofs",
     "project_generic_visual_review_receipt",
     "project_laugh_expression_review_receipt",
 ]
