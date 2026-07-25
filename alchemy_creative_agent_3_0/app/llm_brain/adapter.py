@@ -280,14 +280,33 @@ class V3LLMBrainAdapter:
                 "Remote Brain did not return the required developmental-presence receipt."
             )
         professional_anchor_view_requirement = _required_professional_anchor_view_requirement(request)
+        professional_anchor_view_reuse_applied = False
+        professional_anchor_view_reuse_provenance = ""
         if professional_anchor_view_requirement and not _matches_professional_anchor_view_receipts(
             prompts_raw,
             expected_count=expected_count,
             expected_requirement=professional_anchor_view_requirement,
         ):
-            raise BrainProfessionalAnchorViewDecisionMissing(
-                "Remote Brain did not return the required frozen Professional anchor-view receipt."
+            reuse = _trusted_professional_anchor_view_decision_reuse(
+                request,
+                expected_count=expected_count,
+                expected_requirement=professional_anchor_view_requirement,
             )
+            if reuse and not _has_any_professional_anchor_view_receipt(prompts_raw):
+                prompts_raw = _with_reused_professional_anchor_view_receipts(
+                    prompts_raw,
+                    decision=reuse["decision"],
+                )
+                professional_anchor_view_reuse_applied = True
+                professional_anchor_view_reuse_provenance = str(reuse["provenance"])
+            if not _matches_professional_anchor_view_receipts(
+                prompts_raw,
+                expected_count=expected_count,
+                expected_requirement=professional_anchor_view_requirement,
+            ):
+                raise BrainProfessionalAnchorViewDecisionMissing(
+                    "Remote Brain did not return the required frozen Professional anchor-view receipt."
+                )
         provider_admission_requirement = _required_provider_admission_requirement(request)
         if provider_admission_requirement and not _matches_provider_admission_receipts(
             prompts_raw,
@@ -385,6 +404,8 @@ class V3LLMBrainAdapter:
                 ),
                 "professional_anchor_view_decision_required": bool(professional_anchor_view_requirement),
                 "professional_anchor_view_decision_signed": bool(professional_anchor_view_requirement),
+                "professional_anchor_view_decision_reuse_applied": professional_anchor_view_reuse_applied,
+                "professional_anchor_view_decision_reuse_provenance": professional_anchor_view_reuse_provenance,
                 "professional_anchor_prompt_scope_checked": bool(
                     professional_anchor_view_requirement
                     and professional_anchor_view_requirement.get("capture_scope")
@@ -1445,6 +1466,123 @@ def _matches_professional_anchor_view_receipts(
         and item["professional_anchor_view_decision"].get("owner") == "remote_v3_llm_brain"
         for index, item in enumerate(candidate, start=1)
     )
+
+
+_PROFESSIONAL_ANCHOR_REUSE_BINDING_FIELDS = (
+    "project_id",
+    "source_asset_id",
+    "source_sha256",
+    "target_view_role",
+    "capture_scope",
+    "reference_semantics",
+    "rendering_contract",
+    "candidate_contract",
+    "operation_context",
+)
+
+
+def _has_any_professional_anchor_view_receipt(candidate: Any) -> bool:
+    if not isinstance(candidate, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and isinstance(item.get("professional_anchor_view_decision"), dict)
+        for item in candidate
+    )
+
+
+def _trusted_professional_anchor_view_decision_reuse(
+    request: BrainRunRequest,
+    *,
+    expected_count: int,
+    expected_requirement: dict[str, str],
+) -> dict[str, Any]:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    payload = metadata.get("trusted_professional_anchor_view_decision_reuse")
+    if not isinstance(payload, dict):
+        return {}
+    if (
+        payload.get("contract_version")
+        != "v3_professional_anchor_view_decision_reuse_v1"
+        or payload.get("provenance") != "trusted_prior_remote_brain_decision_v1"
+    ):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The trusted Professional anchor-view reuse provenance is invalid."
+        )
+    source_binding = payload.get("source_binding")
+    current_binding = payload.get("current_binding")
+    actual_current_binding = metadata.get("professional_anchor_view_decision_current_binding")
+    if not isinstance(source_binding, dict) or not isinstance(current_binding, dict):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The trusted Professional anchor-view reuse binding is missing."
+        )
+    if not isinstance(actual_current_binding, dict):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The current Professional anchor-view binding is missing."
+        )
+    for field in _PROFESSIONAL_ANCHOR_REUSE_BINDING_FIELDS:
+        source_value = str(source_binding.get(field) or "").strip()
+        current_value = str(current_binding.get(field) or "").strip()
+        actual_value = str(actual_current_binding.get(field) or "").strip()
+        if (
+            not source_value
+            or not current_value
+            or not actual_value
+            or source_value != current_value
+            or current_value != actual_value
+        ):
+            raise BrainProfessionalAnchorViewDecisionMissing(
+                "The trusted Professional anchor-view reuse binding does not match."
+            )
+    if current_binding.get("target_view_role") != expected_requirement.get("target_view_role"):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The trusted Professional anchor-view reuse view role does not match."
+        )
+    if current_binding.get("capture_scope") != expected_requirement.get("capture_scope"):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The trusted Professional anchor-view reuse capture scope does not match."
+        )
+    decision = payload.get("decision")
+    if not isinstance(decision, dict):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The trusted Professional anchor-view reuse decision is missing."
+        )
+    probe = [
+        {
+            "output_index": index,
+            "professional_anchor_view_decision": dict(decision),
+        }
+        for index in range(1, expected_count + 1)
+    ]
+    if not _matches_professional_anchor_view_receipts(
+        probe,
+        expected_count=expected_count,
+        expected_requirement=expected_requirement,
+    ):
+        raise BrainProfessionalAnchorViewDecisionMissing(
+            "The trusted Professional anchor-view reuse decision does not match the frozen requirement."
+        )
+    return {
+        "decision": dict(decision),
+        "provenance": payload.get("provenance"),
+    }
+
+
+def _with_reused_professional_anchor_view_receipts(
+    candidate: Any,
+    *,
+    decision: dict[str, Any],
+) -> Any:
+    if not isinstance(candidate, list):
+        return candidate
+    return [
+        {
+            **dict(item),
+            "professional_anchor_view_decision": dict(decision),
+        }
+        for item in candidate
+        if isinstance(item, dict)
+    ]
 
 
 def _professional_anchor_prompt_scope_violations(

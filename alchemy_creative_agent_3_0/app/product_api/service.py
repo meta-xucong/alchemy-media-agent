@@ -1129,11 +1129,37 @@ class V3ProductApiService:
                 for key in self._SERVER_OWNED_RUNTIME_METADATA
                 if key in source_metadata
             }
+            # Doc249 signed-decision reuse is an exact-bound MCP continuation
+            # adapter.  Ordinary Provider stage-plan continuation keeps the
+            # pre-existing capability-plan reuse behavior and must not be
+            # upgraded into the stricter MCP/operation-bound reuse contract.
+            anchor_view_reuse = (
+                self._professional_anchor_view_decision_reuse_payload(
+                    create_request,
+                    source=source,
+                    view_role=view_role,
+                    capture_scope=capture_scope,
+                    reference_evidence_ids=reference_evidence_ids,
+                    mcp_operation_id=mcp_operation_id,
+                )
+                if generation_channel == "mcp" and str(mcp_operation_id or "").strip()
+                else {}
+            )
             create_request.metadata = {
                 **dict(create_request.metadata or {}),
                 **reusable,
                 "capability_plan_reuse_source_job_id": source_job_id,
                 "professional_anchor_stage_plan_reuse": True,
+                **(
+                    {
+                        "trusted_professional_anchor_view_decision_reuse": anchor_view_reuse,
+                        "professional_anchor_view_decision_current_binding": anchor_view_reuse[
+                            "current_binding"
+                        ],
+                    }
+                    if anchor_view_reuse
+                    else {}
+                ),
             }
         return self._create_creative_job(
             create_request,
@@ -8398,7 +8424,7 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest,
         *,
         trusted_capability_plan_reuse: bool | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | ScenarioRuntimeRequest:
         self._prepare_ecommerce_creative_context(request)
         metadata = self._runtime_metadata_without_retired_ecommerce_execution(request)
         scenario_selection = self._runtime_scenario_selection_without_retired_ecommerce_execution(request)
@@ -8433,7 +8459,7 @@ class V3ProductApiService:
                 ],
                 *frozen_anchor_references,
             ]
-        return {
+        payload = {
             "user_input": request.user_input,
             "optional_brand_id": request.effective_brand_id,
             "scenario_selection": scenario_selection,
@@ -8443,6 +8469,12 @@ class V3ProductApiService:
             "metadata": metadata,
             "trusted_capability_plan_reuse": trusted_reuse,
         }
+        if isinstance(metadata.get("trusted_professional_anchor_view_decision_reuse"), dict):
+            runtime_request = ScenarioRuntimeRequest.model_validate(payload)
+            return runtime_request.model_copy(
+                update={"trusted_professional_anchor_view_decision_reuse": True}
+            )
+        return payload
 
     def _is_ecommerce_request(self, request: CreateCreativeJobRequest) -> bool:
         resolution = self.scenario_runtime.scenario_registry.resolve(request.scenario_selection)
@@ -8526,6 +8558,8 @@ class V3ProductApiService:
             "professional_absolute_portrait_realism_required",
             "professional_absolute_portrait_realism_provenance",
             "professional_anchor_stage_plan_reuse",
+            "trusted_professional_anchor_view_decision_reuse",
+            "professional_anchor_view_decision_current_binding",
             "professional_character_card_preparation",
             "professional_character_card_stage",
             "professional_character_card_slot",
@@ -8538,6 +8572,147 @@ class V3ProductApiService:
             "visual_asset_library_execution",
         }
     )
+
+    _PROFESSIONAL_ANCHOR_VIEW_DECISION_REUSE_BINDING_FIELDS = (
+        "project_id",
+        "source_asset_id",
+        "source_sha256",
+        "target_view_role",
+        "capture_scope",
+        "reference_semantics",
+        "rendering_contract",
+        "candidate_contract",
+        "operation_context",
+    )
+
+    def _professional_anchor_view_decision_reuse_payload(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        source: ProductJobRecord,
+        view_role: str,
+        capture_scope: str,
+        reference_evidence_ids: list[str] | None,
+        mcp_operation_id: str | None,
+    ) -> dict[str, Any]:
+        decision = self._professional_anchor_view_decision_from_source_job(source)
+        if not decision:
+            return {}
+        source_metadata = dict(source.request.metadata or {})
+        source_binding = self._professional_anchor_view_decision_binding(
+            source.request,
+            view_role=str(source_metadata.get("professional_reference_stage") or ""),
+            capture_scope=str(source_metadata.get("professional_anchor_capture_scope") or "anchor_pack"),
+            reference_evidence_ids=list(source.request.uploaded_asset_ids),
+            mcp_operation_id=str(source_metadata.get("mcp_operation_id") or ""),
+        )
+        current_binding = self._professional_anchor_view_decision_binding(
+            request,
+            view_role=view_role,
+            capture_scope=capture_scope,
+            reference_evidence_ids=reference_evidence_ids,
+            mcp_operation_id=mcp_operation_id,
+        )
+        if not source_binding or not current_binding:
+            raise ValueError("professional_anchor_view_decision_reuse_binding_missing")
+        for field in self._PROFESSIONAL_ANCHOR_VIEW_DECISION_REUSE_BINDING_FIELDS:
+            if str(source_binding.get(field) or "") != str(current_binding.get(field) or ""):
+                raise ValueError("professional_anchor_view_decision_reuse_source_mismatch")
+        return {
+            "contract_version": "v3_professional_anchor_view_decision_reuse_v1",
+            "provenance": "trusted_prior_remote_brain_decision_v1",
+            "source_job_id": source.job_id,
+            "source_binding": source_binding,
+            "current_binding": current_binding,
+            "decision": decision,
+        }
+
+    @staticmethod
+    def _professional_anchor_view_decision_from_source_job(
+        source: ProductJobRecord,
+    ) -> dict[str, Any]:
+        metadata = dict(source.request.metadata or {})
+        frozen = metadata.get("frozen_remote_creative_brain")
+        frozen = frozen if isinstance(frozen, dict) else {}
+        brain = frozen.get("brain_result")
+        brain = brain if isinstance(brain, dict) else {}
+        audit = brain.get("audit")
+        audit = audit if isinstance(audit, dict) else {}
+        decisions = audit.get("professional_anchor_view_decisions")
+        if not isinstance(decisions, list) or len(decisions) != 1:
+            return {}
+        decision = decisions[0]
+        if not isinstance(decision, dict):
+            return {}
+        if (
+            decision.get("contract_version") != "v3_professional_anchor_view_decision_v3"
+            or decision.get("owner") != "remote_v3_llm_brain"
+            or decision.get("status") not in {"approved", "rewritten"}
+        ):
+            return {}
+        return dict(decision)
+
+    def _professional_anchor_view_decision_binding(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        view_role: str,
+        capture_scope: str,
+        reference_evidence_ids: list[str] | None,
+        mcp_operation_id: str | None,
+    ) -> dict[str, str]:
+        metadata = dict(request.metadata or {})
+        project_id = str(metadata.get("project_id") or "").strip()
+        evidence_ids = [
+            str(item or "").strip()
+            for item in (reference_evidence_ids or list(request.uploaded_asset_ids[:1]))
+            if str(item or "").strip()
+        ]
+        if not project_id or not evidence_ids:
+            return {}
+        root_asset_id = evidence_ids[0]
+        if root_asset_id not in request.uploaded_asset_ids:
+            return {}
+        root = self.asset_store.get_upload(root_asset_id)
+        path = Path(root.file_path) if root is not None and root.file_path else None
+        if root is None or path is None or not path.is_file():
+            return {}
+        source_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        view = str(view_role or "").strip()
+        initial_multi_source = view == "standard_front" and len(evidence_ids) == 2
+        reference_semantics = (
+            "identity_only_two_derivative_evidence_v1"
+            if initial_multi_source
+            else "identity_only_single_root_reference_v1"
+        )
+        operation_context = str(mcp_operation_id or metadata.get("mcp_operation_id") or "").strip()
+        candidate_index = str(metadata.get("professional_anchor_candidate_index") or "").strip()
+        rendering_contract = self._professional_anchor_rendering_contract(metadata)
+        if not operation_context or not candidate_index or not rendering_contract:
+            return {}
+        candidate_contract = f"{view}:candidate:{candidate_index}"
+        return {
+            "project_id": project_id,
+            "source_asset_id": root_asset_id,
+            "source_sha256": source_sha256,
+            "target_view_role": view,
+            "capture_scope": str(capture_scope or "anchor_pack").strip() or "anchor_pack",
+            "reference_semantics": reference_semantics,
+            "rendering_contract": rendering_contract,
+            "candidate_contract": candidate_contract,
+            "operation_context": operation_context,
+        }
+
+    @staticmethod
+    def _professional_anchor_rendering_contract(metadata: dict[str, Any]) -> str:
+        explicit = str(metadata.get("professional_anchor_rendering_contract") or "").strip()
+        if explicit:
+            return explicit
+        requested_size = str(metadata.get("requested_image_size") or "").strip()
+        quality_mode = str(metadata.get("quality_mode") or "strict").strip() or "strict"
+        if not requested_size:
+            return ""
+        return f"size:{requested_size}|quality:{quality_mode}|reference_card"
 
     def _bind_professional_mode(
         self,

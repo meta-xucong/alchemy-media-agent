@@ -1781,6 +1781,22 @@ class ScenarioRuntime:
                     "frozen_binding": dict(canonical_prompt_context.get("frozen_binding") or {}),
                 }
 
+        signing_metadata: dict[str, Any] = {"canonical_prompt_context": canonical_prompt_context}
+        if request.trusted_professional_anchor_view_decision_reuse:
+            trusted_reuse = request.metadata.get(
+                "trusted_professional_anchor_view_decision_reuse"
+            )
+            current_binding = request.metadata.get(
+                "professional_anchor_view_decision_current_binding"
+            )
+            if isinstance(trusted_reuse, dict):
+                signing_metadata["trusted_professional_anchor_view_decision_reuse"] = dict(
+                    trusted_reuse
+                )
+            if isinstance(current_binding, dict):
+                signing_metadata[
+                    "professional_anchor_view_decision_current_binding"
+                ] = dict(current_binding)
         signing_request = BrainRunRequest(
             user_input=request.user_input,
             job_id=self._runtime_job_id(request, resolution),
@@ -1792,7 +1808,7 @@ class ScenarioRuntime:
             requested_image_size=ledger.provider_projection.get("requested_image_size"),
             reasoning_depth="balanced",
             transport_timeout_seconds=self._character_card_slot_delta_transport_timeout_seconds(request),
-            metadata={"canonical_prompt_context": canonical_prompt_context},
+            metadata=signing_metadata,
             template_capability_policy=policy,
         )
         try:
@@ -4394,6 +4410,11 @@ class ScenarioRuntime:
         )
 
     def _coerce_request(self, request: ScenarioRuntimeRequest | dict[str, Any]) -> ScenarioRuntimeRequest:
+        if not isinstance(request, ScenarioRuntimeRequest) and isinstance(request, dict):
+            if "trusted_professional_anchor_view_decision_reuse" in request:
+                raise ValueError(
+                    "trusted_professional_anchor_view_decision_reuse is an internal runtime flag"
+                )
         runtime_request = request if isinstance(request, ScenarioRuntimeRequest) else ScenarioRuntimeRequest.model_validate(request)
         return self._with_uploaded_reference_snapshot(runtime_request)
 

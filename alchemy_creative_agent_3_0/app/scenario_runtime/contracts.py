@@ -47,6 +47,12 @@ class ScenarioRuntimeRequest(V3BaseModel):
     # resolved its persisted parent/job provenance and explicitly marked the
     # hand-off trusted.
     trusted_capability_plan_reuse: bool = False
+    # Internal service-to-runtime flag for Doc249.  A prior remote Brain
+    # professional-anchor decision may be reused only after the Product API or
+    # another trusted host has exact-bound the source, view, capture, rendering,
+    # candidate, and operation context.  Ordinary request metadata alone must
+    # never activate this path.
+    trusted_professional_anchor_view_decision_reuse: bool = False
 
     @model_validator(mode="before")
     @classmethod
