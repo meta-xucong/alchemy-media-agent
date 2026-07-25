@@ -15,6 +15,7 @@ from typing import Any
 from PIL import Image
 
 from ..shared_capabilities.visual_cluster.expression_review import (
+    BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
     expression_front_card_framing_materialization_directive,
     laugh_expression_materialization_directive,
     project_generic_visual_review_receipt,
@@ -2335,6 +2336,11 @@ class ProductApiAnchorPackPreparationHost:
             verified=verified,
             raw_status=raw_status,
             require_front_card_framing=request.module == "expression_set",
+            framing_dimension_allowlist=(
+                BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS
+                if request.module == "body_silhouette"
+                else None
+            ),
         )
         evidence_codes.extend(generic_receipt.evidence_codes)
         if generic_receipt.status != "pass":

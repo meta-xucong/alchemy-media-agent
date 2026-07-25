@@ -5,6 +5,13 @@ from __future__ import annotations
 import pytest
 
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorReviewDecision
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
+    BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+    project_generic_visual_review_receipt,
+)
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    active_review_contract,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BODY_SLOT_KEYS,
     CharacterCardCandidateRequest,
@@ -18,6 +25,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
 from alchemy_creative_agent_3_0.app.visual_assets.library import VisualAssetLibraryLifecycleService
+from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 
 
 def _generic_body_shared_receipt(*, status: str = "pass") -> dict[str, object]:
@@ -36,6 +44,76 @@ def _generic_body_shared_receipt(*, status: str = "pass") -> dict[str, object]:
         "score_dimensions": ["generic_visual_quality", "identity_or_subject_consistency"],
         "framing_delta_dimensions": ["body_scale_delta", "ground_contact_delta"],
     }
+
+
+def _body_review_metadata_for_vision() -> dict[str, object]:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    return {
+        "project_id": "project_doc245_body_review",
+        "capability_execution_envelope": {
+            "activation_plan": {
+                "plan_id": "plan_doc245_body_review",
+                "activation_mode": "enforced",
+                "active_capability_ids": ["human_realism"],
+                "dependency_order": ["human_realism"],
+                "metadata": {
+                    "professional_face_identity_quality_contract": stage_metadata[
+                        "professional_face_identity_quality_contract"
+                    ],
+                },
+            },
+            "resolved_constraint_ledger": {
+                "hard_semantic_contract": True,
+                "review_contracts": [],
+                "provider_projection": {},
+            },
+        },
+        "professional_planning_metadata": stage_metadata,
+    }
+
+
+def test_doc245_body_review_contract_exposes_framing_dimensions_to_shared_vision() -> None:
+    contract = active_review_contract(_body_review_metadata_for_vision())
+
+    professional_quality = contract["professional_identity_quality"]
+    assert professional_quality["body_silhouette_review"]["applies"] is True
+    assert set(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS).issubset(
+        set(professional_quality["body_silhouette_review"]["framing_delta_dimensions"])
+    )
+    assert set(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS).issubset(set(contract["score_dimensions"]))
+
+
+def test_doc245_generic_projector_preserves_body_framing_dimensions_only_when_allowed() -> None:
+    score_card = {
+        "generic_visual_quality": 0.96,
+        "identity_or_subject_consistency": 0.94,
+        "body_scale_delta": 0.02,
+        "ground_contact_delta": 0.01,
+        "raw_untrusted_body_private_dimension": 0.99,
+    }
+
+    missing_allowlist = project_generic_visual_review_receipt(
+        score_card=score_card,
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+    )
+    assert missing_allowlist.status == "pass"
+    assert missing_allowlist.framing_delta_dimensions == ()
+
+    body_receipt = project_generic_visual_review_receipt(
+        score_card=score_card,
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        framing_dimension_allowlist=BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+    )
+
+    assert set(body_receipt.framing_delta_dimensions) == {"body_scale_delta", "ground_contact_delta"}
+    assert "raw_untrusted_body_private_dimension" not in body_receipt.framing_delta_dimensions
 
 
 def _legacy_body_slot_success_receipt(slot_key: str, output_id: str) -> dict[str, object]:

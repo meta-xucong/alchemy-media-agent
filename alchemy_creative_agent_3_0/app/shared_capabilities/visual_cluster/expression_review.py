@@ -110,6 +110,13 @@ EXPRESSION_FRAMING_DELTA_MAX = {
     "head_yaw_delta_from_front": 0.08,
     "head_pitch_delta_from_front": 0.06,
 }
+BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS = (
+    "body_scale_delta",
+    "full_body_containment_delta",
+    "ground_contact_delta",
+    "limb_visibility_delta",
+    "centerline_delta",
+)
 EXPRESSION_SCORE_FLOOR_EPSILON = 0.005
 
 
@@ -277,6 +284,7 @@ def project_generic_visual_review_receipt(
     verified: bool,
     raw_status: str,
     require_front_card_framing: bool = False,
+    framing_dimension_allowlist: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> GenericVisualReviewReceipt:
     """Project shared Vision's generic pass/fail facts into a safe receipt.
 
@@ -303,8 +311,19 @@ def project_generic_visual_review_receipt(
         evidence_codes.append("shared_visual_review_status_pass")
         if require_front_card_framing:
             evidence_codes.extend(sorted(EXPRESSION_FRONT_CARD_FRAMING_EVIDENCE_CODES))
+    allowed_framing_dimensions = (
+        tuple(EXPRESSION_FRAMING_DELTA_MAX)
+        if framing_dimension_allowlist is None
+        else tuple(
+            dict.fromkeys(
+                str(dimension or "").strip()
+                for dimension in framing_dimension_allowlist
+                if str(dimension or "").strip()
+            )
+        )
+    )
     framing_dimensions = tuple(
-        sorted(dimension for dimension in EXPRESSION_FRAMING_DELTA_MAX if dimension in normalized_scores)
+        sorted(dimension for dimension in allowed_framing_dimensions if dimension in normalized_scores)
     )
     return GenericVisualReviewReceipt(
         status=status,
@@ -455,6 +474,7 @@ def _score_below_floor(score_card: dict[str, float], dimension: str, floor: floa
 
 __all__ = [
     "AffectiveExpressionReviewReceipt",
+    "BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS",
     "EXPRESSION_FRAMING_DELTA_MAX",
     "EXPRESSION_FRONT_CARD_FRAMING_EVIDENCE_CODES",
     "EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES",

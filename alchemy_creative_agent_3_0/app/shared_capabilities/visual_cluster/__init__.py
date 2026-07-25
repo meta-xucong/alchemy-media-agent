@@ -83,6 +83,7 @@ from .doc66_closure import (
 )
 from .expression_review import (
     AffectiveExpressionReviewReceipt,
+    BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
     EXPRESSION_FRAMING_DELTA_MAX,
     EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES,
     GENERIC_SLOT_REVIEW_RECEIPT_CONTRACT_VERSION,
@@ -140,6 +141,7 @@ __all__ = [
     "AdaptiveReferenceRetriever",
     "AdaptiveReferenceSelectionPlan",
     "AffectiveExpressionReviewReceipt",
+    "BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS",
     "AntiAIFaceReviewResult",
     "AutoRetryDecision",
     "BatchIdentityDiversityReview",

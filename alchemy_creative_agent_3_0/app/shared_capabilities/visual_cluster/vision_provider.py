@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from ..apparel_construction import apparel_construction_review_contract
 from .contracts import GeneratedOutputResolution
 from .expression_review import (
+    BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
     EXPRESSION_FRAMING_DELTA_MAX,
     EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES,
     LAUGH_EXPRESSION_SCORE_FLOORS,
@@ -774,6 +775,11 @@ def _professional_identity_quality_contract(
         scope == "character_card_expression_set"
         and isinstance(contract.get("laugh_intent_contract"), dict)
     )
+    body_silhouette_review_applies = bool(
+        scope == "character_card_body_silhouette"
+        and str(contract.get("body_silhouette_contract") or "").strip()
+        == "preserve_identity_scale_and_age_appropriate_body_proportion"
+    )
     capture_presentation = contract.get("capture_presentation")
     applies = bool(
         isinstance(contract, dict)
@@ -829,6 +835,13 @@ def _professional_identity_quality_contract(
         "shared_affective_laugh_evidence_below_bar",
         "shared_affective_expression_framing_drift",
         "shared_affective_expression_framing_receipt_missing",
+    ]
+    body_silhouette_score_dimensions = [
+        *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+    ]
+    body_silhouette_issue_codes = [
+        "body_silhouette_framing_drift",
+        "body_silhouette_full_body_framing_missing",
     ]
     return {
         "applies": applies,
@@ -894,6 +907,7 @@ def _professional_identity_quality_contract(
                 [
                     *base_score_dimensions,
                     *(expression_score_dimensions if expression_review_applies else []),
+                    *(body_silhouette_score_dimensions if body_silhouette_review_applies else []),
                 ]
             )
         ) if applies else [],
@@ -902,6 +916,7 @@ def _professional_identity_quality_contract(
                 [
                     *base_issue_codes,
                     *(expression_issue_codes if expression_review_applies else []),
+                    *(body_silhouette_issue_codes if body_silhouette_review_applies else []),
                 ]
             )
         ) if applies else [],
@@ -916,6 +931,18 @@ def _professional_identity_quality_contract(
                 "framing_delta_dimensions": list(EXPRESSION_FRAMING_DELTA_MAX.keys()),
             }
             if applies and expression_review_applies
+            else {"applies": False}
+        ),
+        "body_silhouette_review": (
+            {
+                "applies": True,
+                "source": "professional_face_identity_quality_contract.body_silhouette_contract",
+                "score_dimensions": list(dict.fromkeys(body_silhouette_score_dimensions)),
+                "issue_codes": list(dict.fromkeys(body_silhouette_issue_codes)),
+                "framing_baseline": "body.slot",
+                "framing_delta_dimensions": list(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS),
+            }
+            if applies and body_silhouette_review_applies
             else {"applies": False}
         ),
     }
