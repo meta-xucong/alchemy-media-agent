@@ -1791,19 +1791,9 @@ class AnchorPackPreparationService:
             (review.identity_scores.same_face_score for review in passing_reviews),
             default=0.0,
         )
-        evidence_codes = sorted(
-            {
-                code
-                for review in passing_reviews
-                for code in review.identity_scores.evidence_codes
-                if str(code or "").strip()
-            }
-        )
-        if passing_reviews and not evidence_codes:
-            evidence_codes = ["face_identity_shared_identity_review_verified"]
         return FormalSlotRequirementSummary(
             status="pass" if passing_reviews else "fail",
-            evidence_codes=evidence_codes,
+            evidence_codes=["face_identity_shared_identity_review_verified"] if passing_reviews else [],
             dimensions={"same_face_score": best_same_face_score} if passing_reviews else {},
         )
 

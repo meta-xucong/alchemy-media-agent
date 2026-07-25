@@ -132,6 +132,21 @@ class ProductApiAnchorPackPreparationHost:
     _CHARACTER_CARD_FOREGROUND_WIDTH_MAX_RELATIVE_DELTA = 0.28
     _CHARACTER_CARD_HEAD_TOP_MARGIN_MAX_ABSOLUTE_DELTA = 0.045
     _CHARACTER_CARD_SHOULDER_PADDING_MAX_ABSOLUTE_DELTA = 0.055
+    _CHARACTER_CARD_STANDARD_FRONT_FRAMING_PROFILE_ID = (
+        "professional_standard_front_model_card_framing_v1"
+    )
+    # Initial server-owned profile derived from the current stable Professional
+    # model-card evidence set (old winner plus candidate1/candidate2) using
+    # `_foreground_card_box`.  Width is foreground-card footprint width
+    # (hair/shoulders/clothing), not face width.  1024x1536 remains a transport
+    # contract; these normalized dimensions are the Face Host review gate for
+    # standard_front crop.
+    _CHARACTER_CARD_STANDARD_FRONT_FRAMING_PROFILE = {
+        "head_top_margin": {"min": 0.09, "max": 0.16},
+        "subject_height": {"min": 0.76, "max": 0.89},
+        "subject_width": {"min": 0.85, "max": 1.0},
+        "upper_shoulder_bottom_cutoff": {"min": 0.90, "max": 1.0},
+    }
     _CHARACTER_CARD_FRONT_25_MIN_VIEW_MAGNITUDE = 0.060
     _CHARACTER_CARD_FRONT_25_MAX_VIEW_MAGNITUDE = 0.24
     _CHARACTER_CARD_FRONT_45_HARD_MIN_VIEW_MAGNITUDE = 0.10
@@ -444,6 +459,13 @@ class ProductApiAnchorPackPreparationHost:
                 "professional_anchor_candidate_index": request.candidate_index,
             },
         }
+        if (
+            request.capture_scope == "character_card_face_identity"
+            and request.view_role == "standard_front"
+        ):
+            job_request["metadata"]["professional_standard_front_framing_profile"] = (
+                self._character_card_standard_front_framing_profile_payload()
+            )
         if (
             request.photographic_model_card_front_required
             and request.view_role == "standard_front"
@@ -3167,6 +3189,15 @@ class ProductApiAnchorPackPreparationHost:
         request: AnchorGenerationRequest,
         selected,
     ) -> tuple[bool, list[str]]:
+        if (
+            request.capture_scope == "character_card_face_identity"
+            and request.view_role == "standard_front"
+        ):
+            selected_box = _foreground_card_box(Path(selected.file_path))
+            if not selected_box:
+                return False, ["professional_face_card_standard_front_framing_metric_unavailable"]
+            issue_codes = self._character_card_standard_front_framing_issues(selected_box)
+            return not issue_codes, issue_codes
         if request.view_role not in {
             "left_front_25",
             "three_quarter",
@@ -3192,6 +3223,52 @@ class ProductApiAnchorPackPreparationHost:
             baseline_box,
         )
         return not issue_codes, issue_codes
+
+    @classmethod
+    def _character_card_standard_front_framing_profile_payload(cls) -> dict[str, Any]:
+        return {
+            "owner": "server_owned_face_host",
+            "profile_id": cls._CHARACTER_CARD_STANDARD_FRONT_FRAMING_PROFILE_ID,
+            "contract_version": "v3_character_card_standard_front_framing_profile_v1",
+            "capture_scope": "character_card_face_identity",
+            "view_role": "standard_front",
+            "canvas_size": "1024x1536",
+            "normalized_dimensions": {
+                key: dict(value)
+                for key, value in cls._CHARACTER_CARD_STANDARD_FRONT_FRAMING_PROFILE.items()
+            },
+        }
+
+    def _character_card_standard_front_framing_issues(
+        self,
+        selected_box: dict[str, float],
+    ) -> list[str]:
+        try:
+            head_top_margin = float(selected_box["top_ratio"])
+            subject_height = float(selected_box["height_ratio"])
+            subject_width = float(selected_box["width_ratio"])
+            upper_shoulder_bottom_cutoff = head_top_margin + subject_height
+        except (KeyError, TypeError, ValueError):
+            return ["professional_face_card_standard_front_framing_metric_unavailable"]
+        dimensions = {
+            "head_top_margin": head_top_margin,
+            "subject_height": subject_height,
+            "subject_width": subject_width,
+            "upper_shoulder_bottom_cutoff": upper_shoulder_bottom_cutoff,
+        }
+        if any(not math.isfinite(value) for value in dimensions.values()):
+            return ["professional_face_card_standard_front_framing_metric_unavailable"]
+        profile = self._CHARACTER_CARD_STANDARD_FRONT_FRAMING_PROFILE
+        issue_codes: list[str] = []
+        if not _value_in_range(head_top_margin, profile["head_top_margin"]):
+            issue_codes.append("professional_face_card_standard_front_head_top_margin_out_of_profile")
+        if not _value_in_range(subject_height, profile["subject_height"]):
+            issue_codes.append("professional_face_card_standard_front_subject_scale_out_of_profile")
+        if not _value_in_range(subject_width, profile["subject_width"]):
+            issue_codes.append("professional_face_card_standard_front_subject_width_out_of_profile")
+        if not _value_in_range(upper_shoulder_bottom_cutoff, profile["upper_shoulder_bottom_cutoff"]):
+            issue_codes.append("professional_face_card_standard_front_shoulder_cutoff_out_of_profile")
+        return issue_codes
 
     def _character_card_foreground_framing_issues(
         self,
@@ -3566,6 +3643,12 @@ def _foreground_card_box(path: Path) -> dict[str, float] | None:
             }
     except Exception:
         return None
+
+
+def _value_in_range(value: float, band: dict[str, float]) -> bool:
+    lower = float(band["min"])
+    upper = float(band["max"])
+    return math.isfinite(value) and lower <= value <= upper
 
 
 __all__ = ["ProductApiAnchorPackPreparationHost"]

@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image, ImageDraw
 
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorGenerationRequest
@@ -170,6 +171,21 @@ class _SharedProductService:
         return self.jobs.get(job_id)
 
 
+class _StandardFrontProfileSharedProductService(_SharedProductService):
+    """Doc257-only fixture: keep shared service defaults untouched."""
+
+    def generate_job(self, job_id, request):  # noqa: ANN001, ANN201
+        status = super().generate_job(job_id, request)
+        frozen = next(item for item in self.requests if item["job_id"] == job_id)
+        if (
+            frozen["view_role"] == "standard_front"
+            and frozen.get("capture_scope") == "character_card_face_identity"
+        ):
+            output = self.output_store.by_job[job_id][0]
+            _write_framing_card(Path(output.file_path), top=0.12, height=0.80, left=0.04, width=0.92)
+        return status
+
+
 class _FramingProfiler:
     def __init__(
         self,
@@ -320,6 +336,20 @@ def _rear_head_generation_request() -> AnchorGenerationRequest:
     )
 
 
+def _standard_front_character_card_generation_request() -> AnchorGenerationRequest:
+    return AnchorGenerationRequest(
+        project_id="project_doc162",
+        people_asset_id="person_doc162",
+        pack_version_id="pack_doc162",
+        view_role="standard_front",
+        candidate_index=1,
+        preparation_intent=PREPARATION_INTENT,
+        root_source_asset_id="v3_asset_root",
+        reference_evidence_ids=["v3_asset_root"],
+        capture_scope="character_card_face_identity",
+    )
+
+
 def test_doc162_product_host_runs_three_by_three_by_three_through_shared_service() -> None:
     service = _SharedProductService()
     host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
@@ -367,6 +397,147 @@ def test_doc162_product_host_runs_three_by_three_by_three_through_shared_service
         for attempt in result.attempts
     )
     assert "prompt" not in service.requests[0]["payload"]["metadata"]
+
+
+def test_doc257_standard_front_generation_metadata_carries_frozen_framing_profile() -> None:
+    service = _SharedProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+
+    host.generate(_standard_front_character_card_generation_request())
+
+    metadata = service.requests[0]["payload"]["metadata"]
+    profile = metadata["professional_standard_front_framing_profile"]
+    assert profile["owner"] == "server_owned_face_host"
+    assert profile["profile_id"] == "professional_standard_front_model_card_framing_v1"
+    assert profile["view_role"] == "standard_front"
+    assert profile["capture_scope"] == "character_card_face_identity"
+    assert profile["canvas_size"] == "1024x1536"
+    assert set(profile["normalized_dimensions"]) == {
+        "head_top_margin",
+        "subject_height",
+        "subject_width",
+        "upper_shoulder_bottom_cutoff",
+    }
+
+
+def test_doc257_public_job_cannot_forge_standard_front_framing_profile() -> None:
+    service = V3ProductApiService()
+
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_job(
+            {
+                "user_input": "Prepare a standard front model-card portrait.",
+                "scenario_selection": {"scenario_id": "general_creative"},
+                "metadata": {
+                    "professional_standard_front_framing_profile": {
+                        "profile_id": "professional_standard_front_model_card_framing_v1"
+                    }
+                },
+            }
+        )
+
+
+def test_doc257_trusted_host_may_carry_standard_front_framing_profile() -> None:
+    service = V3ProductApiService()
+    request = CreateCreativeJobRequest.model_validate(
+        {
+            "user_input": "Prepare a standard front model-card portrait.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {
+                "professional_standard_front_framing_profile": {
+                    "profile_id": "professional_standard_front_model_card_framing_v1"
+                }
+            },
+        }
+    )
+
+    service._assert_runtime_metadata_server_owned(  # noqa: SLF001
+        request,
+        trusted_capability_plan_reuse=False,
+        trusted_professional_anchor_preparation=True,
+    )
+
+
+def test_doc257_public_metadata_projection_hides_standard_front_framing_profile() -> None:
+    projected = V3ProductApiService._public_metadata_projection(  # noqa: SLF001
+        {
+            "safe_status": "planned",
+            "professional_standard_front_framing_profile": {
+                "profile_id": "professional_standard_front_model_card_framing_v1",
+                "normalized_dimensions": {"subject_width": {"min": 0.85, "max": 1.0}},
+            },
+        }
+    )
+
+    assert projected == {"safe_status": "planned"}
+
+
+def test_doc257_formal_identity_summary_sanitizes_internal_review_evidence_codes() -> None:
+    service = _StandardFrontProfileSharedProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+
+    result = host.prepare(
+        project_id="project_doc162",
+        people_asset=_asset(),
+        root_source_provenance=_root(),
+    )
+
+    assert result.status == "review"
+    front_attempts = [attempt for attempt in result.attempts if attempt.request.view_role == "standard_front"]
+    assert front_attempts
+    assert any(
+        "canonical_prompt_reference_parity_verified" in attempt.review.identity_scores.evidence_codes
+        for attempt in front_attempts
+    )
+    receipt = result.pack.anchor_views[0].formal_slot_receipt
+    assert receipt is not None
+    assert "canonical_prompt_reference_parity_verified" not in receipt.identity_summary.evidence_codes
+    assert receipt.identity_summary.evidence_codes == ["face_identity_shared_identity_review_verified"]
+
+
+def test_doc257_standard_front_card_framing_rejects_missing_normalized_geometry() -> None:
+    service = _SharedProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+
+    passed, issues = host._character_card_card_framing_parity(  # noqa: SLF001
+        _standard_front_character_card_generation_request(),
+        SimpleNamespace(file_path="missing-standard-front.png"),
+    )
+
+    assert passed is False
+    assert issues == ["professional_face_card_standard_front_framing_metric_unavailable"]
+
+
+def test_doc257_standard_front_card_framing_rejects_subject_scale_and_headroom_drift(tmp_path) -> None:
+    service = _SharedProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    loose = tmp_path / "loose-front.png"
+    _write_framing_card(loose, top=0.28, height=0.52, left=0.20, width=0.70)
+
+    passed, issues = host._character_card_card_framing_parity(  # noqa: SLF001
+        _standard_front_character_card_generation_request(),
+        SimpleNamespace(file_path=str(loose)),
+    )
+
+    assert passed is False
+    assert "professional_face_card_standard_front_head_top_margin_out_of_profile" in issues
+    assert "professional_face_card_standard_front_subject_scale_out_of_profile" in issues
+    assert "professional_face_card_standard_front_shoulder_cutoff_out_of_profile" in issues
+
+
+def test_doc257_standard_front_card_framing_accepts_frozen_profile_geometry(tmp_path) -> None:
+    service = _SharedProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    selected = tmp_path / "standard-front.png"
+    _write_framing_card(selected, top=0.12, height=0.79, left=0.04, width=0.92)
+
+    passed, issues = host._character_card_card_framing_parity(  # noqa: SLF001
+        _standard_front_character_card_generation_request(),
+        SimpleNamespace(file_path=str(selected)),
+    )
+
+    assert passed is True
+    assert issues == []
 
 
 def test_doc192_reverse_45_framing_parity_uses_approved_right25_as_baseline() -> None:
