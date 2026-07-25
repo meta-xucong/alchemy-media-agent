@@ -570,6 +570,30 @@ Doc102 is the implementation companion. Its shadow-plan, frozen-plan,
 contribution-composer, review isolation, compatibility, and rollout gates must
 be completed before Doc101 may be marked implemented.
 
+## 22.3 Professional Character Card Close Model-Card Front
+
+Doc256 is the current product-definition authority for Professional Character
+Card Face `standard_front` and for Professional Expression delivery slots that
+inherit the same card-family framing baseline.
+
+Forward work must preserve the formal three-candidate acceptance machine:
+real candidates, canonical shared review, external Enhanced eligibility,
+explicit ranking, one winner, per-slot `FormalSlotReceipt`, save/reload/public
+projection, and activation validation.
+
+Doc256 supersedes Doc248, Doc252, Doc253, Doc254, and Doc255 only as active
+image-design / production-gating targets for Face `standard_front` and inherited
+Expression card-family framing. It does not delete those documents, migrate old
+receipts, upgrade target-only history, or change Formal Core authority.
+
+The corrected visual target is a close professional child model-card front
+photograph: not a half-body portrait, not a passport / ID-style big-head
+headshot. Face and Expression may share neutral versioned
+`card_family_framing` evidence and calibration, but Expression must not import
+Face-local implementation. Shared Human Realism foundation remains the owner of
+generic eye, skin, hair, garment, and light realism evidence; Doc256 binds that
+evidence to the model-card candidate instead of duplicating a second evaluator.
+
 ## 23. Strategic Reminder
 
 Do not build a Lovart clone.
