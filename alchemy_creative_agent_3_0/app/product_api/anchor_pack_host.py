@@ -16,13 +16,9 @@ from typing import Any
 from PIL import Image
 
 from ..shared_capabilities.visual_cluster.micro_real_human_fidelity import (
-    MICRO_REAL_HUMAN_FIDELITY_METADATA_FLAG,
-    MICRO_REAL_HUMAN_FIDELITY_METADATA_PROVENANCE,
-    MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
     MINIMUM_MICRO_DIMENSION_SCORE,
     OPTIONAL_VISIBLE_DIMENSIONS,
     REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS,
-    append_micro_real_human_fidelity_guidance,
 )
 from ..shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
@@ -448,11 +444,6 @@ class ProductApiAnchorPackPreparationHost:
                 "professional_anchor_candidate_index": request.candidate_index,
             },
         }
-        if request.absolute_portrait_realism_required and request.view_role == "standard_front":
-            job_request["metadata"]["professional_absolute_portrait_realism_required"] = True
-            job_request["metadata"]["professional_absolute_portrait_realism_provenance"] = (
-                "server_feature_flag_v1"
-            )
         if (
             request.photographic_model_card_front_required
             and request.view_role == "standard_front"
@@ -461,41 +452,6 @@ class ProductApiAnchorPackPreparationHost:
             job_request["metadata"]["professional_photographic_model_card_front_required"] = True
             job_request["metadata"]["professional_photographic_model_card_front_provenance"] = (
                 "server_feature_flag_v1"
-            )
-        if (
-            request.micro_real_human_fidelity_required
-            and request.view_role == "standard_front"
-            and request.capture_scope == "character_card_face_identity"
-        ):
-            micro_metadata = {
-                MICRO_REAL_HUMAN_FIDELITY_METADATA_FLAG: True,
-                MICRO_REAL_HUMAN_FIDELITY_METADATA_PROVENANCE: MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
-            }
-            existing_prompt_contract = {
-                **ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
-                    view_role=request.view_role,
-                    capture_scope=request.capture_scope,
-                ),
-                "visual_direction_addons": [],
-                "negative_prompt_addons": [],
-            }
-            prompt_projection = append_micro_real_human_fidelity_guidance(
-                existing_prompt_contract,
-                metadata=micro_metadata,
-                scope="character_card_face_identity:standard_front",
-            )
-            job_request["metadata"]["professional_micro_real_human_fidelity_required"] = True
-            job_request["metadata"]["professional_micro_real_human_fidelity_provenance"] = (
-                MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE
-            )
-            job_request["metadata"]["professional_micro_real_human_fidelity_guidance"] = (
-                prompt_projection["micro_real_human_fidelity_guidance"]
-            )
-            job_request["metadata"]["professional_micro_real_human_fidelity_visual_direction_addons"] = (
-                prompt_projection["visual_direction_addons"]
-            )
-            job_request["metadata"]["professional_micro_real_human_fidelity_negative_prompt_addons"] = (
-                prompt_projection["negative_prompt_addons"]
             )
         job_kwargs = {
             "view_role": request.view_role,

@@ -1162,33 +1162,26 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             )
             if anchor_view_target == "standard_front":
                 response_contract += (
-                    " For the standard_front slot, preserve the person's identity but do not inherit a slightly angled "
-                    "source viewpoint as the final card pose; normalize it into a straight-on, symmetric, camera-facing "
-                    "front capture with the face midline vertical, eyes level and nose centered. Keep the image commercially "
-                    "clean and translucent: crisp photographic detail, clean white/high-key neutrality, no dirty cast, no "
-                    "smear, no waxy smoothing, no beauty-filter haze, and real skin texture at the visible scale. Treat the "
-                    "result as an evidence-grade standardized identity capture rather than a portfolio, fashion, social-media, "
-                    "pageant or beauty portrait. Make the frontality observable through balanced left/right ear and cheek "
-                    "visibility, level shoulders and a calm camera axis instead of a flattering head turn. Use stage-appropriate "
-                    "relaxed attention and a natural neutral mouth unless the current slot explicitly owns another expression. "
-                    "Let small real facial asymmetry, fine hair edges and camera-observed skin variation remain visible inside "
-                    "the clean vertical 2:3 card result, with a plain white matte reference field. Treat fair, cold-white or commercial-clean "
-                    "complexion language as neutral white balance, clean exposure and natural fair skin in camera light, not "
-                    "whitening or smoothing. Return capture_scope "
-                    "character_card_face_identity plus the exact frozen framing, aspect-ratio and front-pose-normalization "
-                    "fields in the typed receipt."
+                    " For the standard_front slot, preserve the person's identity while producing a photographer-shot "
+                    "front model-card portrait. Use consistent photographer distance, complete hair outline, small natural "
+                    "headroom, and a close model-card crop with visible neck, collar and upper shoulders on a clean white "
+                    "studio model-card background. Keep the image commercially polished, naturally photographic, and "
+                    "child-present, with a natural neutral expression unless the current slot explicitly owns another "
+                    "expression. Return capture_scope character_card_face_identity plus the exact frozen framing, "
+                    "aspect-ratio and front-pose-normalization fields in the typed receipt."
                 )
             else:
                 response_contract += (
                     " For non-front Character Card Face Identity slots, keep the serial evidence chain intact, but use "
                     "approved prior winner evidence as the commercial reference-card continuity source and make only the "
-                    "frozen view-angle delta renderer-facing; change only the frozen view angle. Do not restate straight-on "
-                    "symmetry, stable person biology or standard_front symmetry as if this were another first identity-definition prompt. Use only a short positive "
+                    "frozen view-angle delta renderer-facing; change only the frozen view angle. Use only a short positive "
                     f"photographic phrase that makes the target view {anchor_view_target} unambiguous while the references "
                     "carry identity, developmental stage, complexion balance and material finish. Keep one compact "
-                    "modeling-card framing rule: match the approved front/card-family vertical 2:3 head-neck-upper-shoulders crop; avoid close-up, "
-                    "half-body or torso framing. For visible turning slots, allow natural face-box changes caused by head rotation and "
-                    "judge continuity by the full card framing, not by matching another angle's face rectangle. Do not turn this into a checklist of eye, ear, nose or chin-line tokens; let the shared visual review judge the image. The typed "
+                    "model-card framing rule: use the same model-card framing with consistent photographer distance, "
+                    "complete hair outline, small natural headroom, visible neck, collar and upper shoulders. For visible "
+                    "turning slots, allow natural face-box changes caused by head rotation and judge continuity by the full "
+                    "card framing, not by matching another angle's face rectangle. Expression delivery slots reuse the same "
+                    "model-card framing while keeping laugh, anger and sad affect wording owned by the Expression slot. The typed "
                     "professional_anchor_view_decision for non-front Character Card slots should stay compact: return "
                     "the exact target_view_role, capture_presentation, capture_continuity and capture_scope; do not "
                     "repeat the standard_front-only framing/aspect/front-axis receipt fields."
@@ -1215,8 +1208,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                     response_contract += (
                         " For rear_head, disambiguate the view as a back-of-head reference: "
                         "rear head view only, no visible face and no visible eyes. Preserve the same head-and-upper-shoulders "
-                        "reference-card scale through the back-of-head hair outline, neck, upper shoulders and back collar line, "
-                        "not through face-area or full-face wording."
+                        "reference-card scale through the back-of-head hair outline, neck, upper shoulders and back collar line."
                     )
         elif anchor_capture_presentation:
             response_contract += (
