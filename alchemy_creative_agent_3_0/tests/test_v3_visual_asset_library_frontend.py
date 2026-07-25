@@ -117,6 +117,21 @@ def test_doc173_asset_lifecycle_and_binding_copy_is_human_readable_and_non_secre
     assert '"provider"' not in helper.lower()
 
 
+def test_doc247_character_card_slot_status_labels_completed_winner_selected() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    helper_start = source.index("function v3CharacterCardStatusLabel")
+    helper_end = source.index("function v3CharacterCardAssetFailureMessage", helper_start)
+    helper = source[helper_start:helper_end]
+
+    assert 'winner_selected: "已完成"' in helper
+    assert 'active: "已完成"' in helper
+    assert 'empty: "尚未建立"' in helper
+    assert 'blocked: "需要重新处理"' in helper
+    assert '}[status] || "等待处理";' in helper
+    assert "app.js?v=20260725-character-card-slot-status" in index
+
+
 def test_doc173_project_binding_is_explicit_and_never_silent_fallback() -> None:
     source = APP_JS.read_text(encoding="utf-8")
     panel = _function(source, "renderV3ProjectVisualAssetPanel", "openV3VisualAssetBindingDialog")

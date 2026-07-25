@@ -5341,6 +5341,7 @@ function v3CharacterCardStatusLabel(status) {
     preparing: "正在生成",
     reviewing: "等待确认",
     partial: "部分完成",
+    winner_selected: "已完成",
     active: "已完成",
     stale: "需要更新",
     blocked: "需要重新处理",
