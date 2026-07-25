@@ -16,8 +16,10 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.absolute_
     evaluate_absolute_portrait_realism,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
+    AnchorCandidateUnavailable,
     AnchorCandidateResult,
     AnchorGenerationRequest,
+    AnchorPackPreparationResult,
     AnchorPackPreparationService,
     AnchorReviewDecision,
     _absolute_portrait_realism_enhanced_proof_summary,
@@ -29,8 +31,14 @@ from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductR
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     FaceIdentityModule,
+    IdentityAnchorPackVersion,
     PeopleAsset,
     RootSourceProvenance,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.library import (
+    LibraryRootSourceProvenance,
+    VisualAsset,
+    VisualAssetLibraryLifecycleService,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
@@ -424,6 +432,75 @@ def test_doc248_product_host_threads_absolute_realism_flag_into_face_request() -
     assert fake.request.absolute_portrait_realism_required is True
 
 
+def _library_asset_for_absolute_realism() -> VisualAsset:
+    return VisualAsset(
+        visual_asset_id="asset_absolute_realism",
+        asset_type="people",
+        display_name="Absolute Realism Test",
+        owner_scope="local_default",
+        root_source_provenance=LibraryRootSourceProvenance(
+            source_asset_id="source_original",
+            consent_reference="user-confirmed-source",
+            supplementary_source_asset_ids=["source_supplemental"],
+        ),
+        preparation_intent="character card front identity",
+        created_at="2026-07-25T00:00:00Z",
+        updated_at="2026-07-25T00:00:00Z",
+    )
+
+
+def _failed_pack_for_asset(people_asset: PeopleAsset) -> IdentityAnchorPackVersion:
+    return IdentityAnchorPackVersion(
+        pack_version_id="pack_absolute_realism_failed",
+        people_asset_id=people_asset.people_asset_id,
+        status="failed",
+        root_source_provenance=people_asset.root_source_provenance,
+    )
+
+
+def test_doc248_absolute_realism_inherits_generation_channel_without_special_mcp_default() -> None:
+    captured: list[dict[str, object]] = []
+    asset = _library_asset_for_absolute_realism()
+
+    class _Catalog:
+        def get(self, *, owner_scope: str, visual_asset_id: str):  # noqa: ANN001, ANN201
+            assert owner_scope == "local_default"
+            assert visual_asset_id == asset.visual_asset_id
+            return asset
+
+        def save(self, asset_to_save):  # noqa: ANN001, ANN201
+            return asset_to_save
+
+    class _Host:
+        def prepare_character_card(self, **kwargs):  # noqa: ANN001, ANN201
+            captured.append(dict(kwargs))
+            return AnchorPackPreparationResult(
+                status="blocked",
+                pack=_failed_pack_for_asset(kwargs["people_asset"]),
+                failure_codes=["synthetic_block"],
+            )
+
+    lifecycle = VisualAssetLibraryLifecycleService(_Catalog(), anchor_pack_host=_Host())  # type: ignore[arg-type]
+
+    lifecycle.prepare_character_card_face(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        absolute_portrait_realism_required=True,
+        generation_channel="provider",
+    )
+    lifecycle.prepare_character_card_face(
+        owner_scope="local_default",
+        visual_asset_id=asset.visual_asset_id,
+        absolute_portrait_realism_required=True,
+        generation_channel="mcp",
+    )
+
+    assert captured[0]["absolute_portrait_realism_required"] is True
+    assert "generation_channel" not in captured[0]
+    assert captured[1]["absolute_portrait_realism_required"] is True
+    assert captured[1]["generation_channel"] == "mcp"
+
+
 def test_doc248_public_route_rejects_user_supplied_absolute_realism_flag() -> None:
     handlers = V3ProductRouteHandlers(service=V3ProductApiService())
 
@@ -493,9 +570,9 @@ def test_doc248_host_writes_absolute_realism_trusted_provenance_only_for_standar
         capture_scope="character_card_face_identity",
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(AnchorCandidateUnavailable):
         host.generate(front_request)
-    with pytest.raises(Exception):
+    with pytest.raises(AnchorCandidateUnavailable):
         host.generate(bridge_request)
 
     assert captured[0]["professional_absolute_portrait_realism_required"] is True
