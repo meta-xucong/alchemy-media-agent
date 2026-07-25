@@ -907,7 +907,10 @@ def test_doc189_review_contract_calibrates_commercial_refined_realism() -> None:
         "pose_compliance_means_requested_face_view_angle_for_character_card_not_full_body_pose"
     )
     assert "mature model-card photography calibration" in prompt
+    assert "This is review/acceptance evidence, not renderer wording" in prompt
     assert "Do not fail merely because the image is polished or commercially retouched" in prompt
+    assert "waxy/plastic or poreless/smeared skin" in prompt
+    assert "visible AI-render artifact" in prompt
     assert "pose_compliance means the requested Face card angle is pixel-observable" in prompt
     assert "standard_front reads as front-facing" in prompt
     assert "left_front_25 and right_front_25 read as shallow front-side bridge cards" in prompt

@@ -491,11 +491,11 @@ def _enforced_inspection_prompt(
         if professional_quality.get("commercial_refinement_policy"):
             lines.append(
                 "Character Card mature model-card photography calibration: judge identity, age-stage coherence, requested "
-                "view, clean white model-card background, and commercial photo finish without turning the review into a "
-                "microscopic skin, facial-defect, detector, or anti-AI checklist. Do not fail merely because the image is "
-                "polished or commercially retouched; fail or warn when the pixels show a different person, lost distinctive "
-                "features, wrong requested card view, wrong background, degraded commercial finish, or actual prompt-owned "
-                "channel violation."
+                "view, clean white model-card background, and commercial photo finish. This is review/acceptance evidence, "
+                "not renderer wording. Do not fail merely because the image is polished or commercially retouched; fail or "
+                "warn when the pixels show a different person, lost distinctive features, wrong requested card view, wrong "
+                "background, degraded commercial finish, waxy/plastic or poreless/smeared skin, doll-like child rendering, "
+                "visible AI-render artifact, or actual prompt-owned channel violation."
             )
             lines.append(
                 "Character Card Face Identity view-angle calibration: pose_compliance means the requested Face card angle "
