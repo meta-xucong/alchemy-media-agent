@@ -9,6 +9,7 @@ professional portrait slot explicitly opts in.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import math
 from typing import Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -33,6 +34,8 @@ REQUIRED_REALISM_DIMENSIONS = (
     "camera_texture_response",
     "commercial_beauty_preserved",
 )
+MINIMUM_REALISM_DIMENSION_SCORE = 0.72
+MINIMUM_REALISM_BEAUTY_SCORE = 0.78
 
 FORBIDDEN_DEGRADATION_ISSUES = frozenset(
     {
@@ -89,7 +92,7 @@ def _normalized_scores(values: Mapping[str, float], field_name: str) -> dict[str
     for raw_key, raw_score in values.items():
         key = _safe_label(str(raw_key), f"{field_name} key")
         score = float(raw_score)
-        if score < 0.0 or score > 1.0:
+        if not math.isfinite(score) or score < 0.0 or score > 1.0:
             raise ValueError(f"{field_name} values must be in [0, 1]")
         normalized[key] = score
     return normalized
@@ -116,8 +119,8 @@ class AbsolutePortraitRealismProof(_StrictRealismModel):
     issue_codes: list[str] = Field(default_factory=list)
     dimensions: dict[str, float]
     required_dimensions: list[str] = Field(default_factory=lambda: list(REQUIRED_REALISM_DIMENSIONS))
-    minimum_dimension_score: float = Field(default=0.72, ge=0.0, le=1.0)
-    minimum_beauty_score: float = Field(default=0.78, ge=0.0, le=1.0)
+    minimum_dimension_score: float = Field(default=MINIMUM_REALISM_DIMENSION_SCORE, ge=0.0, le=1.0)
+    minimum_beauty_score: float = Field(default=MINIMUM_REALISM_BEAUTY_SCORE, ge=0.0, le=1.0)
 
     @field_validator("candidate_id", "output_id")
     @classmethod
@@ -143,6 +146,12 @@ class AbsolutePortraitRealismProof(_StrictRealismModel):
             raise ValueError("absolute portrait realism proof requires evidence codes")
         if not self.dimensions:
             raise ValueError("absolute portrait realism proof requires dimensions")
+        if set(REQUIRED_REALISM_DIMENSIONS) - set(self.required_dimensions):
+            raise ValueError("absolute portrait realism required dimensions cannot be narrowed")
+        if self.minimum_dimension_score < MINIMUM_REALISM_DIMENSION_SCORE:
+            raise ValueError("absolute portrait realism dimension floor cannot be lowered")
+        if self.minimum_beauty_score < MINIMUM_REALISM_BEAUTY_SCORE:
+            raise ValueError("absolute portrait realism beauty floor cannot be lowered")
         if self.eligible != (self.status == "pass"):
             raise ValueError("absolute portrait realism eligibility must match pass status")
         missing = [name for name in self.required_dimensions if name not in self.dimensions]
@@ -183,8 +192,8 @@ def evaluate_absolute_portrait_realism(
     dimensions: Mapping[str, float],
     evidence_codes: Sequence[str],
     issue_codes: Sequence[str] = (),
-    minimum_dimension_score: float = 0.72,
-    minimum_beauty_score: float = 0.78,
+    minimum_dimension_score: float = MINIMUM_REALISM_DIMENSION_SCORE,
+    minimum_beauty_score: float = MINIMUM_REALISM_BEAUTY_SCORE,
     required_dimensions: Sequence[str] = REQUIRED_REALISM_DIMENSIONS,
 ) -> AbsolutePortraitRealismProof:
     """Evaluate a structured absolute-realism evidence packet.
@@ -221,34 +230,10 @@ def evaluate_absolute_portrait_realism(
         output_id=output_id,
         status=status,
         eligible=status == "pass",
-        evidence_codes=normalized_evidence or ["absolute_portrait_realism_reviewed"],
+        evidence_codes=normalized_evidence,
         issue_codes=sorted(set(failure_issues)),
         dimensions=normalized_dimensions,
         required_dimensions=list(normalized_required),
         minimum_dimension_score=minimum_dimension_score,
         minimum_beauty_score=minimum_beauty_score,
-    )
-
-
-def project_absolute_portrait_realism_enhanced_proof(
-    proof: AbsolutePortraitRealismProof,
-):
-    """Project Doc248 proof into the module-neutral candidate Enhanced proof.
-
-    The import is intentionally local so the Enhanced module can be inspected
-    without pulling Formal Core or slot lifecycle code into its evaluation path.
-    """
-
-    from ...visual_assets.formal_slot_acceptance import FormalSlotCandidateEnhancedProofSummary
-
-    return FormalSlotCandidateEnhancedProofSummary(
-        profile_id=proof.profile_id,
-        requirement_id=proof.requirement_id,
-        candidate_id=proof.candidate_id,
-        output_id=proof.output_id,
-        eligible=proof.eligible,
-        status=proof.status,
-        evidence_codes=list(proof.evidence_codes),
-        issue_codes=list(proof.issue_codes),
-        dimensions=dict(proof.dimensions),
     )

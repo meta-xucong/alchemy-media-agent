@@ -432,6 +432,9 @@ class ProductApiAnchorPackPreparationHost:
         }
         if request.absolute_portrait_realism_required and request.view_role == "standard_front":
             job_request["metadata"]["professional_absolute_portrait_realism_required"] = True
+            job_request["metadata"]["professional_absolute_portrait_realism_provenance"] = (
+                "server_feature_flag_v1"
+            )
         job_kwargs = {
             "view_role": request.view_role,
             "reference_evidence_ids": list(request.reference_evidence_ids),
@@ -2643,6 +2646,12 @@ class ProductApiAnchorPackPreparationHost:
         passes = passes and view_direction_verified
         passes = passes and framing_parity_verified
         passes = passes and card_framing_verified
+        generic_receipt = project_generic_visual_review_receipt(
+            score_card=score_card,
+            issue_codes=issue_codes,
+            verified=verified,
+            raw_status="pass" if passes else "fail",
+        )
         decision = AnchorReviewDecision(
             status="pass" if passes else "fail",
             identity_scores=IdentityScoreSummary(
@@ -2677,6 +2686,7 @@ class ProductApiAnchorPackPreparationHost:
                 ] if parity_verified else ["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"],
             ),
             issue_codes=list(dict.fromkeys(issue_codes)),
+            shared_review_receipts=[generic_receipt.to_public_dict()],
         )
         return candidate, decision
 

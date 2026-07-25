@@ -14,8 +14,8 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from ..shared_capabilities.visual_cluster.absolute_portrait_realism import (
+    AbsolutePortraitRealismProof,
     evaluate_absolute_portrait_realism,
-    project_absolute_portrait_realism_enhanced_proof,
 )
 from .contracts import (
     AnchorAuxiliaryReference,
@@ -33,6 +33,7 @@ from .formal_slot_acceptance import (
     FORMAL_SLOT_SHARED_REVIEW_CONTRACT_VERSION,
     FORMAL_SLOT_SHARED_REVIEW_OWNER,
     FormalSlotAcceptanceCore,
+    FormalSlotCandidateEnhancedProofSummary,
     FormalSlotCandidateSummary,
     FormalSlotReceipt,
     FormalSlotRequirementSummary,
@@ -40,6 +41,29 @@ from .formal_slot_acceptance import (
     mark_formal_slot_receipt_reload_public_projection_verified,
     validate_formal_slot_receipt_for_activation,
 )
+
+
+def _absolute_portrait_realism_enhanced_proof_summary(
+    proof: AbsolutePortraitRealismProof,
+) -> FormalSlotCandidateEnhancedProofSummary:
+    """Adapt Doc248 proof into the module-neutral candidate proof contract.
+
+    The absolute-realism Enhanced module deliberately does not import Formal
+    Core.  Face Identity owns this adapter because it is the slot profile that
+    opted into the proof.
+    """
+
+    return FormalSlotCandidateEnhancedProofSummary(
+        profile_id=proof.profile_id,
+        requirement_id=proof.requirement_id,
+        candidate_id=proof.candidate_id,
+        output_id=proof.output_id,
+        eligible=proof.eligible,
+        status=proof.status,
+        evidence_codes=list(proof.evidence_codes),
+        issue_codes=list(proof.issue_codes),
+        dimensions=dict(proof.dimensions),
+    )
 
 
 class AnchorGenerationRequest(V3BaseModel):
@@ -1298,7 +1322,7 @@ class AnchorPackPreparationService:
             ] or ["absolute_portrait_realism_reviewed"],
             issue_codes=getattr(review, "issue_codes", []) or [],
         )
-        return project_absolute_portrait_realism_enhanced_proof(proof)
+        return _absolute_portrait_realism_enhanced_proof_summary(proof)
 
     def _validate_formal_attempt_shared_review_authority(
         self,

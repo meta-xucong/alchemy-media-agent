@@ -857,6 +857,10 @@ def _professional_identity_quality_contract(
     )
     absolute_portrait_realism_applies = bool(
         metadata.get("professional_absolute_portrait_realism_required") is True
+        and metadata.get("professional_absolute_portrait_realism_provenance")
+        == "server_feature_flag_v1"
+        and str(metadata.get("professional_anchor_capture_scope") or "").strip()
+        == "character_card_face_identity"
         and scope == "character_card_face_identity"
     )
     capture_presentation = contract.get("capture_presentation")
@@ -1019,6 +1023,7 @@ def _professional_identity_quality_contract(
             {
                 "applies": True,
                 "source": "professional_absolute_portrait_realism_required",
+                "provenance": "server_feature_flag_v1",
                 "profile_id": "absolute_portrait_realism_v1",
                 "score_dimensions": list(REQUIRED_REALISM_DIMENSIONS),
                 "issue_codes": list(absolute_portrait_realism_issue_codes),

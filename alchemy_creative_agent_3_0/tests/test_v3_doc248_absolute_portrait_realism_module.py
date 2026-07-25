@@ -1,4 +1,4 @@
-"""Doc248 absolute portrait realism hot-plug Enhanced module contracts."""
+﻿"""Doc248 absolute portrait realism hot-plug Enhanced module contracts."""
 
 from __future__ import annotations
 
@@ -14,16 +14,18 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.absolute_
     REQUIRED_REALISM_DIMENSIONS,
     AbsolutePortraitRealismProof,
     evaluate_absolute_portrait_realism,
-    project_absolute_portrait_realism_enhanced_proof,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateResult,
     AnchorGenerationRequest,
     AnchorPackPreparationService,
     AnchorReviewDecision,
+    _absolute_portrait_realism_enhanced_proof_summary,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
     FaceIdentityModule,
@@ -65,7 +67,7 @@ def _proof(**overrides: object) -> AbsolutePortraitRealismProof:
 
 def test_doc248_passing_realism_proof_projects_to_formal_enhanced_proof() -> None:
     proof = _proof()
-    enhanced = project_absolute_portrait_realism_enhanced_proof(proof)
+    enhanced = _absolute_portrait_realism_enhanced_proof_summary(proof)
 
     assert proof.eligible is True
     assert proof.status == "pass"
@@ -96,7 +98,7 @@ def test_doc248_missing_visible_realism_dimension_fails_closed(missing_dimension
     assert proof.eligible is False
     assert proof.status == "fail"
     assert "absolute_portrait_realism_evidence_missing" in proof.issue_codes
-    enhanced = project_absolute_portrait_realism_enhanced_proof(proof)
+    enhanced = _absolute_portrait_realism_enhanced_proof_summary(proof)
     assert enhanced.eligible is False
 
 
@@ -181,6 +183,48 @@ def test_doc248_private_or_malformed_fields_are_rejected() -> None:
         )
 
 
+def test_doc248_empty_evidence_is_not_backfilled_as_reviewed() -> None:
+    with pytest.raises(ValidationError):
+        evaluate_absolute_portrait_realism(
+            candidate_id="candidate_1",
+            output_id="output_1",
+            dimensions=_passing_dimensions(),
+            evidence_codes=[],
+        )
+
+
+def test_doc248_required_dimensions_cannot_be_narrowed() -> None:
+    narrowed = [dimension for dimension in REQUIRED_REALISM_DIMENSIONS if dimension != "ear_anatomy_clarity"]
+    with pytest.raises(ValidationError):
+        evaluate_absolute_portrait_realism(
+            candidate_id="candidate_1",
+            output_id="output_1",
+            dimensions=_passing_dimensions(),
+            evidence_codes=["absolute_portrait_realism_reviewed"],
+            required_dimensions=narrowed,
+        )
+
+
+def test_doc248_policy_thresholds_and_finite_scores_are_fail_closed() -> None:
+    with pytest.raises(ValidationError):
+        evaluate_absolute_portrait_realism(
+            candidate_id="candidate_1",
+            output_id="output_1",
+            dimensions=_passing_dimensions(),
+            evidence_codes=["absolute_portrait_realism_reviewed"],
+            minimum_dimension_score=0.1,
+        )
+    dimensions = _passing_dimensions()
+    dimensions["skin_micro_texture"] = float("nan")
+    with pytest.raises(ValueError):
+        evaluate_absolute_portrait_realism(
+            candidate_id="candidate_1",
+            output_id="output_1",
+            dimensions=dimensions,
+            evidence_codes=["absolute_portrait_realism_reviewed"],
+        )
+
+
 def test_doc248_module_does_not_import_provider_mcp_route_or_formal_core() -> None:
     import alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.absolute_portrait_realism as module
 
@@ -207,7 +251,7 @@ def test_doc248_module_is_slot_agnostic_and_hot_pluggable() -> None:
         dimensions=_passing_dimensions(),
         evidence_codes=["real_photo_detail_review_verified"],
     )
-    enhanced = project_absolute_portrait_realism_enhanced_proof(proof)
+    enhanced = _absolute_portrait_realism_enhanced_proof_summary(proof)
 
     assert enhanced.profile_id == "absolute_portrait_realism_v1"
     assert enhanced.owner == "v3_professional_enhanced_profile_contract"
@@ -380,6 +424,190 @@ def test_doc248_product_host_threads_absolute_realism_flag_into_face_request() -
     assert fake.request.absolute_portrait_realism_required is True
 
 
+def test_doc248_public_route_rejects_user_supplied_absolute_realism_flag() -> None:
+    handlers = V3ProductRouteHandlers(service=V3ProductApiService())
+
+    with pytest.raises(ValueError, match="character_card_stage_payload_invalid"):
+        handlers.post_visual_asset_character_card_prepare(
+            "asset_absolute_realism",
+            {"stage": "face_identity", "absolute_portrait_realism_required": True},
+        )
+
+
+def test_doc248_ordinary_job_metadata_cannot_forge_absolute_realism_flag() -> None:
+    service = V3ProductApiService()
+
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_job(
+            {
+                "user_input": "Create a realistic portrait.",
+                "scenario_selection": {"scenario_id": "general_creative"},
+                "metadata": {
+                    "requested_image_count": 1,
+                    "professional_absolute_portrait_realism_required": True,
+                    "professional_absolute_portrait_realism_provenance": "server_feature_flag_v1",
+                },
+            }
+        )
+
+
+def test_doc248_host_writes_absolute_realism_trusted_provenance_only_for_standard_front() -> None:
+    captured: list[dict[str, object]] = []
+
+    class _FakeService:
+        visual_asset_catalog = None
+
+        def create_professional_anchor_preparation_job(self, request, **kwargs):  # noqa: ANN001, ANN201
+            captured.append(dict(request["metadata"]))
+            return SimpleNamespace(job_id="job_blocked", status=ProductJobStatusValue.BLOCKED)
+
+        def get_job_record(self, job_id: str):  # noqa: ANN001, ANN201
+            return SimpleNamespace(request=SimpleNamespace(metadata={}))
+
+    host = ProductApiAnchorPackPreparationHost(_FakeService())  # type: ignore[arg-type]
+
+    front_request = AnchorGenerationRequest(
+        project_id="project_absolute_realism",
+        people_asset_id="asset_absolute_realism",
+        pack_version_id="pack_absolute_realism",
+        view_role="standard_front",
+        candidate_index=1,
+        preparation_intent="character card front identity",
+        root_source_asset_id="source_original",
+        reference_evidence_ids=["source_original", "source_supplemental"],
+        initial_supplementary_source_asset_ids=["source_supplemental"],
+        absolute_portrait_realism_required=True,
+        capture_scope="character_card_face_identity",
+    )
+    bridge_request = AnchorGenerationRequest(
+        project_id="project_absolute_realism",
+        people_asset_id="asset_absolute_realism",
+        pack_version_id="pack_absolute_realism",
+        view_role="left_front_25",
+        candidate_index=1,
+        preparation_intent="character card bridge",
+        root_source_asset_id="source_original",
+        reference_evidence_ids=["source_original", "front_output"],
+        initial_supplementary_source_asset_ids=[],
+        absolute_portrait_realism_required=True,
+        capture_scope="character_card_face_identity",
+    )
+
+    with pytest.raises(Exception):
+        host.generate(front_request)
+    with pytest.raises(Exception):
+        host.generate(bridge_request)
+
+    assert captured[0]["professional_absolute_portrait_realism_required"] is True
+    assert captured[0]["professional_absolute_portrait_realism_provenance"] == "server_feature_flag_v1"
+    assert "professional_absolute_portrait_realism_required" not in captured[1]
+    assert "professional_absolute_portrait_realism_provenance" not in captured[1]
+
+
+def test_doc248_face_host_projects_canonical_generic_shared_receipt_for_formal_core() -> None:
+    class _FakeOutputStore:
+        def list_by_job(self, job_id: str):  # noqa: ANN001, ANN201
+            assert job_id == "job_front_absolute"
+            return [
+                SimpleNamespace(
+                    output_id="v3_output_front_absolute",
+                    candidate_id="candidate_front_absolute",
+                    metadata={
+                        "provider_prompt_sha256": "prompt_hash_front_absolute",
+                        "prompt_compilation_id": "prompt_compilation_front_absolute",
+                        "provider_reference_image_count": 2,
+                        "provider_reference_assets": [
+                            {
+                                "provider_reference_derivative": True,
+                                "identity_evidence_scope": "feature_detail",
+                                "identity_face_localization_applied": True,
+                                "identity_face_localization_status": "detected",
+                                "identity_nonidentity_pixel_suppression_profile": (
+                                    "face_localized_nonidentity_suppression_v1"
+                                ),
+                            },
+                            {
+                                "provider_reference_derivative": True,
+                                "identity_evidence_scope": "head_geometry",
+                                "identity_face_localization_applied": True,
+                                "identity_face_localization_status": "detected",
+                                "identity_nonidentity_pixel_suppression_profile": (
+                                    "face_localized_nonidentity_suppression_v1"
+                                ),
+                            },
+                        ],
+                    },
+                    file_path="unused_front.png",
+                )
+            ]
+
+    class _FakeService:
+        visual_asset_catalog = None
+        output_store = _FakeOutputStore()
+
+        def get_job_record(self, job_id: str):  # noqa: ANN001, ANN201
+            assert job_id == "job_front_absolute"
+            score_card = {
+                "same_person_readability": 0.94,
+                "distinctive_feature_readability": 0.91,
+                "human_realism": 0.9,
+                "pose_compliance": 0.92,
+                "visual_quality": 0.94,
+                "ai_overperfection_penalty": 0.04,
+                "technical_finish": 0.93,
+                "developmental_age_coherence": 0.9,
+                "prompt_owned_channel_obedience": 0.89,
+                "neutral_capture_compliance": 0.9,
+                **_passing_dimensions(),
+            }
+            return SimpleNamespace(
+                generation_result=SimpleNamespace(
+                    planning_result_id="planning_result_front_absolute",
+                    metadata={
+                        "post_generation_review_package": {
+                            "inspections": [
+                                {
+                                    "output_id": "v3_output_front_absolute",
+                                    "status": "pass",
+                                    "mode": "vision_model",
+                                    "verification_state": "verified",
+                                    "issue_codes": [],
+                                    "score_card": score_card,
+                                }
+                            ]
+                        }
+                    },
+                )
+            )
+
+    host = ProductApiAnchorPackPreparationHost(_FakeService())  # type: ignore[arg-type]
+    request = AnchorGenerationRequest(
+        project_id="project_absolute_realism",
+        people_asset_id="asset_absolute_realism",
+        pack_version_id="pack_absolute_realism",
+        view_role="standard_front",
+        candidate_index=1,
+        preparation_intent="character card front identity",
+        root_source_asset_id="source_original",
+        reference_evidence_ids=["source_original", "source_supplemental"],
+        initial_supplementary_source_asset_ids=["source_supplemental"],
+        absolute_portrait_realism_required=True,
+        capture_scope="character_card_face_identity",
+    )
+
+    candidate, review = host._candidate_and_review("job_front_absolute", request)  # noqa: SLF001
+
+    assert candidate.output_id == "v3_output_front_absolute"
+    assert review.status == "pass"
+    assert review.shared_review_receipts
+    receipt = review.shared_review_receipts[0]
+    assert receipt["owner"] == "v3_shared_visual_cluster"
+    assert receipt["contract_version"] == "v3_character_card_generic_slot_review_receipt_v1"
+    assert receipt["status"] == "pass"
+    assert "human_realism" in receipt["score_dimensions"]
+    assert "shared_visual_review_status_pass" in receipt["evidence_codes"]
+
+
 def test_doc248_vision_contract_requests_absolute_realism_dimensions_only_when_enabled() -> None:
     planning_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
         view_role="standard_front",
@@ -397,18 +625,39 @@ def test_doc248_vision_contract_requests_absolute_realism_dimensions_only_when_e
     }
 
     disabled = active_review_contract({"capability_execution_envelope": envelope})
-    enabled = active_review_contract(
+    forged = active_review_contract(
         {
             "capability_execution_envelope": envelope,
             "professional_absolute_portrait_realism_required": True,
         }
     )
+    wrong_scope = active_review_contract(
+        {
+            "capability_execution_envelope": envelope,
+            "professional_anchor_capture_scope": "anchor_pack",
+            "professional_absolute_portrait_realism_required": True,
+            "professional_absolute_portrait_realism_provenance": "server_feature_flag_v1",
+        }
+    )
+    enabled = active_review_contract(
+        {
+            "capability_execution_envelope": envelope,
+            "professional_anchor_capture_scope": "character_card_face_identity",
+            "professional_absolute_portrait_realism_required": True,
+            "professional_absolute_portrait_realism_provenance": "server_feature_flag_v1",
+        }
+    )
 
     for dimension in REQUIRED_REALISM_DIMENSIONS:
         assert dimension not in disabled["score_dimensions"]
+        assert dimension not in forged["score_dimensions"]
+        assert dimension not in wrong_scope["score_dimensions"]
         assert dimension in enabled["score_dimensions"]
+    assert forged["professional_identity_quality"]["absolute_portrait_realism"]["applies"] is False
+    assert wrong_scope["professional_identity_quality"]["absolute_portrait_realism"]["applies"] is False
     assert enabled["professional_identity_quality"]["absolute_portrait_realism"]["applies"] is True
     assert enabled["professional_identity_quality"]["absolute_portrait_realism"]["detector_evasion_objective"] is False
+    assert enabled["professional_identity_quality"]["absolute_portrait_realism"]["provenance"] == "server_feature_flag_v1"
 
 
 def test_doc248_host_projects_absolute_realism_evidence_only_from_passing_scores() -> None:
