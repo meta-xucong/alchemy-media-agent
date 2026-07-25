@@ -8,6 +8,7 @@ second candidate/delivery lifecycle.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -186,6 +187,8 @@ class ProductApiAnchorPackPreparationHost:
         pending_mcp_handoff_ids: list[str] | None = None,
         absolute_portrait_realism_required: bool = False,
         micro_real_human_fidelity_required: bool = False,
+        photographic_model_card_front_required: bool = False,
+        round_id: str | None = None,
     ) -> AnchorPackPreparationResult:
         """Reuse the same host for the two additive Doc178 Face slots."""
 
@@ -201,8 +204,10 @@ class ProductApiAnchorPackPreparationHost:
                 face_view_scope="character_card",
                 generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
                 pending_mcp_handoff_ids=list(pending_mcp_handoff_ids or []),
+                round_id=round_id,
                 absolute_portrait_realism_required=absolute_portrait_realism_required,
                 micro_real_human_fidelity_required=micro_real_human_fidelity_required,
+                photographic_model_card_front_required=photographic_model_card_front_required,
             ),
             resume_from_pack=safe_resume_from_pack,
         )
@@ -445,6 +450,15 @@ class ProductApiAnchorPackPreparationHost:
         if request.absolute_portrait_realism_required and request.view_role == "standard_front":
             job_request["metadata"]["professional_absolute_portrait_realism_required"] = True
             job_request["metadata"]["professional_absolute_portrait_realism_provenance"] = (
+                "server_feature_flag_v1"
+            )
+        if (
+            request.photographic_model_card_front_required
+            and request.view_role == "standard_front"
+            and request.capture_scope == "character_card_face_identity"
+        ):
+            job_request["metadata"]["professional_photographic_model_card_front_required"] = True
+            job_request["metadata"]["professional_photographic_model_card_front_provenance"] = (
                 "server_feature_flag_v1"
             )
         if (
@@ -2603,6 +2617,10 @@ class ProductApiAnchorPackPreparationHost:
             canonical_prompt_hash=prompt_hash,
             prompt_compilation_id=str(output_metadata.get("prompt_compilation_id") or ""),
             prompt_reference_parity_verified=parity_verified,
+            operation_id=(
+                request.mcp_operation_id if request.photographic_model_card_front_required else None
+            ),
+            round_id=(request.round_id if request.photographic_model_card_front_required else None),
         )
         if self._mcp_review_pending(request, inspection, issue_codes, verified):
             raise AnchorCandidateUnavailable(
@@ -2731,10 +2749,15 @@ class ProductApiAnchorPackPreparationHost:
                     ),
                     *self._absolute_portrait_realism_evidence_codes(request, score_card),
                     *self._micro_real_human_fidelity_evidence_codes(request, score_card),
+                    *self._photographic_model_card_front_evidence_codes(request, score_card),
                 ] if parity_verified else ["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"],
             ),
             issue_codes=list(dict.fromkeys(issue_codes)),
             shared_review_receipts=[generic_receipt.to_public_dict()],
+            enhanced_review_dimensions=self._photographic_model_card_front_dimensions(
+                request,
+                score_card,
+            ),
         )
         return candidate, decision
 
@@ -2803,6 +2826,65 @@ class ProductApiAnchorPackPreparationHost:
             elif dimension in score_card:
                 evidence.append(f"micro_{dimension}_visible")
         return evidence
+
+    @staticmethod
+    def _photographic_model_card_front_evidence_codes(
+        request: AnchorGenerationRequest,
+        score_card: dict[str, float],
+    ) -> list[str]:
+        if (
+            not request.photographic_model_card_front_required
+            or request.view_role != "standard_front"
+            or request.capture_scope != "character_card_face_identity"
+        ):
+            return []
+        allowed_codes = (
+            "doc256_card_family_framing_profile_passed",
+            "doc256_shared_human_realism_profile_passed",
+            "doc256_shared_human_visibility_profile_passed",
+            "doc256_visibility_eyes_visible_reviewed",
+            "doc256_visibility_skin_visible_reviewed",
+            "doc256_visibility_hair_visible_reviewed",
+            "doc256_visibility_ear_or_temple_visible_reviewed",
+            "doc256_visibility_garment_neckline_visible_reviewed",
+            "doc256_visibility_light_camera_visible_reviewed",
+        )
+        return [
+            code
+            for code in allowed_codes
+            if float(score_card.get(code, 0.0)) >= 0.5
+        ]
+
+    @staticmethod
+    def _photographic_model_card_front_dimensions(
+        request: AnchorGenerationRequest,
+        score_card: dict[str, float],
+    ) -> dict[str, float]:
+        if (
+            not request.photographic_model_card_front_required
+            or request.view_role != "standard_front"
+            or request.capture_scope != "character_card_face_identity"
+        ):
+            return {}
+        dimensions = (
+            "model_card_crop_closeness",
+            "shoulder_collar_context",
+            "headroom_commercial_balance",
+            "camera_distance_consistency",
+        )
+        projected: dict[str, float] = {}
+        for dimension in dimensions:
+            if dimension not in score_card:
+                continue
+            value = score_card[dimension]
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+            ):
+                return {}
+            projected[dimension] = float(value)
+        return projected
 
     def _character_card_score_below_floor(self, score_card: dict[str, float], dimension: str, floor: float) -> bool:
         value = score_card.get(dimension, -1.0)

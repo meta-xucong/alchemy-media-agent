@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import math
 from pathlib import Path
+
+import pytest
 
 
 def _card_family_module():
@@ -29,6 +32,24 @@ def _expression_module():
     return importlib.import_module(
         "alchemy_creative_agent_3_0.app.visual_assets.expression_model_card_framing"
     )
+
+
+def _anchor_pack_module():
+    return importlib.import_module("alchemy_creative_agent_3_0.app.visual_assets.anchor_pack")
+
+
+def _anchor_host_module():
+    return importlib.import_module("alchemy_creative_agent_3_0.app.product_api.anchor_pack_host")
+
+
+class _NoopAnchorGenerator:
+    def generate(self, request):  # pragma: no cover - not called by propagation test
+        raise AssertionError("generation must not run")
+
+
+class _NoopAnchorReviewer:
+    def review(self, candidate):  # pragma: no cover - not called by propagation test
+        raise AssertionError("review must not run")
 
 
 def _calibration(*, applies_to: list[str] | None = None, approved: bool = True) -> dict[str, object]:
@@ -469,6 +490,281 @@ def test_doc256_face_public_summary_sanitizes_private_fields() -> None:
     )
 
     _assert_public_summary_safe(proof.public_summary())
+
+
+def _doc256_anchor_candidate_and_review(
+    *,
+    evidence_codes: list[str] | None = None,
+    operation_id: str | None = "op_model_card_front_round1",
+    round_id: str | None = "round1",
+    enhanced_review_dimensions: dict[str, float] | None = None,
+):
+    anchor_pack = _anchor_pack_module()
+    candidate = anchor_pack.AnchorCandidateResult(
+        candidate_id="candidate_1",
+        view_id="view_output_1",
+        output_id="output_1",
+        view_role="standard_front",
+        candidate_index=1,
+        source_candidate_ids=["candidate_1"],
+        source_asset_ids=["source_asset_1"],
+        brain_plan_id="brain_plan_1",
+        canonical_prompt_hash="prompt_hash_1",
+        prompt_compilation_id="prompt_compile_1",
+        prompt_reference_parity_verified=True,
+        operation_id=operation_id,
+        round_id=round_id,
+    )
+    shared = anchor_pack.FormalSlotSharedReviewSummary(
+        status="pass",
+        evidence_codes=["shared_real_pixel_review_verified"],
+        score_dimensions=["same_person_readability", "human_realism"],
+        framing_delta_dimensions=["model_card_crop_closeness"],
+    )
+    review = anchor_pack.AnchorReviewDecision(
+        status="pass",
+        identity_scores=anchor_pack.IdentityScoreSummary(
+            same_face_score=0.93,
+            visual_quality_score=0.94,
+            distinctive_feature_score=0.92,
+            human_realism_score=0.91,
+            pose_compliance_score=0.93,
+            ai_overperfection_penalty=0.02,
+            evidence_codes=evidence_codes
+            or [
+                "doc256_card_family_framing_profile_passed",
+                "doc256_shared_human_realism_profile_passed",
+                "doc256_shared_human_visibility_profile_passed",
+                "doc256_visibility_eyes_visible_reviewed",
+                "doc256_visibility_skin_visible_reviewed",
+                "doc256_visibility_hair_visible_reviewed",
+                "doc256_visibility_ear_or_temple_visible_reviewed",
+                "doc256_visibility_garment_neckline_visible_reviewed",
+                "doc256_visibility_light_camera_visible_reviewed",
+            ],
+        ),
+        shared_review_receipts=[shared.model_dump()],
+        enhanced_review_dimensions=enhanced_review_dimensions
+        if enhanced_review_dimensions is not None
+        else {
+            "model_card_crop_closeness": 0.9,
+            "shoulder_collar_context": 0.86,
+            "headroom_commercial_balance": 0.88,
+            "camera_distance_consistency": 0.91,
+        },
+    )
+    return candidate, review
+
+
+def test_doc256_phase3a_face_standard_front_projects_one_doc256_enhanced_summary() -> None:
+    anchor_pack = _anchor_pack_module()
+    candidate, review = _doc256_anchor_candidate_and_review()
+
+    summary = anchor_pack.AnchorPackPreparationService._face_standard_front_enhanced_proof(
+        candidate,
+        review,
+        photographic_model_card_front_required=True,
+        absolute_portrait_realism_required=False,
+        micro_real_human_fidelity_required=False,
+    )
+
+    assert summary.profile_id == "photographic_model_card_front_v1"
+    assert summary.requirement_id == "photographic_model_card_front_enhanced_eligibility_v1"
+    assert summary.eligible is True
+    assert summary.candidate_id == "candidate_1"
+    assert summary.output_id == "output_1"
+    assert "photographic_model_card_front_profile_passed" in summary.evidence_codes
+    assert all("absolute_portrait" not in code and "micro_real" not in code for code in summary.evidence_codes)
+
+
+def test_doc256_phase3a_face_missing_visibility_fails_closed_without_doc248_or_doc252_fallback() -> None:
+    anchor_pack = _anchor_pack_module()
+    candidate, review = _doc256_anchor_candidate_and_review(
+        evidence_codes=[
+            "doc256_card_family_framing_profile_passed",
+            "doc256_shared_human_realism_profile_passed",
+            "doc256_shared_human_visibility_profile_passed",
+        ]
+    )
+
+    summary = anchor_pack.AnchorPackPreparationService._face_standard_front_enhanced_proof(
+        candidate,
+        review,
+        photographic_model_card_front_required=True,
+        absolute_portrait_realism_required=False,
+        micro_real_human_fidelity_required=False,
+    )
+
+    assert summary.eligible is False
+    assert "shared_human_visibility_evidence_missing" in summary.issue_codes
+    assert all("absolute_portrait" not in code and "micro_real" not in code for code in summary.evidence_codes)
+
+
+def test_doc256_phase3a_face_requires_numeric_framing_dimensions_not_pass_code_only() -> None:
+    anchor_pack = _anchor_pack_module()
+    candidate, review = _doc256_anchor_candidate_and_review(enhanced_review_dimensions={})
+
+    summary = anchor_pack.AnchorPackPreparationService._face_standard_front_enhanced_proof(
+        candidate,
+        review,
+        photographic_model_card_front_required=True,
+        absolute_portrait_realism_required=False,
+        micro_real_human_fidelity_required=False,
+    )
+
+    assert summary.eligible is False
+    assert "card_family_framing_failed" in summary.issue_codes
+
+
+def test_doc256_phase3a_face_requires_real_operation_and_round_binding() -> None:
+    anchor_pack = _anchor_pack_module()
+    candidate, review = _doc256_anchor_candidate_and_review(operation_id=None, round_id=None)
+
+    summary = anchor_pack.AnchorPackPreparationService._face_standard_front_enhanced_proof(
+        candidate,
+        review,
+        photographic_model_card_front_required=True,
+        absolute_portrait_realism_required=False,
+        micro_real_human_fidelity_required=False,
+    )
+
+    assert summary.eligible is False
+    assert "candidate_binding_mismatch" in summary.issue_codes
+
+
+def test_doc256_phase3a_trusted_face_scope_required_and_host_evidence_is_scope_gated() -> None:
+    anchor_pack = _anchor_pack_module()
+    anchor_host = _anchor_host_module()
+
+    with pytest.raises(ValueError, match="photographic_model_card_front_requires_character_card_standard_front"):
+        anchor_pack.AnchorGenerationRequest(
+            project_id="project_1",
+            people_asset_id="asset_1",
+            pack_version_id="pack_1",
+            view_role="standard_front",
+            candidate_index=1,
+            preparation_intent="front",
+            root_source_asset_id="source_asset_1",
+            reference_evidence_ids=["source_asset_1"],
+            photographic_model_card_front_required=True,
+            capture_scope="anchor_pack",
+        )
+
+    request = anchor_pack.AnchorGenerationRequest(
+        project_id="project_1",
+        people_asset_id="asset_1",
+        pack_version_id="pack_1",
+        view_role="standard_front",
+        candidate_index=1,
+        preparation_intent="front",
+        root_source_asset_id="source_asset_1",
+        reference_evidence_ids=["source_asset_1"],
+        photographic_model_card_front_required=True,
+        capture_scope="character_card_face_identity",
+    )
+    score_card = {
+        "doc256_card_family_framing_profile_passed": 1.0,
+        "doc256_shared_human_realism_profile_passed": 1.0,
+        "doc256_shared_human_visibility_profile_passed": 1.0,
+        "doc256_visibility_eyes_visible_reviewed": 1.0,
+        "doc256_visibility_skin_visible_reviewed": 1.0,
+        "doc256_visibility_hair_visible_reviewed": 1.0,
+        "doc256_visibility_ear_or_temple_visible_reviewed": 1.0,
+        "doc256_visibility_garment_neckline_visible_reviewed": 1.0,
+        "doc256_visibility_light_camera_visible_reviewed": 1.0,
+        "model_card_crop_closeness": 0.9,
+        "shoulder_collar_context": 0.86,
+        "headroom_commercial_balance": 0.88,
+        "camera_distance_consistency": 0.91,
+    }
+
+    evidence = anchor_host.ProductApiAnchorPackPreparationHost._photographic_model_card_front_evidence_codes(
+        request,
+        score_card,
+    )
+    dimensions = anchor_host.ProductApiAnchorPackPreparationHost._photographic_model_card_front_dimensions(
+        request,
+        score_card,
+    )
+
+    assert "doc256_card_family_framing_profile_passed" in evidence
+    assert "doc256_visibility_eyes_visible_reviewed" in evidence
+    assert dimensions == {
+        "model_card_crop_closeness": 0.9,
+        "shoulder_collar_context": 0.86,
+        "headroom_commercial_balance": 0.88,
+        "camera_distance_consistency": 0.91,
+    }
+
+
+def test_doc256_phase3a_round_id_propagates_without_default_and_bad_dimensions_return_empty() -> None:
+    anchor_pack = _anchor_pack_module()
+    anchor_host = _anchor_host_module()
+    root = anchor_pack.RootSourceProvenance(
+        source_type="uploaded_portrait",
+        source_asset_id="source_asset_1",
+        project_id="project_1",
+    )
+    asset = anchor_pack.PeopleAsset(
+        people_asset_id="asset_1",
+        project_id="project_1",
+        subject_kind="human_person",
+        face_identity_module=anchor_pack.FaceIdentityModule(
+            module_id="face_module_1",
+            people_asset_id="asset_1",
+        ),
+        root_source_provenance=root,
+        preparation_intent="front",
+    )
+    service = anchor_pack.AnchorPackPreparationService(
+        generator=_NoopAnchorGenerator(),
+        reviewer=_NoopAnchorReviewer(),
+    )
+    request = anchor_pack.AnchorPackPreparationRequest(
+        project_id="project_1",
+        asset=asset,
+        root_source_provenance=root,
+        preparation_intent="front",
+        face_view_scope="character_card",
+        generation_channel="mcp",
+        round_id="round42",
+        photographic_model_card_front_required=True,
+    )
+
+    generation_request = service._generation_request(
+        request=request,
+        pack_version_id="pack_1",
+        view_role="standard_front",
+        candidate_index=1,
+        reference_evidence_ids=["source_asset_1"],
+    )
+    missing_round_request = anchor_pack.AnchorPackPreparationRequest(
+        project_id="project_1",
+        asset=asset,
+        root_source_provenance=root,
+        preparation_intent="front",
+        face_view_scope="character_card",
+        generation_channel="mcp",
+        photographic_model_card_front_required=True,
+    )
+
+    assert generation_request.round_id == "round42"
+    assert service._generation_request(
+        request=missing_round_request,
+        pack_version_id="pack_1",
+        view_role="standard_front",
+        candidate_index=1,
+        reference_evidence_ids=["source_asset_1"],
+    ).round_id is None
+    assert anchor_host.ProductApiAnchorPackPreparationHost._photographic_model_card_front_dimensions(
+        generation_request,
+        {
+            "model_card_crop_closeness": 0.9,
+            "shoulder_collar_context": math.nan,
+            "headroom_commercial_balance": 0.88,
+            "camera_distance_consistency": 0.91,
+        },
+    ) == {}
 
 
 def test_doc256_expression_composite_accepts_neutral_framing_and_owned_affect() -> None:

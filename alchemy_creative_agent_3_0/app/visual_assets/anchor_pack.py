@@ -7,6 +7,7 @@ already be backed by the shared Brain-owned canonical-prompt path.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
@@ -24,6 +25,9 @@ from ..shared_capabilities.visual_cluster.micro_real_human_fidelity import (
     MicroDimensionApplicability,
     MicroRealHumanFidelityProof,
     evaluate_micro_real_human_fidelity,
+)
+from .photographic_model_card_front import (
+    evaluate_photographic_model_card_front_candidate,
 )
 from .contracts import (
     AnchorAuxiliaryReference,
@@ -164,6 +168,38 @@ class FaceStandardFrontEnhancedProofBundle(V3BaseModel):
         )
 
 
+_DOC256_VISIBILITY_DIMENSIONS = (
+    "eyes",
+    "skin",
+    "hair",
+    "ear_or_temple",
+    "garment_neckline",
+    "light_camera",
+)
+_DOC256_FRAMING_DIMENSIONS = (
+    "model_card_crop_closeness",
+    "shoulder_collar_context",
+    "headroom_commercial_balance",
+    "camera_distance_consistency",
+)
+
+
+def _photographic_model_card_front_enhanced_proof_summary(
+    proof: Any,
+) -> FormalSlotCandidateEnhancedProofSummary:
+    return FormalSlotCandidateEnhancedProofSummary(
+        profile_id=proof.profile_id,
+        requirement_id=proof.requirement_id,
+        candidate_id=proof.candidate_id or "",
+        output_id=proof.output_id or "",
+        eligible=proof.eligible,
+        status=proof.status,
+        evidence_codes=list(proof.evidence_codes),
+        issue_codes=list(proof.issue_codes),
+        dimensions=dict(proof.dimensions),
+    )
+
+
 class AnchorGenerationRequest(V3BaseModel):
     """Typed evidence request; prompt content is deliberately not a field.
 
@@ -193,8 +229,10 @@ class AnchorGenerationRequest(V3BaseModel):
     generation_channel: Literal["provider", "mcp"] = "provider"
     mcp_operation_id: str | None = None
     mcp_handoff_id: str | None = None
+    round_id: str | None = None
     absolute_portrait_realism_required: bool = False
     micro_real_human_fidelity_required: bool = False
+    photographic_model_card_front_required: bool = False
     # The shared execution path needs to know which geometric contract owns
     # this capture. Character Card face views are face/head evidence only;
     # the ordinary Anchor Pack keeps its historical whole-person contract.
@@ -253,6 +291,11 @@ class AnchorGenerationRequest(V3BaseModel):
             or self.view_role != "standard_front"
         ):
             raise ValueError("micro_real_human_fidelity_requires_character_card_standard_front")
+        if self.photographic_model_card_front_required and (
+            self.capture_scope != "character_card_face_identity"
+            or self.view_role != "standard_front"
+        ):
+            raise ValueError("photographic_model_card_front_requires_character_card_standard_front")
         return self
 
 
@@ -269,9 +312,11 @@ class AnchorPackPreparationRequest(V3BaseModel):
     canonical_prompt_hash: str | None = None
     face_view_scope: Literal["base", "character_card"] = "base"
     generation_channel: Literal["provider", "mcp"] = "provider"
+    round_id: str | None = None
     pending_mcp_handoff_ids: list[str] = Field(default_factory=list)
     absolute_portrait_realism_required: bool = False
     micro_real_human_fidelity_required: bool = False
+    photographic_model_card_front_required: bool = False
 
     @field_validator("brain_plan_id", "canonical_prompt_hash", "preparation_intent")
     @classmethod
@@ -290,6 +335,8 @@ class AnchorPackPreparationRequest(V3BaseModel):
             raise ValueError("preparation intent must match the immutable People Asset intent")
         if self.micro_real_human_fidelity_required and self.face_view_scope != "character_card":
             raise ValueError("micro_real_human_fidelity_requires_character_card_standard_front")
+        if self.photographic_model_card_front_required and self.face_view_scope != "character_card":
+            raise ValueError("photographic_model_card_front_requires_character_card_standard_front")
         return self
 
 
@@ -307,11 +354,13 @@ class AnchorCandidateResult(V3BaseModel):
     canonical_prompt_hash: str
     prompt_compilation_id: str
     prompt_reference_parity_verified: bool
+    operation_id: str | None = None
+    round_id: str | None = None
 
-    @field_validator("brain_plan_id", "canonical_prompt_hash", "prompt_compilation_id")
+    @field_validator("brain_plan_id", "canonical_prompt_hash", "prompt_compilation_id", "operation_id", "round_id")
     @classmethod
-    def require_actual_candidate_provenance(cls, value: str) -> str:
-        if not value.strip():
+    def require_actual_candidate_provenance(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
             raise ValueError("actual per-candidate Brain and canonical prompt provenance is required")
         return value
 
@@ -329,6 +378,7 @@ class AnchorReviewDecision(V3BaseModel):
     identity_scores: IdentityScoreSummary
     issue_codes: list[str] = Field(default_factory=list)
     shared_review_receipts: list[dict[str, Any]] = Field(default_factory=list)
+    enhanced_review_dimensions: dict[str, float] = Field(default_factory=dict)
 
 
 class AnchorCandidateAttempt(V3BaseModel):
@@ -613,6 +663,7 @@ class AnchorPackPreparationService:
                     front_attempts,
                     absolute_portrait_realism_required=request.absolute_portrait_realism_required,
                     micro_real_human_fidelity_required=request.micro_real_human_fidelity_required,
+                    photographic_model_card_front_required=request.photographic_model_card_front_required,
                 )
             except ValueError as exc:
                 pack = self._pack(
@@ -1219,6 +1270,7 @@ class AnchorPackPreparationService:
             canonical_prompt_hash=request.canonical_prompt_hash,
             reference_strategy="serial_anchor_pack_root_reuse_v1",
             generation_channel=request.generation_channel,
+            round_id=request.round_id,
             mcp_operation_id=(
                 f"{request.asset.people_asset_id}:{view_role}:{candidate_index}"
                 if request.generation_channel == "mcp"
@@ -1232,6 +1284,11 @@ class AnchorPackPreparationService:
             absolute_portrait_realism_required=request.absolute_portrait_realism_required,
             micro_real_human_fidelity_required=(
                 request.micro_real_human_fidelity_required
+                and request.face_view_scope == "character_card"
+                and view_role == "standard_front"
+            ),
+            photographic_model_card_front_required=(
+                request.photographic_model_card_front_required
                 and request.face_view_scope == "character_card"
                 and view_role == "standard_front"
             ),
@@ -1294,6 +1351,7 @@ class AnchorPackPreparationService:
         *,
         absolute_portrait_realism_required: bool = False,
         micro_real_human_fidelity_required: bool = False,
+        photographic_model_card_front_required: bool = False,
     ) -> AnchorView:
         receipt = self._formal_receipt_for_attempts(
             view_role=view_role,
@@ -1301,6 +1359,7 @@ class AnchorPackPreparationService:
             acceptance_mode="standard_three_candidate",
             absolute_portrait_realism_required=absolute_portrait_realism_required,
             micro_real_human_fidelity_required=micro_real_human_fidelity_required,
+            photographic_model_card_front_required=photographic_model_card_front_required,
         )
         winner_candidate, winner_review = self._candidate_by_id(attempts, receipt.winner_candidate_id)
         return AnchorView(
@@ -1340,7 +1399,13 @@ class AnchorPackPreparationService:
         acceptance_mode: Literal["standard_three_candidate", "auxiliary_first_pass_reference"],
         absolute_portrait_realism_required: bool = False,
         micro_real_human_fidelity_required: bool = False,
+        photographic_model_card_front_required: bool = False,
     ) -> FormalSlotReceipt:
+        require_photographic_model_card_front = (
+            photographic_model_card_front_required
+            and acceptance_mode == "standard_three_candidate"
+            and view_role == "standard_front"
+        )
         require_micro_realism = (
             micro_real_human_fidelity_required
             and acceptance_mode == "standard_three_candidate"
@@ -1368,6 +1433,7 @@ class AnchorPackPreparationService:
                 self._formal_candidate_summary(
                     candidate,
                     review,
+                    photographic_model_card_front_required=require_photographic_model_card_front,
                     absolute_portrait_realism_required=require_absolute_realism,
                     micro_real_human_fidelity_required=require_micro_realism,
                 )
@@ -1383,7 +1449,7 @@ class AnchorPackPreparationService:
             ),
             candidate_eligibility=(
                 (lambda candidate: candidate.enhanced_proof is not None and candidate.enhanced_proof.eligible)
-                if require_absolute_realism or require_micro_realism
+                if require_photographic_model_card_front or require_absolute_realism or require_micro_realism
                 else None
             ),
         )
@@ -1403,6 +1469,7 @@ class AnchorPackPreparationService:
         candidate: AnchorCandidateResult,
         review: AnchorReviewDecision,
         *,
+        photographic_model_card_front_required: bool = False,
         absolute_portrait_realism_required: bool = False,
         micro_real_human_fidelity_required: bool = False,
     ) -> FormalSlotCandidateSummary:
@@ -1416,10 +1483,11 @@ class AnchorPackPreparationService:
                 self._face_standard_front_enhanced_proof(
                     candidate,
                     review,
+                    photographic_model_card_front_required=photographic_model_card_front_required,
                     absolute_portrait_realism_required=absolute_portrait_realism_required,
                     micro_real_human_fidelity_required=micro_real_human_fidelity_required,
                 )
-                if absolute_portrait_realism_required or micro_real_human_fidelity_required
+                if photographic_model_card_front_required or absolute_portrait_realism_required or micro_real_human_fidelity_required
                 else None
             ),
         )
@@ -1430,9 +1498,12 @@ class AnchorPackPreparationService:
         candidate: AnchorCandidateResult,
         review: AnchorReviewDecision,
         *,
+        photographic_model_card_front_required: bool,
         absolute_portrait_realism_required: bool,
         micro_real_human_fidelity_required: bool,
     ) -> FormalSlotCandidateEnhancedProofSummary:
+        if photographic_model_card_front_required:
+            return cls._photographic_model_card_front_enhanced_proof(candidate, review)
         absolute_summary = (
             cls._absolute_portrait_realism_enhanced_proof(candidate, review)
             if absolute_portrait_realism_required
@@ -1456,6 +1527,113 @@ class AnchorPackPreparationService:
             absolute_portrait_realism=absolute_proof,
             micro_real_human_fidelity=micro_proof,
         ).to_formal_enhanced_summary()
+
+    @classmethod
+    def _photographic_model_card_front_enhanced_proof(
+        cls,
+        candidate: AnchorCandidateResult,
+        review: AnchorReviewDecision,
+    ) -> FormalSlotCandidateEnhancedProofSummary:
+        return _photographic_model_card_front_enhanced_proof_summary(
+            cls._photographic_model_card_front_proof(candidate, review)
+        )
+
+    @staticmethod
+    def _photographic_model_card_front_proof(
+        candidate: AnchorCandidateResult,
+        review: AnchorReviewDecision,
+    ) -> Any:
+        evidence_codes = [
+            str(code or "").strip()
+            for code in review.identity_scores.evidence_codes
+            if str(code or "").strip()
+        ]
+        evidence_set = set(evidence_codes)
+        operation_id = str(candidate.operation_id).strip() if candidate.operation_id is not None else None
+        round_id = str(candidate.round_id).strip() if candidate.round_id is not None else None
+        binding = {
+            "candidate_id": candidate.candidate_id,
+            "output_id": candidate.output_id,
+            "operation_id": operation_id,
+            "round_id": round_id,
+        }
+        has_framing_code = "doc256_card_family_framing_profile_passed" in evidence_set
+        framing_dimensions = {
+            dimension: review.enhanced_review_dimensions[dimension]
+            for dimension in _DOC256_FRAMING_DIMENSIONS
+            if dimension in review.enhanced_review_dimensions
+        }
+        has_framing_dimensions = (
+            len(framing_dimensions) == len(_DOC256_FRAMING_DIMENSIONS)
+            and all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and 0.0 <= float(value) <= 1.0
+                for value in framing_dimensions.values()
+            )
+        )
+        has_framing = has_framing_code and has_framing_dimensions
+        card_family_framing = {
+            "owner": "shared_card_family_framing",
+            "contract_version": "v3_card_family_framing_contract_v1",
+            "profile_id": "card_family_framing_v1",
+            "requirement_id": "close_photographic_model_card_framing_v1",
+            "status": "pass" if has_framing else "fail",
+            **binding,
+            "evidence_codes": ["close_model_card_crop_verified"] if has_framing else [],
+            "issue_codes": (
+                []
+                if has_framing
+                else [
+                    "card_family_numeric_framing_missing"
+                    if has_framing_code
+                    else "card_family_framing_evidence_missing"
+                ]
+            ),
+            "dimensions": framing_dimensions,
+        }
+        has_realism = "doc256_shared_human_realism_profile_passed" in evidence_set
+        shared_human_realism = {
+            "owner": "shared_human_realism_foundation",
+            "profile_id": "human_realism_v3_shared",
+            "status": "pass" if has_realism else "fail",
+            **binding,
+            "evidence_codes": [
+                code
+                for code in evidence_codes
+                if code.startswith("doc256_shared_human_realism")
+                or code in {"commercial_beauty_preserved", "real_camera_skin_texture_present"}
+            ],
+            "issue_codes": [] if has_realism else ["shared_human_realism_evidence_missing"],
+            "dimensions": {
+                "human_realism": review.identity_scores.effective_human_realism_score if has_realism else 0.0,
+                "commercial_beauty": review.identity_scores.visual_quality_score if has_realism else 0.0,
+            },
+        }
+        visibility_receipts = {
+            dimension: "visible_reviewed"
+            for dimension in _DOC256_VISIBILITY_DIMENSIONS
+            if f"doc256_visibility_{dimension}_visible_reviewed" in evidence_set
+        }
+        shared_human_visibility = {
+            "owner": "shared_human_realism_visibility",
+            "status": "pass" if "doc256_shared_human_visibility_profile_passed" in evidence_set else "fail",
+            **binding,
+            "applicability_receipts": visibility_receipts,
+        }
+        return evaluate_photographic_model_card_front_candidate(
+            module="face_identity",
+            view_role="standard_front",
+            slot_scope="formal_slot",
+            candidate_id=candidate.candidate_id,
+            output_id=candidate.output_id,
+            operation_id=operation_id,
+            round_id=round_id,
+            card_family_framing=card_family_framing,
+            shared_human_realism=shared_human_realism,
+            shared_human_visibility=shared_human_visibility,
+        )
 
     @staticmethod
     def _absolute_portrait_realism_proof(
