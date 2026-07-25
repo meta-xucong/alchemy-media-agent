@@ -105,6 +105,7 @@ def _review(index: int, *, framing: bool = True, body_eligible: bool = True) -> 
 
 
 def _body_candidate(slot_key: str, index: int) -> CharacterCardCandidateResult:
+    refs = ["face_front_output", "face_profile_output", "face_rear_output"]
     return CharacterCardCandidateResult(
         candidate_id=f"candidate_{slot_key}_{index}",
         output_id=f"output_{slot_key}_{index}",
@@ -112,7 +113,7 @@ def _body_candidate(slot_key: str, index: int) -> CharacterCardCandidateResult:
         slot_key=slot_key,
         candidate_index=index,
         source_candidate_ids=[f"source_{slot_key}_{index}"],
-        source_output_ids=["face_front_output"],
+        source_output_ids=refs,
         canonical_prompt_hash=f"prompt_hash_{slot_key}_{index}",
         prompt_compilation_id=f"prompt_compilation_{slot_key}_{index}",
         prompt_reference_parity_verified=True,
@@ -122,6 +123,17 @@ def _body_candidate(slot_key: str, index: int) -> CharacterCardCandidateResult:
 def _body_attempts(slot_key: str, *, framing: bool = True) -> list[object]:
     return [
         SimpleNamespace(
+            request=CharacterCardCandidateRequest(
+                project_id="visual_asset_body",
+                people_asset_id="people_body",
+                card_version_id="card_doc246_body",
+                module="body_silhouette",
+                slot_key=slot_key,  # type: ignore[arg-type]
+                candidate_index=index,
+                reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+                user_intent="neutral body silhouette profile",
+                source_class="brain_inferred",
+            ),
             candidate=_body_candidate(slot_key, index),
             review=_review(index, framing=framing),
         )

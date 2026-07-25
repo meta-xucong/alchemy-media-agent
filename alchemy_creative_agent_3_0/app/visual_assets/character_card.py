@@ -2137,10 +2137,59 @@ class CharacterCardPreparationService:
     def _formal_body_enhanced_proof(
         *,
         slot_key: str,
-        candidate: CharacterCardCandidateResult,
-        review: Any,
+        attempt: CharacterCardCandidateAttempt,
     ) -> FormalSlotCandidateEnhancedProofSummary:
-        eligible = CharacterCardPreparationService._review_allows_body_slot(review)
+        request = attempt.request
+        candidate = attempt.candidate
+        review = attempt.review
+        issue_codes: list[str] = []
+        evidence_codes: list[str] = []
+        reference_output_ids = [str(item).strip() for item in request.reference_output_ids if str(item).strip()]
+        candidate_source_output_ids = [
+            str(item).strip() for item in candidate.source_output_ids if str(item).strip()
+        ]
+        if request.module != "body_silhouette" or candidate.module != "body_silhouette":
+            issue_codes.append("body_candidate_module_mismatch")
+        if request.slot_key != slot_key or candidate.slot_key != slot_key:
+            issue_codes.append("body_candidate_slot_mismatch")
+        if request.candidate_index != candidate.candidate_index:
+            issue_codes.append("body_candidate_index_mismatch")
+        if len(reference_output_ids) != 3 or len(set(reference_output_ids)) != 3:
+            issue_codes.append("body_face_reference_scope_mismatch")
+        elif candidate_source_output_ids != reference_output_ids:
+            issue_codes.append("body_candidate_reference_scope_mismatch")
+        source_class = str(request.source_class or "").strip()
+        if source_class not in {"brain_inferred", "user_described", "observed"}:
+            issue_codes.append("body_source_class_missing")
+        elif source_class == "observed" and not str(request.consent_provenance_id or "").strip():
+            issue_codes.append("body_observed_consent_missing")
+        review_issue_codes = {
+            str(item.get("code") if isinstance(item, dict) else item).strip()
+            for item in (getattr(review, "issue_codes", []) or [])
+            if str(item.get("code") if isinstance(item, dict) else item).strip()
+        }
+        if BODY_ENHANCED_PROFILE_ISSUE_CODE in review_issue_codes:
+            issue_codes.append(BODY_ENHANCED_PROFILE_ISSUE_CODE)
+        if getattr(review, "status", None) != "pass":
+            issue_codes.append("body_shared_review_not_pass")
+        eligible = not issue_codes
+        if eligible:
+            evidence_codes.extend(
+                [
+                    BODY_ENHANCED_PROFILE_EVIDENCE_CODE,
+                    f"body_source_class_{source_class}",
+                    "body_face_reference_scope_verified",
+                    "body_candidate_contract_verified",
+                    "body_shared_review_pass_verified",
+                ]
+            )
+            if source_class == "observed":
+                evidence_codes.append("body_observed_consent_verified")
+            else:
+                evidence_codes.append("body_consent_not_required")
+        else:
+            evidence_codes.append(BODY_ENHANCED_PROFILE_ISSUE_CODE)
+        issue_codes = list(dict.fromkeys(issue_codes))
         return FormalSlotCandidateEnhancedProofSummary(
             profile_id="body_silhouette_slot_profile_v1",
             requirement_id=f"{slot_key}.enhanced_profile",
@@ -2148,11 +2197,14 @@ class CharacterCardPreparationService:
             output_id=candidate.output_id,
             eligible=eligible,
             status="pass" if eligible else "fail",
-            evidence_codes=["body_silhouette_profile_eligible"]
-            if eligible
-            else ["body_silhouette_profile_rejected"],
-            issue_codes=[] if eligible else ["body_silhouette_profile_rejected"],
-            dimensions={"profile_score": 1.0 if eligible else 0.0},
+            evidence_codes=evidence_codes,
+            issue_codes=issue_codes,
+            dimensions={
+                "profile_score": 1.0 if eligible else 0.0,
+                "face_reference_scope_score": 1.0
+                if len(reference_output_ids) == 3 and len(set(reference_output_ids)) == 3
+                else 0.0,
+            },
         )
 
     @classmethod
@@ -2174,11 +2226,7 @@ class CharacterCardPreparationService:
         for attempt in slot_attempts:
             candidate = attempt.candidate
             shared_review = cls._formal_shared_review_summary(attempt.review)
-            enhanced_proof = cls._formal_body_enhanced_proof(
-                slot_key=slot_key,
-                candidate=candidate,
-                review=attempt.review,
-            )
+            enhanced_proof = cls._formal_body_enhanced_proof(slot_key=slot_key, attempt=attempt)
             selection_keys[candidate.candidate_id] = cls._selection_key(attempt.review)
             candidates.append(
                 FormalSlotCandidateSummary(
@@ -2190,6 +2238,21 @@ class CharacterCardPreparationService:
                     enhanced_proof=enhanced_proof,
                 )
             )
+        fatal_enhanced_issue_codes = {
+            "body_candidate_module_mismatch",
+            "body_candidate_slot_mismatch",
+            "body_candidate_index_mismatch",
+            "body_face_reference_scope_mismatch",
+            "body_candidate_reference_scope_mismatch",
+            "body_source_class_missing",
+            "body_observed_consent_missing",
+        }
+        if any(
+            candidate.enhanced_proof is not None
+            and fatal_enhanced_issue_codes.intersection(candidate.enhanced_proof.issue_codes)
+            for candidate in candidates
+        ):
+            raise ValueError("Body formal slot enhanced proof contract mismatch")
         framing_ok = cls._formal_generic_framing_passed(candidates)
         parity_ok = all(attempt.candidate.prompt_reference_parity_verified for attempt in slot_attempts)
         identity_ok = any(candidate.shared_review.passed for candidate in candidates)

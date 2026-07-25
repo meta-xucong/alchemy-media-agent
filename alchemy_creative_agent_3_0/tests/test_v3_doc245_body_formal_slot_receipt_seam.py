@@ -78,6 +78,66 @@ def _review(index: int, *, status: str = "pass", body_eligible: bool = True) -> 
     )
 
 
+def _generic_pass_review_without_body_profile_evidence(index: int) -> AnchorReviewDecision:
+    return AnchorReviewDecision(
+        status="pass",
+        identity_scores=IdentityScoreSummary(
+            same_face_score=0.80 + index / 100,
+            visual_quality_score=0.70 + index / 100,
+            evidence_codes=[
+                "shared_real_pixel_review_verified",
+                "shared_visual_review_verified",
+                "shared_visual_review_status_pass",
+            ],
+        ),
+        issue_codes=[],
+        shared_review_receipts=[_generic_body_shared_receipt(status="pass")],
+    )
+
+
+def _body_attempt(
+    index: int,
+    *,
+    slot_key: str = "body.front_full",
+    source_class: str = "brain_inferred",
+    reference_output_ids: list[str] | None = None,
+    consent_provenance_id: str | None = None,
+    review: AnchorReviewDecision | None = None,
+) -> object:
+    refs = list(reference_output_ids or ["face_front_output", "face_profile_output", "face_rear_output"])
+    request = CharacterCardCandidateRequest(
+        project_id="visual_asset_body",
+        people_asset_id="people_body",
+        card_version_id="card_body_formal",
+        module="body_silhouette",
+        slot_key=slot_key,  # type: ignore[arg-type]
+        candidate_index=index,
+        reference_output_ids=refs,
+        user_intent="neutral body silhouette profile",
+        source_class=source_class,  # type: ignore[arg-type]
+        consent_provenance_id=consent_provenance_id,
+    )
+    candidate = CharacterCardCandidateResult(
+        candidate_id=f"candidate_{slot_key}_{index}",
+        output_id=f"output_{slot_key}_{index}",
+        module="body_silhouette",
+        slot_key=slot_key,
+        candidate_index=index,
+        source_candidate_ids=[f"source_{slot_key}_{index}"],
+        source_output_ids=refs,
+        canonical_prompt_hash=f"prompt_hash_{slot_key}_{index}",
+        prompt_compilation_id=f"prompt_compilation_{slot_key}_{index}",
+        prompt_reference_parity_verified=True,
+    )
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import CharacterCardCandidateAttempt
+
+    return CharacterCardCandidateAttempt(
+        request=request,
+        candidate=candidate,
+        review=review or _generic_pass_review_without_body_profile_evidence(index),
+    )
+
+
 class _BodyGenerator:
     def __init__(self) -> None:
         self.requests: list[CharacterCardCandidateRequest] = []
@@ -230,6 +290,65 @@ def test_doc245_body_formal_core_filters_enhanced_ineligible_candidate_before_ra
     assert receipt.candidates[2].shared_review.passed is True
     assert receipt.candidates[2].enhanced_proof is not None
     assert receipt.candidates[2].enhanced_proof.eligible is False
+
+
+def test_doc245_body_adapter_projects_brain_inferred_source_scope_into_candidate_enhanced_proof() -> None:
+    attempts = [_body_attempt(index) for index in (1, 2, 3)]
+
+    receipt = CharacterCardPreparationService._formal_body_slot_receipt(  # noqa: SLF001
+        slot_key="body.front_full",
+        attempts=attempts,  # type: ignore[arg-type]
+    )
+
+    assert receipt.acceptance_mode == "standard_three_candidate"
+    assert receipt.reviewed_candidate_count == 3
+    assert receipt.candidate_eligibility_required is True
+    assert receipt.winner_output_id == "output_body.front_full_3"
+    assert all(candidate.enhanced_proof is not None for candidate in receipt.candidates)
+    assert all(candidate.enhanced_proof.eligible for candidate in receipt.candidates if candidate.enhanced_proof)
+    assert {
+        "body_silhouette_profile_eligible",
+        "body_source_class_brain_inferred",
+        "body_face_reference_scope_verified",
+    }.issubset(set(receipt.candidates[0].enhanced_proof.evidence_codes))  # type: ignore[union-attr]
+
+
+def test_doc245_body_adapter_rejects_observed_without_consent_or_reference_scope_mismatch() -> None:
+    observed_missing_consent = [
+        _body_attempt(index, source_class="observed", consent_provenance_id="consent_123")
+        for index in (1, 2, 3)
+    ]
+    observed_missing_consent[0] = observed_missing_consent[0].model_copy(
+        update={
+            "request": observed_missing_consent[0].request.model_construct(
+                **{
+                    **observed_missing_consent[0].request.model_dump(mode="python"),
+                    "source_class": "observed",
+                    "consent_provenance_id": None,
+                }
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="Body formal slot enhanced proof contract mismatch"):
+        CharacterCardPreparationService._formal_body_slot_receipt(  # noqa: SLF001
+            slot_key="body.front_full",
+            attempts=observed_missing_consent,  # type: ignore[arg-type]
+        )
+
+    mismatched_refs = [_body_attempt(index) for index in (1, 2, 3)]
+    mismatched_refs[1] = mismatched_refs[1].model_copy(
+        update={
+            "request": mismatched_refs[1].request.model_copy(
+                update={"reference_output_ids": ["face_front_output", "face_profile_output", "wrong_rear_output"]}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="Body formal slot enhanced proof contract mismatch"):
+        CharacterCardPreparationService._formal_body_slot_receipt(  # noqa: SLF001
+            slot_key="body.front_full",
+            attempts=mismatched_refs,  # type: ignore[arg-type]
+        )
 
 
 def test_doc245_body_formal_core_blocks_when_all_enhanced_profiles_fail() -> None:
