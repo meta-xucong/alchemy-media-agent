@@ -21,6 +21,9 @@ from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatu
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import (
     ProfessionalModeRuntimeBridge,
 )
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    active_review_contract,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
     AnchorCandidateUnavailable,
     AnchorCandidateResult,
@@ -943,6 +946,148 @@ def test_doc252_visible_optional_micro_dimension_missing_is_not_synthesized_not_
     review.identity_scores.evidence_codes = evidence
 
     summary = service._formal_candidate_summary(  # noqa: SLF001
+        _anchor_candidate(1),
+        review,
+        absolute_portrait_realism_required=True,
+        micro_real_human_fidelity_required=True,
+    )
+
+    assert summary.enhanced_proof is not None
+    assert summary.enhanced_proof.eligible is False
+    assert "micro_real_human_fidelity_profile_failed" in summary.enhanced_proof.issue_codes
+
+
+def test_doc252_vision_contract_requests_micro_dimensions_only_for_trusted_face_standard_front() -> None:
+    module = _module()
+    planning_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+        view_role="standard_front",
+        capture_scope="character_card_face_identity",
+    )
+    envelope = {
+        "activation_plan": {
+            "metadata": {
+                "professional_face_identity_quality_contract": planning_metadata[
+                    "professional_face_identity_quality_contract"
+                ]
+            }
+        },
+        "resolved_constraint_ledger": {},
+    }
+
+    disabled = active_review_contract({"capability_execution_envelope": envelope})
+    forged = active_review_contract(
+        {
+            "capability_execution_envelope": envelope,
+            "professional_micro_real_human_fidelity_required": True,
+        }
+    )
+    wrong_scope = active_review_contract(
+        {
+            "capability_execution_envelope": envelope,
+            "professional_anchor_capture_scope": "anchor_pack",
+            "professional_micro_real_human_fidelity_required": True,
+            "professional_micro_real_human_fidelity_provenance": "server_feature_flag_v1",
+        }
+    )
+    enabled = active_review_contract(
+        {
+            "capability_execution_envelope": envelope,
+            "professional_anchor_capture_scope": "character_card_face_identity",
+            "professional_micro_real_human_fidelity_required": True,
+            "professional_micro_real_human_fidelity_provenance": "server_feature_flag_v1",
+        }
+    )
+
+    expected_dimensions = (
+        set(module.REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS)
+        | set(module.OPTIONAL_VISIBLE_DIMENSIONS)
+    )
+    for dimension in expected_dimensions:
+        assert dimension not in disabled["score_dimensions"]
+        assert dimension not in forged["score_dimensions"]
+        assert dimension not in wrong_scope["score_dimensions"]
+        assert dimension in enabled["score_dimensions"]
+    micro_contract = enabled["professional_identity_quality"]["micro_real_human_fidelity"]
+    assert micro_contract["applies"] is True
+    assert micro_contract["provenance"] == "server_feature_flag_v1"
+    assert micro_contract["detector_evasion_objective"] is False
+    assert disabled["professional_identity_quality"]["micro_real_human_fidelity"]["applies"] is False
+
+
+def test_doc252_host_projects_micro_evidence_from_shared_vision_score_card_only_when_required() -> None:
+    score_card = _passing_dimensions()
+    score_card.update(
+        {
+            "ear_cartilage_fold_clarity_not_applicable_outside_frame": 1.0,
+            "left_right_ear_nonidentity_not_applicable_outside_frame": 1.0,
+            "ear_hair_boundary_naturalness_not_applicable_outside_frame": 1.0,
+            "fabric_weave_irregularity_not_applicable_outside_frame": 1.0,
+            "collar_tension_plausibility_not_applicable_outside_frame": 1.0,
+            "seam_edge_nonuniformity_not_applicable_outside_frame": 1.0,
+        }
+    )
+    request = AnchorGenerationRequest(
+        project_id="project_micro_realism",
+        people_asset_id="asset_micro_realism",
+        pack_version_id="pack_micro_realism",
+        view_role="standard_front",
+        candidate_index=1,
+        preparation_intent="character card front identity",
+        root_source_asset_id="source_original",
+        reference_evidence_ids=["source_original", "source_supplemental"],
+        initial_supplementary_source_asset_ids=["source_supplemental"],
+        absolute_portrait_realism_required=True,
+        micro_real_human_fidelity_required=True,
+        capture_scope="character_card_face_identity",
+    )
+
+    evidence = ProductApiAnchorPackPreparationHost._micro_real_human_fidelity_evidence_codes(  # noqa: SLF001
+        request,
+        score_card,
+    )
+
+    assert "micro_non_mirrored_catchlights_verified" in evidence
+    assert "micro_pore_scale_texture_verified" in evidence
+    assert "micro_ear_cartilage_fold_clarity_not_applicable_outside_frame" in evidence
+    disabled_request = request.model_copy(update={"micro_real_human_fidelity_required": False})
+    assert ProductApiAnchorPackPreparationHost._micro_real_human_fidelity_evidence_codes(  # noqa: SLF001
+        disabled_request,
+        score_card,
+    ) == []
+
+
+def test_doc252_host_micro_projection_fails_closed_when_optional_applicability_missing() -> None:
+    score_card = dict(_passing_dimensions())
+    request = AnchorGenerationRequest(
+        project_id="project_micro_realism",
+        people_asset_id="asset_micro_realism",
+        pack_version_id="pack_micro_realism",
+        view_role="standard_front",
+        candidate_index=1,
+        preparation_intent="character card front identity",
+        root_source_asset_id="source_original",
+        reference_evidence_ids=["source_original", "source_supplemental"],
+        initial_supplementary_source_asset_ids=["source_supplemental"],
+        absolute_portrait_realism_required=True,
+        micro_real_human_fidelity_required=True,
+        capture_scope="character_card_face_identity",
+    )
+
+    evidence = ProductApiAnchorPackPreparationHost._micro_real_human_fidelity_evidence_codes(  # noqa: SLF001
+        request,
+        score_card,
+    )
+    review = _anchor_review(1, same_face_score=0.99)
+    review.identity_scores.evidence_codes = [
+        code
+        for code in review.identity_scores.evidence_codes
+        if not code.startswith("micro_")
+    ] + evidence
+
+    summary = AnchorPackPreparationService(
+        generator=object(),
+        reviewer=object(),
+    )._formal_candidate_summary(  # noqa: SLF001
         _anchor_candidate(1),
         review,
         absolute_portrait_realism_required=True,

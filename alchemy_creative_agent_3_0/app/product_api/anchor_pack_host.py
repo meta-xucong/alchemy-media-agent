@@ -18,6 +18,9 @@ from ..shared_capabilities.visual_cluster.micro_real_human_fidelity import (
     MICRO_REAL_HUMAN_FIDELITY_METADATA_FLAG,
     MICRO_REAL_HUMAN_FIDELITY_METADATA_PROVENANCE,
     MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
+    MINIMUM_MICRO_DIMENSION_SCORE,
+    OPTIONAL_VISIBLE_DIMENSIONS,
+    REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS,
     append_micro_real_human_fidelity_guidance,
 )
 from ..shared_capabilities.visual_cluster.expression_review import (
@@ -2727,6 +2730,7 @@ class ProductApiAnchorPackPreparationHost:
                         else ["face_view_framing_parity_unverified"]
                     ),
                     *self._absolute_portrait_realism_evidence_codes(request, score_card),
+                    *self._micro_real_human_fidelity_evidence_codes(request, score_card),
                 ] if parity_verified else ["shared_real_pixel_review_verified" if verified else "shared_real_pixel_review_unverified"],
             ),
             issue_codes=list(dict.fromkeys(issue_codes)),
@@ -2766,6 +2770,39 @@ class ProductApiAnchorPackPreparationHost:
             for dimension, threshold in thresholds.items()
             if float(score_card.get(dimension, 0.0)) >= threshold
         ]
+
+    @staticmethod
+    def _micro_real_human_fidelity_evidence_codes(
+        request: AnchorGenerationRequest,
+        score_card: dict[str, float],
+    ) -> list[str]:
+        if (
+            not request.micro_real_human_fidelity_required
+            or request.view_role != "standard_front"
+            or request.capture_scope != "character_card_face_identity"
+        ):
+            return []
+        evidence: list[str] = []
+        for dimension in sorted(REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS):
+            if float(score_card.get(dimension, -1.0)) >= MINIMUM_MICRO_DIMENSION_SCORE:
+                evidence.append(f"micro_{dimension}_verified")
+            elif dimension in score_card:
+                evidence.append(f"micro_{dimension}_visible")
+        for dimension in sorted(OPTIONAL_VISIBLE_DIMENSIONS):
+            if float(score_card.get(dimension, -1.0)) >= MINIMUM_MICRO_DIMENSION_SCORE:
+                evidence.append(f"micro_{dimension}_verified")
+                continue
+            not_applicable_visibility = None
+            for visibility in ("outside_frame", "occluded", "insufficient_resolution"):
+                key = f"{dimension}_not_applicable_{visibility}"
+                if float(score_card.get(key, 0.0)) >= 0.5:
+                    not_applicable_visibility = visibility
+                    break
+            if not_applicable_visibility is not None:
+                evidence.append(f"micro_{dimension}_not_applicable_{not_applicable_visibility}")
+            elif dimension in score_card:
+                evidence.append(f"micro_{dimension}_visible")
+        return evidence
 
     def _character_card_score_below_floor(self, score_card: dict[str, float], dimension: str, floor: float) -> bool:
         value = score_card.get(dimension, -1.0)

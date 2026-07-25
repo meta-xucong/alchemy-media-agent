@@ -18,6 +18,14 @@ from .expression_review import (
     EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES,
     LAUGH_EXPRESSION_SCORE_FLOORS,
 )
+from .micro_real_human_fidelity import (
+    MICRO_REAL_HUMAN_FIDELITY_METADATA_FLAG,
+    MICRO_REAL_HUMAN_FIDELITY_PROFILE_ID,
+    MICRO_REAL_HUMAN_FIDELITY_REQUIREMENT_ID,
+    MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
+    OPTIONAL_VISIBLE_DIMENSIONS,
+    REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS,
+)
 
 
 _HUMAN_AUTHENTICITY_CONTRACT_KEYS = {
@@ -863,6 +871,14 @@ def _professional_identity_quality_contract(
         == "character_card_face_identity"
         and scope == "character_card_face_identity"
     )
+    micro_real_human_fidelity_applies = bool(
+        metadata.get("professional_micro_real_human_fidelity_required") is True
+        and metadata.get("professional_micro_real_human_fidelity_provenance")
+        == MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE
+        and str(metadata.get("professional_anchor_capture_scope") or "").strip()
+        == "character_card_face_identity"
+        and scope == "character_card_face_identity"
+    )
     capture_presentation = contract.get("capture_presentation")
     applies = bool(
         isinstance(contract, dict)
@@ -936,6 +952,23 @@ def _professional_identity_quality_contract(
         "absolute_camera_texture_response_failed",
         "absolute_commercial_beauty_preservation_failed",
     ]
+    micro_optional_applicability_dimensions = [
+        f"{dimension}_not_applicable_{visibility}"
+        for dimension in sorted(OPTIONAL_VISIBLE_DIMENSIONS)
+        for visibility in ("outside_frame", "occluded", "insufficient_resolution")
+    ]
+    micro_real_human_score_dimensions = [
+        *sorted(REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS),
+        *sorted(OPTIONAL_VISIBLE_DIMENSIONS),
+        *micro_optional_applicability_dimensions,
+    ]
+    micro_real_human_issue_codes = [
+        "micro_real_human_visible_evidence_missing",
+        "micro_real_human_applicability_missing",
+        "micro_real_human_dimension_below_target",
+        "micro_realism_degradation_strategy_rejected",
+        "commercial_beauty_not_preserved",
+    ]
     return {
         "applies": applies,
         "contract_version": contract.get("contract_version") if applies else None,
@@ -1002,6 +1035,7 @@ def _professional_identity_quality_contract(
                     *(expression_score_dimensions if expression_review_applies else []),
                     *(body_silhouette_score_dimensions if body_silhouette_review_applies else []),
                     *(REQUIRED_REALISM_DIMENSIONS if absolute_portrait_realism_applies else []),
+                    *(micro_real_human_score_dimensions if micro_real_human_fidelity_applies else []),
                 ]
             )
         ) if applies else [],
@@ -1014,6 +1048,11 @@ def _professional_identity_quality_contract(
                     *(
                         absolute_portrait_realism_issue_codes
                         if absolute_portrait_realism_applies
+                        else []
+                    ),
+                    *(
+                        micro_real_human_issue_codes
+                        if micro_real_human_fidelity_applies
                         else []
                     ),
                 ]
@@ -1031,6 +1070,24 @@ def _professional_identity_quality_contract(
                 "detector_evasion_objective": False,
             }
             if absolute_portrait_realism_applies
+            else {"applies": False}
+        ),
+        "micro_real_human_fidelity": (
+            {
+                "applies": True,
+                "source": MICRO_REAL_HUMAN_FIDELITY_METADATA_FLAG,
+                "provenance": MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
+                "profile_id": MICRO_REAL_HUMAN_FIDELITY_PROFILE_ID,
+                "requirement_id": MICRO_REAL_HUMAN_FIDELITY_REQUIREMENT_ID,
+                "score_dimensions": list(dict.fromkeys(micro_real_human_score_dimensions)),
+                "issue_codes": list(dict.fromkeys(micro_real_human_issue_codes)),
+                "optional_applicability_dimensions": list(
+                    dict.fromkeys(micro_optional_applicability_dimensions)
+                ),
+                "beauty_preservation_required": True,
+                "detector_evasion_objective": False,
+            }
+            if micro_real_human_fidelity_applies
             else {"applies": False}
         ),
         "expression_review": (
