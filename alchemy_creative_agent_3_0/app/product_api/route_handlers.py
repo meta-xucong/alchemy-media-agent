@@ -421,8 +421,6 @@ class V3ProductRouteHandlers:
                 "candidate_index": int(getattr(candidate, "candidate_index", 0) or 0),
                 "failure_code": str(getattr(candidate, "failure_code", "") or ""),
             }
-            candidate_id = str(getattr(candidate, "candidate_id", "") or "").strip()
-            handoff_id = str(getattr(candidate, "mcp_handoff_id", "") or "").strip()
             if output_id:
                 encoded = quote(output_id, safe="")
                 public.update(
@@ -432,10 +430,6 @@ class V3ProductRouteHandlers:
                         "download_url": f"/api/v3/creative-agent/outputs/{encoded}/download",
                     }
                 )
-            if candidate_id:
-                public["candidate_id"] = candidate_id
-            if handoff_id:
-                public["mcp_handoff_id"] = handoff_id
             return public
 
         def _preparation_public(version: Any, *, include_resume: bool = False) -> dict[str, Any]:
@@ -459,11 +453,8 @@ class V3ProductRouteHandlers:
             if candidate_history:
                 public["candidate_history"] = candidate_history
             generation_channel = str(getattr(version, "generation_channel", "") or "")
-            handoff_ids = list(getattr(version, "mcp_handoff_ids", []) or [])
             if generation_channel == "mcp":
                 public["generation_channel"] = generation_channel
-            if handoff_ids:
-                public["mcp_handoff_ids"] = handoff_ids
             failure_attempt_count = int(getattr(version, "failure_attempt_count", 0) or 0)
             if failure_attempt_count:
                 public["failure_attempt_count"] = failure_attempt_count
@@ -523,9 +514,6 @@ class V3ProductRouteHandlers:
                     },
                 },
             }
-            pending_mcp_handoff_ids = list(getattr(card, "pending_mcp_handoff_ids", []) or [])
-            if pending_mcp_handoff_ids:
-                card_public["pending_mcp_handoff_ids"] = pending_mcp_handoff_ids
         return {
             "visual_asset_id": asset.visual_asset_id,
             "display_name": asset.display_name,
@@ -613,9 +601,6 @@ class V3ProductRouteHandlers:
                     }.items()
                 },
             }
-            pending_mcp_handoff_ids = list(getattr(card, "pending_mcp_handoff_ids", []) or [])
-            if pending_mcp_handoff_ids:
-                record["character_card"]["pending_mcp_handoff_ids"] = pending_mcp_handoff_ids
         return record
 
     def post_project_people_asset_prepare(

@@ -309,14 +309,13 @@ def test_doc180_character_card_media_projection_is_server_owned_and_non_secret()
         assert forbidden not in helper.lower()
 
 
-def test_doc193_people_asset_public_projection_keeps_current_mcp_handoff_on_card() -> None:
+def test_doc193_people_asset_public_projection_hides_current_mcp_handoff_on_card() -> None:
     handlers = HANDLERS.read_text(encoding="utf-8")
     helper_start = handlers.index("def _people_asset_public_record")
     helper_end = handlers.index("    def post_project_people_asset_prepare", helper_start)
     helper = handlers[helper_start:helper_end]
 
-    assert 'record["character_card"]["pending_mcp_handoff_ids"] = pending_mcp_handoff_ids' in helper
-    assert 'card_public["pending_mcp_handoff_ids"]' not in helper
+    assert "pending_mcp_handoff_ids" not in helper
 
 
 def test_doc177_linear_failure_projection_distinguishes_brain_unavailable_from_quality_failure() -> None:

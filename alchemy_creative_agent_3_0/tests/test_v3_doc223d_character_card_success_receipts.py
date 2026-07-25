@@ -410,6 +410,88 @@ def test_doc223d_public_projection_exposes_only_safe_success_receipt_summary(tmp
         assert forbidden not in text
 
 
+def test_doc223d_public_projection_sanitizes_auxiliary_mcp_history_ids() -> None:
+    candidate_failure = SimpleNamespace(
+        stage="body_silhouette",
+        view_role="body.front_full",
+        candidate_index=2,
+        failure_code="body_silhouette_framing_drift",
+        output_id="output_body_candidate2",
+        candidate_id="candidate_internal_private",
+        mcp_handoff_id="mcp_handoff_private_candidate",
+    )
+    version = SimpleNamespace(
+        lifecycle_status="blocked",
+        version_id="version_with_mcp_history",
+        activation_confirmed=False,
+        generation_channel="mcp",
+        mcp_handoff_ids=["mcp_handoff_private_version"],
+        failure_attempt_count=1,
+        failure_code="body_silhouette_framing_drift",
+        anchor_pack=SimpleNamespace(
+            anchor_views=[],
+            candidate_failures=[candidate_failure],
+            status="failed",
+        ),
+    )
+    card = SimpleNamespace(
+        face_identity_status="active",
+        expression_set_status="partial",
+        body_silhouette_status="blocked",
+        face_identity_base_active=True,
+        face_identity_complete=True,
+        resume_available=True,
+        last_failed_module="body_silhouette",
+        last_failed_slot_key="body.front_full",
+        last_failure_code="body_silhouette_framing_drift",
+        last_failure_attempt_count=1,
+        last_shared_runtime_failure=None,
+        face_slots={},
+        expression_slots={},
+        body_slots={},
+        pending_mcp_handoff_ids=["mcp_handoff_private_pending"],
+    )
+    asset = SimpleNamespace(
+        visual_asset_id="visual_asset_public_sanitizer",
+        display_name="Public sanitizer fixture",
+        asset_type="people",
+        lifecycle_status="blocked",
+        active_version_id=None,
+        versions=[version],
+        active_version=lambda: None,
+        character_card=card,
+    )
+
+    public = V3ProductRouteHandlers._visual_asset_public_record(asset)
+
+    history = public["preparation_history"][0]
+    candidate_public = history["candidate_history"][0]
+    assert candidate_public == {
+        "stage": "body_silhouette",
+        "view_role": "body.front_full",
+        "candidate_index": 2,
+        "failure_code": "body_silhouette_framing_drift",
+        "output_id": "output_body_candidate2",
+        "preview_url": "/api/v3/creative-agent/outputs/output_body_candidate2/preview",
+        "download_url": "/api/v3/creative-agent/outputs/output_body_candidate2/download",
+    }
+    assert history["generation_channel"] == "mcp"
+    text = json.dumps(public, ensure_ascii=False).lower()
+    for forbidden in (
+        "mcp_handoff",
+        "candidate_internal_private",
+        "pending_mcp_handoff_ids",
+        "mcp_handoff_ids",
+        "mcp_handoff_id",
+        "artifact",
+        "provider",
+        "prompt",
+        "file_path",
+        "source_path",
+    ):
+        assert forbidden not in text
+
+
 def test_doc223d_public_projection_marks_corrupt_success_receipt_inconsistent_without_leak() -> None:
     corrupt_slot = SimpleNamespace(
         state="winner_selected",
