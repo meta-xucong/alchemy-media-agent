@@ -180,7 +180,13 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
     # prompt recipe or changing ordinary Anchor Pack behavior.
     framing_standard: Literal["consistent_head_and_upper_shoulders_reference_crop"] | None = None
     crop_policy: Literal["head_top_margin_full_face_neck_and_upper_shoulders_visible"] | None = None
-    torso_scope: Literal["visible_neck_collar_and_upper_shoulders"] | None = None
+    # Active Doc257 emits ``visible_neck_collar_and_upper_shoulders``.  The
+    # legacy value stays readable for old signed receipts/history; active
+    # adapter validation still compares against the current requirement.
+    torso_scope: Literal[
+        "visible_neck_collar_and_upper_shoulders",
+        "upper_shoulders_only_no_half_body_or_big_head_crop",
+    ] | None = None
     aspect_ratio_standard: Literal[
         "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
     ] | None = None
@@ -191,10 +197,12 @@ class BrainProfessionalAnchorViewDecision(V3BaseModel):
         "identity_only_do_not_inherit_source_pose_angle"
     ] | None = None
     front_pose_normalization: Literal[
-        "standard_front_model_card_view"
+        "standard_front_model_card_view",
+        "normalize_to_symmetric_camera_facing_front",
     ] | None = None
     face_axis_alignment: Literal[
-        "camera_facing_front_model_card_view"
+        "camera_facing_front_model_card_view",
+        "face_midline_vertical_eyes_level_nose_centered",
     ] | None = None
     status: Literal["approved", "rewritten"]
     owner: Literal["remote_v3_llm_brain"]

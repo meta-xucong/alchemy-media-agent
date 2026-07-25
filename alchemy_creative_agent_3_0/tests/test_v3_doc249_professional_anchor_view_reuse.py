@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.contracts import BrainProfessionalAnchorViewDecision
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     BrainProfessionalAnchorViewDecisionMissing,
 )
@@ -46,6 +47,20 @@ def _decision() -> dict[str, object]:
         "status": "approved",
         "owner": "remote_v3_llm_brain",
     }
+
+
+def test_doc249_legacy_standard_front_signed_decision_remains_readable() -> None:
+    decision = BrainProfessionalAnchorViewDecision.model_validate(
+        {
+            **_decision(),
+            "torso_scope": "upper_shoulders_only_no_half_body_or_big_head_crop",
+            "front_pose_normalization": "normalize_to_symmetric_camera_facing_front",
+            "face_axis_alignment": "face_midline_vertical_eyes_level_nose_centered",
+        }
+    )
+
+    assert decision.target_view_role == "standard_front"
+    assert decision.torso_scope == "upper_shoulders_only_no_half_body_or_big_head_crop"
 
 
 def _requirement() -> dict[str, object]:

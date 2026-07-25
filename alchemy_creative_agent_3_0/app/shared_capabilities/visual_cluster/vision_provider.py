@@ -499,10 +499,13 @@ def _enforced_inspection_prompt(
             )
             lines.append(
                 "Character Card Face Identity view-angle calibration: pose_compliance means the requested Face card angle "
-                "is pixel-observable. Keep the card family consistent through photographer distance, complete hair outline, "
-                "small natural headroom, visible neck, collar and upper shoulders, and a clean white background. Angle labels "
-                "are visual modeling targets rather than exact protractor measurements; judge continuity by the whole "
-                "model-card frame, not by a face-box or canvas-size shortcut."
+                "is pixel-observable. Use this compact angle family: standard_front reads as front-facing; left_front_25 "
+                "and right_front_25 read as shallow front-side bridge cards; three_quarter and reverse_three_quarter read "
+                "as the left/right 45-family cards; profile reads as a 90-degree side card; rear_head reads as a back-of-head "
+                "card. Keep the card family consistent through photographer distance, complete hair outline, small natural "
+                "headroom, visible neck, collar and upper shoulders, and a clean white background. Angle labels are visual "
+                "modeling targets rather than exact protractor measurements; judge continuity by the whole model-card frame, "
+                "not by a face-box or canvas-size shortcut."
             )
         expression_review = professional_quality.get("expression_review")
         if isinstance(expression_review, dict) and expression_review.get("applies"):

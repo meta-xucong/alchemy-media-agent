@@ -909,6 +909,11 @@ def test_doc189_review_contract_calibrates_commercial_refined_realism() -> None:
     assert "mature model-card photography calibration" in prompt
     assert "Do not fail merely because the image is polished or commercially retouched" in prompt
     assert "pose_compliance means the requested Face card angle is pixel-observable" in prompt
+    assert "standard_front reads as front-facing" in prompt
+    assert "left_front_25 and right_front_25 read as shallow front-side bridge cards" in prompt
+    assert "three_quarter and reverse_three_quarter read as the left/right 45-family cards" in prompt
+    assert "profile reads as a 90-degree side card" in prompt
+    assert "rear_head reads as a back-of-head card" in prompt
     assert "Angle labels are visual modeling targets rather than exact protractor measurements" in prompt
     assert "photographer distance" in prompt
     assert "small natural headroom" in prompt
