@@ -10,6 +10,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expressio
     project_generic_visual_review_receipt,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    _inspection_prompt,
     active_review_contract,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
@@ -46,10 +47,10 @@ def _generic_body_shared_receipt(*, status: str = "pass") -> dict[str, object]:
     }
 
 
-def _body_review_metadata_for_vision() -> dict[str, object]:
+def _body_review_metadata_for_vision(slot_key: str = "body.front_full") -> dict[str, object]:
     stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="body_silhouette",
-        slot_key="body.front_full",
+        slot_key=slot_key,
     )
     return {
         "project_id": "project_doc245_body_review",
@@ -84,6 +85,21 @@ def test_doc245_body_review_contract_exposes_framing_dimensions_to_shared_vision
         set(professional_quality["body_silhouette_review"]["framing_delta_dimensions"])
     )
     assert set(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS).issubset(set(contract["score_dimensions"]))
+
+
+def test_doc245_body_rear_review_uses_rear_continuity_instead_of_visible_face() -> None:
+    metadata = _body_review_metadata_for_vision("body.rear_full")
+    contract = active_review_contract(metadata)
+
+    body_review = contract["professional_identity_quality"]["body_silhouette_review"]
+    assert body_review["applies"] is True
+
+    prompt = _inspection_prompt(metadata)
+
+    assert "Body rear-full evidence rule" in prompt
+    assert "visible face or facial landmarks are not required" in prompt
+    assert "rear-head and hair outline" in prompt
+    assert "full-body containment" in prompt
 
 
 def test_doc245_generic_projector_preserves_body_framing_dimensions_only_when_allowed() -> None:
@@ -389,6 +405,48 @@ def test_doc245_body_adapter_projects_brain_inferred_source_scope_into_candidate
         "body_source_class_brain_inferred",
         "body_face_reference_scope_verified",
     }.issubset(set(receipt.candidates[0].enhanced_proof.evidence_codes))  # type: ignore[union-attr]
+
+
+def test_doc245_rear_body_no_visible_face_issue_does_not_block_rear_role_evidence() -> None:
+    rear_attempts = [
+        _body_attempt(
+            index,
+            slot_key="body.rear_full",
+            review=_review(index).model_copy(update={"issue_codes": ["output_face_not_detected"]}),
+        )
+        for index in (1, 2, 3)
+    ]
+
+    receipt = CharacterCardPreparationService._formal_body_slot_receipt(  # noqa: SLF001
+        slot_key="body.rear_full",
+        attempts=rear_attempts,  # type: ignore[arg-type]
+    )
+
+    assert receipt.acceptance_mode == "standard_three_candidate"
+    assert receipt.reviewed_candidate_count == 3
+    assert receipt.winner_output_id == "output_body.rear_full_3"
+    assert all(candidate.enhanced_proof is not None for candidate in receipt.candidates)
+    assert all(candidate.enhanced_proof.eligible for candidate in receipt.candidates if candidate.enhanced_proof)
+
+
+def test_doc245_rear_body_missing_rear_evidence_still_fails_closed() -> None:
+    rear_attempts = [_body_attempt(index, slot_key="body.rear_full") for index in (1, 2, 3)]
+    rear_attempts[1] = _body_attempt(
+        2,
+        slot_key="body.rear_full",
+        review=_review(2, status="fail", body_eligible=False),
+    )
+
+    receipt = CharacterCardPreparationService._formal_body_slot_receipt(  # noqa: SLF001
+        slot_key="body.rear_full",
+        attempts=rear_attempts,  # type: ignore[arg-type]
+    )
+
+    assert receipt.winner_candidate_id == "candidate_body.rear_full_3"
+    rejected = receipt.candidates[1]
+    assert rejected.shared_review.passed is False
+    assert rejected.enhanced_proof is not None
+    assert rejected.enhanced_proof.eligible is False
 
 
 def test_doc245_body_adapter_rejects_observed_without_consent_or_reference_scope_mismatch() -> None:

@@ -316,6 +316,10 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
         review_contract,
         reference_count=reference_count,
     )
+    body_silhouette_review = _professional_body_silhouette_review_context(
+        metadata,
+        review_contract,
+    )
     if review_contract["enforced"]:
         return _enforced_inspection_prompt(
             user_goal=user_goal,
@@ -327,6 +331,7 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             apparel_contract=apparel_contract,
             output_evidence=output_evidence,
             serial_anchor_review=serial_anchor_review,
+            body_silhouette_review=body_silhouette_review,
         )
     prompt = "\n".join(
         [
@@ -412,6 +417,7 @@ def _enforced_inspection_prompt(
     apparel_contract: dict[str, Any],
     output_evidence: dict[str, Any],
     serial_anchor_review: dict[str, Any],
+    body_silhouette_review: dict[str, Any] | None = None,
 ) -> str:
     """Build a lean inspection request directly from frozen enforced truth.
 
@@ -519,6 +525,23 @@ def _enforced_inspection_prompt(
                 "regions, plastic expression symmetry, expression/framing drift, or age/identity incoherence using only "
                 "the allowed frozen issue codes."
             )
+        if body_silhouette_review:
+            lines.append(
+                "Character Card Body Silhouette review authority: inspect this output as the requested body slot, "
+                "not as a Face Identity card. Frozen body authority: "
+                + json.dumps(body_silhouette_review, ensure_ascii=False)
+            )
+            if body_silhouette_review.get("slot_key") == "body.rear_full":
+                lines.append(
+                    "Body rear-full evidence rule: the target is an intentional full-body rear view, so a visible face "
+                    "or facial landmarks are not required and their absence must not by itself become "
+                    "professional_identity_mismatch, low-confidence identity review, prompt-owned-channel failure, "
+                    "or composition failure. Judge same-person continuity from rear-head and hair outline, neck and "
+                    "shoulder relationship, body-silhouette proportions, age-appropriate scale, full-body containment, "
+                    "ground contact, limb visibility, centerline stability, material realism, and absence of reference "
+                    "source leakage. Still fail genuine rear-view absence, missing full body, broken proportions, wrong "
+                    "pose direction, style/source-channel leakage, or insufficient rear-head/hair/body continuity."
+                )
     if serial_anchor_review:
         lines.append(
             "Professional serial-anchor reference authority: Image 2 is the immutable root portrait and remains "
@@ -613,6 +636,57 @@ def _professional_serial_anchor_review_context(
         "current_brain_direction_authoritative": True,
         "required_stage_change": "target_viewpoint_geometry",
     }
+
+
+def _professional_body_silhouette_review_context(
+    metadata: dict[str, Any],
+    review_contract: dict[str, Any],
+) -> dict[str, Any]:
+    professional = review_contract.get("professional_identity_quality")
+    body_review = professional.get("body_silhouette_review") if isinstance(professional, dict) else None
+    if not isinstance(body_review, dict) or not body_review.get("applies"):
+        return {}
+    slot_key = _professional_character_card_slot(metadata)
+    return {
+        "contract_version": "professional_body_silhouette_review_authority_v1",
+        "slot_key": slot_key,
+        "identity_evidence_mode": (
+            "rear_head_hair_body_silhouette_continuity"
+            if slot_key == "body.rear_full"
+            else "visible_body_identity_and_face_continuity"
+        ),
+        "face_visibility_required": False if slot_key == "body.rear_full" else True,
+        "source": body_review.get("source"),
+        "framing_baseline": body_review.get("framing_baseline"),
+        "framing_delta_dimensions": list(body_review.get("framing_delta_dimensions") or []),
+        "score_dimensions": list(body_review.get("score_dimensions") or []),
+        "issue_codes": list(body_review.get("issue_codes") or []),
+    }
+
+
+def _professional_character_card_slot(metadata: dict[str, Any]) -> str:
+    candidates: list[Any] = [
+        metadata.get("professional_character_card_slot"),
+    ]
+    planning = metadata.get("professional_planning_metadata")
+    if isinstance(planning, dict):
+        candidates.append(planning.get("slot_key"))
+        candidates.append(planning.get("professional_character_card_slot"))
+    envelope = _execution_envelope(metadata)
+    plan = envelope.get("activation_plan") if isinstance(envelope, dict) else {}
+    plan_metadata = plan.get("metadata") if isinstance(plan, dict) else {}
+    if isinstance(plan_metadata, dict):
+        candidates.append(plan_metadata.get("slot_key"))
+        candidates.append(plan_metadata.get("professional_character_card_slot"))
+        nested = plan_metadata.get("professional_planning_metadata")
+        if isinstance(nested, dict):
+            candidates.append(nested.get("slot_key"))
+            candidates.append(nested.get("professional_character_card_slot"))
+    for value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def active_review_contract(metadata: dict[str, Any]) -> dict[str, Any]:
