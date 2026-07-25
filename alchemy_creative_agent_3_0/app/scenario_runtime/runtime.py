@@ -16,6 +16,7 @@ from ..llm_brain.providers import (
     BrainExecutionBudgetExceeded,
     BrainHumanNaturalnessDecisionMissing,
     BrainProfessionalAnchorViewDecisionMissing,
+    BrainProviderError,
     BrainReferenceChannelOwnershipDecisionMissing,
     BrainSemanticPreflightMissing,
 )
@@ -1909,6 +1910,11 @@ class ScenarioRuntime:
                         if isinstance(failure, BrainDevelopmentalPresenceDecisionMissing)
                         else "professional_anchor_view_decision_missing"
                         if isinstance(failure, BrainProfessionalAnchorViewDecisionMissing)
+                        else "remote_creative_brain_prompt_signoff_invalid"
+                        if (
+                            isinstance(failure, BrainProviderError)
+                            and "canonical provider-prompt contract" in str(failure)
+                        )
                         else "remote_creative_brain_prompt_signoff_unavailable"
                     ),
                     blocked_brain_result,
