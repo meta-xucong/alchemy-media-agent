@@ -63,6 +63,85 @@ class _NoopAnchorReviewer:
         raise AssertionError("review must not run")
 
 
+class _Doc256ExpressionOutputStore:
+    def __init__(self, output: SimpleNamespace) -> None:
+        self.output = output
+
+    def list_by_job(self, _job_id: str) -> list[SimpleNamespace]:
+        return [self.output]
+
+
+class _Doc256ExpressionReviewService:
+    visual_asset_catalog = None
+
+    def __init__(
+        self,
+        inspection: dict[str, object],
+        *,
+        slot_key: str = "expression.anger",
+        operation_id: str = "asset_doc256:expression_set:expression.anger:1:round7",
+    ) -> None:
+        self.output = SimpleNamespace(
+            output_id="output_1",
+            candidate_id="candidate_1",
+            file_path="unused.png",
+            metadata={
+                "provider_prompt_sha256": "sha256:expression_doc256",
+                "prompt_compilation_id": "compile_expression_doc256",
+                "provider_reference_image_count": 2,
+                "reference_asset_count": 2,
+                "provider_reference_assets": [
+                    {"asset_id": "front_reference", "role": "card_framing"},
+                    {"asset_id": "identity_reference", "role": "portrait_identity"},
+                ],
+                "reference_asset_ids": ["front_reference", "identity_reference"],
+                "reference_input_execution": {
+                    "schema_version": "v3_reference_input_execution_v1",
+                    "reference_count": 2,
+                    "operation_outcome": "pixels_received",
+                },
+            },
+        )
+        self.output_store = _Doc256ExpressionOutputStore(self.output)
+        self.record = SimpleNamespace(
+            job_id="job_expression_doc256",
+            planning_result=SimpleNamespace(
+                generation_plans=[
+                    SimpleNamespace(
+                        metadata={
+                            "professional_character_card_preparation": True,
+                            "professional_character_card_stage": "expression_set",
+                            "professional_character_card_slot": slot_key,
+                            "professional_character_card_attempt_round": 7,
+                            "professional_character_card_reference_output_ids": ["front_reference"],
+                            "generation_channel": "mcp",
+                            "mcp_operation_id": operation_id,
+                        }
+                    )
+                ]
+            ),
+            request=SimpleNamespace(
+                metadata={
+                    "professional_character_card_preparation": True,
+                    "professional_character_card_stage": "expression_set",
+                    "professional_character_card_slot": slot_key,
+                    "generation_channel": "mcp",
+                    "mcp_operation_id": operation_id,
+                }
+            ),
+            generation_result=SimpleNamespace(
+                metadata={"post_generation_review_package": {"inspections": [inspection]}}
+            ),
+        )
+        self.job_store = SimpleNamespace(
+            list_recent=lambda _limit: [self.record],
+            list_mcp_operation_records=lambda _operation_id: [self.record],
+        )
+
+    def get_job_record(self, _job_id: str) -> SimpleNamespace:
+        return self.record
+
+
 def _calibration(*, applies_to: list[str] | None = None, approved: bool = True) -> dict[str, object]:
     return {
         "artifact_id": "close_model_card_framing_family_calibration_v1",
@@ -238,6 +317,60 @@ def _expression_review_binding(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def _doc256_expression_inspection(**score_overrides: object) -> dict[str, object]:
+    score_card = {
+        "same_person_readability": 0.92,
+        "distinctive_feature_readability": 0.90,
+        "human_realism": 0.91,
+        "visual_quality": 0.93,
+        "overall": 0.93,
+        "expression_framing_parity": 0.9,
+        "face_area_delta_from_front": 0.03,
+        "top_margin_delta_from_front": 0.018,
+        "bottom_margin_delta_from_front": 0.020,
+        "eye_line_delta_from_front": 0.016,
+        "center_x_delta_from_front": 0.014,
+        "shoulder_span_delta_from_front": 0.035,
+        "head_yaw_delta_from_front": 0.030,
+        "head_pitch_delta_from_front": 0.020,
+        "model_card_crop_closeness": 0.9,
+        "shoulder_collar_context": 0.86,
+        "headroom_commercial_balance": 0.88,
+        "camera_distance_consistency": 0.91,
+        "expression_affect_readability": 0.9,
+        "expression_identity_preserved_under_affect": 0.91,
+    }
+    score_card.update(score_overrides)
+    return {
+        "output_id": "output_1",
+        "mode": "hybrid",
+        "verification_state": "verified",
+        "status": "pass",
+        "issue_codes": [],
+        "score_card": score_card,
+    }
+
+
+def _doc256_expression_character_card_request(
+    *,
+    slot_key: str = "expression.anger",
+    candidate_index: int = 1,
+    generation_channel: str = "mcp",
+) -> object:
+    character_card = _character_card_module()
+    return character_card.CharacterCardCandidateRequest(
+        project_id="project_doc256",
+        people_asset_id="asset_doc256",
+        card_version_id="card_doc256",
+        module="expression_set",
+        slot_key=slot_key,
+        candidate_index=candidate_index,
+        reference_output_ids=["front_reference"],
+        user_intent="controlled model-card expression",
+        generation_channel=generation_channel,
+    )
 
 
 def _assert_public_summary_safe(public_summary: dict[str, object]) -> None:
@@ -1195,6 +1328,32 @@ def test_doc256_expression_review_projector_does_not_upgrade_legacy_target_only(
     assert "card_family_framing_failed" in doc256_summary.issue_codes
     assert "expression_affect_profile_failed" in doc256_summary.issue_codes
     assert legacy_summary.profile_id == "expression_slot_profile_v1"
+
+
+def test_doc256_expression_host_review_calls_projector_and_feeds_consumer() -> None:
+    anchor_host = _anchor_host_module()
+    character_card = _character_card_module()
+    operation_id = "asset_doc256:expression_set:expression.anger:1:round7"
+    host = anchor_host.ProductApiAnchorPackPreparationHost(
+        _Doc256ExpressionReviewService(_doc256_expression_inspection(), operation_id=operation_id)
+    )
+
+    candidate, review = host._character_card_candidate_and_review(  # noqa: SLF001
+        "job_expression_doc256",
+        _doc256_expression_character_card_request(),
+    )
+    proofs = getattr(review, "expression_model_card_proofs", None)
+    summary = character_card.CharacterCardPreparationService._formal_expression_enhanced_proof(
+        slot_key="expression.anger",
+        candidate=candidate,
+        review=review,
+    )
+
+    assert candidate.operation_id == operation_id
+    assert candidate.round_id == "round7"
+    assert set(proofs) == {"card_family_framing", "affect_proof"}
+    assert summary.profile_id == "expression_model_card_delivery_v1"
+    assert summary.eligible is True
 
 
 def test_doc256_expression_adapter_does_not_import_face_local_front_module() -> None:

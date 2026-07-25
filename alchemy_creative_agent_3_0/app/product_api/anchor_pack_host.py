@@ -28,6 +28,7 @@ from ..shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
     expression_front_card_framing_materialization_directive,
     laugh_expression_materialization_directive,
+    project_expression_model_card_proofs,
     project_generic_visual_review_receipt,
     project_laugh_expression_review_receipt,
 )
@@ -2376,12 +2377,29 @@ class ProductApiAnchorPackPreparationHost:
                 output_id=selected.output_id,
                 candidate_id=selected.candidate_id,
             )
+        character_card_metadata = self._character_card_job_metadata(record)
+        is_doc256_expression_delivery = (
+            request.module == "expression_set"
+            and request.slot_key in {"expression.laugh", "expression.anger", "expression.sad"}
+        )
+        expression_operation_id = (
+            str(character_card_metadata.get("mcp_operation_id") or "").strip()
+            if is_doc256_expression_delivery
+            else ""
+        )
+        expression_round_id = (
+            self._character_card_round_id(character_card_metadata)
+            if is_doc256_expression_delivery
+            else None
+        )
         candidate = CharacterCardCandidateResult(
             candidate_id=selected.candidate_id,
             output_id=selected.output_id,
             module=request.module,
             slot_key=request.slot_key,
             candidate_index=request.candidate_index,
+            operation_id=expression_operation_id or None,
+            round_id=expression_round_id,
             source_candidate_ids=[item.candidate_id for item in outputs],
             source_output_ids=list(request.reference_output_ids),
             canonical_prompt_hash=str(output_metadata.get("provider_prompt_sha256") or ""),
@@ -2424,6 +2442,26 @@ class ProductApiAnchorPackPreparationHost:
             issue_codes.extend(expression_receipt.issue_codes)
             shared_review_receipts.append(expression_receipt.to_public_dict())
         shared_review_receipts.append(generic_receipt.to_public_dict())
+        expression_model_card_proofs: dict[str, dict[str, Any]] | None = None
+        if is_doc256_expression_delivery:
+            expression_model_card_proofs = project_expression_model_card_proofs(
+                slot_key=request.slot_key,
+                candidate_id=selected.candidate_id,
+                output_id=selected.output_id,
+                operation_id=expression_operation_id,
+                round_id=expression_round_id or "",
+                review_binding={
+                    "candidate_id": selected.candidate_id,
+                    "output_id": selected.output_id,
+                    "operation_id": expression_operation_id,
+                    "round_id": expression_round_id or "",
+                },
+                score_card=score_card,
+                issue_codes=issue_codes,
+                verified=verified,
+                raw_status=raw_status,
+                acceptance_mode="standard_three_candidate",
+            )
         review = AnchorReviewDecision(
             status=(
                 "pass"
@@ -2446,7 +2484,39 @@ class ProductApiAnchorPackPreparationHost:
             issue_codes=list(dict.fromkeys(issue_codes)),
             shared_review_receipts=shared_review_receipts,
         )
+        if expression_model_card_proofs is not None:
+            object.__setattr__(review, "expression_model_card_proofs", expression_model_card_proofs)
         return candidate, review
+
+    @staticmethod
+    def _character_card_job_metadata(record: Any) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        planning_result = getattr(record, "planning_result", None)
+        generation_plans = getattr(planning_result, "generation_plans", None)
+        if generation_plans:
+            plan_metadata = getattr(generation_plans[0], "metadata", None)
+            if isinstance(plan_metadata, dict):
+                metadata.update(plan_metadata)
+        request_metadata = getattr(getattr(record, "request", None), "metadata", None)
+        if isinstance(request_metadata, dict):
+            metadata.update({key: value for key, value in request_metadata.items() if key not in metadata})
+        return metadata
+
+    @staticmethod
+    def _character_card_round_id(metadata: dict[str, Any]) -> str | None:
+        raw_round = metadata.get("professional_character_card_attempt_round")
+        try:
+            attempt_round = int(raw_round)
+        except (TypeError, ValueError):
+            attempt_round = 0
+        if attempt_round > 0:
+            return f"round{attempt_round}"
+        operation_id = str(metadata.get("mcp_operation_id") or "").strip()
+        if ":round" in operation_id:
+            suffix = operation_id.rsplit(":round", 1)[1].strip()
+            if suffix.isdigit() and int(suffix) > 0:
+                return f"round{int(suffix)}"
+        return None
 
     @staticmethod
     def _character_card_prompt_reference_parity_verified(
