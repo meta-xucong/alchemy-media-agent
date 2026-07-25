@@ -17,6 +17,14 @@ from ..shared_capabilities.visual_cluster.absolute_portrait_realism import (
     AbsolutePortraitRealismProof,
     evaluate_absolute_portrait_realism,
 )
+from ..shared_capabilities.visual_cluster.micro_real_human_fidelity import (
+    MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
+    OPTIONAL_VISIBLE_DIMENSIONS,
+    REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS,
+    MicroDimensionApplicability,
+    MicroRealHumanFidelityProof,
+    evaluate_micro_real_human_fidelity,
+)
 from .contracts import (
     AnchorAuxiliaryReference,
     AnchorCandidateFailureReceipt,
@@ -66,6 +74,96 @@ def _absolute_portrait_realism_enhanced_proof_summary(
     )
 
 
+class FaceStandardFrontEnhancedProofBundle(V3BaseModel):
+    """Face-local bundle for multiple standard-front Enhanced profiles.
+
+    Formal Core accepts one module-neutral ``enhanced_proof`` per candidate.
+    Face Identity therefore keeps Doc248 and Doc252 as independent profile
+    proofs here, then emits exactly one safe eligibility summary for Core.
+    """
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    candidate_id: str
+    output_id: str
+    absolute_portrait_realism_required: bool
+    micro_real_human_fidelity_required: bool
+    absolute_portrait_realism: AbsolutePortraitRealismProof | None = None
+    micro_real_human_fidelity: MicroRealHumanFidelityProof | None = None
+
+    @field_validator("candidate_id", "output_id")
+    @classmethod
+    def require_identity(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("Face standard-front enhanced bundle requires candidate/output identity")
+        return text
+
+    @model_validator(mode="after")
+    def validate_bound_proofs(self) -> "FaceStandardFrontEnhancedProofBundle":
+        for proof in (self.absolute_portrait_realism, self.micro_real_human_fidelity):
+            if proof is None:
+                continue
+            if proof.candidate_id != self.candidate_id or proof.output_id != self.output_id:
+                raise ValueError("Face standard-front enhanced proof is not bound to the candidate output")
+        return self
+
+    @property
+    def eligible(self) -> bool:
+        if self.absolute_portrait_realism_required:
+            if self.absolute_portrait_realism is None or not self.absolute_portrait_realism.eligible:
+                return False
+        if self.micro_real_human_fidelity_required:
+            if self.micro_real_human_fidelity is None or not self.micro_real_human_fidelity.eligible:
+                return False
+        return True
+
+    @property
+    def status(self) -> Literal["pass", "fail"]:
+        return "pass" if self.eligible else "fail"
+
+    def issue_codes(self) -> list[str]:
+        issues: list[str] = []
+        if self.absolute_portrait_realism_required:
+            if self.absolute_portrait_realism is None:
+                issues.append("absolute_portrait_realism_proof_missing")
+            elif not self.absolute_portrait_realism.eligible:
+                issues.append("absolute_portrait_realism_profile_failed")
+        if self.micro_real_human_fidelity_required:
+            if self.micro_real_human_fidelity is None:
+                issues.append("micro_real_human_fidelity_proof_missing")
+            elif not self.micro_real_human_fidelity.eligible:
+                issues.append("micro_real_human_fidelity_profile_failed")
+        return sorted(set(issues))
+
+    def to_formal_enhanced_summary(self) -> FormalSlotCandidateEnhancedProofSummary:
+        evidence_codes: list[str] = ["face_standard_front_enhanced_quality_bundle_reviewed"]
+        if self.absolute_portrait_realism is not None and self.absolute_portrait_realism.eligible:
+            evidence_codes.append("absolute_portrait_realism_profile_passed")
+        if self.micro_real_human_fidelity is not None and self.micro_real_human_fidelity.eligible:
+            evidence_codes.append("micro_real_human_fidelity_profile_passed")
+        required_count = int(self.absolute_portrait_realism_required) + int(self.micro_real_human_fidelity_required)
+        passed_count = int(
+            self.absolute_portrait_realism is not None and self.absolute_portrait_realism.eligible
+        ) + int(self.micro_real_human_fidelity is not None and self.micro_real_human_fidelity.eligible)
+        completion = 1.0 if required_count == 0 else min(1.0, passed_count / required_count)
+        return FormalSlotCandidateEnhancedProofSummary(
+            profile_id="face_standard_front_enhanced_quality_bundle_v1",
+            requirement_id="doc248_absolute_realism_plus_doc252_micro_fidelity_v1",
+            candidate_id=self.candidate_id,
+            output_id=self.output_id,
+            eligible=self.eligible,
+            status=self.status,
+            evidence_codes=evidence_codes,
+            issue_codes=self.issue_codes(),
+            dimensions={
+                "required_profile_completion": completion,
+                "required_profile_count": min(1.0, required_count / 2.0),
+                "passed_profile_count": min(1.0, passed_count / 2.0),
+            },
+        )
+
+
 class AnchorGenerationRequest(V3BaseModel):
     """Typed evidence request; prompt content is deliberately not a field.
 
@@ -96,6 +194,7 @@ class AnchorGenerationRequest(V3BaseModel):
     mcp_operation_id: str | None = None
     mcp_handoff_id: str | None = None
     absolute_portrait_realism_required: bool = False
+    micro_real_human_fidelity_required: bool = False
     # The shared execution path needs to know which geometric contract owns
     # this capture. Character Card face views are face/head evidence only;
     # the ordinary Anchor Pack keeps its historical whole-person contract.
@@ -149,6 +248,11 @@ class AnchorGenerationRequest(V3BaseModel):
             )
         if self.view_role == "standard_front" and references[1:] != supplemental:
             raise ValueError("front supplementary evidence must match immutable source provenance")
+        if self.micro_real_human_fidelity_required and (
+            self.capture_scope != "character_card_face_identity"
+            or self.view_role != "standard_front"
+        ):
+            raise ValueError("micro_real_human_fidelity_requires_character_card_standard_front")
         return self
 
 
@@ -167,6 +271,7 @@ class AnchorPackPreparationRequest(V3BaseModel):
     generation_channel: Literal["provider", "mcp"] = "provider"
     pending_mcp_handoff_ids: list[str] = Field(default_factory=list)
     absolute_portrait_realism_required: bool = False
+    micro_real_human_fidelity_required: bool = False
 
     @field_validator("brain_plan_id", "canonical_prompt_hash", "preparation_intent")
     @classmethod
@@ -183,6 +288,8 @@ class AnchorPackPreparationRequest(V3BaseModel):
             raise ValueError("People Asset preparation intent is required")
         if self.preparation_intent != self.asset.preparation_intent:
             raise ValueError("preparation intent must match the immutable People Asset intent")
+        if self.micro_real_human_fidelity_required and self.face_view_scope != "character_card":
+            raise ValueError("micro_real_human_fidelity_requires_character_card_standard_front")
         return self
 
 
@@ -505,6 +612,7 @@ class AnchorPackPreparationService:
                     "standard_front",
                     front_attempts,
                     absolute_portrait_realism_required=request.absolute_portrait_realism_required,
+                    micro_real_human_fidelity_required=request.micro_real_human_fidelity_required,
                 )
             except ValueError as exc:
                 pack = self._pack(
@@ -1122,6 +1230,11 @@ class AnchorPackPreparationService:
                 else None
             ),
             absolute_portrait_realism_required=request.absolute_portrait_realism_required,
+            micro_real_human_fidelity_required=(
+                request.micro_real_human_fidelity_required
+                and request.face_view_scope == "character_card"
+                and view_role == "standard_front"
+            ),
             capture_scope=(
                 "character_card_face_identity"
                 if request.face_view_scope == "character_card"
@@ -1180,12 +1293,14 @@ class AnchorPackPreparationService:
         attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
         *,
         absolute_portrait_realism_required: bool = False,
+        micro_real_human_fidelity_required: bool = False,
     ) -> AnchorView:
         receipt = self._formal_receipt_for_attempts(
             view_role=view_role,
             attempts=attempts,
             acceptance_mode="standard_three_candidate",
             absolute_portrait_realism_required=absolute_portrait_realism_required,
+            micro_real_human_fidelity_required=micro_real_human_fidelity_required,
         )
         winner_candidate, winner_review = self._candidate_by_id(attempts, receipt.winner_candidate_id)
         return AnchorView(
@@ -1224,9 +1339,15 @@ class AnchorPackPreparationService:
         attempts: list[tuple[AnchorCandidateResult, AnchorReviewDecision]],
         acceptance_mode: Literal["standard_three_candidate", "auxiliary_first_pass_reference"],
         absolute_portrait_realism_required: bool = False,
+        micro_real_human_fidelity_required: bool = False,
     ) -> FormalSlotReceipt:
+        require_micro_realism = (
+            micro_real_human_fidelity_required
+            and acceptance_mode == "standard_three_candidate"
+            and view_role == "standard_front"
+        )
         require_absolute_realism = (
-            absolute_portrait_realism_required
+            (absolute_portrait_realism_required or require_micro_realism)
             and acceptance_mode == "standard_three_candidate"
             and view_role == "standard_front"
         )
@@ -1248,6 +1369,7 @@ class AnchorPackPreparationService:
                     candidate,
                     review,
                     absolute_portrait_realism_required=require_absolute_realism,
+                    micro_real_human_fidelity_required=require_micro_realism,
                 )
                 for candidate, review in attempts
             ],
@@ -1261,7 +1383,7 @@ class AnchorPackPreparationService:
             ),
             candidate_eligibility=(
                 (lambda candidate: candidate.enhanced_proof is not None and candidate.enhanced_proof.eligible)
-                if require_absolute_realism
+                if require_absolute_realism or require_micro_realism
                 else None
             ),
         )
@@ -1282,6 +1404,7 @@ class AnchorPackPreparationService:
         review: AnchorReviewDecision,
         *,
         absolute_portrait_realism_required: bool = False,
+        micro_real_human_fidelity_required: bool = False,
     ) -> FormalSlotCandidateSummary:
         return FormalSlotCandidateSummary(
             candidate_index=candidate.candidate_index,
@@ -1290,17 +1413,55 @@ class AnchorPackPreparationService:
             reviewed=True,
             shared_review=self._formal_shared_review_summary(review),
             enhanced_proof=(
-                self._absolute_portrait_realism_enhanced_proof(candidate, review)
-                if absolute_portrait_realism_required
+                self._face_standard_front_enhanced_proof(
+                    candidate,
+                    review,
+                    absolute_portrait_realism_required=absolute_portrait_realism_required,
+                    micro_real_human_fidelity_required=micro_real_human_fidelity_required,
+                )
+                if absolute_portrait_realism_required or micro_real_human_fidelity_required
                 else None
             ),
         )
 
-    @staticmethod
-    def _absolute_portrait_realism_enhanced_proof(
+    @classmethod
+    def _face_standard_front_enhanced_proof(
+        cls,
         candidate: AnchorCandidateResult,
         review: AnchorReviewDecision,
-    ):
+        *,
+        absolute_portrait_realism_required: bool,
+        micro_real_human_fidelity_required: bool,
+    ) -> FormalSlotCandidateEnhancedProofSummary:
+        absolute_summary = (
+            cls._absolute_portrait_realism_enhanced_proof(candidate, review)
+            if absolute_portrait_realism_required
+            else None
+        )
+        if not micro_real_human_fidelity_required:
+            if absolute_summary is None:
+                raise ValueError("Face standard-front enhanced proof requires an enabled profile")
+            return absolute_summary
+        absolute_proof = (
+            cls._absolute_portrait_realism_proof(candidate, review)
+            if absolute_portrait_realism_required
+            else None
+        )
+        micro_proof = cls._micro_real_human_fidelity_proof(candidate, review)
+        return FaceStandardFrontEnhancedProofBundle(
+            candidate_id=candidate.candidate_id,
+            output_id=candidate.output_id,
+            absolute_portrait_realism_required=absolute_portrait_realism_required,
+            micro_real_human_fidelity_required=micro_real_human_fidelity_required,
+            absolute_portrait_realism=absolute_proof,
+            micro_real_human_fidelity=micro_proof,
+        ).to_formal_enhanced_summary()
+
+    @staticmethod
+    def _absolute_portrait_realism_proof(
+        candidate: AnchorCandidateResult,
+        review: AnchorReviewDecision,
+    ) -> AbsolutePortraitRealismProof:
         evidence_codes = [str(code or "").strip() for code in review.identity_scores.evidence_codes if str(code or "").strip()]
         evidence_set = set(evidence_codes)
         dimensions = {
@@ -1313,7 +1474,7 @@ class AnchorPackPreparationService:
             "camera_texture_response": 1.0 if "absolute_camera_texture_response_verified" in evidence_set else 0.0,
             "commercial_beauty_preserved": 1.0 if "absolute_commercial_beauty_preserved" in evidence_set else 0.0,
         }
-        proof = evaluate_absolute_portrait_realism(
+        return evaluate_absolute_portrait_realism(
             candidate_id=candidate.candidate_id,
             output_id=candidate.output_id,
             dimensions=dimensions,
@@ -1322,7 +1483,78 @@ class AnchorPackPreparationService:
             ] or ["absolute_portrait_realism_reviewed"],
             issue_codes=getattr(review, "issue_codes", []) or [],
         )
-        return _absolute_portrait_realism_enhanced_proof_summary(proof)
+
+    @classmethod
+    def _absolute_portrait_realism_enhanced_proof(
+        cls,
+        candidate: AnchorCandidateResult,
+        review: AnchorReviewDecision,
+    ) -> FormalSlotCandidateEnhancedProofSummary:
+        return _absolute_portrait_realism_enhanced_proof_summary(
+            cls._absolute_portrait_realism_proof(candidate, review)
+        )
+
+    @staticmethod
+    def _micro_real_human_fidelity_proof(
+        candidate: AnchorCandidateResult,
+        review: AnchorReviewDecision,
+    ) -> MicroRealHumanFidelityProof | None:
+        evidence_codes = [str(code or "").strip() for code in review.identity_scores.evidence_codes if str(code or "").strip()]
+        micro_evidence = [code for code in evidence_codes if code.startswith("micro_")]
+        if not micro_evidence:
+            return None
+        evidence_set = set(micro_evidence)
+
+        dimensions: dict[str, float] = {}
+        applicability: dict[str, MicroDimensionApplicability] = {}
+        for dimension in sorted(REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS):
+            verified = f"micro_{dimension}_verified" in evidence_set
+            dimensions[dimension] = 1.0 if verified else 0.0
+            applicability[dimension] = MicroDimensionApplicability(
+                applicability="applicable",
+                visibility="visible_and_reviewable",
+                status="pass" if verified else "fail",
+            )
+        for dimension in sorted(OPTIONAL_VISIBLE_DIMENSIONS):
+            verified = f"micro_{dimension}_verified" in evidence_set
+            if verified:
+                dimensions[dimension] = 1.0
+                applicability[dimension] = MicroDimensionApplicability(
+                    applicability="applicable",
+                    visibility="visible_and_reviewable",
+                    status="pass",
+                )
+            elif (
+                f"micro_{dimension}_visible" in evidence_set
+                or f"micro_{dimension}_applicable" in evidence_set
+            ):
+                dimensions[dimension] = 0.0
+                applicability[dimension] = MicroDimensionApplicability(
+                    applicability="applicable",
+                    visibility="visible_and_reviewable",
+                    status="fail",
+                )
+            else:
+                visibility_receipt = None
+                for visibility in ("outside_frame", "occluded", "insufficient_resolution"):
+                    if f"micro_{dimension}_not_applicable_{visibility}" in evidence_set:
+                        visibility_receipt = visibility
+                        break
+                if visibility_receipt is not None:
+                    applicability[dimension] = MicroDimensionApplicability(
+                        applicability="not_applicable",
+                        visibility=visibility_receipt,
+                        status="not_applicable",
+                    )
+        return evaluate_micro_real_human_fidelity(
+            candidate_id=candidate.candidate_id,
+            output_id=candidate.output_id,
+            dimensions=dimensions,
+            applicability=applicability,
+            evidence_codes=micro_evidence,
+            issue_codes=getattr(review, "issue_codes", []) or [],
+            enabled_by=MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
+        )
 
     def _validate_formal_attempt_shared_review_authority(
         self,

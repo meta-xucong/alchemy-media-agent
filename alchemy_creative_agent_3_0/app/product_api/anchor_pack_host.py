@@ -14,6 +14,12 @@ from typing import Any
 
 from PIL import Image
 
+from ..shared_capabilities.visual_cluster.micro_real_human_fidelity import (
+    MICRO_REAL_HUMAN_FIDELITY_METADATA_FLAG,
+    MICRO_REAL_HUMAN_FIDELITY_METADATA_PROVENANCE,
+    MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
+    append_micro_real_human_fidelity_guidance,
+)
 from ..shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
     expression_front_card_framing_materialization_directive,
@@ -22,6 +28,7 @@ from ..shared_capabilities.visual_cluster.expression_review import (
     project_laugh_expression_review_receipt,
 )
 from ..shared_capabilities.visual_cluster.identity_metric import create_default_identity_metric_provider
+from ..visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from ..visual_assets.anchor_pack import (
     AnchorCandidateResult,
     AnchorCandidateUnavailable,
@@ -175,6 +182,7 @@ class ProductApiAnchorPackPreparationHost:
         generation_channel: str = "provider",
         pending_mcp_handoff_ids: list[str] | None = None,
         absolute_portrait_realism_required: bool = False,
+        micro_real_human_fidelity_required: bool = False,
     ) -> AnchorPackPreparationResult:
         """Reuse the same host for the two additive Doc178 Face slots."""
 
@@ -191,6 +199,7 @@ class ProductApiAnchorPackPreparationHost:
                 generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
                 pending_mcp_handoff_ids=list(pending_mcp_handoff_ids or []),
                 absolute_portrait_realism_required=absolute_portrait_realism_required,
+                micro_real_human_fidelity_required=micro_real_human_fidelity_required,
             ),
             resume_from_pack=safe_resume_from_pack,
         )
@@ -434,6 +443,41 @@ class ProductApiAnchorPackPreparationHost:
             job_request["metadata"]["professional_absolute_portrait_realism_required"] = True
             job_request["metadata"]["professional_absolute_portrait_realism_provenance"] = (
                 "server_feature_flag_v1"
+            )
+        if (
+            request.micro_real_human_fidelity_required
+            and request.view_role == "standard_front"
+            and request.capture_scope == "character_card_face_identity"
+        ):
+            micro_metadata = {
+                MICRO_REAL_HUMAN_FIDELITY_METADATA_FLAG: True,
+                MICRO_REAL_HUMAN_FIDELITY_METADATA_PROVENANCE: MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
+            }
+            existing_prompt_contract = {
+                **ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+                    view_role=request.view_role,
+                    capture_scope=request.capture_scope,
+                ),
+                "visual_direction_addons": [],
+                "negative_prompt_addons": [],
+            }
+            prompt_projection = append_micro_real_human_fidelity_guidance(
+                existing_prompt_contract,
+                metadata=micro_metadata,
+                scope="character_card_face_identity:standard_front",
+            )
+            job_request["metadata"]["professional_micro_real_human_fidelity_required"] = True
+            job_request["metadata"]["professional_micro_real_human_fidelity_provenance"] = (
+                MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE
+            )
+            job_request["metadata"]["professional_micro_real_human_fidelity_guidance"] = (
+                prompt_projection["micro_real_human_fidelity_guidance"]
+            )
+            job_request["metadata"]["professional_micro_real_human_fidelity_visual_direction_addons"] = (
+                prompt_projection["visual_direction_addons"]
+            )
+            job_request["metadata"]["professional_micro_real_human_fidelity_negative_prompt_addons"] = (
+                prompt_projection["negative_prompt_addons"]
             )
         job_kwargs = {
             "view_role": request.view_role,

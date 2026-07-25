@@ -360,7 +360,8 @@ def evaluate_micro_real_human_fidelity(
     not_applicable: list[str] = []
 
     required_dimensions = set(REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS)
-    for dimension in sorted(required_dimensions | set(applicability_map)):
+    expected_dimensions = required_dimensions | set(OPTIONAL_VISIBLE_DIMENSIONS)
+    for dimension in sorted(expected_dimensions | set(applicability_map)):
         receipt = applicability_map.get(dimension)
         if receipt is None:
             failure_issues.append("micro_real_human_applicability_missing")
