@@ -8,20 +8,23 @@ def _read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8").lower()
 
 
-def test_doc257_standard_front_prompt_uses_positive_model_card_framing_only() -> None:
+def _character_card_anchor_prompt_block() -> str:
     source = _read("app/llm_brain/prompts.py")
+    start = source.index("also reconcile this as a character card face identity capture")
+    end = source.index("elif anchor_capture_presentation:", start)
+    return source[start:end]
+
+
+def test_doc257_standard_front_prompt_uses_positive_model_card_framing_only() -> None:
+    source = _character_card_anchor_prompt_block()
 
     required_positive = [
         "photographer-shot",
-        "age-appropriate casting/model-card",
-        "reference-owned age reading",
-        "hair/grooming logic",
         "model-card",
         "consistent photographer distance",
         "complete hair outline",
         "small natural headroom",
         "visible neck, collar and upper shoulders",
-        "real studio softness",
     ]
     for phrase in required_positive:
         assert phrase in source
@@ -37,17 +40,22 @@ def test_doc257_standard_front_prompt_uses_positive_model_card_framing_only() ->
         "passport",
         "biometric",
         "undetectable",
+        "age-appropriate casting/model-card",
+        "hair/grooming logic",
+        "natural expression tendency",
+        "real studio softness",
+        "commercially polished",
+        "beautiful, and relaxed",
     ]
     for phrase in forbidden_prompt_increments:
         assert phrase not in source
 
 
 def test_doc257_expression_prompt_reuses_framing_without_old_negative_crop_stack() -> None:
-    source = _read("app/llm_brain/prompts.py")
+    source = _character_card_anchor_prompt_block()
 
     assert "same model-card framing" in source
     assert "model-card framing family" in source
-    assert "reference-owned age reading" in source
     assert "laugh" in source
     assert "anger" in source
     assert "sad" in source

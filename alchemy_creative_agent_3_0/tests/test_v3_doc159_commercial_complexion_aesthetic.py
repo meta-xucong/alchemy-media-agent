@@ -41,7 +41,7 @@ def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -
     assert "explicit complexion hue and undertone are authoritative" in SYSTEM_PROMPT
     assert "unintended muddy yellow, green, gray, or orange cast" in SYSTEM_PROMPT
     assert "requested brightness come from clean scene light and color management" in SYSTEM_PROMPT
-    assert "fine-grained and irregular real skin microtexture" in SYSTEM_PROMPT
+    assert "natural camera-observed skin material" in SYSTEM_PROMPT
     assert "airbrush or wax" in SYSTEM_PROMPT
     assert "visibly includes a person or model" in SYSTEM_PROMPT
     assert "do not invent a hidden bright-complexion treatment" in SYSTEM_PROMPT
@@ -56,7 +56,7 @@ def test_doc159_brain_instruction_honors_market_brightness_without_bleaching() -
     assert "Keep the person's complexion as its own material judgement" in SYSTEM_PROMPT
     assert "user-owned hue and undertone" in SYSTEM_PROMPT
     assert "separation from scene color cast" in SYSTEM_PROMPT
-    assert "camera-resolved, nonuniform skin microvariation" in SYSTEM_PROMPT
+    assert "natural tonal separation and skin material" in SYSTEM_PROMPT
     assert "do not approve it until" in SYSTEM_PROMPT
     assert "Before returning the final provider prompt" in SYSTEM_PROMPT
     assert "generic word such as natural or fair" in SYSTEM_PROMPT

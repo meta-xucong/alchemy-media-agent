@@ -62,13 +62,13 @@ The reusable shape is:
 verified photographic model-card baseline
 + slot-owned angle / crop wording
 + optional Expression affect delta
-+ source-image identity adaptation
 ```
 
 It must not hard-code a single successful sample's hair, clothing, complexion,
-face detail, expression, or background style. Those traits stay adaptive: the
-reference and current user intent own identity, age reading, hair / grooming
-logic, natural expression tendency, and wardrobe simplicity.
+face detail, expression, background style, or realism checklist. Identity,
+beauty, realism, and expression quality stay owned by the already verified
+baseline route and existing user/reference contracts; Doc257 adds only the
+minimal slot angle and crop wording.
 
 ## Remove from active prompt / negative prompt
 
@@ -102,7 +102,6 @@ complete hair outline
 small natural headroom
 close model-card crop with visible neck, collar and upper shoulders
 clean white studio model-card background
-real studio softness rather than document-style flatness
 ```
 
 Canvas size, 2:3 output, provider quality, MCP transport, and white background
