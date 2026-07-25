@@ -784,7 +784,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         or (
             anchor_framing_standard == "consistent_head_and_upper_shoulders_reference_crop"
             and anchor_crop_policy == "head_top_margin_full_face_neck_and_upper_shoulders_visible"
-            and anchor_torso_scope == "upper_shoulders_only_no_half_body_or_big_head_crop"
+            and anchor_torso_scope == "visible_neck_collar_and_upper_shoulders"
             and anchor_aspect_ratio_standard
             == "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
         )
@@ -796,9 +796,9 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             anchor_source_viewpoint_inheritance
             == "identity_only_do_not_inherit_source_pose_angle"
             and anchor_front_pose_normalization
-            == "normalize_to_symmetric_camera_facing_front"
+            == "standard_front_model_card_view"
             and anchor_face_axis_alignment
-            == "face_midline_vertical_eyes_level_nose_centered"
+            == "camera_facing_front_model_card_view"
         )
     )
     anchor_view_decision_required = bool(
@@ -1214,8 +1214,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                 "request and reference-channel ownership, and return capture_presentation "
                 "neutral_identity_evidence_capture in the same typed receipt. This is a semantic objective, not a "
                 "background, clothing, facial-feature, complexion, or lighting keyword recipe. "
-                "For this capture objective, an ambiguous grey beauty-studio treatment is not comparison-ready: resolve "
-                "a genuinely clean high-key neutral field, clear photographic material, and ordinary age-appropriate "
+                "For this capture objective, an ambiguous generic studio treatment is not comparison-ready: resolve "
+                "a clean mature photographic reference background, clear model-card material, and ordinary age-appropriate "
                 "presentation as one coherent evidence image rather than merely naming a neutral backdrop. During a serial anchor "
                 "stage, treat an already selected prior-view winner as evidence of the approved capture presentation: "
                 "keep that presentation coherent and change only the frozen view unless the current request explicitly "
@@ -1261,20 +1261,12 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         response_contract += (
             " For the Professional Face Identity anchor-pack contract, likeness to the selected person is the first-order "
             "criterion. Preserve the person's age direction and distinctive feature relationships before aesthetic polish. "
-            "The complete prompt must require camera-observed human materiality: visible but subtle natural skin texture, "
-            "non-uniform complexion, ordinary eyelid/lip detail, and small real-life asymmetries. Do not substitute a generic "
-            "perfect, poreless, retouched, pageant, fashion, or beauty-app face. This is a semantic quality requirement, "
-            "not a static prompt recipe; keep the selected view and user-owned styling intact. When the current request "
-            "owns an age direction, resolve the whole-person developmental stage coherently rather than altering only "
-            "facial scale or polish. For Character Card Face Identity captures, commercial cleanliness is part of the "
-            "quality contract: the face-card pixels must read clean, bright, crisp and translucent without dirty noise, "
-            "blurred/smeared skin, waxy smoothing or plastic shine, while still preserving real camera-observed skin material. "
-            "Do not make the subject rough, dull, tired, darker, or documentary-looking merely to prove realism. A refined "
-            "high-key commercial studio finish, cool-white or fair complexion through neutral white balance, and subtle "
-            "professional retouch are acceptable when distinctive identity relationships, developmental age and materiality "
-            "remain intact. For Character Card Face Identity, avoid a generic model archetype: keep the source person's "
-            "eye spacing, brow-eye relationship, nose-mouth relationship, cheek/lower-face direction, hairline/ear balance, "
-            "and age-stage facial presence before generic prettiness."
+            "The complete prompt should stay within the already verified mature photographer-shot model-card baseline: "
+            "commercially clean, polished, identity-preserving, and visually natural without adding a microscopic skin, "
+            "eye, hair, ear, or defect checklist. This is a product framing and photography-quality boundary, "
+            "not a static prompt recipe and not a second realism evaluator; keep the selected view and user-owned styling intact. "
+            "When the current request owns an age direction, resolve the whole-person developmental stage coherently while "
+            "preserving the same mature model-card photography finish."
         )
     payload: dict[str, object] = {
         "task": "finalize_canonical_image_provider_prompts",

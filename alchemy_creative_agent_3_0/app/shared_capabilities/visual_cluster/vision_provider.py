@@ -490,32 +490,19 @@ def _enforced_inspection_prompt(
         )
         if professional_quality.get("commercial_refinement_policy"):
             lines.append(
-                "Character Card commercial-refined realism calibration: a clean high-key studio finish, cool-white or fair "
-                "commercial complexion, subtle professional retouch, and plain hair/neutral wardrobe continuity are allowed "
-                "when identity, developmental-age coherence, materiality, fixed crop and prompt-owned view/background remain "
-                "intact. Do not fail merely because skin is clean, bright, fair, or commercially refined. Fail or warn only "
-                "when the pixels show a different person, distinctive-feature loss, child/adult stage drift, waxy/plastic/"
-                "poreless/smeared skin, doll-like child rendering, wrong card crop, wrong background, non-front pose for a "
-                "front slot, or actual prompt-owned channel violation. Minor natural asymmetry in an otherwise front-facing "
-                "Face Identity card is acceptable."
+                "Character Card mature model-card photography calibration: judge identity, age-stage coherence, requested "
+                "view, clean white model-card background, and commercial photo finish without turning the review into a "
+                "microscopic skin, facial-defect, detector, or anti-AI checklist. Do not fail merely because the image is "
+                "polished or commercially retouched; fail or warn when the pixels show a different person, lost distinctive "
+                "features, wrong requested card view, wrong background, degraded commercial finish, or actual prompt-owned "
+                "channel violation."
             )
             lines.append(
-                "Character Card Face Identity view-angle calibration: for this module, pose_compliance means head-view "
-                "slot geometry, not full-body pose, and angle labels are visual modeling targets rather than exact protractor measurements. Score it low and fail or warn when the requested slot view is not "
-                "pixel-observable: standard_front must read as front; left_front_25 and right_front_25 must read as shallow "
-                "front-side transition cards, visibly beyond front but not yet full 45; three_quarter should read "
-                "as a usable left/front-side three-quarter head view around the 45-degree family, profile as a clear approximately 90-degree side profile, "
-                "reverse_three_quarter as the opposite right/front-side three-quarter head view around the 45-degree family with the face "
-                "still visible as an independent opposite-side view, not a horizontal flip or literal mirror of the approved three_quarter card, and rear_head as a clear back/rear head view. "
-                "Do not fail a commercially clean, identity-faithful three-quarter card merely because the yaw is a little softer or deeper than an ideal 45 degrees; fail the slot only when it is effectively straight-front, pure profile, rear/back, same-side/opposite-side wrong, mirrored, or materially inconsistent in crop/scale. "
-                "Every Face Identity card must keep comparable modeling-card scale with the approved card family: same camera "
-                "distance and head size, complete hair outline inside the frame, similar head-top margin, neck, "
-                "upper shoulders and collar line visible. Visible front-side bridge and 45-degree cards must keep the full face "
-                "readable for identity comparison, but natural face-box size and position changes from head rotation are acceptable; "
-                "judge card-scale continuity by head top, foreground scale, neckline/collar-line height, shoulder cutoff and white padding. rear_head must instead keep a clear "
-                "back-of-head hair outline with no visible face or eyes. Fail or warn tight face/head close-ups, big-head crops, half-body crops, "
-                "soft feathered vignettes, faded hair boundaries, or any slot whose crop/scale is not comparable with the approved front/left45 cards. Keep judging the "
-                "fixed vertical reference-card crop and white background separately from body posture."
+                "Character Card Face Identity view-angle calibration: pose_compliance means the requested Face card angle "
+                "is pixel-observable. Keep the card family consistent through photographer distance, complete hair outline, "
+                "small natural headroom, visible neck, collar and upper shoulders, and a clean white background. Angle labels "
+                "are visual modeling targets rather than exact protractor measurements; judge continuity by the whole "
+                "model-card frame, not by a face-box or canvas-size shortcut."
             )
         expression_review = professional_quality.get("expression_review")
         if isinstance(expression_review, dict) and expression_review.get("applies"):

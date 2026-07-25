@@ -93,13 +93,13 @@ def _anchor_request(
                 {
                     "framing_standard": "consistent_head_and_upper_shoulders_reference_crop",
                     "crop_policy": "head_top_margin_full_face_neck_and_upper_shoulders_visible",
-                    "torso_scope": "upper_shoulders_only_no_half_body_or_big_head_crop",
+                    "torso_scope": "visible_neck_collar_and_upper_shoulders",
                     "aspect_ratio_standard": (
                         "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
                     ),
                     "source_viewpoint_inheritance": "identity_only_do_not_inherit_source_pose_angle",
-                    "front_pose_normalization": "normalize_to_symmetric_camera_facing_front",
-                    "face_axis_alignment": "face_midline_vertical_eyes_level_nose_centered",
+                    "front_pose_normalization": "standard_front_model_card_view",
+                    "face_axis_alignment": "camera_facing_front_model_card_view",
                 }
             )
     provider_admission = {
@@ -156,31 +156,23 @@ def test_doc184_character_card_scope_is_typed_and_ordinary_anchor_scope_is_uncha
         face["professional_face_identity_quality_contract"]["front_pose_normalization_contract"][
             "front_pose_normalization"
         ]
-        == "normalize_to_symmetric_camera_facing_front"
+        == "standard_front_model_card_view"
     )
     assert (
         face["professional_face_identity_quality_contract"]["face_card_image_clarity_contract"][
             "clarity_standard"
         ]
-        == "commercial_clean_translucent_no_smear_no_dirty_noise"
+        == "mature_commercial_model_card_photo_finish"
     )
     evidence_capture = face["professional_face_identity_quality_contract"][
         "face_card_evidence_capture_contract"
     ]
     assert evidence_capture["contract_version"] == "v3_character_card_face_evidence_capture_v1"
-    assert evidence_capture["capture_objective"] == (
-        "standardized_identity_evidence_capture_not_portfolio_or_beauty_portrait"
-    )
-    assert evidence_capture["pose_observability"] == (
-        "balanced_ears_cheeks_shoulders_no_head_turn_or_tilt"
-    )
-    assert evidence_capture["complexion_semantics"] == (
-        "cool_white_or_fair_means_neutral_white_balance_luminous_clean_exposure_not_bleaching"
-    )
-    assert evidence_capture["commercial_refinement_policy"] == (
-        "clean_high_key_commercial_retouch_allowed_without_identity_or_materiality_loss"
-    )
-    assert evidence_capture["front_pose_tolerance"] == "minor_natural_asymmetry_allowed_but_not_nonfront_view"
+    assert evidence_capture["capture_objective"] == "photographer_shot_model_card_reference"
+    assert evidence_capture["pose_observability"] == "requested_face_view_angle_for_model_card"
+    assert evidence_capture["complexion_semantics"] == "owned_by_user_intent_and_reference_policy"
+    assert evidence_capture["commercial_refinement_policy"] == "use_existing_photographic_baseline"
+    assert evidence_capture["front_pose_tolerance"] == "standard_front_model_card_view"
     assert evidence_capture["face_view_pose_compliance"] == (
         "pose_compliance_means_requested_face_view_angle_for_character_card_not_full_body_pose"
     )
@@ -270,20 +262,19 @@ def test_doc184_brain_schema_and_receipt_carry_face_scope_without_prompt_patchin
     )
     assert (
         schema["professional_anchor_view_decision"]["front_pose_normalization"]
-        == "normalize_to_symmetric_camera_facing_front"
+        == "standard_front_model_card_view"
     )
     assert "face/head angle only" in payload["remote_response_contract"]
-    assert "straight-on, symmetric" in payload["remote_response_contract"]
-    assert "no dirty cast, no smear" in payload["remote_response_contract"]
-    assert "evidence-grade standardized identity capture" in payload["remote_response_contract"]
-    assert "rather than a portfolio, fashion" in payload["remote_response_contract"]
-    assert "balanced left/right ear and cheek visibility" in payload["remote_response_contract"]
-    assert "plain white matte reference field" in payload["remote_response_contract"]
-    assert "neutral white balance, clean exposure and natural fair skin" in payload[
+    assert "photographer-shot model-card" in payload["remote_response_contract"]
+    assert "visible neck, collar and upper shoulders" in payload["remote_response_contract"]
+    assert "evidence-grade standardized identity capture" not in payload["remote_response_contract"]
+    assert "rather than a portfolio, fashion" not in payload["remote_response_contract"]
+    assert "balanced left/right ear and cheek visibility" not in payload["remote_response_contract"]
+    assert "plain white matte reference field" not in payload["remote_response_contract"]
+    assert "neutral white balance, clean exposure and natural fair skin" not in payload[
         "remote_response_contract"
     ]
-    assert "vertical 2:3 card" in payload["remote_response_contract"]
-    assert "full-body portrait" in payload["remote_response_contract"]
+    assert "full-body portrait" not in payload["remote_response_contract"]
     assert "provider_admission_decision" in schema
     assert "concise_positive_renderer_direction" in payload["remote_response_contract"]
     assert "prompt suffix" not in payload["remote_response_contract"].lower()
@@ -399,7 +390,7 @@ def test_doc184_runtime_and_adapter_preserve_brain_scope_receipt(tmp_path: Path,
     )
     assert (
         context["professional_anchor_view_decision"]["face_axis_alignment"]
-        == "face_midline_vertical_eyes_level_nose_centered"
+        == "camera_facing_front_model_card_view"
     )
     assert context["provider_admission_decision"]["prompt_language_mode"] == (
         "concise_positive_renderer_direction"
@@ -650,14 +641,14 @@ def test_doc189_nonfront_character_card_payload_uses_reference_led_view_delta_la
         "professional_anchor_view_decision"
     ]
     assert "change only the frozen view angle" in contract
-    assert "Do not restate straight-on symmetry" in contract
-    assert "match the approved front/card-family vertical 2:3" in contract
+    assert "do not repeat the standard_front-only framing/aspect/front-axis receipt fields" in contract
+    assert "use the same model-card framing with consistent photographer distance" in contract
     assert "For visible turning slots" in contract
     assert "allow natural face-box changes caused by head rotation" in contract
     assert "not by matching another angle's face rectangle" in contract
-    assert "Do not turn this into a checklist" in contract
+    assert "Do not turn this into a checklist" not in contract
     assert "full card framing" in contract
-    assert "avoid close-up" in contract
+    assert "avoid close-up" not in contract
     assert "For three_quarter, produce the left-front 45-family face card" in contract
     assert "For the standard_front slot" not in contract
     assert "face midline vertical" not in contract
@@ -910,20 +901,19 @@ def test_doc189_review_contract_calibrates_commercial_refined_realism() -> None:
     )
 
     assert contract["professional_identity_quality"]["commercial_refinement_policy"] == (
-        "clean_high_key_commercial_retouch_allowed_without_identity_or_materiality_loss"
+        "use_existing_photographic_baseline"
     )
     assert contract["professional_identity_quality"]["face_view_pose_compliance"] == (
         "pose_compliance_means_requested_face_view_angle_for_character_card_not_full_body_pose"
     )
-    assert "commercial-refined realism calibration" in prompt
-    assert "Do not fail merely because skin is clean, bright, fair, or commercially refined" in prompt
-    assert "pose_compliance means head-view slot geometry" in prompt
-    assert "angle labels are visual modeling targets rather than exact protractor measurements" in prompt
-    assert "three_quarter should read as a usable left/front-side three-quarter head view around the 45-degree family" in prompt
-    assert "profile as a clear approximately 90-degree" in prompt
-    assert "same camera distance and head size" in prompt
-    assert "tight face/head close-ups" in prompt
-    assert "rear_head must instead keep a clear back-of-head hair outline" in prompt
+    assert "mature model-card photography calibration" in prompt
+    assert "Do not fail merely because the image is polished or commercially retouched" in prompt
+    assert "pose_compliance means the requested Face card angle is pixel-observable" in prompt
+    assert "Angle labels are visual modeling targets rather than exact protractor measurements" in prompt
+    assert "photographer distance" in prompt
+    assert "small natural headroom" in prompt
+    assert "visible neck, collar and upper shoulders" in prompt
+    assert "face-box or canvas-size shortcut" in prompt
 
 
 def test_doc184_body_silhouette_keeps_its_own_typed_contract() -> None:

@@ -87,12 +87,12 @@ class ProfessionalModeRuntimeBridge:
             "scope": "face_identity_anchor_pack",
             "priority_order": [
                 "same_person_likeness",
-                "natural_human_presence",
+                "model_card_view_and_framing",
                 "age_fidelity",
-                "camera_observed_skin_materiality",
+                "mature_commercial_photography_finish",
                 "prompt_owned_view_and_styling",
             ],
-            "anti_overperfection_boundary": "reject_generic_perfect_beauty_surface",
+            "photography_baseline": "use_existing_mature_model_card_photography_baseline",
             "developmental_age_coherence": "whole_person_when_age_owned",
             "owner": "remote_v3_llm_brain",
             "review_owner": "v3_shared_vision",
@@ -123,16 +123,17 @@ class ProfessionalModeRuntimeBridge:
 
         A source photo can be slightly angled.  For a reusable Face Identity
         card, that source angle is evidence of identity only, not an owned
-        viewpoint.  The first slot must establish a standard straight-on
-        capture that later slots can depend on.
+        viewpoint.  The first slot must establish a standard photographer-shot
+        model-card front view that later slots can depend on without adding a
+        rigid geometry recipe.
         """
 
         return {
             "contract_version": "v3_character_card_front_pose_normalization_v1",
             "required": True,
             "source_viewpoint_inheritance": "identity_only_do_not_inherit_source_pose_angle",
-            "front_pose_normalization": "normalize_to_symmetric_camera_facing_front",
-            "face_axis_alignment": "face_midline_vertical_eyes_level_nose_centered",
+            "front_pose_normalization": "standard_front_model_card_view",
+            "face_axis_alignment": "camera_facing_front_model_card_view",
             "owner": "remote_v3_llm_brain",
         }
 
@@ -145,7 +146,7 @@ class ProfessionalModeRuntimeBridge:
             "required": True,
             "framing_standard": "consistent_head_and_upper_shoulders_reference_crop",
             "crop_policy": "head_top_margin_full_face_neck_and_upper_shoulders_visible",
-            "torso_scope": "upper_shoulders_only_no_half_body_or_big_head_crop",
+            "torso_scope": "visible_neck_collar_and_upper_shoulders",
             "owner": "remote_v3_llm_brain",
         }
 
@@ -156,14 +157,10 @@ class ProfessionalModeRuntimeBridge:
         return {
             "contract_version": "v3_character_card_commercial_clarity_v1",
             "required": True,
-            "clarity_standard": "commercial_clean_translucent_no_smear_no_dirty_noise",
-            "skin_materiality_boundary": "real_skin_texture_without_plastic_or_waxy_smoothing",
-            "commercial_refinement_policy": (
-                "clean_high_key_commercial_retouch_allowed_without_identity_or_materiality_loss"
-            ),
-            "beauty_realism_balance": (
-                "preserve_commercial_beauty_without_generic_ai_face_or_rough_documentary_skin"
-            ),
+            "clarity_standard": "mature_commercial_model_card_photo_finish",
+            "skin_materiality_boundary": "use_existing_photographic_baseline",
+            "commercial_refinement_policy": "use_existing_photographic_baseline",
+            "beauty_realism_balance": "preserve_existing_mature_photographic_baseline",
             "minimum_review_scores": {
                 "same_person_readability": 0.88,
                 "distinctive_feature_readability": 0.78,
@@ -179,40 +176,32 @@ class ProfessionalModeRuntimeBridge:
     def _face_card_evidence_capture_contract() -> dict[str, object]:
         """Objective for reusable identity-card captures.
 
-        The first Character Card views are not beauty portraits.  They are
-        standardized evidence images that later expression/body/product scenes
-        must be able to rely on.  Keep this generic: the requested age, gender,
-        complexion and identity remain owned by user intent and references.
+        The first Character Card views are photographer-shot model-card
+        references.  Keep this generic: the requested age, gender, complexion
+        and identity remain owned by user intent and references; this contract
+        must not reintroduce rigid geometry or microscopic-defect wording.
         """
 
         return {
             "contract_version": "v3_character_card_face_evidence_capture_v1",
             "required": True,
-            "capture_objective": "standardized_identity_evidence_capture_not_portfolio_or_beauty_portrait",
-            "pose_observability": "balanced_ears_cheeks_shoulders_no_head_turn_or_tilt",
-            "expression_standard": "stage_appropriate_relaxed_neutral_attention_not_model_performance",
-            "materiality_standard": "camera_observed_skin_and_hair_detail_with_minor_real_variation",
-            "commercial_refinement_policy": (
-                "clean_high_key_commercial_retouch_allowed_without_identity_or_materiality_loss"
-            ),
-            "beauty_realism_balance": (
-                "preserve_commercial_beauty_without_generic_ai_face_or_rough_documentary_skin"
-            ),
-            "complexion_semantics": (
-                "cool_white_or_fair_means_neutral_white_balance_luminous_clean_exposure_not_bleaching"
-            ),
-            "source_channel_tolerance": (
-                "plain_hair_and_neutral_wardrobe_continuity_allowed_when_it_supports_identity_comparison"
-            ),
-            "front_pose_tolerance": "minor_natural_asymmetry_allowed_but_not_nonfront_view",
+            "capture_objective": "photographer_shot_model_card_reference",
+            "pose_observability": "requested_face_view_angle_for_model_card",
+            "expression_standard": "slot_or_user_intent_owns_expression",
+            "materiality_standard": "use_existing_photographic_baseline",
+            "commercial_refinement_policy": "use_existing_photographic_baseline",
+            "beauty_realism_balance": "preserve_existing_mature_photographic_baseline",
+            "complexion_semantics": "owned_by_user_intent_and_reference_policy",
+            "source_channel_tolerance": "identity_reference_only_unless_user_locks_other_channels",
+            "front_pose_tolerance": "standard_front_model_card_view",
             "face_view_pose_compliance": (
                 "pose_compliance_means_requested_face_view_angle_for_character_card_not_full_body_pose"
             ),
             "face_view_slot_semantics": {
-                "standard_front": "straight_on_front_head_and_upper_shoulders_card",
+                "standard_front": "front_head_neck_collar_and_upper_shoulders_model_card",
                 "left_front_25": "left_front_25_degree_transition_card_for_left_45_bridge",
-                "three_quarter": "left_front_45_degree_head_and_upper_shoulders_card",
-                "profile": "side_profile_90_degree_head_and_upper_shoulders_card",
+                "three_quarter": "left_front_45_degree_model_card",
+                "profile": "side_profile_90_degree_model_card",
                 "right_front_25": "right_front_25_degree_transition_card_for_right_45_bridge",
                 "reverse_three_quarter": (
                     "legacy_key_for_opposite_right_front_45_degree_card_not_rear_view"
@@ -220,12 +209,12 @@ class ProfessionalModeRuntimeBridge:
                 "rear_head": "rear_head_back_of_head_card",
             },
             "face_view_framing_parity": (
-                "all_face_view_cards_match_approved_front_card_camera_distance_head_size_"
-                "hair_outline_head_top_margin_neck_upper_shoulders_and_collar_line"
+                "all_face_view_cards_share_model_card_camera_distance_hair_outline_"
+                "headroom_neck_collar_and_upper_shoulders"
             ),
-            "background_standard": "plain_white_matte_reference_field_no_vignette_or_glamour_gradient",
+            "background_standard": "clean_white_model_card_background",
             "aspect_ratio_standard": "honor_frozen_rendering_size_as_reference_card_aspect_ratio",
-            "lens_standard": "low_distortion_portrait_lens_no_big_eye_or_beauty_perspective",
+            "lens_standard": "use_existing_photographic_baseline",
             "owner": "remote_v3_llm_brain",
             "review_owner": "v3_shared_vision",
         }

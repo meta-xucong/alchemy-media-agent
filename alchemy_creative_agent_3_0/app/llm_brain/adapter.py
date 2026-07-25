@@ -1338,7 +1338,7 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
         if target == "standard_front" and (
             framing_standard != "consistent_head_and_upper_shoulders_reference_crop"
             or crop_policy != "head_top_margin_full_face_neck_and_upper_shoulders_visible"
-            or torso_scope != "upper_shoulders_only_no_half_body_or_big_head_crop"
+            or torso_scope != "visible_neck_collar_and_upper_shoulders"
             or aspect_ratio_standard
             != "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
         ):
@@ -1363,9 +1363,9 @@ def _required_professional_anchor_view_requirement(request: BrainRunRequest) -> 
             source_viewpoint_inheritance
             != "identity_only_do_not_inherit_source_pose_angle"
             or front_pose_normalization
-            != "normalize_to_symmetric_camera_facing_front"
+            != "standard_front_model_card_view"
             or face_axis_alignment
-            != "face_midline_vertical_eyes_level_nose_centered"
+            != "camera_facing_front_model_card_view"
         ):
             raise BrainProfessionalAnchorViewDecisionMissing(
                 "The frozen Character Card front-pose normalization requirement is missing or contradictory."
@@ -1685,9 +1685,13 @@ def _professional_anchor_prompt_scope_violations(
         "head and upper shoulders",
         "reference-card",
         "reference card",
+        "model-card",
+        "model card",
         "modeling-card",
         "modeling card",
         "face card",
+        "neck, collar and upper shoulders",
+        "visible neck, collar and upper shoulders",
         "头部、颈部和上肩",
         "头部、颈部、上肩",
         "头部、完整面部、颈部和上肩",
@@ -1728,6 +1732,7 @@ def _professional_anchor_prompt_scope_violations(
         "standard_front": (
             "front-facing",
             "front facing",
+            "standard-front",
             "front view",
             "frontal",
             "standard front",
@@ -1887,11 +1892,15 @@ def _professional_anchor_prompt_scope_violations(
                 violations.append(f"output_{index}:rear_allows_front_face")
         if target == "standard_front" and (
             expected_requirement.get("front_pose_normalization")
-            == "normalize_to_symmetric_camera_facing_front"
+            == "standard_front_model_card_view"
         ):
             straight_terms = (
                 "straight-on",
                 "straight on",
+                "front-facing",
+                "front facing",
+                "standard-front",
+                "standard front",
                 "真正直面镜头",
                 "直面镜头",
                 "标准正面",
@@ -1899,30 +1908,17 @@ def _professional_anchor_prompt_scope_violations(
                 "面对镜头",
                 "面向镜头",
             )
-            alignment_terms = (
-                "symmetric",
-                "symmetrical",
-                "centered",
-                "nose centered",
-                "face midline",
-                "eyes level",
-                "真正直面镜头",
-                "直面镜头",
-                "标准正面",
-                "正对镜头",
-                "脸部中线垂直",
-                "面部中线垂直",
-                "中线垂直",
-                "双眼水平",
-                "眼睛水平",
-                "鼻梁居中",
-                "鼻部居中",
-                "鼻子居中",
+            model_card_terms = (
+                "model-card",
+                "model card",
+                "character card",
+                "人物卡",
+                "角色卡",
             )
             if not any(term in normalized for term in straight_terms):
-                violations.append(f"output_{index}:front_pose_not_straight_on")
-            if not any(term in normalized for term in alignment_terms):
-                violations.append(f"output_{index}:front_axis_not_normalized")
+                violations.append(f"output_{index}:front_pose_not_model_card_front")
+            if not any(term in normalized for term in model_card_terms):
+                violations.append(f"output_{index}:front_framing_not_model_card")
     return violations
 
 

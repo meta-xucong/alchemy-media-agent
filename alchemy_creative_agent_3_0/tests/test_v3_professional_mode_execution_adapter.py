@@ -109,7 +109,7 @@ def test_professional_planning_metadata_exposes_typed_anchor_quality_contract() 
     contract = metadata["professional_face_identity_quality_contract"]
     assert contract["contract_version"] == "professional_face_identity_quality_v2"
     assert contract["priority_order"][0] == "same_person_likeness"
-    assert contract["anti_overperfection_boundary"] == "reject_generic_perfect_beauty_surface"
+    assert contract["photography_baseline"] == "use_existing_mature_model_card_photography_baseline"
     assert contract["developmental_age_coherence"] == "whole_person_when_age_owned"
     assert "capture_presentation" not in contract
     assert contract["owner"] == "remote_v3_llm_brain"

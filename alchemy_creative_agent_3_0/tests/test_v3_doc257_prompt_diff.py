@@ -31,6 +31,10 @@ def test_doc257_standard_front_prompt_uses_positive_model_card_framing_only() ->
 
     forbidden_prompt_increments = [
         "evidence-grade standardized identity capture",
+        "upper_shoulders_only_no_half_body_or_big_head_crop",
+        "normalize_to_symmetric_camera_facing_front",
+        "face_midline_vertical_eyes_level_nose_centered",
+        "balanced_ears_cheeks_shoulders_no_head_turn_or_tilt",
         "face midline vertical",
         "eyes level",
         "nose centered",

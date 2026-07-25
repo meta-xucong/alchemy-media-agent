@@ -528,7 +528,7 @@ def test_doc248_ordinary_job_metadata_cannot_forge_absolute_realism_flag() -> No
         )
 
 
-def test_doc248_host_writes_absolute_realism_trusted_provenance_only_for_standard_front() -> None:
+def test_doc248_host_does_not_write_deprecated_absolute_realism_active_metadata() -> None:
     captured: list[dict[str, object]] = []
 
     class _FakeService:
@@ -575,8 +575,8 @@ def test_doc248_host_writes_absolute_realism_trusted_provenance_only_for_standar
     with pytest.raises(AnchorCandidateUnavailable):
         host.generate(bridge_request)
 
-    assert captured[0]["professional_absolute_portrait_realism_required"] is True
-    assert captured[0]["professional_absolute_portrait_realism_provenance"] == "server_feature_flag_v1"
+    assert "professional_absolute_portrait_realism_required" not in captured[0]
+    assert "professional_absolute_portrait_realism_provenance" not in captured[0]
     assert "professional_absolute_portrait_realism_required" not in captured[1]
     assert "professional_absolute_portrait_realism_provenance" not in captured[1]
 

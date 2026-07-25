@@ -1073,7 +1073,7 @@ class ScenarioRuntime:
                 "capture_scope": "character_card_face_identity",
                 "framing_standard": "consistent_head_and_upper_shoulders_reference_crop",
                 "crop_policy": "head_top_margin_full_face_neck_and_upper_shoulders_visible",
-                "torso_scope": "upper_shoulders_only_no_half_body_or_big_head_crop",
+                "torso_scope": "visible_neck_collar_and_upper_shoulders",
                 "aspect_ratio_standard": "honor_frozen_rendering_size_as_reference_card_aspect_ratio",
                 "status": "approved",
                 "owner": "remote_v3_llm_brain",

@@ -209,7 +209,7 @@ class EcommerceRemoteBrainTestProvider:
             or (
                 anchor_framing_standard == "consistent_head_and_upper_shoulders_reference_crop"
                 and anchor_crop_policy == "head_top_margin_full_face_neck_and_upper_shoulders_visible"
-                and anchor_torso_scope == "upper_shoulders_only_no_half_body_or_big_head_crop"
+                and anchor_torso_scope == "visible_neck_collar_and_upper_shoulders"
                 and anchor_aspect_ratio_standard
                 == "honor_frozen_rendering_size_as_reference_card_aspect_ratio"
             )
@@ -221,9 +221,9 @@ class EcommerceRemoteBrainTestProvider:
                 anchor_source_viewpoint_inheritance
                 == "identity_only_do_not_inherit_source_pose_angle"
                 and anchor_front_pose_normalization
-                == "normalize_to_symmetric_camera_facing_front"
+                == "standard_front_model_card_view"
                 and anchor_face_axis_alignment
-                == "face_midline_vertical_eyes_level_nose_centered"
+                == "camera_facing_front_model_card_view"
             )
         )
         requires_anchor_view_decision = bool(
@@ -298,41 +298,29 @@ class EcommerceRemoteBrainTestProvider:
         )
         character_card_face_prompt = {
             "standard_front": (
-                "Clean straight-on front-facing, symmetric, centered face-midline identity reference portrait; "
-                "eyes level and nose centered, vertical 2:3 card, consistent head-and-upper-shoulders crop on a plain white studio "
-                "background, same person, natural camera-observed human materiality, crisp commercial clean finish."
+                "Photographer-shot standard-front model-card portrait on a clean white background; "
+                "same person, complete hair outline, small natural headroom, visible neck, collar and upper shoulders, "
+                "consistent photographer distance, mature commercial photo finish."
             ),
             "three_quarter": (
-                "Clean left-front 45-degree three-quarter vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
-                "background, same person, left ear visible on image-left and nose angled toward image-right, "
-                "same camera distance and head size as the approved front card, complete head-and-hair silhouette around the cranium, "
-                "similar head-top margin, same foreground card scale and subject top margin, full face, neck, upper shoulders and collar line visible, allowing natural face-box projection changes from the head turn, "
-                "crop ends just below the upper shoulders with clean white padding below the shoulder line, long hair may crop naturally below the upper shoulders, not a tight face close-up "
-                "and not a half-body crop, no chest-or-torso panel below the upper shoulders, not zoomed in, no soft feathered vignette or faded hair boundary, natural camera-observed human materiality, crisp commercial clean finish."
+                "Photographer-shot left-front 45-degree model-card portrait on a clean white background; "
+                "same person, complete hair outline, small natural headroom, visible neck, collar and upper shoulders, "
+                "consistent photographer distance, mature commercial photo finish."
             ),
             "profile": (
-                "Clean side profile vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
-                "background, same person, same camera distance and head size as the approved front card, complete head-and-hair silhouette around the cranium, "
-                "similar head-top margin, same foreground card scale and subject top margin, neck, upper shoulders and collar line visible, same head-and-upper-shoulders card scale, "
-                "crop ends just below the upper shoulders with clean white padding below the shoulder line, long hair may crop naturally below the upper shoulders, not a tight face close-up and not a half-body crop, "
-                "no chest-or-torso panel below the upper shoulders, not zoomed in, no soft feathered vignette or faded hair boundary, natural camera-observed human materiality, crisp commercial clean finish."
+                "Photographer-shot side-profile 90-degree model-card portrait on a clean white background; "
+                "same person, complete hair outline, small natural headroom, visible neck, collar and upper shoulders, "
+                "consistent photographer distance, mature commercial photo finish."
             ),
             "reverse_three_quarter": (
-                "Clean right-front opposite 45-degree three-quarter vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
-                "background, same person, independent opposite-side right-front view with right ear visible on image-right "
-                "and nose angled toward image-left, not a horizontal flip or literal mirror of the left-front card, preserving natural left/right face and hair asymmetry, "
-                "same camera distance and head size as the approved front card, complete head-and-hair silhouette around the cranium, "
-                "similar head-top margin, same foreground card scale and subject top margin, full face, neck, upper shoulders and collar line visible, allowing natural face-box projection changes from the head turn, "
-                "crop ends just below the upper shoulders with clean white padding below the shoulder line, long hair may crop naturally below the upper shoulders, not a tight face close-up and not a half-body crop, "
-                "no chest-or-torso panel below the upper shoulders, not zoomed in, no soft feathered vignette or faded hair boundary, natural camera-observed human materiality, crisp commercial clean finish."
+                "Photographer-shot right-front 45-degree model-card portrait on a clean white background; "
+                "same person, complete hair outline, small natural headroom, visible neck, collar and upper shoulders, "
+                "consistent photographer distance, mature commercial photo finish."
             ),
             "rear_head": (
-                "Clean rear head view vertical 2:3 card head-and-upper-shoulders identity reference portrait on a plain white studio "
-                "background, same person hair and head shape, same camera distance and head size as the approved front card, complete back-of-head silhouette around the cranium, "
-                "similar head-top margin, same foreground card scale and subject top margin, neck, upper shoulders and back collar line visible, same back-of-head head-and-upper-shoulders card scale, "
-                "crop ends just below the upper shoulders with clean white padding below the shoulder line, long hair may crop naturally below the upper shoulders, no visible face and no visible eyes, "
-                "not a tight head close-up and not a half-body crop, no chest-or-torso panel below the upper shoulders, not zoomed in, no soft feathered vignette "
-                "or faded hair boundary, natural camera-observed human materiality, crisp commercial clean finish."
+                "Photographer-shot rear-head model-card portrait on a clean white background; "
+                "same person hair and head shape, complete hair outline, small natural headroom, visible neck, collar and upper shoulders, "
+                "consistent photographer distance, mature commercial photo finish."
             ),
         }.get(anchor_view_target)
         expression_slot_prompt = {
