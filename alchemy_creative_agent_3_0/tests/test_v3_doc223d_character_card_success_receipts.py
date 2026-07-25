@@ -27,6 +27,13 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     validate_character_card_slot_success_receipt,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
+from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    FormalSlotAcceptanceCore,
+    FormalSlotCandidateSummary,
+    FormalSlotReceipt,
+    FormalSlotRequirementSummary,
+    mark_formal_slot_receipt_reload_public_projection_verified,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryVisualAssetCreateRequest,
     PersistentVisualAssetLibraryCatalog,
@@ -61,10 +68,13 @@ def _generic_shared_review_receipt() -> dict[str, object]:
         "owner": "v3_shared_visual_cluster",
         "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
         "status": "pass",
-        "evidence_codes": ["shared_visual_review_verified"],
+        "evidence_codes": [
+            "shared_visual_review_verified",
+            "front_card_framing_parity_verified",
+        ],
         "issue_codes": [],
         "score_dimensions": ["identity_fidelity", "visual_quality"],
-        "framing_delta_dimensions": [],
+        "framing_delta_dimensions": ["eye_line_delta_from_front"],
     }
 
 
@@ -75,6 +85,48 @@ def _stage_receipt(shared_review_receipts: list[dict[str, object]]) -> Character
         prompt_reference_parity_verified=True,
         shared_review_receipts=shared_review_receipts,
     )
+
+
+def _requirement_summary(label: str) -> FormalSlotRequirementSummary:
+    return FormalSlotRequirementSummary(
+        status="pass",
+        evidence_codes=[f"{label}_verified"],
+        dimensions={f"{label}_score": 0.95},
+    )
+
+
+def _formal_slot_receipt(
+    *,
+    slot_key: str,
+    output_id: str,
+    shared_review_receipt: dict[str, object] | None = None,
+    reload_public_projection_verified: bool = False,
+) -> FormalSlotReceipt:
+    shared_review = dict(shared_review_receipt or _generic_shared_review_receipt())
+    candidates = [
+        FormalSlotCandidateSummary(
+            candidate_index=index,
+            candidate_id=f"candidate_{slot_key.replace('.', '_')}_{index}",
+            output_id=output_id if index == 3 else f"{output_id}_rejected_{index}",
+            reviewed=True,
+            shared_review=shared_review,
+        )
+        for index in (1, 2, 3)
+    ]
+    receipt = FormalSlotAcceptanceCore().accept(
+        module="expression_set",
+        slot_key=slot_key,
+        acceptance_mode="standard_three_candidate",
+        candidates=candidates,
+        framing_summary=_requirement_summary("framing"),
+        parity_summary=_requirement_summary("parity"),
+        identity_summary=_requirement_summary("identity"),
+        ranking_key=lambda candidate: candidate.candidate_index,
+        reload_public_projection_verified=reload_public_projection_verified,
+    )
+    if reload_public_projection_verified:
+        return mark_formal_slot_receipt_reload_public_projection_verified(receipt)
+    return receipt
 
 
 def _face_ready_card() -> CharacterCardState:
@@ -192,6 +244,13 @@ class _SuccessfulExpressionHost:
             ],
             winner_output_ids={"expression.laugh": output_id},
             shared_runtime_receipt=_stage_receipt([receipt]),
+            formal_slot_receipts={
+                "expression.laugh": _formal_slot_receipt(
+                    slot_key="expression.laugh",
+                    output_id=output_id,
+                    shared_review_receipt=_generic_shared_review_receipt(),
+                )
+            },
         )
 
 
@@ -239,6 +298,13 @@ class _SingleLaughSlotHost:
             ],
             winner_output_ids={"expression.laugh": output_id},
             shared_runtime_receipt=_stage_receipt([receipt]),
+            formal_slot_receipts={
+                "expression.laugh": _formal_slot_receipt(
+                    slot_key="expression.laugh",
+                    output_id=output_id,
+                    shared_review_receipt=_generic_shared_review_receipt(),
+                )
+            },
         )
 
 
@@ -258,25 +324,21 @@ def test_doc223d_prepare_persists_slot_success_receipt_across_catalog_reload(tmp
     )
 
     slot = updated.character_card.expression_slots["expression.laugh"]
-    assert slot.shared_runtime_receipt is not None
-    assert slot.shared_runtime_receipt["slot_key"] == "expression.laugh"
-    assert slot.shared_runtime_receipt["output_id"] == "output_laugh_doc223d"
-    assert slot.shared_runtime_receipt["shared_review_receipts"][0]["status"] == "pass"
-    assert "mouth_eye_coherence" in slot.shared_runtime_receipt["shared_review_receipts"][0]["score_dimensions"]
-    assert "eye_line_delta_from_front" in slot.shared_runtime_receipt["shared_review_receipts"][0]["framing_delta_dimensions"]
+    assert slot.formal_slot_receipt is not None
+    assert slot.formal_slot_receipt.slot_key == "expression.laugh"
+    assert slot.formal_slot_receipt.winner_output_id == "output_laugh_doc223d"
+    assert slot.formal_slot_receipt.acceptance_mode == "standard_three_candidate"
+    assert slot.formal_slot_receipt.reviewed_candidate_count == 3
+    assert slot.formal_slot_receipt.reload_public_projection_verified is True
+    assert slot.formal_slot_receipt.activation_eligible is True
 
     reopened = PersistentVisualAssetLibraryCatalog(tmp_path)
     restored = reopened.get(owner_scope="local_default", visual_asset_id=asset.visual_asset_id)
 
     assert restored is not None
     restored_slot = restored.character_card.expression_slots["expression.laugh"]
-    assert restored_slot.shared_runtime_receipt == slot.shared_runtime_receipt
-    validate_character_card_slot_success_receipt(
-        restored_slot.shared_runtime_receipt,
-        module="expression_set",
-        slot_key="expression.laugh",
-        output_id="output_laugh_doc223d",
-    )
+    assert restored_slot.formal_slot_receipt == slot.formal_slot_receipt
+    assert restored_slot.formal_slot_receipt.activation_eligible is True
 
 
 def test_doc232_laugh_slot_receipt_does_not_require_unrelated_module_activation(tmp_path) -> None:
@@ -301,9 +363,10 @@ def test_doc232_laugh_slot_receipt_does_not_require_unrelated_module_activation(
     assert updated.character_card.expression_set_status == "partial"
     assert laugh.state == "winner_selected"
     assert laugh.output_id == "output_laugh_doc232"
-    assert laugh.shared_runtime_receipt is not None
-    assert laugh.shared_runtime_receipt["slot_key"] == "expression.laugh"
-    assert laugh.shared_runtime_receipt["output_id"] == "output_laugh_doc232"
+    assert laugh.formal_slot_receipt is not None
+    assert laugh.formal_slot_receipt.slot_key == "expression.laugh"
+    assert laugh.formal_slot_receipt.winner_output_id == "output_laugh_doc232"
+    assert laugh.formal_slot_receipt.activation_eligible is True
     assert card.expression_slots["expression.anger"].state == "empty"
     assert card.expression_slots["expression.sad"].state == "empty"
     with pytest.raises(ValueError, match="Expression Set contains an unreviewed slot"):
@@ -325,12 +388,13 @@ def test_doc223d_public_projection_exposes_only_safe_success_receipt_summary(tmp
 
     public = V3ProductRouteHandlers._visual_asset_public_record(updated)
     slot_public = public["character_card"]["slots"]["expression.laugh"]
-    receipt_public = slot_public["shared_runtime_receipt"]
+    receipt_public = slot_public["formal_slot_receipt"]
 
-    assert slot_public["shared_runtime_receipt_verified"] is True
+    assert slot_public["formal_slot_receipt_verified"] is True
     assert receipt_public["slot_key"] == "expression.laugh"
-    assert receipt_public["output_id"] == "output_laugh_doc223d"
-    assert receipt_public["shared_review_receipts"][0]["owner"] == "v3_shared_visual_cluster"
+    assert receipt_public["winner_output_id"] == "output_laugh_doc223d"
+    assert receipt_public["acceptance_mode"] == "standard_three_candidate"
+    assert receipt_public["reviewed_candidate_count"] == 3
     text = json.dumps(receipt_public, ensure_ascii=False).lower()
     for forbidden in (
         "canonical_prompt",
@@ -431,7 +495,7 @@ def test_doc223d_legacy_boolean_winner_without_success_receipt_cannot_activate()
         update={"expression_set_status": "reviewing", "expression_slots": expression_slots}
     )
 
-    with pytest.raises(ValueError, match="persisted shared runtime receipt"):
+    with pytest.raises(ValueError, match="formal slot receipt"):
         CharacterCardPreparationService.activate_module(
             reviewing,
             module="expression_set",
@@ -453,13 +517,10 @@ def test_doc223d_activation_accepts_only_slot_owned_success_receipts() -> None:
     )
     for key in ("expression.laugh", "expression.anger", "expression.sad"):
         output_id = f"output_{key}"
-        review_receipts = [_laugh_shared_review_receipt()] if key == "expression.laugh" else [_generic_shared_review_receipt()]
-        receipt = project_character_card_slot_success_receipt(
-            _stage_receipt(review_receipts),
-            module="expression_set",
+        formal_receipt = _formal_slot_receipt(
             slot_key=key,
             output_id=output_id,
-            shared_review_receipts=review_receipts,
+            reload_public_projection_verified=True,
         )
         expression_slots[key] = CharacterCardSlot(
             slot_key=key,  # type: ignore[arg-type]
@@ -470,7 +531,7 @@ def test_doc223d_activation_accepts_only_slot_owned_success_receipts() -> None:
             lineage_id=f"lineage_{key}",
             review_verified=True,
             prompt_reference_parity_verified=True,
-            shared_runtime_receipt=receipt,
+            formal_slot_receipt=formal_receipt,
             candidate_attempt_count=3,
         )
     reviewing = card.model_copy(
@@ -489,7 +550,7 @@ def test_doc223d_activation_accepts_only_slot_owned_success_receipts() -> None:
 
     assert activated.expression_set_status == "active"
     assert activated.expression_slots["expression.laugh"].state == "active"
-    assert activated.expression_slots["expression.laugh"].shared_runtime_receipt["slot_key"] == "expression.laugh"
+    assert activated.expression_slots["expression.laugh"].formal_slot_receipt.slot_key == "expression.laugh"
 
 
 def test_doc223d_success_receipt_mismatch_and_incomplete_dimensions_fail_closed() -> None:
@@ -586,13 +647,11 @@ def test_doc223d_prepare_fails_closed_when_success_receipt_cannot_be_projected(t
 
 
 def test_doc223d_resume_preserves_existing_slot_receipt_without_copying_stage_receipt(tmp_path) -> None:
-    laugh_review = _laugh_shared_review_receipt()
-    laugh_receipt = project_character_card_slot_success_receipt(
-        _stage_receipt([laugh_review]),
-        module="expression_set",
+    laugh_formal_receipt = _formal_slot_receipt(
         slot_key="expression.laugh",
         output_id="output_laugh_existing",
-        shared_review_receipts=[laugh_review],
+        shared_review_receipt=_generic_shared_review_receipt(),
+        reload_public_projection_verified=True,
     )
     card = _face_ready_card()
     expression_slots = dict(card.expression_slots)
@@ -605,7 +664,7 @@ def test_doc223d_resume_preserves_existing_slot_receipt_without_copying_stage_re
         lineage_id="lineage_laugh_existing",
         review_verified=True,
         prompt_reference_parity_verified=True,
-        shared_runtime_receipt=laugh_receipt,
+        formal_slot_receipt=laugh_formal_receipt,
         candidate_attempt_count=3,
     )
     partial_card = card.model_copy(
@@ -649,6 +708,14 @@ def test_doc223d_resume_preserves_existing_slot_receipt_without_copying_stage_re
                     "expression.anger": anger_output,
                 },
                 shared_runtime_receipt=_stage_receipt([generic]),
+                formal_slot_receipts={
+                    "expression.laugh": laugh_formal_receipt,
+                    "expression.anger": _formal_slot_receipt(
+                        slot_key="expression.anger",
+                        output_id=anger_output,
+                        shared_review_receipt=generic,
+                    ),
+                },
             )
 
     catalog = PersistentVisualAssetLibraryCatalog(tmp_path)
@@ -664,5 +731,8 @@ def test_doc223d_resume_preserves_existing_slot_receipt_without_copying_stage_re
         stage="expression_set",
     )
 
-    assert updated.character_card.expression_slots["expression.laugh"].shared_runtime_receipt == laugh_receipt
-    assert updated.character_card.expression_slots["expression.anger"].shared_runtime_receipt["slot_key"] == "expression.anger"
+    assert updated.character_card.expression_slots["expression.laugh"].formal_slot_receipt == laugh_formal_receipt
+    anger_receipt = updated.character_card.expression_slots["expression.anger"].formal_slot_receipt
+    assert anger_receipt is not None
+    assert anger_receipt.slot_key == "expression.anger"
+    assert anger_receipt.activation_eligible is True
