@@ -369,7 +369,7 @@ This subcontract must reject:
 
 Calibration:
 
-- numeric bands must come from `photographic_model_card_front_calibration_v1`;
+- numeric bands must come from `close_model_card_framing_family_calibration_v1`;
 - no production default may hard-code unreviewed thresholds;
 - the calibration artifact must include positive and negative examples, human
   labels, target face / head / upper-shoulder ratios, and allowed variance.
