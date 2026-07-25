@@ -1125,12 +1125,10 @@ class ScenarioRuntime:
                         "layout_notes": ["vertical 2:3 reference-card crop"],
                         "hard_constraints": [
                             "Use approved references for identity; change only the requested face-view angle.",
-                            "No props, branding, scene marketing, half-body crop, or big-head crop.",
+                            "Keep a clean white studio close model-card crop with visible neck, collar, and upper shoulders; not half-body and not big-head.",
                         ],
                         "negative_prompt_addons": [
                             "avoid unrequested wardrobe, style, or scene changes",
-                            "avoid plastic skin",
-                            "avoid dirty noise or smeared texture",
                         ],
                         "consistency_strategy": "reference_led_character_card_slot_delta_recovery",
                     }
@@ -1414,13 +1412,11 @@ class ScenarioRuntime:
                         "hard_constraints": [
                             "Use the approved front card as the identity, lighting, white-background and framing baseline.",
                             "Change only facial expression and a very small amount of natural head-shoulder energy.",
-                            "No new scene, wardrobe change, full-body crop, half-body crop, or big-head crop.",
+                            "Keep the same clean white close model-card crop, photographer distance, visible neck, collar, and upper shoulders; not half-body and not big-head.",
                         ],
                         "negative_prompt_addons": [
                             "avoid mouth-only expression",
                             "avoid detached gaze",
-                            "avoid plastic skin",
-                            "avoid dirty noise or smeared texture",
                         ],
                         "consistency_strategy": "reference_led_character_card_expression_slot_delta_recovery",
                     }
@@ -1540,9 +1536,8 @@ class ScenarioRuntime:
             ),
         }
         avoid = (
-            " No new scene, no wardrobe change, no full-body or half-body crop, no big-head close-up, no props, no branding, "
-            "no unrequested wardrobe/style/scene change, no mouth-only expression, no detached gaze, no plastic skin, "
-            "no oily shine, no dirty noise or smeared texture."
+            " Keep the same clean white model-card frame, wardrobe/style channel, close photographer crop, visible neck, "
+            "collar, and upper shoulders; change only the expression while preserving direct card usability."
         )
         repair_delta = shared_review_repair_prompt_delta(repair_context)
         if repair_delta:
@@ -1596,20 +1591,17 @@ class ScenarioRuntime:
         visible_face_framing = (
             "Match the approved front card framing: same camera distance, head size, head-top margin, "
             "upper-shoulders cutoff, collar line and background padding. Keep a vertical 2:3 head-neck-upper-shoulders "
-            "modeling card with the full head and hair boundary cleanly inside the frame; do not turn it into a "
-            "tight face close-up, half-body crop or torso portrait. "
+            "close model-card crop with the full head and hair boundary cleanly inside the frame, visible neck, collar, and upper shoulders; not half-body and not big-head. "
         )
         profile_framing = (
             "Match the approved front card framing: same camera distance, head size, head-top margin, "
             "upper-shoulders cutoff, collar line and background padding. Keep a vertical 2:3 head-neck-upper-shoulders "
-            "modeling card with the full head and hair boundary cleanly inside the frame; do not turn it into a "
-            "tight face close-up, half-body crop or torso portrait. "
+            "close model-card crop with the full head and hair boundary cleanly inside the frame, visible neck, collar, and upper shoulders; not half-body and not big-head. "
         )
         rear_framing = (
             "Match the approved card framing: same camera distance, head size, head-top margin, "
             "upper-shoulders cutoff, back collar line and background padding. Keep a vertical 2:3 head-neck-upper-shoulders "
-            "modeling card with the full back-of-head hair boundary cleanly inside the frame; do not turn it into a "
-            "tight head close-up, half-body crop or torso portrait. "
+            "close model-card crop with the full back-of-head hair boundary cleanly inside the frame, visible neck, collar, and upper shoulders; not half-body and not big-head. "
         )
         prompts = {
             "left_front_25": (
@@ -1624,7 +1616,7 @@ class ScenarioRuntime:
                 f"{visible_face_framing}"
                 "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
                 "wardrobe/style channel, and visual finish; keep a natural neutral expression suitable for a reference card. "
-                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+                "Keep the frame as a clean white studio model-card portrait focused only on the subject."
             ),
             "three_quarter": (
                 "Left-front three-quarter view portrait of the same person from the approved references, "
@@ -1635,7 +1627,7 @@ class ScenarioRuntime:
                 f"{visible_face_framing}"
                 "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
                 "wardrobe/style channel, and visual finish; keep a natural neutral expression suitable for a reference card. "
-                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+                "Keep the frame as a clean white studio model-card portrait focused only on the subject."
             ),
             "profile": (
                 "Strict 90-degree side profile portrait of the same person from the approved references, "
@@ -1644,7 +1636,7 @@ class ScenarioRuntime:
                 f"{profile_framing}"
                 "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
                 "wardrobe/style channel, and visual finish; keep a natural neutral expression suitable for a reference card. "
-                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+                "Keep the frame as a clean white studio model-card portrait focused only on the subject."
             ),
             "right_front_25": (
                 "Right-front shallow three-quarter transition portrait of the same person from the approved front card, "
@@ -1659,7 +1651,7 @@ class ScenarioRuntime:
                 f"{visible_face_framing}"
                 "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
                 "wardrobe/style channel, and visual finish; keep a natural neutral expression suitable for a reference card. "
-                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+                "Keep the frame as a clean white studio model-card portrait focused only on the subject."
             ),
             "reverse_three_quarter": (
                 "Right-front three-quarter opposite front-side 45-degree view portrait of the same person from the approved references, "
@@ -1670,8 +1662,8 @@ class ScenarioRuntime:
                 "Do not mirror or copy the left-front card; avoid straight-front, side-profile, rear/back, or same-side results. "
                 f"{visible_face_framing}"
                 "Inherit the approved front card's background treatment, lighting direction, white balance, complexion channel, "
-                "wardrobe/style channel, and visual finish with natural hair and skin texture. "
-                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+                "wardrobe/style channel, and visual finish. "
+                "Keep the frame as a clean white studio model-card portrait focused only on the subject."
             ),
             "rear_head": (
                 "Back-of-head reference portrait of the same person from the approved references, "
@@ -1680,7 +1672,7 @@ class ScenarioRuntime:
                 f"{rear_framing}"
                 "Inherit the approved front card's background treatment, lighting direction, white balance, "
                 "wardrobe/style channel, and visual finish. "
-                "No props, branding, scene marketing, half-body crop, big-head crop, plastic skin, noise or smear."
+                "Keep the frame as a clean white studio model-card portrait focused only on the subject."
             ),
         }
         return prompts.get(view_role, prompts["three_quarter"])

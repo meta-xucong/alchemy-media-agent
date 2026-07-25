@@ -1379,7 +1379,7 @@ def _retry_patch_for_issues(
                 [
                     "raise the foundation aesthetic finish with intentional framing, clear subject readability, balanced exposure, stable color grade, natural contrast, and believable depth",
                     "make the result feel like a directed real-camera image rather than a generic stock render or accidental snapshot",
-                    "preserve useful material, skin, fabric, hair, surface, and environment texture without overprocessed HDR or synthetic micro-detail",
+                    "preserve useful material, fabric, hair, surface, and environment readability with a polished photographer-directed finish",
                 ]
             )
             composition_repair.extend(
@@ -1388,12 +1388,9 @@ def _retry_patch_for_issues(
                     "repair exposure and color so the image is neither washed out, muddy, overly flat, nor strangely color-shifted",
                 ]
             )
-            artifact_repair.append(
-                "avoid AI-looking micro-sharpness, waxy detail, overprocessed contrast, and generic stock-photo polish"
-            )
+            artifact_repair.append("repair contrast, color, subject readability, and material separation without a generic render finish")
             negative_additions.extend(
                 [
-                    "generic stock photo",
                     "weak aesthetic finish",
                     "flat low-contrast image",
                     "washed-out exposure",
@@ -1402,9 +1399,6 @@ def _retry_patch_for_issues(
                     "unclear subject",
                     "weak depth separation",
                     "accidental composition",
-                    "overprocessed HDR",
-                    "synthetic micro detail",
-                    "AI-looking sharpness",
                 ]
             )
         elif code in {"weak_lifestyle_context", "studio_only_when_lifestyle_requested"}:

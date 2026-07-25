@@ -4920,10 +4920,11 @@ class V3ProductApiService:
                 composition_repair.append(
                     "repair exposure, color, contrast, depth, and framing so the subject reads clearly and the image feels directed"
                 )
-                artifact_repair.append("avoid overprocessed HDR, synthetic micro-detail, waxy polish, and generic stock-photo finish")
+                artifact_repair.append(
+                    "repair exposure, color, contrast, depth, and framing so the result feels like a directed studio photograph"
+                )
                 negative_additions.extend(
                     [
-                        "generic stock photo",
                         "weak aesthetic finish",
                         "flat low-contrast image",
                         "washed-out exposure",
@@ -4932,8 +4933,6 @@ class V3ProductApiService:
                         "unclear subject",
                         "weak depth separation",
                         "accidental composition",
-                        "overprocessed HDR",
-                        "synthetic micro detail",
                     ]
                 )
             elif code in {

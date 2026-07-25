@@ -15,6 +15,13 @@ def _character_card_anchor_prompt_block() -> str:
     return source[start:end]
 
 
+def _source_block(relative_path: str, start_marker: str, end_marker: str) -> str:
+    source = _read(relative_path)
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    return source[start:end]
+
+
 def test_doc257_standard_front_prompt_uses_positive_model_card_framing_only() -> None:
     source = _character_card_anchor_prompt_block()
 
@@ -89,3 +96,90 @@ def test_doc257_host_no_longer_writes_deprecated_realism_prompt_gate_metadata() 
     ]
     for phrase in forbidden_active_metadata:
         assert phrase not in source
+
+
+def test_doc257_generation_recovery_exits_drop_old_micro_and_detector_wording() -> None:
+    source = _source_block(
+        "app/scenario_runtime/runtime.py",
+        "def _recover_character_card_slot_delta_brain_result",
+        "def _finalize_canonical_provider_prompts",
+    )
+
+    for phrase in (
+        "head, neck, and upper shoulders reference-card crop",
+        "plain white studio background",
+        "requested face-view angle must be visible",
+        "close model-card crop",
+        "not half-body",
+        "not big-head",
+        "reference-card",
+    ):
+        assert phrase in source
+
+    for phrase in (
+        "avoid plastic skin",
+        "avoid dirty noise or smeared texture",
+        "no plastic skin",
+        "noise or smear",
+    ):
+        assert phrase not in source
+
+
+def test_doc257_active_retry_patches_use_neutral_photo_quality_not_micro_defect_stack() -> None:
+    product_api_retry = _source_block(
+        "app/product_api/service.py",
+        "def _visual_retry_patch_from_issues",
+        "def _merge_post_generation_review_chain",
+    )
+    inspector_retry = _source_block(
+        "app/shared_capabilities/visual_cluster/vision_inspector.py",
+        "elif code in _aesthetic_stability_issues",
+        "elif code in {\"weak_lifestyle_context\"",
+    )
+
+    combined_generation_exits = "\n".join([product_api_retry, inspector_retry])
+    for phrase in (
+        "synthetic micro-detail",
+        "synthetic micro detail",
+        "waxy polish",
+        "ai-looking micro-sharpness",
+        "ai-looking sharpness",
+        "poreless glass-like skin",
+        "avoid plastic skin",
+        "plastic texture",
+        "generic ai beauty identity",
+        "overprocessed hdr",
+        "generic stock-photo polish",
+    ):
+        assert phrase not in combined_generation_exits
+
+
+def test_doc257_shared_provider_strict_policy_remains_out_of_prompt_cleanup_scope() -> None:
+    provider_prompt = _source_block(
+        "app/generation_router/providers.py",
+        "strict_policy = plan_metadata.get",
+        "def _role_prompt_pressure_for_provider",
+    )
+
+    for phrase in (
+        "poreless glass-like skin",
+        "generic ai beauty identity",
+        "overprocessed hdr finish",
+    ):
+        assert phrase in provider_prompt
+
+
+def test_doc257_review_prompt_preserves_quality_and_angle_acceptance_checks() -> None:
+    source = _read("app/shared_capabilities/visual_cluster/vision_provider.py")
+
+    for phrase in (
+        "waxy/plastic or poreless/smeared skin",
+        "visible ai-render artifact",
+        "standard_front reads as front-facing",
+        "left_front_25",
+        "right_front_25",
+        "three_quarter and reverse_three_quarter read",
+        "profile reads as a 90-degree side card",
+        "rear_head reads as a back-of-head",
+    ):
+        assert phrase in source

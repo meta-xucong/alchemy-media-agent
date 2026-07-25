@@ -471,7 +471,7 @@ def test_doc192_left_25_timeout_recovery_preserves_card_scale_family_without_har
     assert "same camera distance" in prompt
     assert "head-top margin" in prompt
     assert "head-neck-upper-shoulders" in prompt
-    assert "tight face close-up" in prompt
+    assert "visible neck, collar, and upper shoulders" in prompt
 
 
 def test_doc190_recovered_character_card_slot_keeps_shared_human_realism_execution_active() -> None:
@@ -534,7 +534,7 @@ def test_doc190_reverse_three_quarter_timeout_recovery_is_opposite_front_45_not_
     assert "nose and gaze angled toward image-left" in prompt
     assert "upper-shoulders cutoff" in prompt
     assert "background padding" in prompt
-    assert "torso portrait" in prompt
+    assert "visible neck, collar, and upper shoulders" in prompt
     assert "back of head dominant" not in prompt
     assert "mostly away" not in prompt
     assert "mirrored opposite side" not in prompt
