@@ -15,6 +15,17 @@
 > than a generic beauty archetype, while preserving user-owned aesthetics. Both
 > passes may only return a whole canonical prompt; neither authorizes local
 > prompt wording or substitutes for pixel-quality certification.
+>
+> **Current Professional model-card direction (Docs256-257):** Face
+> `standard_front` and inherited Expression card-family delivery must optimize
+> for photographer-shot child model-card images, not identity-verification
+> headshots. Doc248 / Doc252 / Doc254 / Doc255 are deprecated as active
+> Face/Expression product targets; keep them only as historical evidence or
+> compatibility vocabulary. The formal three-candidate / winner /
+> `FormalSlotReceipt` chain remains authoritative, but the image-design target
+> must be the simplified Doc257 photographic model-card route. Doc257 is the
+> active removal / simplification authority: old realism flags may explain old
+> records, but they must not author new Face or Expression production success.
 
 This document defines the non-negotiable development rules for Alchemy Creative Agent 3.0.
 
@@ -572,27 +583,28 @@ be completed before Doc101 may be marked implemented.
 
 ## 22.3 Professional Character Card Close Model-Card Front
 
-Doc256 is the current product-definition authority for Professional Character
-Card Face `standard_front` and for Professional Expression delivery slots that
-inherit the same card-family framing baseline.
+Docs256-257 define the current Professional Character Card visual direction,
+with Doc257 as the active simplification authority for Face `standard_front`
+and Professional Expression delivery prompt language.
 
 Forward work must preserve the formal three-candidate acceptance machine:
 real candidates, canonical shared review, external Enhanced eligibility,
 explicit ranking, one winner, per-slot `FormalSlotReceipt`, save/reload/public
 projection, and activation validation.
 
-Doc256 supersedes Doc248, Doc252, Doc253, Doc254, and Doc255 only as active
-image-design / production-gating targets for Face `standard_front` and inherited
-Expression card-family framing. It does not delete those documents, migrate old
-receipts, upgrade target-only history, or change Formal Core authority.
+Doc257 supersedes Doc248, Doc252, Doc253, Doc254, and Doc255 only as active
+image-design prompt / negative-prompt sources for Face `standard_front` and
+inherited Expression card-family framing. It does not delete those documents,
+migrate old receipts, upgrade target-only history, add a new quality gate, or
+change Formal Core authority.
 
 The corrected visual target is a close professional child model-card front
 photograph: not a half-body portrait, not a passport / ID-style big-head
-headshot. Face and Expression may share neutral versioned
-`card_family_framing` evidence and calibration, but Expression must not import
-Face-local implementation. Shared Human Realism foundation remains the owner of
-generic eye, skin, hair, garment, and light realism evidence; Doc256 binds that
-evidence to the model-card candidate instead of duplicating a second evaluator.
+headshot. Face and Expression may share the same neutral card-family prompt
+wording for angle, camera distance, headroom, neck, collar, and upper shoulders,
+but Expression must own its affect wording. AI-detectability is only a
+post-generation observation field; it must not become prompt text, negative
+prompt text, retry logic, or acceptance logic.
 
 ## 23. Strategic Reminder
 
