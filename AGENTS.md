@@ -61,47 +61,36 @@ Each parallel task owns one worktree and one branch.
 Sync early, test before integrating, and protect other worktrees.
 ```
 
-## Project Root and Active Mainline Workspace Anchor
+## Project Root and Unique Mainline Workspace Anchor
 
-The project root remains:
+The project root and the only active `main` branch checkout are:
 
 ```text
 D:\AI\Alchemy Media Agent System
 ```
 
-That path is the human-facing/project-specified workspace root and may contain
-the repository's global guidance, historical artifacts, and worktree registry.
-
-For the current Professional Character Card / visual-asset acceptance work, the
-active `main` branch checkout is currently:
-
-```text
-D:\AI\w\main-codex-reference-parity-integration
-```
-
-This is a Git worktree placement, not a redefinition of the project root. The
-active mainline checkout must be on `main`, and its `HEAD` must match
-`origin/main` before controlled validation or feature work continues.
+That path is the human-facing/project-specified workspace root, the mainline
+integration checkout, and the directory that must match `origin/main` before
+controlled validation or feature work continues.
 
 If an agent starts in `D:\AI\Alchemy Media Agent System` and that directory is
-not currently on `main`, it must first inspect `git worktree list` and locate
-the worktree that owns `refs/heads/main`. It must not assume the project root is
-obsolete, and it must not run current validation from an archive branch.
+not currently on `main`, or if another worktree owns `refs/heads/main`, it must
+stop and report a workspace-governance violation before doing development.
+It must not assume the project root is obsolete, and it must not run current
+validation from an archive branch or stale feature worktree.
 
-Moving `main` back to the project root is a worktree migration, not an ordinary
-validation step. It requires explicit user authorization because it may require
-switching branches, relocating the active `main` worktree, and preserving
-untracked evidence/history. Until that migration is requested and completed,
-current controlled evidence for the six-year-old Character Card acceptance
-lives under the active mainline checkout's `.controlled-validation/` directory
-and remains append-only.
+Feature branches may use temporary worktrees, but they must be integrated back
+into GitHub `origin/main` and the unique mainline checkout before they are used
+as a basis for follow-up work. Temporary worktrees, validation evidence roots,
+V2 work, and frozen historical diffs must not be treated as the V3 mainline
+baseline. Preserve append-only evidence before removing stale worktrees.
 
 Short form:
 
 ```text
-Project root: D:\AI\Alchemy Media Agent System.
-Current main checkout: D:\AI\w\main-codex-reference-parity-integration.
-Do not run mainline validation from an archive branch.
+Unique main checkout: D:\AI\Alchemy Media Agent System.
+Keep it synced to origin/main before V3 validation.
+Do not run mainline validation from archive or feature worktrees.
 ```
 
 ## Theory-First Correction Principle
