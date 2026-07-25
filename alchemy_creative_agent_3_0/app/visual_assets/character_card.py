@@ -542,8 +542,6 @@ class CharacterCardState(_CharacterCardModel):
         if self.body_silhouette_status in {"preparing", "reviewing", "partial", "active"}:
             if self.face_identity_status != "active":
                 raise ValueError("Body Silhouette requires an active Face Identity module")
-            if self.expression_set_status != "active":
-                raise ValueError("Body Silhouette requires an active Expression Set")
         if self.active_version_id and not self.user_activation_confirmed:
             raise ValueError("active Character Card versions require explicit user activation")
         if self.resume_available:
@@ -1549,8 +1547,6 @@ class CharacterCardPreparationService:
     ) -> CharacterCardStageResult:
         if card.face_identity_status != "active":
             raise ValueError("Body Silhouette requires an active Face Identity module")
-        if card.expression_set_status != "active":
-            raise ValueError("Body Silhouette requires an active Expression Set")
         request = BodyPreparationRequest(
             source_class=source_class,
             face_reference_output_ids=face_reference_output_ids,

@@ -194,6 +194,23 @@ def test_doc245_body_slot_result_carries_per_slot_formal_receipt_after_three_rev
     assert receipt.activation_eligible is False
 
 
+def test_doc245_body_preparation_does_not_require_whole_expression_set_activation() -> None:
+    generator = _BodyGenerator()
+    service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+    card = _card_ready_for_body().model_copy(update={"expression_set_status": "partial"})
+
+    result = service.prepare_body_silhouette(
+        card,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert result.status == "review"
+    assert result.winner_output_ids["body.front_full"] == "output_body.front_full_3"
+    assert result.formal_slot_receipts["body.front_full"].acceptance_mode == "standard_three_candidate"
+
+
 def test_doc245_body_formal_core_filters_enhanced_ineligible_candidate_before_ranking() -> None:
     generator = _BodyGenerator()
     service = CharacterCardPreparationService(

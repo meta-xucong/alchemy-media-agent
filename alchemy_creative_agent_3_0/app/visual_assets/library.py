@@ -996,8 +996,6 @@ class VisualAssetLibraryLifecycleService:
         if stage == "body_silhouette":
             if card.face_identity_status != "active":
                 raise ValueError("character_card_body_requires_face_identity")
-            if card.expression_set_status != "active":
-                raise ValueError("character_card_body_requires_expression_set")
             if body_request is None:
                 raise ValueError("character_card_body_source_required")
             if body_request.source_class == "observed":

@@ -184,13 +184,6 @@ def test_doc178_ordered_stage_gate_blocks_expression_and_body_before_face() -> N
             face_reference_output_ids=["front", "profile", "rear"],
             source_class="brain_inferred",
         )
-    face_ready = card.model_copy(update={"face_identity_status": "active"})
-    with pytest.raises(ValueError, match="Expression Set"):
-        service.prepare_body_silhouette(
-            face_ready,
-            face_reference_output_ids=["front", "profile", "rear"],
-            source_class="brain_inferred",
-        )
 
 
 def test_doc178_face_update_marks_only_dependents_stale_and_keeps_history() -> None:
