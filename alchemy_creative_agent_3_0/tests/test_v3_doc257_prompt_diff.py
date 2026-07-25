@@ -13,11 +13,15 @@ def test_doc257_standard_front_prompt_uses_positive_model_card_framing_only() ->
 
     required_positive = [
         "photographer-shot",
+        "age-appropriate casting/model-card",
+        "reference-owned age reading",
+        "hair/grooming logic",
         "model-card",
         "consistent photographer distance",
         "complete hair outline",
         "small natural headroom",
         "visible neck, collar and upper shoulders",
+        "real studio softness",
     ]
     for phrase in required_positive:
         assert phrase in source
@@ -42,6 +46,8 @@ def test_doc257_expression_prompt_reuses_framing_without_old_negative_crop_stack
     source = _read("app/llm_brain/prompts.py")
 
     assert "same model-card framing" in source
+    assert "model-card framing family" in source
+    assert "reference-owned age reading" in source
     assert "laugh" in source
     assert "anger" in source
     assert "sad" in source

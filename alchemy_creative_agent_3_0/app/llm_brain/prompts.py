@@ -1163,11 +1163,14 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             if anchor_view_target == "standard_front":
                 response_contract += (
                     " For the standard_front slot, preserve the person's identity while producing a photographer-shot "
-                    "front model-card portrait. Use consistent photographer distance, complete hair outline, small natural "
+                    "age-appropriate casting/model-card front portrait. Adapt the person's reference-owned age reading, "
+                    "face relationship, hair/grooming logic and natural expression tendency instead of using a fixed "
+                    "sample-specific look. Use consistent photographer distance, complete hair outline, small natural "
                     "headroom, and a close model-card crop with visible neck, collar and upper shoulders on a clean white "
-                    "studio model-card background. Keep the image commercially polished, naturally photographic, and "
-                    "child-present, with a natural neutral expression unless the current slot explicitly owns another "
-                    "expression. Return capture_scope character_card_face_identity plus the exact frozen framing, "
+                    "studio model-card background with real studio softness rather than document-style flatness. Keep the "
+                    "image commercially polished, naturally photographic, beautiful, and relaxed, with a natural neutral "
+                    "expression unless the current slot explicitly owns another expression. Return capture_scope "
+                    "character_card_face_identity plus the exact frozen framing, "
                     "aspect-ratio and front-pose-normalization fields in the typed receipt."
                 )
             else:
@@ -1178,10 +1181,12 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                     f"photographic phrase that makes the target view {anchor_view_target} unambiguous while the references "
                     "carry identity, developmental stage, complexion balance and material finish. Keep one compact "
                     "model-card framing rule: use the same model-card framing with consistent photographer distance, "
-                    "complete hair outline, small natural headroom, visible neck, collar and upper shoulders. For visible "
+                    "complete hair outline, small natural headroom, visible neck, collar and upper shoulders, while adapting "
+                    "the person's reference-owned age reading, face relationship, hair/grooming logic and natural expression "
+                    "tendency instead of copying a sample-specific look. For visible "
                     "turning slots, allow natural face-box changes caused by head rotation and judge continuity by the full "
                     "card framing, not by matching another angle's face rectangle. Expression delivery slots reuse the same "
-                    "model-card framing while keeping laugh, anger and sad affect wording owned by the Expression slot. The typed "
+                    "model-card framing family while keeping laugh, anger and sad affect wording owned by the Expression slot. The typed "
                     "professional_anchor_view_decision for non-front Character Card slots should stay compact: return "
                     "the exact target_view_role, capture_presentation, capture_continuity and capture_scope; do not "
                     "repeat the standard_front-only framing/aspect/front-axis receipt fields."
