@@ -5,17 +5,34 @@ from __future__ import annotations
 from collections.abc import Callable
 import hashlib
 import json
+import multiprocessing
 import os
+from pathlib import Path
 import queue
+import sys
 import threading
 from typing import Any
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SRC_SKELETON_ROOT = _REPO_ROOT / "src_skeleton"
+_REPO_ROOT_TEXT = str(_REPO_ROOT)
+if _REPO_ROOT_TEXT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT_TEXT)
+_SRC_SKELETON_ROOT_TEXT = str(_SRC_SKELETON_ROOT)
+while _SRC_SKELETON_ROOT_TEXT in sys.path:
+    sys.path.remove(_SRC_SKELETON_ROOT_TEXT)
+sys.path.insert(0, _SRC_SKELETON_ROOT_TEXT)
 
 from alchemy_creative_agent_3_0.app.generation_router import (
     ProductionImageGenerationProvider,
     build_provider_generation_request,
 )
 from app.providers.base import ProviderRuntimeError
-from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
+from alchemy_creative_agent_3_0.app.scenario_runtime import (
+    ScenarioRuntime,
+    ScenarioRuntimeResult,
+    ScenarioRuntimeStatus,
+)
 from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
 from alchemy_creative_agent_3_0.app.visual_assets import (
@@ -72,11 +89,33 @@ class _LocalMcpPlanningTimeout(TimeoutError):
     """Internal deadline for conversation-only Codex MCP planning."""
 
 
+class _LocalMcpPlanningInProgress(RuntimeError):
+    """Raised when another local MCP planning worker owns the slot."""
+
+
+_PLANNING_PROCESS_LOCK = threading.Lock()
+
+
 class PlanningOnlyGenerationRouter:
     """Sentinel injected into ScenarioRuntime so this facade cannot render."""
 
     def generate(self, *_: Any, **__: Any) -> Any:
         raise RuntimeError("Doc126 planning-only facade must never call a generation provider")
+
+
+def _plan_job_process_entrypoint(request: dict[str, Any], result_queue: Any) -> None:
+    try:
+        runtime = ScenarioRuntime(generation_router=PlanningOnlyGenerationRouter())
+        result = runtime.plan_job(request)
+        result_queue.put({"kind": "value", "result": result.model_dump(mode="json")})
+    except BaseException as exc:  # pragma: no cover - exercised through parent process
+        result_queue.put(
+            {
+                "kind": "error",
+                "error_type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
 
 
 class CodexNativeImageGenPlanner:
@@ -88,9 +127,14 @@ class CodexNativeImageGenPlanner:
         professional_binding_resolver: ProfessionalBindingResolver | None = None,
         planning_timeout_seconds: float | None = None,
         brain_transport_timeout_seconds: float | None = None,
+        planning_process_entrypoint: Callable[[dict[str, Any], Any], None] | None = None,
     ) -> None:
+        self._uses_default_runtime_factory = runtime_factory is None
         self._runtime_factory = runtime_factory or self._default_runtime
         self._professional_binding_resolver = professional_binding_resolver
+        self._planning_process_entrypoint = (
+            planning_process_entrypoint or _plan_job_process_entrypoint
+        )
         self._planning_timeout_seconds = (
             _LOCAL_MCP_PLANNING_TIMEOUT_SECONDS
             if planning_timeout_seconds is None
@@ -348,7 +392,7 @@ class CodexNativeImageGenPlanner:
         scenario_selection: dict[str, Any],
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
-        runtime = self._runtime_factory()
+        runtime = None if self._uses_default_runtime_factory else self._runtime_factory()
         uploaded_assets = self._uploaded_assets(request)
         runtime_metadata = {
             "template_id": request.template_id,
@@ -380,6 +424,11 @@ class CodexNativeImageGenPlanner:
             return self._blocked(
                 "codex_native_imagegen_planning_timeout",
                 "Codex Native ImageGen planning exceeded the local MCP interaction deadline before any image was created.",
+            )
+        except _LocalMcpPlanningInProgress:
+            return self._blocked(
+                "codex_native_imagegen_planning_in_progress",
+                "Codex Native ImageGen planning is already running; no new image planning request was started.",
             )
         if result.status != ScenarioRuntimeStatus.PLANNED or result.planning_result is None:
             return self._blocked_from_runtime(result.metadata, "Codex Native ImageGen planning was blocked before any image was created.")
@@ -623,16 +672,76 @@ class CodexNativeImageGenPlanner:
             "human_realism_natural_presence_decision_statuses": decision_statuses,
         }
 
-    def _plan_job_with_deadline(self, runtime: ScenarioRuntime, request: dict[str, Any]) -> Any:
+    def _plan_job_with_deadline(self, runtime: ScenarioRuntime | None, request: dict[str, Any]) -> Any:
         """Run the synchronous runtime planner behind a local MCP deadline.
 
         The remote Brain has its own transport timeout, but this stdio MCP
         tool must also fail closed before a desktop caller sees an apparently
-        hung tool call. The thread is daemonized because this adapter is
-        planning-only and creates no job, handoff, output, receipt, retry, or
-        delivery state.
+        hung tool call.  The default runtime is isolated in a child process and
+        killed on timeout, so a timed-out planner cannot keep running in the
+        MCP host process and later create job, handoff, output, receipt, retry,
+        or delivery state.  A single-process lock rejects overlapping native
+        planning attempts instead of stacking orphaned workers.
         """
 
+        if self._uses_default_runtime_factory:
+            return self._plan_job_in_process(request)
+        if runtime is None:
+            runtime = self._runtime_factory()
+        return self._plan_job_in_thread(runtime, request)
+
+    def _plan_job_in_process(self, request: dict[str, Any]) -> ScenarioRuntimeResult:
+        if not _PLANNING_PROCESS_LOCK.acquire(blocking=False):
+            raise _LocalMcpPlanningInProgress()
+        result_queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
+        process = multiprocessing.Process(
+            target=self._planning_process_entrypoint,
+            args=(request, result_queue),
+            name="codex-native-imagegen-planner",
+        )
+        try:
+            process.start()
+            process.join(timeout=self._planning_timeout_seconds)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+                if process.is_alive():  # pragma: no cover - platform fallback
+                    process.kill()
+                    process.join(timeout=1.0)
+                raise _LocalMcpPlanningTimeout()
+            try:
+                payload = result_queue.get_nowait()
+            except queue.Empty as exc:
+                raise RuntimeError(
+                    f"Codex Native ImageGen planning process exited without a result (exitcode={process.exitcode})."
+                ) from exc
+            if not isinstance(payload, dict):
+                raise RuntimeError("Codex Native ImageGen planning process returned an invalid payload.")
+            if payload.get("kind") == "error":
+                error_type = str(payload.get("error_type") or "RuntimeError")
+                message = str(payload.get("message") or "planning process failed")
+                raise RuntimeError(f"{error_type}: {message}")
+            if payload.get("kind") != "value" or not isinstance(payload.get("result"), dict):
+                raise RuntimeError("Codex Native ImageGen planning process returned an invalid result.")
+            return ScenarioRuntimeResult.model_validate(payload["result"])
+        finally:
+            result_queue.close()
+            result_queue.join_thread()
+            _PLANNING_PROCESS_LOCK.release()
+
+    def _plan_job_in_thread(self, runtime: ScenarioRuntime, request: dict[str, Any]) -> ScenarioRuntimeResult:
+        """Deadline wrapper for injected runtimes used by focused tests.
+
+        Only the default runtime is used by the MCP production facade, and that
+        path is process-isolated and killable.  A custom runtime object cannot
+        be safely serialized or force-cancelled, so it keeps the historical
+        thread shape but no longer bypasses the deadline: overlapping calls are
+        rejected, timeout returns fail-closed, and the slot remains locked until
+        the injected runtime naturally drains.
+        """
+
+        if not _PLANNING_PROCESS_LOCK.acquire(blocking=False):
+            raise _LocalMcpPlanningInProgress()
         result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def runner() -> None:
@@ -640,6 +749,8 @@ class CodexNativeImageGenPlanner:
                 result_queue.put(("value", runtime.plan_job(request)))
             except BaseException as exc:  # pragma: no cover - re-raised below
                 result_queue.put(("error", exc))
+            finally:
+                _PLANNING_PROCESS_LOCK.release()
 
         thread = threading.Thread(
             target=runner,
