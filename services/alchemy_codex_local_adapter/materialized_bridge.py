@@ -21,7 +21,13 @@ class V3MaterializedMcpBridge:
     """Call only the localhost V3 handoff endpoints; never a Web Provider."""
 
     def __init__(self, base_url: str | None = None, *, timeout_seconds: float = 15.0) -> None:
-        self.base_url = (base_url or os.getenv("ALCHEMY_V3_BASE_URL") or "http://127.0.0.1:8017").rstrip("/")
+        resolved_base_url = (base_url or os.getenv("ALCHEMY_V3_BASE_URL") or "").strip()
+        if not resolved_base_url:
+            raise MaterializedBridgeError(
+                "mcp_materialization_v3_base_url_required",
+                "Set ALCHEMY_V3_BASE_URL or pass v3_base_url for the already-running local V3 service.",
+            )
+        self.base_url = resolved_base_url.rstrip("/")
         parsed = urlparse(self.base_url)
         if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
             raise MaterializedBridgeError("mcp_materialization_local_only")

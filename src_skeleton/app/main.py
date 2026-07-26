@@ -92,6 +92,7 @@ from app.services.veyra_auth import (
 from app.services.veyra_usage import list_veyra_usage
 from app.services.video_service import create_video_job
 from app.storage import media_store
+from app.runtime_paths import resolve_repo_storage_path
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 logger = logging.getLogger(__name__)
@@ -109,11 +110,13 @@ IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable
 APP_SHELL_HEADERS = {"Cache-Control": "no-store"}
 V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
 V2_IDEMPOTENCY_PREFIX = "v2:"
-V3_VISUAL_ASSET_CATALOG_ROOT = Path(
-    os.getenv("V3_VISUAL_ASSET_CATALOG_ROOT", str(Path(".media_storage") / "v3_visual_assets"))
+V3_VISUAL_ASSET_CATALOG_ROOT = resolve_repo_storage_path(
+    "V3_VISUAL_ASSET_CATALOG_ROOT",
+    ".media_storage/v3_visual_assets",
 )
-V3_VISUAL_ASSET_LIBRARY_ROOT = Path(
-    os.getenv("V3_VISUAL_ASSET_LIBRARY_ROOT", str(Path(".media_storage") / "v3_visual_asset_library"))
+V3_VISUAL_ASSET_LIBRARY_ROOT = resolve_repo_storage_path(
+    "V3_VISUAL_ASSET_LIBRARY_ROOT",
+    ".media_storage/v3_visual_asset_library",
 )
 _v3_product_service = V3ProductApiService(
     job_store=PersistentProductJobStore(),

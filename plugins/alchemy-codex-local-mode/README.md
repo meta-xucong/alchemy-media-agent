@@ -134,6 +134,12 @@ repository, then restart Codex. The launcher validates that path before it
 imports anything. If it cannot find the repository, the MCP stays unavailable;
 it never falls back to a Web route or Platform API.
 
+For materialized MCP handoff tools, also set `ALCHEMY_V3_BASE_URL` to the
+already-running local V3 service, for example `http://127.0.0.1:8772` when the
+desktop app is using that port. The bridge intentionally has no hidden default
+port: without an explicit local base URL it fails closed instead of silently
+calling an empty or stale `8017` process.
+
 If the checked-out main worktree contains its already configured remote
 Central Brain environment, the launcher discovers `.env` (and the legacy
 `src_skeleton/.env`) inside that checkout automatically. If the environment
