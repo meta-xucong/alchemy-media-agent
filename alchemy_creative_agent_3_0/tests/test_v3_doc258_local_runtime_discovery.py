@@ -195,6 +195,7 @@ def test_runtime_root_detects_source_checkout_layout(
     repo = tmp_path / "repo"
     module_file = repo / "src_skeleton" / "app" / "runtime_paths.py"
     module_file.parent.mkdir(parents=True)
+    (repo / "src_skeleton" / "app" / "main.py").write_text("", encoding="utf-8")
     module_file.write_text("", encoding="utf-8")
 
     runtime_paths = importlib.import_module("app.runtime_paths")

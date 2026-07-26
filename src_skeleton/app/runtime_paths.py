@@ -42,8 +42,10 @@ def discover_application_root(start: Path | None = None) -> Path:
 
     current = _path_or_parent((start or Path(__file__)).resolve())
     for candidate in (current, *current.parents):
-        if (candidate / "src_skeleton" / "app").is_dir():
+        if (candidate / "src_skeleton" / "app" / "main.py").is_file():
             return candidate
+
+    for candidate in (current, *current.parents):
         if (candidate / "app").is_dir() and (candidate / "app" / "main.py").is_file():
             return candidate
 
