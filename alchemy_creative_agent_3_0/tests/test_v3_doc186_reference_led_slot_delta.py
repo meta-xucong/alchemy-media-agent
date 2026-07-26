@@ -527,9 +527,9 @@ def test_doc190_reverse_three_quarter_timeout_recovery_is_opposite_front_45_not_
     assert "independent right-front" in prompt
     assert "Do not mirror or copy the left-front card" in prompt
     assert "Reference role map" in prompt
-    assert "input 4 is the approved 90-degree side profile and is the primary pose-depth guide" in prompt
-    assert "input 5 is the approved right-front 25-degree transition" in prompt
-    assert "right-side identity/framing bridge" in prompt
+    assert "input 4 is the approved right-front 25-degree pose-geometry bridge" in prompt
+    assert "input 5 is the approved right-front 25-degree raw continuity reference" in prompt
+    assert "preserve same-side pose direction and identity asymmetry" in prompt
     assert "right ear on image-right" in prompt
     assert "nose and gaze angled toward image-left" in prompt
     assert "upper-shoulders cutoff" in prompt

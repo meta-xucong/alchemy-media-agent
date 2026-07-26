@@ -602,7 +602,7 @@ def test_doc190_adapter_accepts_reverse_three_quarter_as_opposite_front_45_slot(
             for item in payload.get("canonical_provider_prompts", []):
                 item["prompt"] = (
                     "竖版2:3标准人物角色卡，反侧前方右前45度头颈上肩景别。"
-                    "Reference role map: input 1 is root identity geometry, input 2 is front identity detail, input 3 is front full-frame card framing, input 4 is the approved 90-degree side profile and is the primary pose-depth guide, input 5 is the approved right_front_25 transition and is only the right-side identity/framing bridge. "
+                    "Reference role map: input 1 is root identity geometry, input 2 is front identity detail, input 3 is front full-frame card framing, input 4 is the approved right_front_25 pose-geometry bridge, and input 5 is the approved right_front_25 raw continuity reference. "
                     "同一名六岁女童，脸部仍然可见，是独立的另一侧前方建模照，"
                     "以已通过 right_front_25 的 25-degree transition 只作为过渡身份桥，形成自然右前45度家族视角，independent opposite-side，不是水平翻转，"
                     "右耳在画面右侧可见，鼻尖朝画面左侧，避免和左前45度同侧重复，"

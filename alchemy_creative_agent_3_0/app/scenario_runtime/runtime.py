@@ -1655,9 +1655,9 @@ class ScenarioRuntime:
             ),
             "reverse_three_quarter": (
                 "Right-front three-quarter opposite front-side 45-degree view portrait of the same person from the approved references, "
-                "Reference role map: input 1 is root identity geometry, input 2 is front identity detail, input 3 is front full-frame card framing, input 4 is the approved 90-degree side profile and is the primary pose-depth guide, input 5 is the approved right-front 25-degree transition and is only the right-side identity/framing bridge. "
-                "Let input 4 control pose depth and input 5 preserve same-side identity/asymmetry; do not let the 25-degree bridge become the target yaw. "
-                "Create an independent right-front 40-to-50-degree card toward image-left, closer to the profile depth than to the bridge but not a pure profile. "
+                "Reference role map: input 1 is root identity geometry, input 2 is front identity detail, input 3 is front full-frame card framing, input 4 is the approved right-front 25-degree pose-geometry bridge, and input 5 is the approved right-front 25-degree raw continuity reference. "
+                "Let inputs 4 and 5 preserve same-side pose direction and identity asymmetry; do not let the 25-degree bridge become the target yaw. "
+                "Create an independent right-front 40-to-50-degree card toward image-left, visibly deeper than the 25-degree bridge but not a pure profile. "
                 "Turn head, neck and shoulders together; show the right ear on image-right, nose and gaze angled toward image-left, front-side facial depth, and a smaller far eye while both eyes remain visible. "
                 "Do not mirror or copy the left-front card; avoid straight-front, side-profile, rear/back, or same-side results. "
                 f"{visible_face_framing}"
