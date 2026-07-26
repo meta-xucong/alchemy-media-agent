@@ -141,6 +141,25 @@ has no hidden default port: if no live local V3 runtime can be discovered, it
 fails closed instead of silently calling an empty or stale process on a
 historical port.
 
+The runtime descriptor is disabled by default and is meant for local/dev MCP
+discovery only. Start the V3 service with
+`ALCHEMY_V3_LOCAL_RUNTIME_DISCOVERY_ENABLED=true`, or set an explicit
+`ALCHEMY_V3_RUNTIME_DESCRIPTOR` path, when Codex should discover the active
+local service automatically. The descriptor is written atomically and contains
+a runtime identity plus the active Professional visual-asset storage roots.
+The MCP bridge verifies those values against
+`/api/v3/creative-agent/local-runtime`; a stale descriptor that points at a
+different healthy V3 process is rejected. `ALCHEMY_V3_PUBLIC_BASE_URL` is never
+used as the local descriptor address.
+
+V3 Professional visual-asset roots are anchored to the discovered application
+root so a source checkout and the Docker `/app/app` module layout both resolve
+storage under the directory that owns `.media_storage`. Existing local
+`src_skeleton/.media_storage/v3_visual_assets` and
+`src_skeleton/.media_storage/v3_visual_asset_library` directories remain
+read-compatible when the new app-root V3 directory does not exist yet. The
+older V1 `MEDIA_STORAGE_ROOT` behavior is intentionally unchanged.
+
 If the checked-out main worktree contains its already configured remote
 Central Brain environment, the launcher discovers `.env` (and the legacy
 `src_skeleton/.env`) inside that checkout automatically. If the environment

@@ -93,7 +93,12 @@ from app.services.veyra_auth import (
 from app.services.veyra_usage import list_veyra_usage
 from app.services.video_service import create_video_job
 from app.storage import media_store
-from app.runtime_paths import local_runtime_descriptor_path, resolve_repo_storage_path
+from app.runtime_paths import (
+    LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
+    local_runtime_descriptor_enabled,
+    local_runtime_descriptor_path,
+    resolve_runtime_storage_path,
+)
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 logger = logging.getLogger(__name__)
@@ -111,13 +116,15 @@ IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable
 APP_SHELL_HEADERS = {"Cache-Control": "no-store"}
 V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
 V2_IDEMPOTENCY_PREFIX = "v2:"
-V3_VISUAL_ASSET_CATALOG_ROOT = resolve_repo_storage_path(
+V3_VISUAL_ASSET_CATALOG_ROOT = resolve_runtime_storage_path(
     "V3_VISUAL_ASSET_CATALOG_ROOT",
     ".media_storage/v3_visual_assets",
+    legacy_relative_path="src_skeleton/.media_storage/v3_visual_assets",
 )
-V3_VISUAL_ASSET_LIBRARY_ROOT = resolve_repo_storage_path(
+V3_VISUAL_ASSET_LIBRARY_ROOT = resolve_runtime_storage_path(
     "V3_VISUAL_ASSET_LIBRARY_ROOT",
     ".media_storage/v3_visual_asset_library",
+    legacy_relative_path="src_skeleton/.media_storage/v3_visual_asset_library",
 )
 _v3_product_service = V3ProductApiService(
     job_store=PersistentProductJobStore(),
@@ -149,10 +156,19 @@ def _uvicorn_arg_value(name: str) -> str | None:
     return None
 
 
+def _local_http_base_url(value: str) -> str | None:
+    parsed = urlsplit(value.rstrip("/"))
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    return value.rstrip("/")
+
+
 def _current_local_v3_base_url() -> str | None:
-    configured = (os.getenv("ALCHEMY_V3_PUBLIC_BASE_URL") or os.getenv("ALCHEMY_V3_BASE_URL") or "").strip()
+    configured = (os.getenv("ALCHEMY_V3_BASE_URL") or "").strip()
     if configured:
-        return configured.rstrip("/")
+        return _local_http_base_url(configured)
     port = _uvicorn_arg_value("--port")
     if not port:
         return None
@@ -161,33 +177,52 @@ def _current_local_v3_base_url() -> str | None:
         host = "127.0.0.1"
     if host == "::1":
         host = "[::1]"
-    return f"http://{host}:{port}".rstrip("/")
+    return _local_http_base_url(f"http://{host}:{port}")
+
+
+def _current_app_module() -> str | None:
+    for value in sys.argv:
+        if ":app" in value and not value.startswith("-"):
+            return value
+    return None
+
+
+def _v3_local_runtime_payload(base_url: str) -> dict:
+    return {
+        "ok": True,
+        "schema_version": LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
+        "base_url": base_url.rstrip("/"),
+        "pid": os.getpid(),
+        "runtime_id": _v3_background_generation_runtime_id,
+        "app_module": _current_app_module(),
+        "visual_asset_catalog_root": str(V3_VISUAL_ASSET_CATALOG_ROOT),
+        "visual_asset_library_root": str(V3_VISUAL_ASSET_LIBRARY_ROOT),
+    }
 
 
 def _write_v3_local_runtime_descriptor() -> None:
+    if not local_runtime_descriptor_enabled():
+        return
     base_url = _current_local_v3_base_url()
     if not base_url:
         logger.warning("V3 local runtime descriptor not written because local base URL could not be resolved.")
         return
     descriptor_path = local_runtime_descriptor_path()
-    descriptor_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "v3_local_runtime_descriptor_v1",
-                "base_url": base_url,
-                "pid": os.getpid(),
-                "runtime_id": _v3_background_generation_runtime_id,
-                "app_module": "src_skeleton.app.main",
-                "visual_asset_catalog_root": str(V3_VISUAL_ASSET_CATALOG_ROOT),
-                "visual_asset_library_root": str(V3_VISUAL_ASSET_LIBRARY_ROOT),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    payload = _v3_local_runtime_payload(base_url)
+    payload["created_at"] = datetime.now(timezone.utc).isoformat()
+    temporary_path = descriptor_path.with_name(
+        f"{descriptor_path.name}.tmp.{os.getpid()}.{_v3_background_generation_runtime_id}"
     )
+    try:
+        descriptor_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary_path.replace(descriptor_path)
+    except OSError as exc:
+        logger.warning("V3 local runtime descriptor could not be written: %s", exc)
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 v3_output_store = V3GeneratedOutputStore()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/mobile-static", StaticFiles(directory=MOBILE_STATIC_DIR), name="mobile_static")
@@ -305,6 +340,27 @@ def image_share_poster(
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "service": "custom-media-agent", "version": app.version}
+
+
+@app.get("/api/v3/creative-agent/local-runtime")
+def v3_local_runtime():
+    if not local_runtime_descriptor_enabled():
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "v3_local_runtime_discovery_disabled", "message": "Local V3 runtime discovery is disabled."},
+        )
+    base_url = _current_local_v3_base_url()
+    if not base_url:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "v3_local_runtime_base_url_unavailable",
+                "message": "Local V3 runtime base URL could not be resolved.",
+            },
+        )
+    payload = _v3_local_runtime_payload(base_url)
+    payload["descriptor_path"] = str(local_runtime_descriptor_path())
+    return payload
 
 
 async def _v3_json_payload(request: Request) -> dict:

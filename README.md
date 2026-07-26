@@ -49,7 +49,7 @@
 - `claude_code/.claude/hooks/`：Claude Code hook 示例。
 - `scripts/deploy_vps.sh`：VPS Docker 一键部署脚本。
 - `.github/workflows/deploy-vps.yml`：GitHub Actions 远程部署模板。
-- `src_skeleton/.media_storage/`：本地运行时图片与历史目录；生产环境应挂载到 release 目录外的持久路径，例如 `/var/lib/alchemy/v1/media_storage`。
+- `src_skeleton/.media_storage/`：V1 本地运行时图片与历史目录；生产环境应挂载到 release 目录外的持久路径，例如 `/var/lib/alchemy/v1/media_storage`。V3 Professional 视觉资产默认使用应用根 `.media_storage/v3_*`，Docker 中对应 `/app/.media_storage/v3_*`；若旧的 `src_skeleton/.media_storage/v3_*` 已存在且新目录不存在，会被兼容读取。
 
 ## 重要假设
 

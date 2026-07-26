@@ -10,6 +10,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION = "v3_local_runtime_descriptor_v1"
+
 
 class MaterializedBridgeError(ValueError):
     def __init__(self, code: str, message: str | None = None) -> None:
@@ -22,7 +24,13 @@ class V3MaterializedMcpBridge:
 
     def __init__(self, base_url: str | None = None, *, timeout_seconds: float = 15.0) -> None:
         self.timeout_seconds = max(1.0, min(float(timeout_seconds), 60.0))
-        resolved_base_url = (base_url or os.getenv("ALCHEMY_V3_BASE_URL") or self._discover_local_v3_base_url()).strip()
+        descriptor: dict | None = None
+        configured_base_url = base_url or os.getenv("ALCHEMY_V3_BASE_URL")
+        if configured_base_url:
+            resolved_base_url = configured_base_url.strip()
+        else:
+            descriptor = self._load_runtime_descriptor()
+            resolved_base_url = str(descriptor.get("base_url") or "").strip()
         if not resolved_base_url:
             raise MaterializedBridgeError(
                 "mcp_materialization_v3_runtime_not_discovered",
@@ -32,8 +40,8 @@ class V3MaterializedMcpBridge:
         parsed = urlparse(self.base_url)
         if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
             raise MaterializedBridgeError("mcp_materialization_local_only")
-        if not base_url and not os.getenv("ALCHEMY_V3_BASE_URL"):
-            self._verify_discovered_runtime()
+        if descriptor is not None:
+            self._verify_discovered_runtime(descriptor)
 
     @staticmethod
     def _repository_root() -> Path:
@@ -51,24 +59,30 @@ class V3MaterializedMcpBridge:
         return cls._repository_root() / ".media_storage" / "v3_runtime" / "local_runtime.json"
 
     @classmethod
-    def _discover_local_v3_base_url(cls) -> str:
+    def _load_runtime_descriptor(cls) -> dict:
         descriptor_path = cls._runtime_descriptor_path()
         if not descriptor_path.is_file():
-            return ""
+            raise MaterializedBridgeError("mcp_materialization_v3_runtime_not_discovered")
         try:
             payload = json.loads(descriptor_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_descriptor_invalid") from exc
         if not isinstance(payload, dict):
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_descriptor_invalid")
-        base_url = str(payload.get("base_url") or "").strip()
-        if not base_url:
+        if payload.get("schema_version") != LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION:
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_descriptor_invalid")
-        return base_url
+        base_url = str(payload.get("base_url") or "").strip()
+        runtime_id = str(payload.get("runtime_id") or "").strip()
+        if not base_url or not runtime_id:
+            raise MaterializedBridgeError("mcp_materialization_v3_runtime_descriptor_invalid")
+        return payload
 
-    def _verify_discovered_runtime(self) -> None:
+    def _verify_discovered_runtime(self, descriptor: dict) -> None:
         try:
-            with urlopen(Request(f"{self.base_url}/healthz", headers={"Accept": "application/json"}), timeout=1.0) as response:
+            with urlopen(
+                Request(f"{self.base_url}/api/v3/creative-agent/local-runtime", headers={"Accept": "application/json"}),
+                timeout=1.0,
+            ) as response:
                 raw = response.read()
         except (HTTPError, URLError, TimeoutError) as exc:
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_unavailable", str(exc)) from exc
@@ -76,8 +90,17 @@ class V3MaterializedMcpBridge:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_health_invalid") from exc
-        if not isinstance(payload, dict) or payload.get("ok") is not True:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("ok") is not True
+            or payload.get("schema_version") != LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION
+        ):
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_health_invalid")
+        for key in ("runtime_id", "visual_asset_catalog_root", "visual_asset_library_root"):
+            expected = str(descriptor.get(key) or "").strip()
+            actual = str(payload.get(key) or "").strip()
+            if expected and actual != expected:
+                raise MaterializedBridgeError("mcp_materialization_v3_runtime_mismatch")
 
     def get_handoff(self, handoff_id: str) -> dict:
         return self._request("GET", f"/api/v3/creative-agent/mcp-materializations/{handoff_id}")

@@ -7,8 +7,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field
 
-from .runtime_paths import resolve_repo_storage_path
-
 try:
     from dotenv import dotenv_values, load_dotenv
 except ModuleNotFoundError:
@@ -279,7 +277,7 @@ class Settings(BaseModel):
     orchestration_mode: str = os.getenv("ORCHESTRATION_MODE", "runtime_first")
     persist_runtime_settings: bool = os.getenv("MEDIA_AGENT_PERSIST_RUNTIME_SETTINGS", "true").lower() in {"1", "true", "yes", "on"}
     runtime_env_path: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_AGENT_RUNTIME_ENV_FILE", ".env")))
-    media_storage_root: Path = Field(default_factory=lambda: resolve_repo_storage_path("MEDIA_STORAGE_ROOT", ".media_storage"))
+    media_storage_root: Path = Field(default_factory=lambda: Path(os.getenv("MEDIA_STORAGE_ROOT", ".media_storage")))
     max_asset_upload_bytes: int = _int_env("MAX_ASSET_UPLOAD_BYTES", 12 * 1024 * 1024)
     max_asset_upload_count: int = _int_env("MAX_ASSET_UPLOAD_COUNT", 6)
     veyra_auth_enabled: bool = os.getenv("VEYRA_AUTH_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
