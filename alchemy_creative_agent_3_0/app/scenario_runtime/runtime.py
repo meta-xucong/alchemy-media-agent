@@ -1868,7 +1868,7 @@ class ScenarioRuntime:
             ),
             "smile": (
                 "Render a lower-intensity natural smile: gentle mouth-corner lift, engaged gaze, light cheek participation, "
-                "relaxed jaw and small spontaneous asymmetry. It must read as a warm child portrait smile, not neutral."
+                "relaxed jaw and small spontaneous asymmetry. It must read as a real smile, not neutral or plastic."
             ),
             "anger": (
                 "Render a clearly readable childlike annoyed pout suitable for a reference card: knitted brows, focused eyes, "
