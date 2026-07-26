@@ -1914,7 +1914,7 @@ function openV3Home({ silent = false } = {}) {
   const shouldLoadProjects = !v3State.projectsLoaded && !v3State.projectsLoading;
   const shouldLoadHistory = false;
   if (shouldLoadProjects || shouldLoadHistory) {
-    setV3PageLoading(true, "正在同步最近项目", "先读取项目，再分批加载图片预览。");
+    updateV3Notice("正在后台同步最近项目。", "info");
     window.setTimeout(() => {
       const loadTasks = [];
       if (shouldLoadProjects) {
@@ -1923,7 +1923,7 @@ function openV3Home({ silent = false } = {}) {
         }));
       }
       Promise.allSettled(loadTasks)
-        .then(() => waitForV3HomePreviewImages())
+        .then(() => waitForV3HomePreviewImages({ blockPage: false }))
         .finally(() => setV3PageLoading(false));
     }, 40);
   }
@@ -5344,13 +5344,25 @@ function v3CharacterCardModuleStatus(card, module) {
   return String(card?.[`${module}_status`] || "empty");
 }
 
-function v3CharacterCardStatusLabel(status) {
+function v3CharacterCardProofVerified(record) {
+  if (!record || typeof record !== "object") return false;
+  return Boolean(
+    record.activation_eligible === true
+      || record.formal_completion_verified === true
+      || record.formal_slot_receipt_verified === true
+      || record.formal_verified === true
+  );
+}
+
+function v3CharacterCardStatusLabel(status, proofRecord = null) {
+  if (String(status || "empty") === "winner_selected") {
+    return v3CharacterCardProofVerified(proofRecord) ? "已完成" : "待确认";
+  }
   return {
     empty: "尚未建立",
     preparing: "正在生成",
     reviewing: "等待确认",
     partial: "部分完成",
-    winner_selected: "已完成",
     active: "已完成",
     stale: "需要更新",
     blocked: "需要重新处理",
@@ -5500,7 +5512,7 @@ function renderV3CharacterCardWorkspace() {
           : `<div class="v3-character-card-slot-placeholder"><span>${state === "preparing" ? "正在生成" : state === "blocked" ? "可从断点继续" : "空位"}</span></div>`;
         return `<article class="v3-character-card-slot" data-state="${escapeHtml(state)}">
           ${media}
-          <div class="v3-character-card-slot-label"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(v3CharacterCardStatusLabel(state))}</small></div>
+          <div class="v3-character-card-slot-label"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(v3CharacterCardStatusLabel(state, slot))}</small></div>
         </article>`;
       }).join("");
       return `<section class="v3-character-card-module" data-v3-character-card-module="${module}" data-state="${escapeHtml(status)}">
@@ -5664,7 +5676,6 @@ function openV3CharacterCard(visualAssetId) {
   if (els.v3CharacterCardBodyFacts) els.v3CharacterCardBodyFacts.value = "";
   renderV3VisualAssetLibrary();
   window.setTimeout(() => {
-    els.v3CharacterCardWorkspace?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     els.v3CloseCharacterCardBtn?.focus?.({ preventScroll: true });
   }, 0);
 }
@@ -7774,14 +7785,14 @@ function v3ImageSettled(image) {
   return v3ImageLoaded(image) || image?.dataset?.v3HomeThumbFailed === "true";
 }
 
-function waitForV3HomePreviewImages() {
+function waitForV3HomePreviewImages({ blockPage = true } = {}) {
   const images = v3HomePreviewImages();
   if (!images.length) return Promise.resolve();
   images.forEach((image) => {
     if (image.complete && image.naturalWidth === 0) markV3HomePreviewImageFailed(image);
   });
   if (images.every(v3ImageSettled)) return Promise.resolve();
-  setV3PageLoading(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
+  if (blockPage) setV3PageLoading(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
   return new Promise((resolve) => {
     const cleanup = [];
     const timeout = window.setTimeout(() => {
@@ -15338,9 +15349,7 @@ function closeImageLightbox() {
   resetLightboxZoom();
   closeLightboxPrompt();
   renderLightboxActions([]);
-  if (!els.v3ProjectHistoryModal || els.v3ProjectHistoryModal.hidden) {
-    document.body.classList.remove("modal-open");
-  }
+  releaseV3ScrollLockIfNoModal();
 }
 
 function renderLightboxActions(actions = []) {
@@ -15999,13 +16008,28 @@ function showGlobalToast(message, type = "success") {
   }, 2600);
 }
 
+const publicErrorFallbackMessage = "暂时无法完成，请刷新后重试。";
+
+function containsPrivateDiagnostic(value) {
+  const text = String(value || "");
+  return /(?:job_|mcp_handoff_|candidate_|v3_output_|artifact_|inspection_|asset_|sha256|hash|provider|payload|prompt|negative_prompt|traceback|stack|exception|\.json|\.png|\.jpg|\.jpeg|\.webp|[A-Za-z]:\\|\\\\|\/(?:api|tmp|var|home|mnt|Users|AI)\/|[a-f0-9]{32,})/i.test(text);
+}
+
+function publicSafeErrorText(value) {
+  const text = String(value || "").trim();
+  if (!text) return publicErrorFallbackMessage;
+  if (containsPrivateDiagnostic(text)) return publicErrorFallbackMessage;
+  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
+}
+
 function friendlyError(error) {
   if (!error) return "未知错误";
   try {
     const parsed = JSON.parse(error.message);
-    return parsed.detail?.message || parsed.detail?.code || error.message;
+    const detail = parsed && typeof parsed.detail === "object" ? parsed.detail : null;
+    return publicSafeErrorText(detail?.message || detail?.code || parsed.message || error.message);
   } catch {
-    return error.message || String(error);
+    return publicSafeErrorText(error.message || String(error));
   }
 }
 

@@ -4232,6 +4232,14 @@ button.v2-live-preview:focus-visible {
   gap: 12px;
 }
 
+.v3-visual-asset-library-dialog [hidden],
+.v3-visual-asset-binding-dialog [hidden],
+.v3-visual-asset-create-form[hidden],
+.v3-character-card-workspace[hidden],
+.v3-visual-asset-workflow-panel[hidden] {
+  display: none !important;
+}
+
 .v3-visual-asset-create-form h4 {
   margin: 0;
 }

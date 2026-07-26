@@ -16,6 +16,7 @@ APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
 STYLES_CSS = ROOT / "src_skeleton" / "app" / "static" / "styles.css"
 HANDLERS = ROOT / "alchemy_creative_agent_3_0" / "app" / "product_api" / "route_handlers.py"
+FRONTEND_VERSION = "20260726-v3-card-modal-remediation2"
 
 
 def _function(source: str, name: str, next_name: str) -> str:
@@ -117,19 +118,21 @@ def test_doc173_asset_lifecycle_and_binding_copy_is_human_readable_and_non_secre
     assert '"provider"' not in helper.lower()
 
 
-def test_doc247_character_card_slot_status_labels_completed_winner_selected() -> None:
+def test_doc247_character_card_slot_status_labels_are_formal_proof_aware() -> None:
     source = APP_JS.read_text(encoding="utf-8")
     index = INDEX_HTML.read_text(encoding="utf-8")
     helper_start = source.index("function v3CharacterCardStatusLabel")
     helper_end = source.index("function v3CharacterCardAssetFailureMessage", helper_start)
     helper = source[helper_start:helper_end]
 
-    assert 'winner_selected: "已完成"' in helper
+    assert 'String(status || "empty") === "winner_selected"' in helper
+    assert 'return v3CharacterCardProofVerified(proofRecord) ? "已完成" : "待确认";' in helper
     assert 'active: "已完成"' in helper
     assert 'empty: "尚未建立"' in helper
     assert 'blocked: "需要重新处理"' in helper
     assert '}[status] || "等待处理";' in helper
-    assert "app.js?v=20260726-visual-asset-cards" in index
+    assert f"app.js?v={FRONTEND_VERSION}" in index
+    assert f"styles.css?v={FRONTEND_VERSION}" in index
 
 
 def test_doc247_character_card_ui_excludes_auxiliary_25_degree_face_references() -> None:
@@ -211,7 +214,7 @@ def test_doc177_professional_home_is_a_compact_hub_and_detail_work_is_on_demand(
     assert 'id="v3ManageVisualAssetsFromBindingBtn"' in index
     assert ".v3-visual-asset-hub-card" in css
     assert ".v3-visual-asset-library-dialog" in css
-    assert "styles.css?v=20260726-visual-asset-cards" in index
+    assert f"styles.css?v={FRONTEND_VERSION}" in index
 
 
 def test_doc177_project_asset_card_preserves_explicit_binding_and_management_route() -> None:
@@ -243,8 +246,16 @@ def test_doc258_visual_asset_library_uses_parallel_asset_cards_not_scroll_pile()
     assert "visualAssetLibraryExpandedAssetId" in source
     assert 'data-v3-visual-asset-action="toggle-asset-details"' in source
     assert "v3VisualAssetLibraryCards.hidden = cardOpen" in source
+    assert "els.v3CharacterCardWorkspace?.scrollIntoView" not in source
+    home = _function(source, "openV3Home", "openV3ProfessionalWorkspace")
+    assert 'updateV3Notice("正在后台同步最近项目。", "info")' in home
+    assert "waitForV3HomePreviewImages({ blockPage: false })" in home
+    assert 'setV3PageLoading(true, "正在同步最近项目"' not in home
+    assert "function waitForV3HomePreviewImages({ blockPage = true } = {})" in source
     assert ".v3-visual-asset-library-cards" in css
     assert "grid-template-columns: minmax(320px, 1.05fr) minmax(320px, 0.95fr)" in css
+    assert ".v3-visual-asset-library-dialog [hidden]" in css
+    assert "display: none !important" in css
 
 
 def test_doc258_visual_asset_library_hides_archived_cases_from_active_list() -> None:
@@ -272,6 +283,20 @@ def test_doc258_lightbox_is_top_layer_dialog_with_close_state_sync() -> None:
     assert 'els.imageLightbox.addEventListener("cancel"' in source
     assert ".image-lightbox::backdrop" in css
     assert "z-index: 1200" in css
+    assert "releaseV3ScrollLockIfNoModal()" in closer
+
+
+def test_doc258_friendly_error_sanitizes_public_ui_diagnostics() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    helper_start = source.index("function containsPrivateDiagnostic")
+    helper_end = source.index("function jobErrorMessage", helper_start)
+    helper = source[helper_start:helper_end]
+
+    assert "function publicSafeErrorText" in helper
+    assert 'const publicErrorFallbackMessage = "暂时无法完成，请刷新后重试。"' in source
+    for forbidden in ("job_", "mcp_handoff_", "v3_output_", "sha256", "provider", "payload", "prompt", "traceback"):
+        assert forbidden in helper
+    assert "return publicSafeErrorText(detail?.message || detail?.code || parsed.message || error.message);" in helper
 
 
 def test_doc258_expression_slots_render_as_uniform_four_card_grid() -> None:

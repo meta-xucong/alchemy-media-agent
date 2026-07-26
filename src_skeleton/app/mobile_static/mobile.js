@@ -2900,6 +2900,25 @@ function mobileV3CharacterCardModuleStatus(card, module) {
   return String(statusFields[module] || "empty");
 }
 
+function mobileV3CharacterCardProofVerified(record) {
+  if (!record || typeof record !== "object") return false;
+  return Boolean(
+    record.activation_eligible === true
+      || record.formal_completion_verified === true
+      || record.formal_slot_receipt_verified === true
+      || record.formal_verified === true
+  );
+}
+
+function mobileV3CharacterCardModuleProof(card, module) {
+  return {
+    activation_eligible: card?.[`${module}_activation_eligible`],
+    formal_completion_verified: card?.[`${module}_formal_completion_verified`],
+    formal_slot_receipt_verified: card?.[`${module}_formal_slot_receipt_verified`],
+    formal_verified: card?.[`${module}_formal_verified`],
+  };
+}
+
 function mobileV3VisualAssetLabel(asset) {
   if (mobileV3VisualAssetIsActive(asset)) return "已启用，可用于项目";
   const card = mobileV3CharacterCard(asset);
@@ -3013,7 +3032,8 @@ function openMobileV3VisualAssetDetail(visualAssetId) {
       <div class="v3-mobile-visual-asset-module-list">
         ${rows.map(([label, state], index) => {
           const module = ["face_identity", "expression_set", "body_silhouette"][index];
-          return `<p><strong>${escapeHtml(label)}</strong><span>${escapeHtml(mobileV3CharacterCardStateLabel(state))}</span>${mobileV3CharacterCardModuleAction(asset, module, state)}</p>`;
+          const proof = mobileV3CharacterCardModuleProof(card, module);
+          return `<p><strong>${escapeHtml(label)}</strong><span>${escapeHtml(mobileV3CharacterCardStateLabel(state, proof))}</span>${mobileV3CharacterCardModuleAction(asset, module, state, proof)}</p>`;
         }).join("")}
       </div>
       <p>这些按钮调用正式共享角色卡流程；上传源图仍不等于启用。</p>
@@ -3022,12 +3042,12 @@ function openMobileV3VisualAssetDetail(visualAssetId) {
   openMobileSurface("v3-visual-asset-detail", document.querySelector("#mobileV3VisualAssetList"));
 }
 
-function mobileV3CharacterCardModuleAction(asset, module, state) {
+function mobileV3CharacterCardModuleAction(asset, module, state, proofRecord = null) {
   if (mobileV3State.visualAssetBusy) return "";
   const card = mobileV3CharacterCard(asset);
   const faceActive = mobileV3CharacterCardModuleStatus(card, "face_identity") === "active";
   const blockedByPrerequisite = (module === "expression_set" || module === "body_silhouette") && !faceActive;
-  if (state === "active") return "<em>已完成</em>";
+  if (state === "active" || mobileV3CharacterCardProofVerified(proofRecord)) return "<em>已完成</em>";
   if (state === "reviewing" || state === "winner_selected") {
     return `<button class="button compact primary" type="button" data-mobile-v3-visual-asset-activate-module="${escapeHtml(module)}">确认启用</button>`;
   }
@@ -3042,7 +3062,7 @@ async function prepareMobileV3VisualAssetModule(module) {
   mobileV3State.visualAssetBusy = true;
   updateMobileV3Status("正在提交角色卡处理，请不要重复点击。");
   try {
-    const body = { stage: module, generation_channel: "provider" };
+    const body = { stage: module };
     if (module === "body_silhouette") body.source_class = "brain_inferred";
     await mobileV3Request(`/visual-assets/${encodeURIComponent(assetId)}/character-card/prepare`, { method: "POST", body });
     await loadMobileV3VisualAssets({ silent: true, force: true });
@@ -3077,12 +3097,14 @@ async function activateMobileV3VisualAssetModule(module) {
   }
 }
 
-function mobileV3CharacterCardStateLabel(state) {
+function mobileV3CharacterCardStateLabel(state, proofRecord = null) {
+  if (String(state || "empty") === "winner_selected") {
+    return mobileV3CharacterCardProofVerified(proofRecord) ? "已完成" : "待确认";
+  }
   const labels = {
     empty: "空位",
     preparing: "正在生成",
     reviewing: "待确认",
-    winner_selected: "待确认",
     active: "已完成",
     partial: "部分完成",
     blocked: "需处理",
@@ -11774,13 +11796,28 @@ function showGlobalToast(message, type = "success") {
   }, 2600);
 }
 
+const publicErrorFallbackMessage = "暂时无法完成，请刷新后重试。";
+
+function containsPrivateDiagnostic(value) {
+  const text = String(value || "");
+  return /(?:job_|mcp_handoff_|candidate_|v3_output_|artifact_|inspection_|asset_|sha256|hash|provider|payload|prompt|negative_prompt|traceback|stack|exception|\.json|\.png|\.jpg|\.jpeg|\.webp|[A-Za-z]:\\|\\\\|\/(?:api|tmp|var|home|mnt|Users|AI)\/|[a-f0-9]{32,})/i.test(text);
+}
+
+function publicSafeErrorText(value) {
+  const text = String(value || "").trim();
+  if (!text) return publicErrorFallbackMessage;
+  if (containsPrivateDiagnostic(text)) return publicErrorFallbackMessage;
+  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
+}
+
 function friendlyError(error) {
   if (!error) return "未知错误";
   try {
     const parsed = JSON.parse(error.message);
-    return parsed.detail?.message || parsed.detail?.code || error.message;
+    const detail = parsed && typeof parsed.detail === "object" ? parsed.detail : null;
+    return publicSafeErrorText(detail?.message || detail?.code || parsed.message || error.message);
   } catch {
-    return error.message || String(error);
+    return publicSafeErrorText(error.message || String(error));
   }
 }
 
