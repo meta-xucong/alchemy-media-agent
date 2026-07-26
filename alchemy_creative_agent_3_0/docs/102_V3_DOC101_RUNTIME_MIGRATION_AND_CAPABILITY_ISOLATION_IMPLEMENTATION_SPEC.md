@@ -5,6 +5,14 @@
 > a remote-Brain canonical prompt sign-off; they do not replay local module
 > prompt or retry fragments.
 
+> **Doc259 current-authority marker:** this migration document contains older
+> deterministic fallback implementation wording for activation compatibility.
+> That wording is not current authority for enforced real-image specialized
+> planning or Codex Native MCP relay. When Remote Brain is required, timeout,
+> unavailable, malformed, or fallback results block before image creation; they
+> do not authorize local creative direction, prompt repair, route switching, or
+> hidden serial splitting. See Docs 133, 158, 175, E17, and 259.
+
 Status: accepted implementation companion for Doc101. This document phase does
 not change runtime code. Future code work must implement the phases and gates in
 this document in order.

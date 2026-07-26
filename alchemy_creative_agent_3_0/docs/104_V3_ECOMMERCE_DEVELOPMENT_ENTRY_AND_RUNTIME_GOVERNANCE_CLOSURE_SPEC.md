@@ -4,6 +4,14 @@ Status: accepted development-entry specification; foundation Gates A and B are
 implemented and regression-tested. Live-provider and browser acceptance remain
 separate recorded gates.
 
+> **Doc259 conflict marker:** Section 9's gateway-managed 600/660 second
+> timeout discussion is an image Provider/gateway terminal-request policy. It
+> must not be applied to Remote Brain planning transport. For Brain planning,
+> Docs 158/175/259 own the distinction between per-call transport timeout,
+> shared logical execution budget, local native-planner outer deadline, and
+> safe blocked provenance. Do not use this document to expand Brain timeout,
+> split exact-count E-Commerce planning, or enable fallback generation.
+
 Doc105 freezes the shared E-Commerce slot-continuation and final text-pixel
 delivery contract. It does not activate either interface before the associated
 runtime and live-acceptance gates pass.

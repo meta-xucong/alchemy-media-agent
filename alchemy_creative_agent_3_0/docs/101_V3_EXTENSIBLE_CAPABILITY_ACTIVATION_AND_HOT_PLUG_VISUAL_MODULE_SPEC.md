@@ -4,6 +4,13 @@
 > it does not authorize any selected capability to compose renderer wording,
 > prompt atoms, negative lists or retry text.
 
+> **Doc259 current-authority marker:** early references in this document to a
+> deterministic Brain/activation fallback are historical compatibility language
+> for capability selection. They must not be followed for enforced real-image
+> E-Commerce, Photography, Professional, or Codex Native MCP planning. Current
+> forward jobs that require remote creative Brain must fail closed without local
+> creative fallback; see Docs 133, 158, 175, E17, and 259.
+
 Status: accepted development specification. This document phase changes
 governance and implementation instructions only; selective runtime execution is
 not considered complete until the migration and acceptance tests in this
