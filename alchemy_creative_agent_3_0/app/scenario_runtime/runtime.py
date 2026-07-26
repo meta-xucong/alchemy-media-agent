@@ -1868,15 +1868,15 @@ class ScenarioRuntime:
             ),
             "smile": (
                 "Render a lower-intensity natural smile: gentle mouth-corner lift, engaged gaze, light cheek participation, "
-                "relaxed jaw and small spontaneous asymmetry. It must read as a real smile, not neutral or plastic."
+                "relaxed jaw and small spontaneous asymmetry. It must read as a warm child portrait smile, not neutral."
             ),
             "anger": (
-                "Render a controlled angry expression suitable for a reference card: focused gaze, mild brow tension, "
-                "closed or lightly pressed lips and age-coherent facial affect without theatrical exaggeration."
+                "Render a clearly readable childlike annoyed pout suitable for a reference card: knitted brows, focused eyes, "
+                "a small stubborn frown or pressed lips, and playful innocent child energy without aggression or theatrical exaggeration."
             ),
             "sad": (
-                "Render a subdued sad expression suitable for a reference card: softened gaze, slight downward mouth energy, "
-                "relaxed facial tension and age-coherent affect without tears, props, or melodrama."
+                "Render soft childlike sadness suitable for a reference card: misty-eyed vulnerability, slightly lifted inner brows, "
+                "a gentle downturned mouth, and innocent quiet emotion without props, distress, or melodrama."
             ),
         }
         avoid = (

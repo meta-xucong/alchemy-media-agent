@@ -982,6 +982,9 @@ class V3ProductApiService:
             )
             create_request.metadata = {
                 **dict(create_request.metadata or {}),
+                "requested_image_size": "1024x1536",
+                "quality_mode": "strict",
+                "professional_anchor_rendering_contract": "size:1024x1536|quality:strict|reference_card",
                 "professional_mode": True,
                 "professional_character_card_preparation": True,
                 "professional_character_card_stage": professional_character_card_stage,

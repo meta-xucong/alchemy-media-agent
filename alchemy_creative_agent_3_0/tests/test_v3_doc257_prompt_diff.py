@@ -82,6 +82,52 @@ def test_doc257_expression_prompt_reuses_framing_without_old_negative_crop_stack
         assert phrase not in source
 
 
+def test_doc257_expression_generation_uses_child_model_card_affect_without_detector_stack() -> None:
+    source = _source_block(
+        "app/product_api/anchor_pack_host.py",
+        "def _character_card_expression_slot_intents",
+        "def _character_card_single_expression_intent",
+    )
+    recovery_source = _source_block(
+        "app/scenario_runtime/runtime.py",
+        "def _character_card_expression_slot_delta_recovery_prompt",
+        "def _character_card_slot_delta_transport_timeout_seconds",
+    )
+    combined = "\n".join([source, recovery_source])
+
+    for phrase in (
+        "playful innocent child energy",
+        "bright childlike laugh",
+        "childlike annoyed pout",
+        "small stubborn frown",
+        "soft childlike sadness",
+        "misty-eyed",
+    ):
+        assert phrase in combined
+
+    for phrase in (
+        "detector",
+        "undetectable",
+        "ai-generated",
+        "plastic skin",
+        "micro-detail",
+        "pore",
+    ):
+        assert phrase not in combined
+
+
+def test_doc257_expression_stage_pins_vertical_model_card_size() -> None:
+    source = _source_block(
+        "app/product_api/service.py",
+        "elif trusted_professional_character_card:",
+        "else:\n            self._bind_professional_mode",
+    )
+
+    assert '"requested_image_size": "1024x1536"' in source
+    assert '"quality_mode": "strict"' in source
+    assert '"professional_anchor_rendering_contract": "size:1024x1536|quality:strict|reference_card"' in source
+
+
 def test_doc257_host_no_longer_writes_deprecated_realism_prompt_gate_metadata() -> None:
     source = _read("app/product_api/anchor_pack_host.py")
 

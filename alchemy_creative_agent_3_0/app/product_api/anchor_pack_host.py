@@ -1155,19 +1155,22 @@ class ProductApiAnchorPackPreparationHost:
             "laugh": (
                 f"{base}\nExpression slot target: expression.laugh. "
                 f"{laugh_expression_materialization_directive()} "
+                "Add playful innocent child energy: a bright childlike laugh with lifted cheeks, smiling eyes, "
+                "natural small-teeth visibility when appropriate, and the lively timing of a child being gently amused. "
                 f"{front_card_framing} "
                 "Allow only a small amount of natural head-shoulder energy."
             ),
             "anger": (
                 f"{base}\nExpression slot target: expression.anger. "
-                "Render the same person with a mild, age-appropriate annoyed or serious expression; "
-                "avoid adult aggression, shouting, or theatrical anger. "
+                "Render the same person with a clearly readable childlike annoyed pout: knitted brows, focused eyes, "
+                "a small stubborn frown or pressed lips, and playful innocent child energy rather than adult anger; "
+                "avoid aggression, shouting, or theatrical performance. "
                 f"{front_card_framing}"
             ),
             "sad": (
                 f"{base}\nExpression slot target: expression.sad. "
-                "Render the same person with a quiet, age-appropriate sad or pensive expression; "
-                "avoid tears, drama, or a distressed scene. "
+                "Render the same person with soft childlike sadness: misty-eyed vulnerability, slightly lifted inner brows, "
+                "a gentle downturned mouth, and innocent quiet emotion; avoid a distressed scene or melodrama. "
                 f"{front_card_framing}"
             ),
         }
