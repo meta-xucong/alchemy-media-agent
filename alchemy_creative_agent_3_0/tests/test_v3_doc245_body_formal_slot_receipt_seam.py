@@ -18,6 +18,12 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expressio
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
     project_generic_visual_review_receipt,
 )
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import (
+    GeneratedOutputResolution,
+)
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import (
+    VisionOutputInspector,
+)
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
     _inspection_prompt,
     active_review_contract,
@@ -225,6 +231,101 @@ def test_doc245_body_review_contract_carries_reference_driven_hair_continuity_wi
 
     assert body_review["hair_continuity_contract"] == hair_contract
     assert "body_silhouette_hair_continuity_drift" in body_review["issue_codes"]
+
+
+class _Doc245IdentityMetricProvider:
+    def __init__(self, *, objective: float, geometry: float = 0.18, confidence: float = 0.788) -> None:
+        self.objective = objective
+        self.geometry = geometry
+        self.confidence = confidence
+
+    def evaluate(self, output_path, references):
+        assert references
+        return {
+            "calibrated_score": self.objective,
+            "geometry_score": self.geometry,
+            "metric_confidence": self.confidence,
+            "metadata": {
+                "viewpoint_relationship": "same_view",
+                "geometry_comparability": "comparable",
+            },
+        }
+
+
+def _doc245_identity_metric_metadata(tmp_path, *, slot_key: str) -> dict[str, object]:
+    metadata = _body_review_metadata_for_vision(slot_key)
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(b"reference")
+    metadata["reference_assets"] = [
+        {
+            "role": "portrait_identity",
+            "use_policy": "identity",
+            "file_path": str(reference_path),
+        }
+    ]
+    return metadata
+
+
+def _doc245_identity_metric_resolution(tmp_path) -> GeneratedOutputResolution:
+    output_path = tmp_path / "output.png"
+    output_path.write_bytes(b"output")
+    return GeneratedOutputResolution(
+        resolution_id="resolution_doc245_body_side_identity",
+        job_id="job_doc245_body_side_identity",
+        candidate_id="candidate_doc245_body_side_identity",
+        output_id="output_doc245_body_side_identity",
+        file_path=str(output_path),
+        status="ready",
+    )
+
+
+def test_doc245_body_side_full_identity_metric_treats_close_crop_geometry_as_advisory(tmp_path) -> None:
+    inspector = VisionOutputInspector(
+        identity_metric_provider=_Doc245IdentityMetricProvider(objective=0.84, geometry=0.18)
+    )
+
+    _, fusion = inspector._identity_metric_fusion(
+        _doc245_identity_metric_resolution(tmp_path),
+        metadata=_doc245_identity_metric_metadata(tmp_path, slot_key="body.side_full"),
+        multimodal_score=1.0,
+    )
+
+    assert fusion is not None
+    assert fusion["hard_gate_passed"] is True
+    assert fusion["geometry_evidence_mode"] == "body_full_body_side_geometry_advisory"
+    assert fusion["fused_identity_score"] >= 0.82
+
+
+def test_doc245_body_side_full_identity_metric_still_rejects_low_objective_identity(tmp_path) -> None:
+    inspector = VisionOutputInspector(
+        identity_metric_provider=_Doc245IdentityMetricProvider(objective=0.74, geometry=0.18)
+    )
+
+    _, fusion = inspector._identity_metric_fusion(
+        _doc245_identity_metric_resolution(tmp_path),
+        metadata=_doc245_identity_metric_metadata(tmp_path, slot_key="body.side_full"),
+        multimodal_score=1.0,
+    )
+
+    assert fusion is not None
+    assert fusion["hard_gate_passed"] is False
+    assert fusion["reason_codes"] == ["identity_metric_below_commercial_target"]
+
+
+def test_doc245_body_identity_metric_geometry_remains_hard_for_other_body_slots(tmp_path) -> None:
+    inspector = VisionOutputInspector(
+        identity_metric_provider=_Doc245IdentityMetricProvider(objective=0.84, geometry=0.18)
+    )
+
+    _, fusion = inspector._identity_metric_fusion(
+        _doc245_identity_metric_resolution(tmp_path),
+        metadata=_doc245_identity_metric_metadata(tmp_path, slot_key="body.front_full"),
+        multimodal_score=1.0,
+    )
+
+    assert fusion is not None
+    assert fusion["hard_gate_passed"] is False
+    assert fusion["geometry_evidence_mode"] == "same_view_direct"
 
 
 def test_doc245_body_brain_timeout_uses_bounded_body_slot_delta_recovery() -> None:

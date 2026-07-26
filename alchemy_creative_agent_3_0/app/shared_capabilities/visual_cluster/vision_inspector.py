@@ -626,7 +626,21 @@ class VisionOutputInspector:
         metric_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         viewpoint_relationship = str(metric_metadata.get("viewpoint_relationship") or "unknown").strip().lower()
         geometry_comparability = str(metric_metadata.get("geometry_comparability") or "").strip().lower()
-        if viewpoint_relationship == "cross_view" and geometry_comparability == "not_comparable":
+        body_side_full_geometry_advisory = _body_side_full_identity_geometry_advisory(metadata)
+        if body_side_full_geometry_advisory:
+            # Body side_full compares a full-body side silhouette against
+            # close profile/front face references.  The 2-D facial geometry
+            # ratio is therefore a poor hard identity signal even when the
+            # objective identity embedding and shared reviewer agree.  Keep
+            # the 0.82 commercial identity bar and require the objective
+            # metric itself to clear it, but do not let non-comparable
+            # close-crop geometry veto a valid full-body side reference.
+            weights = (
+                {"objective_metric": 0.65, "geometry": 0.0, "multimodal": 0.35}
+                if metric_confidence >= 0.7
+                else {"objective_metric": 0.45, "geometry": 0.0, "multimodal": 0.55}
+            )
+        elif viewpoint_relationship == "cross_view" and geometry_comparability == "not_comparable":
             # An extreme profile transition exposes a different subset and
             # projection of 2-D landmarks. Treating that geometry as negative
             # evidence penalizes the requested viewpoint rather than identity.
@@ -655,6 +669,9 @@ class VisionOutputInspector:
             + geometry * weights["geometry"]
             + llm_score * weights["multimodal"]
         )
+        hard_gate_passed = fused >= 0.82
+        if body_side_full_geometry_advisory:
+            hard_gate_passed = hard_gate_passed and objective >= 0.82
         fusion = {
             "objective_metric_score": round(objective, 4),
             "multimodal_same_person_score": round(llm_score, 4),
@@ -665,6 +682,9 @@ class VisionOutputInspector:
             "viewpoint_relationship": viewpoint_relationship,
             "geometry_comparability": geometry_comparability or "unknown",
             "geometry_evidence_mode": (
+                "body_full_body_side_geometry_advisory"
+                if body_side_full_geometry_advisory
+                else
                 "cross_view_not_comparable"
                 if viewpoint_relationship == "cross_view" and geometry_comparability == "not_comparable"
                 else "cross_view_advisory"
@@ -673,8 +693,8 @@ class VisionOutputInspector:
                 if viewpoint_relationship == "same_view"
                 else "unclassified"
             ),
-            "hard_gate_passed": fused >= 0.82,
-            "reason_codes": [] if fused >= 0.82 else [
+            "hard_gate_passed": hard_gate_passed,
+            "reason_codes": [] if hard_gate_passed else [
                 "identity_metric_low" if fused < 0.72 else "identity_metric_below_commercial_target"
             ],
         }
@@ -1719,6 +1739,32 @@ def _portrait_identity_metric_requested(metadata: dict[str, Any]) -> bool:
             if any(term in text for term in ("portrait", "identity", "face", "person")):
                 return True
     return False
+
+
+def _body_side_full_identity_geometry_advisory(metadata: dict[str, Any]) -> bool:
+    """Scope 2-D geometry down to advisory for Body side full-body review only."""
+
+    slot_candidates: list[Any] = [metadata.get("professional_character_card_slot")]
+    planning = metadata.get("professional_planning_metadata")
+    if isinstance(planning, dict):
+        slot_candidates.append(planning.get("slot_key"))
+    envelope = metadata.get("capability_execution_envelope")
+    if isinstance(envelope, dict):
+        plan = envelope.get("activation_plan")
+        plan_metadata = plan.get("metadata") if isinstance(plan, dict) else None
+        if isinstance(plan_metadata, dict):
+            nested = plan_metadata.get("professional_planning_metadata")
+            if isinstance(nested, dict):
+                slot_candidates.append(nested.get("slot_key"))
+    if not any(str(value or "").strip() == "body.side_full" for value in slot_candidates):
+        return False
+    try:
+        contract = active_review_contract(metadata)
+    except Exception:
+        return False
+    professional = contract.get("professional_identity_quality")
+    body_review = professional.get("body_silhouette_review") if isinstance(professional, dict) else None
+    return bool(isinstance(body_review, dict) and body_review.get("applies"))
 
 
 def _vision_provider_attempt_limit(metadata: dict[str, Any]) -> int:
