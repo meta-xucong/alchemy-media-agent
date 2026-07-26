@@ -6,6 +6,7 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
@@ -845,3 +846,39 @@ def test_doc245_body_set_carries_existing_formal_receipts_during_partial_resume(
         "body.rear_full",
         "body.rear_full",
     ]
+
+
+def test_doc245_body_provider_reference_subset_keeps_side_profile_authority() -> None:
+    refs = ["face_front_winner", "face_profile_90_winner", "face_rear_winner"]
+
+    assert V3ProductApiService._professional_character_card_provider_reference_output_ids(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        reference_output_ids=refs,
+    ) == ["face_front_winner", "face_rear_winner"]
+    assert V3ProductApiService._professional_character_card_provider_reference_output_ids(
+        stage="body_silhouette",
+        slot_key="body.side_full",
+        reference_output_ids=refs,
+    ) == ["face_profile_90_winner", "face_front_winner"]
+    assert V3ProductApiService._professional_character_card_provider_reference_output_ids(
+        stage="body_silhouette",
+        slot_key="body.rear_full",
+        reference_output_ids=refs,
+    ) == ["face_rear_winner", "face_profile_90_winner"]
+
+
+def test_doc245_body_provider_reference_subset_rejects_invalid_body_chain() -> None:
+    with pytest.raises(ValueError, match="professional_character_card_reference_chain_invalid"):
+        V3ProductApiService._professional_character_card_provider_reference_output_ids(
+            stage="body_silhouette",
+            slot_key="body.side_full",
+            reference_output_ids=["face_front_winner", "face_profile_90_winner"],
+        )
+
+    with pytest.raises(ValueError, match="professional_character_card_slot_invalid"):
+        V3ProductApiService._professional_character_card_provider_reference_output_ids(
+            stage="body_silhouette",
+            slot_key="body.unknown",
+            reference_output_ids=["face_front_winner", "face_profile_90_winner", "face_rear_winner"],
+        )

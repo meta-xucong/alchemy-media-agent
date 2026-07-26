@@ -995,7 +995,11 @@ class V3ProductApiService:
                 "professional_identity_reference_strategy": "character_card_shared_identity_v1",
                 "professional_reference_stage": f"character_card_{professional_character_card_stage}",
                 "professional_anchor_reference_assets": self._professional_character_card_reference_assets(
-                    reference_ids
+                    self._professional_character_card_provider_reference_output_ids(
+                        stage=professional_character_card_stage,
+                        slot_key=str(professional_character_card_slot),
+                        reference_output_ids=reference_ids,
+                    )
                 ),
                 "generation_channel": generation_channel,
                 "mcp_operation_id": mcp_operation_id,
@@ -1367,6 +1371,35 @@ class V3ProductApiService:
                 }
             )
         return references
+
+    @staticmethod
+    def _professional_character_card_provider_reference_output_ids(
+        *,
+        stage: Literal["expression_set", "body_silhouette"],
+        slot_key: str,
+        reference_output_ids: list[str],
+    ) -> list[str]:
+        """Select the bounded materialization subset without changing formal lineage.
+
+        Body formal receipts still bind all three Face winners
+        (front/profile/rear).  The Provider/MCP image-edit path, however, only
+        needs the slot-relevant view pair so it stays inside the native
+        reference budget while preserving the correct angle authority.
+        """
+
+        refs = [str(item or "").strip() for item in reference_output_ids if str(item or "").strip()]
+        if stage != "body_silhouette":
+            return refs
+        if len(refs) != 3 or len(set(refs)) != 3:
+            raise ValueError("professional_character_card_reference_chain_invalid")
+        front, profile, rear = refs
+        if slot_key == "body.front_full":
+            return [front, rear]
+        if slot_key == "body.side_full":
+            return [profile, front]
+        if slot_key == "body.rear_full":
+            return [rear, profile]
+        raise ValueError("professional_character_card_slot_invalid")
 
     @staticmethod
     def _professional_anchor_provider_evidence_ids(
