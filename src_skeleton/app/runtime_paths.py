@@ -25,3 +25,12 @@ def resolve_repo_storage_path(env_name: str, default_relative_path: str) -> Path
         configured = Path(os.path.expandvars(raw)).expanduser()
         return configured if configured.is_absolute() else repository_root() / configured
     return repository_root() / default_relative_path
+
+
+def local_runtime_descriptor_path() -> Path:
+    """Path used by the running local V3 service to advertise its base URL."""
+
+    return resolve_repo_storage_path(
+        "ALCHEMY_V3_RUNTIME_DESCRIPTOR",
+        ".media_storage/v3_runtime/local_runtime.json",
+    )

@@ -134,11 +134,12 @@ repository, then restart Codex. The launcher validates that path before it
 imports anything. If it cannot find the repository, the MCP stays unavailable;
 it never falls back to a Web route or Platform API.
 
-For materialized MCP handoff tools, also set `ALCHEMY_V3_BASE_URL` to the
-already-running local V3 service, for example `http://127.0.0.1:8772` when the
-desktop app is using that port. The bridge intentionally has no hidden default
-port: without an explicit local base URL it fails closed instead of silently
-calling an empty or stale `8017` process.
+For materialized MCP handoff tools, the bridge uses either an explicit
+`v3_base_url`, the non-secret `ALCHEMY_V3_BASE_URL`, or the local runtime
+descriptor written by the currently running V3 service. The bridge intentionally
+has no hidden default port: if no live local V3 runtime can be discovered, it
+fails closed instead of silently calling an empty or stale process on a
+historical port.
 
 If the checked-out main worktree contains its already configured remote
 Central Brain environment, the launcher discovers `.env` (and the legacy

@@ -8,6 +8,7 @@ import httpx
 import json
 import logging
 import os
+import sys
 from html import escape
 from pathlib import Path
 import threading
@@ -92,7 +93,7 @@ from app.services.veyra_auth import (
 from app.services.veyra_usage import list_veyra_usage
 from app.services.video_service import create_video_job
 from app.storage import media_store
-from app.runtime_paths import resolve_repo_storage_path
+from app.runtime_paths import local_runtime_descriptor_path, resolve_repo_storage_path
 
 app = FastAPI(title="Custom Media Agent API", version="0.1.0")
 logger = logging.getLogger(__name__)
@@ -136,6 +137,57 @@ v3_route_handlers = V3ProductRouteHandlers(
     visual_asset_library_catalog=_v3_visual_asset_library_catalog,
     project_visual_asset_binding_service=_v3_project_visual_asset_binding_service,
 )
+
+
+def _uvicorn_arg_value(name: str) -> str | None:
+    for index, value in enumerate(sys.argv):
+        if value == name and index + 1 < len(sys.argv):
+            return str(sys.argv[index + 1])
+        prefix = f"{name}="
+        if value.startswith(prefix):
+            return value[len(prefix) :]
+    return None
+
+
+def _current_local_v3_base_url() -> str | None:
+    configured = (os.getenv("ALCHEMY_V3_PUBLIC_BASE_URL") or os.getenv("ALCHEMY_V3_BASE_URL") or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    port = _uvicorn_arg_value("--port")
+    if not port:
+        return None
+    host = (_uvicorn_arg_value("--host") or "127.0.0.1").strip()
+    if host in {"0.0.0.0", "::", ""}:
+        host = "127.0.0.1"
+    if host == "::1":
+        host = "[::1]"
+    return f"http://{host}:{port}".rstrip("/")
+
+
+def _write_v3_local_runtime_descriptor() -> None:
+    base_url = _current_local_v3_base_url()
+    if not base_url:
+        logger.warning("V3 local runtime descriptor not written because local base URL could not be resolved.")
+        return
+    descriptor_path = local_runtime_descriptor_path()
+    descriptor_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "v3_local_runtime_descriptor_v1",
+                "base_url": base_url,
+                "pid": os.getpid(),
+                "runtime_id": _v3_background_generation_runtime_id,
+                "app_module": "src_skeleton.app.main",
+                "visual_asset_catalog_root": str(V3_VISUAL_ASSET_CATALOG_ROOT),
+                "visual_asset_library_root": str(V3_VISUAL_ASSET_LIBRARY_ROOT),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 v3_output_store = V3GeneratedOutputStore()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/mobile-static", StaticFiles(directory=MOBILE_STATIC_DIR), name="mobile_static")
@@ -559,6 +611,7 @@ def _recover_v3_interrupted_background_generations() -> int:
 
 @app.on_event("startup")
 def _recover_v3_interrupted_background_generations_on_startup() -> None:
+    _write_v3_local_runtime_descriptor()
     recovered = _recover_v3_interrupted_background_generations()
     if recovered:
         logger.warning(
