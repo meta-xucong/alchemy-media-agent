@@ -26,7 +26,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260721-professional-character-card" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260726-visual-asset-cards" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -1878,7 +1878,73 @@
                   </div>
                 </div>
                 <div id="v3VisualAssetLibraryStatus" class="v3-visual-asset-status" aria-live="polite"></div>
-                <div id="v3VisualAssetLibraryList" class="v3-visual-asset-list" aria-live="polite"></div>
+                <div id="v3VisualAssetLibraryCards" class="v3-visual-asset-library-cards">
+                  <section class="v3-visual-asset-section-card v3-visual-asset-existing-section" aria-label="已有视觉资产">
+                    <button class="v3-visual-asset-section-toggle" type="button" data-v3-visual-asset-action="toggle-existing-assets" aria-controls="v3VisualAssetLibraryList">
+                      <span>
+                        <span class="eyebrow">Existing assets</span>
+                        <strong>已有资产</strong>
+                      </span>
+                      <small>点击展开已建立的人物资产，再打开角色卡查看内容。</small>
+                    </button>
+                    <div id="v3VisualAssetLibraryList" class="v3-visual-asset-list" aria-live="polite"></div>
+                  </section>
+
+                  <form id="v3VisualAssetCreateForm" class="v3-visual-asset-create-form v3-visual-asset-section-card v3-visual-asset-create-card" novalidate>
+                    <p class="eyebrow">New visual asset</p>
+                    <h4>新建人物资产</h4>
+                    <p class="section-subcopy">第一阶段只支持人物身份资产。保存源图后，会在同一张标准人物角色卡里依次建立人物脸部基础、表情组和身形与全身关系。</p>
+                    <label class="field">
+                      <span>资产名称</span>
+                      <input id="v3VisualAssetNameInput" type="text" maxlength="80" required placeholder="例如：童模 A / 品牌代言人小雨" />
+                    </label>
+                    <div class="field v3-visual-asset-source-field">
+                      <span>人物源图</span>
+                      <label class="file-drop v3-file-drop v3-visual-asset-file-drop" for="v3VisualAssetRootInput">
+                        <input id="v3VisualAssetRootInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                        <span class="file-title">选择人物源图</span>
+                        <span id="v3VisualAssetSourceSummary" class="file-meta">可选 1–2 张：先选主原型，再按需添加补充参考。</span>
+                      </label>
+                      <div id="v3VisualAssetSourceList" class="v3-asset-list v3-visual-asset-source-list empty-v3-list" aria-live="polite">尚未选择人物源图</div>
+                      <p id="v3VisualAssetSourceFeedback" class="v3-visual-asset-source-feedback" role="status" hidden></p>
+                      <small>主原型用于建立身份主线；补充参考仅用于共享流程校准。上传不等于启用，角色卡每个部分都需要共享检查通过并由你确认。</small>
+                    </div>
+                    <label class="field">
+                      <span>建模说明</span>
+                      <textarea id="v3VisualAssetIntentInput" rows="3" maxlength="1200" required placeholder="例如：建立这个人物自然、年龄合适、不同视角仍可辨认的标准化身份参考。"></textarea>
+                    </label>
+                    <label class="field">
+                      <span>图片生成方式</span>
+                      <select id="v3CharacterCardGenerationChannelInput">
+                        <option value="provider">网页生成（默认）</option>
+                        <option value="mcp">本地 Codex / MCP</option>
+                      </select>
+                      <small>两种方式使用同一份中枢提示词、参考图、审查和角色卡位置；如果一种方式暂时不可用，可以在断点继续时切换。</small>
+                    </label>
+                    <label class="v3-confirm-checkbox">
+                      <input id="v3VisualAssetConsentInput" type="checkbox" required />
+                      <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>
+                    </label>
+                    <p id="v3VisualAssetCreateFeedback" class="v3-visual-asset-create-feedback" role="status" aria-live="polite"></p>
+                    <button id="v3VisualAssetCreateBtn" class="button primary" type="submit" aria-describedby="v3VisualAssetCreateFeedback">保存源图并打开人物角色卡</button>
+                    <section id="v3VisualAssetWorkflowPanel" class="v3-visual-asset-workflow-panel" hidden aria-live="polite" aria-label="人物资产建立进度">
+                      <div class="v3-visual-asset-workflow-heading">
+                        <div>
+                          <p class="eyebrow">当前进度</p>
+                          <h4 id="v3VisualAssetWorkflowTitle">正在准备人物资产</h4>
+                          <p id="v3VisualAssetWorkflowDetail" class="section-subcopy"></p>
+                        </div>
+                        <span class="v3-visual-asset-workflow-badge">共享建模流程</span>
+                      </div>
+                      <div id="v3VisualAssetWorkflowProgress" class="v3-visual-asset-workflow-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+                      <div id="v3VisualAssetWorkflowSteps" class="v3-visual-asset-workflow-steps"></div>
+                      <div class="v3-visual-asset-workflow-actions">
+                        <button id="v3VisualAssetWorkflowRetryBtn" class="button compact secondary" type="button" hidden>重新开始标准建模</button>
+                        <button id="v3VisualAssetWorkflowActivateBtn" class="button primary" type="button" hidden>确认启用这个人物资产</button>
+                      </div>
+                    </section>
+                  </form>
+                </div>
 
                 <section id="v3CharacterCardWorkspace" class="v3-character-card-workspace" hidden aria-live="polite" aria-label="标准人物角色卡">
                   <div class="v3-character-card-heading">
@@ -1914,60 +1980,6 @@
                   </div>
                 </section>
 
-                <form id="v3VisualAssetCreateForm" class="v3-visual-asset-create-form" novalidate>
-                  <p class="eyebrow">New visual asset</p>
-                  <h4>新建人物资产</h4>
-                  <p class="section-subcopy">第一阶段只支持人物身份资产。保存源图后，会在同一张标准人物角色卡里依次建立人物脸部基础、表情组和身形与全身关系。</p>
-                  <label class="field">
-                    <span>资产名称</span>
-                    <input id="v3VisualAssetNameInput" type="text" maxlength="80" required placeholder="例如：童模 A / 品牌代言人小雨" />
-                  </label>
-                  <div class="field v3-visual-asset-source-field">
-                    <span>人物源图</span>
-                    <label class="file-drop v3-file-drop v3-visual-asset-file-drop" for="v3VisualAssetRootInput">
-                      <input id="v3VisualAssetRootInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
-                      <span class="file-title">选择人物源图</span>
-                      <span id="v3VisualAssetSourceSummary" class="file-meta">可选 1–2 张：先选主原型，再按需添加补充参考。</span>
-                    </label>
-                    <div id="v3VisualAssetSourceList" class="v3-asset-list v3-visual-asset-source-list empty-v3-list" aria-live="polite">尚未选择人物源图</div>
-                    <p id="v3VisualAssetSourceFeedback" class="v3-visual-asset-source-feedback" role="status" hidden></p>
-                    <small>主原型用于建立身份主线；补充参考仅用于共享流程校准。上传不等于启用，角色卡每个部分都需要共享检查通过并由你确认。</small>
-                  </div>
-                  <label class="field">
-                    <span>建模说明</span>
-                    <textarea id="v3VisualAssetIntentInput" rows="3" maxlength="1200" required placeholder="例如：建立这个人物自然、年龄合适、不同视角仍可辨认的标准化身份参考。"></textarea>
-                  </label>
-                  <label class="field">
-                    <span>图片生成方式</span>
-                    <select id="v3CharacterCardGenerationChannelInput">
-                      <option value="provider">网页生成（默认）</option>
-                      <option value="mcp">本地 Codex / MCP</option>
-                    </select>
-                    <small>两种方式使用同一份中枢提示词、参考图、审查和角色卡位置；如果一种方式暂时不可用，可以在断点继续时切换。</small>
-                  </label>
-                  <label class="v3-confirm-checkbox">
-                    <input id="v3VisualAssetConsentInput" type="checkbox" required />
-                    <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>
-                  </label>
-                  <p id="v3VisualAssetCreateFeedback" class="v3-visual-asset-create-feedback" role="status" aria-live="polite"></p>
-                  <button id="v3VisualAssetCreateBtn" class="button primary" type="submit" aria-describedby="v3VisualAssetCreateFeedback">保存源图并打开人物角色卡</button>
-                  <section id="v3VisualAssetWorkflowPanel" class="v3-visual-asset-workflow-panel" hidden aria-live="polite" aria-label="人物资产建立进度">
-                    <div class="v3-visual-asset-workflow-heading">
-                      <div>
-                        <p class="eyebrow">当前进度</p>
-                        <h4 id="v3VisualAssetWorkflowTitle">正在准备人物资产</h4>
-                        <p id="v3VisualAssetWorkflowDetail" class="section-subcopy"></p>
-                      </div>
-                      <span class="v3-visual-asset-workflow-badge">共享建模流程</span>
-                    </div>
-                    <div id="v3VisualAssetWorkflowProgress" class="v3-visual-asset-workflow-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
-                    <div id="v3VisualAssetWorkflowSteps" class="v3-visual-asset-workflow-steps"></div>
-                    <div class="v3-visual-asset-workflow-actions">
-                      <button id="v3VisualAssetWorkflowRetryBtn" class="button compact secondary" type="button" hidden>重新开始标准建模</button>
-                      <button id="v3VisualAssetWorkflowActivateBtn" class="button primary" type="button" hidden>确认启用这个人物资产</button>
-                    </div>
-                  </section>
-                </form>
               </div>
             </dialog>
 
@@ -2131,7 +2143,7 @@
       </div>
     </section>
 
-    <section id="imageLightbox" class="image-lightbox" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle" hidden>
+    <dialog id="imageLightbox" class="image-lightbox" aria-labelledby="lightboxTitle" hidden>
       <div class="lightbox-backdrop" data-close-lightbox></div>
       <div class="lightbox-panel">
         <button id="closeImageLightboxBtn" class="modal-close lightbox-close" type="button" aria-label="关闭大图预览" title="关闭">×</button>
@@ -2165,7 +2177,7 @@
           </div>
         </div>
       </div>
-    </section>
+    </dialog>
 
     <section id="v3ProjectHistoryModal" class="v3-project-history-modal" role="dialog" aria-modal="true" aria-labelledby="v3ProjectHistoryTitle" hidden>
       <div class="v3-project-history-backdrop" data-close-v3-history></div>
@@ -2196,6 +2208,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260725-formal-face-slots" defer></script>
+    <script src="/static/app.js?v=20260726-visual-asset-cards" defer></script>
   </body>
 </html>

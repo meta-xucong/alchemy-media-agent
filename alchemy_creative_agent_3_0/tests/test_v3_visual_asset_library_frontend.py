@@ -129,7 +129,7 @@ def test_doc247_character_card_slot_status_labels_completed_winner_selected() ->
     assert 'empty: "尚未建立"' in helper
     assert 'blocked: "需要重新处理"' in helper
     assert '}[status] || "等待处理";' in helper
-    assert "app.js?v=20260725-formal-face-slots" in index
+    assert "app.js?v=20260726-visual-asset-cards" in index
 
 
 def test_doc247_character_card_ui_excludes_auxiliary_25_degree_face_references() -> None:
@@ -211,6 +211,7 @@ def test_doc177_professional_home_is_a_compact_hub_and_detail_work_is_on_demand(
     assert 'id="v3ManageVisualAssetsFromBindingBtn"' in index
     assert ".v3-visual-asset-hub-card" in css
     assert ".v3-visual-asset-library-dialog" in css
+    assert "styles.css?v=20260726-visual-asset-cards" in index
 
 
 def test_doc177_project_asset_card_preserves_explicit_binding_and_management_route() -> None:
@@ -223,6 +224,63 @@ def test_doc177_project_asset_card_preserves_explicit_binding_and_management_rou
     assert "v3VisualAssetBindingDialog?.open" in source
     assert "v3VisualAssetLibraryDialog?.open" in source
     assert "不使用视觉资产" in index
+
+
+def test_doc258_visual_asset_library_uses_parallel_asset_cards_not_scroll_pile() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    dialog_start = index.index('id="v3VisualAssetLibraryDialog"')
+    binding_dialog_start = index.index('id="v3VisualAssetBindingDialog"', dialog_start)
+    library_dialog = index[dialog_start:binding_dialog_start]
+
+    assert 'id="v3VisualAssetLibraryCards"' in library_dialog
+    assert "v3-visual-asset-existing-section" in library_dialog
+    assert "v3-visual-asset-create-card" in library_dialog
+    assert 'data-v3-visual-asset-action="toggle-existing-assets"' in library_dialog
+    assert "visualAssetLibraryExistingOpen" in source
+    assert "visualAssetLibraryExpandedAssetId" in source
+    assert 'data-v3-visual-asset-action="toggle-asset-details"' in source
+    assert "v3VisualAssetLibraryCards.hidden = cardOpen" in source
+    assert ".v3-visual-asset-library-cards" in css
+    assert "grid-template-columns: minmax(320px, 1.05fr) minmax(320px, 0.95fr)" in css
+
+
+def test_doc258_visual_asset_library_hides_archived_cases_from_active_list() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    renderer = _function(source, "renderV3VisualAssetLibrary", "loadV3ProjectVisualAssetBindings")
+
+    assert 'asset?.lifecycle_status !== "archived"' in renderer
+    assert "archivedCount" in renderer
+    assert "测试/作废资产已归档" in renderer
+    assert "visibleAssets.map" in renderer
+    assert "assets.map" not in renderer
+
+
+def test_doc258_lightbox_is_top_layer_dialog_with_close_state_sync() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+    opener = _function(source, "openImageLightbox", "closeImageLightbox")
+    closer = _function(source, "closeImageLightbox", "renderLightboxActions")
+
+    assert '<dialog id="imageLightbox"' in index
+    assert "<section id=\"imageLightbox\"" not in index
+    assert "els.imageLightbox.showModal()" in opener
+    assert "els.imageLightbox.close()" in closer
+    assert 'els.imageLightbox.addEventListener("cancel"' in source
+    assert ".image-lightbox::backdrop" in css
+    assert "z-index: 1200" in css
+
+
+def test_doc258_expression_slots_render_as_uniform_four_card_grid() -> None:
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert '.v3-character-card-module[data-v3-character-card-module="expression_set"] .v3-character-card-slots' in css
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css
+    assert "aspect-ratio: 2 / 3" in css
+    assert "object-fit: cover" in css
 
 
 def test_doc177_people_asset_submission_explains_missing_fields_inline() -> None:

@@ -321,6 +321,8 @@ const v3State = {
   visualAssetWorkflowStage: "idle",
   visualAssetWorkflowStartedAt: null,
   visualAssetWorkflowTimer: null,
+  visualAssetLibraryExistingOpen: true,
+  visualAssetLibraryExpandedAssetId: "",
   characterCardRunAll: false,
   characterCardBusyModule: "",
   characterCardBodySource: "brain_inferred",
@@ -565,6 +567,7 @@ const els = {
   v3CloseVisualAssetLibraryDialogBtn: document.querySelector("#v3CloseVisualAssetLibraryDialogBtn"),
   v3RefreshVisualAssetsBtn: document.querySelector("#v3RefreshVisualAssetsBtn"),
   v3VisualAssetLibraryStatus: document.querySelector("#v3VisualAssetLibraryStatus"),
+  v3VisualAssetLibraryCards: document.querySelector("#v3VisualAssetLibraryCards"),
   v3VisualAssetLibraryList: document.querySelector("#v3VisualAssetLibraryList"),
   v3VisualAssetLibraryPanel: document.querySelector("#v3VisualAssetLibraryPanel"),
   v3VisualAssetCreateForm: document.querySelector("#v3VisualAssetCreateForm"),
@@ -1234,7 +1237,7 @@ function bindControls() {
   if (els.v3CreateVisualAssetShortcutBtn) els.v3CreateVisualAssetShortcutBtn.addEventListener("click", () => openV3VisualAssetLibraryDialog({ focusBuilder: true }));
   if (els.v3CloseVisualAssetLibraryDialogBtn) els.v3CloseVisualAssetLibraryDialogBtn.addEventListener("click", closeV3VisualAssetLibraryDialog);
   if (els.v3RefreshVisualAssetsBtn) els.v3RefreshVisualAssetsBtn.addEventListener("click", () => loadV3VisualAssets({ silent: false, force: true }));
-  if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.addEventListener("click", handleV3VisualAssetAction);
+  if (els.v3VisualAssetLibraryDialog) els.v3VisualAssetLibraryDialog.addEventListener("click", handleV3VisualAssetAction);
   if (els.v3CharacterCardModules) els.v3CharacterCardModules.addEventListener("click", handleV3CharacterCardAction);
   if (els.v3CharacterCardRunAllBtn) els.v3CharacterCardRunAllBtn.addEventListener("click", startV3CharacterCardRunAll);
   if (els.v3CloseCharacterCardBtn) els.v3CloseCharacterCardBtn.addEventListener("click", closeV3CharacterCard);
@@ -1376,6 +1379,10 @@ function bindControls() {
   }
   els.imageLightbox.addEventListener("click", (event) => {
     if (event.target.hasAttribute("data-close-lightbox")) closeImageLightbox();
+  });
+  els.imageLightbox.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeImageLightbox();
   });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") setLabNavOpen(false);
@@ -3218,6 +3225,8 @@ function closeV3ProjectHistoryModal({ keepBodyState = false } = {}) {
 function releaseV3ScrollLockIfNoModal() {
   const hasOpenModal = [
     els.imageLightbox,
+    els.v3VisualAssetLibraryDialog,
+    els.v3VisualAssetBindingDialog,
     els.v3ProjectHistoryModal,
     els.v3BrandMemoryModal,
     els.favoritePickerModal,
@@ -6246,26 +6255,39 @@ async function archiveV3VisualAsset(visualAssetId) {
 function handleV3VisualAssetAction(event) {
   const button = event.target.closest("[data-v3-visual-asset-action]");
   if (!button || button.disabled) return;
+  const action = button.dataset.v3VisualAssetAction || "";
   const id = button.dataset.v3VisualAssetId || "";
-  if (button.dataset.v3VisualAssetAction === "open-card") openV3CharacterCard(id);
-  if (button.dataset.v3VisualAssetAction === "prepare") void prepareV3VisualAsset(id);
-  if (button.dataset.v3VisualAssetAction === "activate") void activateV3VisualAsset(id);
-  if (button.dataset.v3VisualAssetAction === "archive") void archiveV3VisualAsset(id);
+  if (action === "toggle-existing-assets") {
+    v3State.visualAssetLibraryExistingOpen = !v3State.visualAssetLibraryExistingOpen;
+    renderV3VisualAssetLibrary();
+    return;
+  }
+  if (action === "toggle-asset-details") {
+    v3State.visualAssetLibraryExpandedAssetId = v3State.visualAssetLibraryExpandedAssetId === id ? "" : id;
+    renderV3VisualAssetLibrary();
+    return;
+  }
+  if (action === "open-card") openV3CharacterCard(id);
+  if (action === "prepare") void prepareV3VisualAsset(id);
+  if (action === "activate") void activateV3VisualAsset(id);
+  if (action === "archive") void archiveV3VisualAsset(id);
 }
 
 function renderV3VisualAssetLibrary() {
   if (!els.v3ProfessionalHomeSurface) return;
   const assets = Array.isArray(v3State.visualAssets) ? v3State.visualAssets : [];
-  const activeCount = assets.filter((asset) => v3VisualAssetIsActive(asset)).length;
+  const visibleAssets = assets.filter((asset) => asset?.lifecycle_status !== "archived");
+  const archivedCount = assets.length - visibleAssets.length;
+  const activeCount = visibleAssets.filter((asset) => v3VisualAssetIsActive(asset)).length;
   if (els.v3VisualAssetLibrarySummary) {
     if (v3State.visualAssetsLoading) {
       els.v3VisualAssetLibrarySummary.innerHTML = "<strong>正在读取你的视觉资产</strong><span>读取完成后，可建立新人物资产或管理已有资产。</span>";
     } else if (v3State.visualAssetsError) {
       els.v3VisualAssetLibrarySummary.innerHTML = "<strong>视觉资产库暂时不可用</strong><span>已有项目不会受影响。请打开资产库刷新后再继续。</span>";
-    } else if (!assets.length) {
+    } else if (!visibleAssets.length) {
       els.v3VisualAssetLibrarySummary.innerHTML = "<strong>还没有视觉资产</strong><span>先建立人物资产；通过标准建模并由你确认启用后，它才能被项目选择。</span>";
     } else {
-      els.v3VisualAssetLibrarySummary.innerHTML = `<strong>已保存 ${assets.length} 个视觉资产，其中 ${activeCount} 个可用于项目</strong><span>打开资产库可继续建模、确认启用或管理已有资产。</span>`;
+      els.v3VisualAssetLibrarySummary.innerHTML = `<strong>已保存 ${visibleAssets.length} 个当前资产，其中 ${activeCount} 个可用于项目</strong><span>${archivedCount ? `另有 ${archivedCount} 个测试/作废资产已归档，不再干扰选择。` : "打开资产库可继续建模、确认启用或管理已有资产。"}</span>`;
     }
   }
   if (els.v3VisualAssetLibraryStatus) {
@@ -6273,19 +6295,32 @@ function renderV3VisualAssetLibrary() {
       els.v3VisualAssetLibraryStatus.innerHTML = "<strong>正在读取视觉资产库</strong><span>请稍候，读取完成后可继续操作。</span>";
     } else if (v3State.visualAssetsError) {
       els.v3VisualAssetLibraryStatus.innerHTML = `<strong>暂时无法读取</strong><span>${escapeHtml(v3State.visualAssetsError)}</span>`;
-    } else if (!assets.length) {
+    } else if (!visibleAssets.length) {
       els.v3VisualAssetLibraryStatus.innerHTML = "<strong>还没有视觉资产</strong><span>第一阶段可以先建立人物资产。未来产品、场景和品牌资产会在对应模块准备好后出现。</span>";
     } else {
-      els.v3VisualAssetLibraryStatus.innerHTML = `<strong>${activeCount ? `已有 ${activeCount} 个已启用资产` : "还没有已启用资产"}</strong><span>只有你明确启用的版本才会出现在项目选择列表中。</span>`;
+      els.v3VisualAssetLibraryStatus.innerHTML = `<strong>${activeCount ? `已有 ${activeCount} 个已启用资产` : "还没有已启用资产"}</strong><span>只有你明确启用的版本才会出现在项目选择列表中。${archivedCount ? ` 已归档 ${archivedCount} 个测试/作废记录。` : ""}</span>`;
     }
   }
   renderV3VisualAssetCreateReadiness();
   renderV3VisualAssetWorkflow();
   const cardOpen = Boolean(v3State.visualAssetWorkflowAssetId);
-  if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.hidden = cardOpen;
-  if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.hidden = cardOpen;
+  if (els.v3VisualAssetLibraryCards) els.v3VisualAssetLibraryCards.hidden = cardOpen;
+  if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.hidden = false;
+  if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.hidden = false;
   if (!els.v3VisualAssetLibraryList) return;
-  els.v3VisualAssetLibraryList.innerHTML = assets.length ? assets.map((asset) => {
+  const existingToggle = els.v3VisualAssetLibraryDialog?.querySelector("[data-v3-visual-asset-action=\"toggle-existing-assets\"]");
+  if (existingToggle) {
+    existingToggle.setAttribute("aria-expanded", String(Boolean(v3State.visualAssetLibraryExistingOpen)));
+    existingToggle.dataset.open = v3State.visualAssetLibraryExistingOpen ? "true" : "false";
+  }
+  if (!v3State.visualAssetLibraryExistingOpen) {
+    els.v3VisualAssetLibraryList.innerHTML = `<button class="v3-visual-asset-collapsed-summary" type="button" data-v3-visual-asset-action="toggle-existing-assets">
+      <strong>${visibleAssets.length ? `${visibleAssets.length} 个当前资产` : "暂无当前资产"}</strong>
+      <span>${activeCount ? `${activeCount} 个已启用；点击展开查看角色卡。` : "点击展开查看草稿、处理中或已启用资产。"}</span>
+    </button>`;
+    return;
+  }
+  els.v3VisualAssetLibraryList.innerHTML = visibleAssets.length ? visibleAssets.map((asset) => {
     const lifecycle = v3VisualAssetLifecycleLabel(asset);
     const preparation = asset.latest_preparation || {};
     const views = Array.isArray(preparation.anchor_views) ? preparation.anchor_views : [];
@@ -6295,22 +6330,29 @@ function renderV3VisualAssetLibrary() {
     const canPrepare = ["draft", "blocked"].includes(asset.lifecycle_status);
     const canActivate = asset.lifecycle_status === "review" && Boolean(preparation.version_id);
     const canArchive = asset.lifecycle_status !== "archived";
+    const expanded = v3State.visualAssetLibraryExpandedAssetId === asset.visual_asset_id;
     const prepareAction = canPrepare
       ? `<button class="button compact secondary" type="button" data-v3-visual-asset-action="prepare" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${!v3State.visualAssetBusy ? "" : "disabled"}>${asset.lifecycle_status === "blocked" ? "重新处理" : "开始标准建模"}</button>`
       : "";
     const activateAction = canActivate
       ? `<button class="button compact primary" type="button" data-v3-visual-asset-action="activate" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${!v3State.visualAssetBusy ? "" : "disabled"}>确认启用</button>`
       : "";
-    return `<article class="v3-visual-asset-card${v3VisualAssetIsActive(asset) ? " active" : ""}">
-      <div class="v3-visual-asset-card-head"><div><span>人物资产</span><strong>${escapeHtml(asset.display_name)}</strong></div><small>${escapeHtml(lifecycle.title)}</small></div>
-      <p>${escapeHtml(lifecycle.detail)}</p>
-      <small class="v3-visual-asset-view-summary">${escapeHtml(viewText)}</small>
-      <div class="v3-visual-asset-actions">
-        <button class="button compact primary" type="button" data-v3-visual-asset-action="open-card" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}">打开人物角色卡</button>
-        ${prepareAction}
-        ${activateAction}
-        <button class="button compact ghost" type="button" data-v3-visual-asset-action="archive" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${canArchive && !v3State.visualAssetBusy ? "" : "disabled"}>归档</button>
-      </div>
+    const detail = expanded ? `<div class="v3-visual-asset-card-detail">
+        <p>${escapeHtml(lifecycle.detail)}</p>
+        <small class="v3-visual-asset-view-summary">${escapeHtml(viewText)}</small>
+        <div class="v3-visual-asset-actions">
+          <button class="button compact primary" type="button" data-v3-visual-asset-action="open-card" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}">查看资产内容</button>
+          ${prepareAction}
+          ${activateAction}
+          <button class="button compact ghost" type="button" data-v3-visual-asset-action="archive" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" ${canArchive && !v3State.visualAssetBusy ? "" : "disabled"}>归档</button>
+        </div>
+      </div>` : "";
+    return `<article class="v3-visual-asset-card${v3VisualAssetIsActive(asset) ? " active" : ""}" data-expanded="${expanded ? "true" : "false"}">
+      <button class="v3-visual-asset-card-head" type="button" data-v3-visual-asset-action="toggle-asset-details" data-v3-visual-asset-id="${escapeHtml(asset.visual_asset_id)}" aria-expanded="${expanded ? "true" : "false"}">
+        <div><span>人物资产</span><strong>${escapeHtml(asset.display_name)}</strong></div>
+        <small>${escapeHtml(lifecycle.title)} · ${expanded ? "收起" : "展开"}</small>
+      </button>
+      ${detail}
     </article>`;
   }).join("") : "<div class=\"v3-visual-asset-empty\">建立人物资产后，它会保存在这里，可供多个项目主动选择。</div>";
 }
@@ -15230,11 +15272,22 @@ function openImageLightbox({ id, title, url, downloadUrl, thumbnailUrl, previewU
   bindDownloadLink(els.lightboxDownload, normalizeOriginalDownloadUrl(downloadUrl || url), `${id || "image"}.${format === "jpeg" ? "jpg" : format || "png"}`);
   renderLightboxActions([{ label: "分享", tone: "primary", run: shareCurrentLightboxImage }, ...actions]);
   els.imageLightbox.hidden = false;
+  if (typeof els.imageLightbox.showModal === "function" && !els.imageLightbox.open) {
+    try {
+      els.imageLightbox.showModal();
+    } catch (_) {
+      // If a browser refuses stacked modal dialogs, keep the existing fixed
+      // overlay fallback visible inside the current page.
+    }
+  }
   document.body.classList.add("modal-open");
   els.closeImageLightboxBtn.focus();
 }
 
 function closeImageLightbox() {
+  if (typeof els.imageLightbox.close === "function" && els.imageLightbox.open) {
+    els.imageLightbox.close();
+  }
   els.imageLightbox.hidden = true;
   els.lightboxImage.removeAttribute("src");
   els.lightboxImage.removeAttribute("data-full-url");

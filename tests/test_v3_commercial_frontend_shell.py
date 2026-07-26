@@ -64,8 +64,8 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3ProjectSnapshot"' in index.text
     assert 'id="v3PersistentDisplayRegion"' in index.text
     assert index.text.count('id="v3PersistentDisplayRegion"') == 1
-    assert "/static/styles.css?v=20260721-professional-character-card" in index.text
-    assert "/static/app.js?v=20260721-professional-character-card" in index.text
+    assert "/static/styles.css?v=20260726-visual-asset-cards" in index.text
+    assert "/static/app.js?v=20260726-visual-asset-cards" in index.text
     assert 'id="v3ProjectOutputBoard"' in index.text
     assert 'id="v3UsefulReferenceBoard"' in index.text
     assert 'id="v3ProjectWorkflow"' in index.text
@@ -191,7 +191,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-project-history-modal" in styles.text
     assert ".v3-project-history-grid" in styles.text
     assert ".v3-project-history-image-card" in styles.text
-    assert "z-index: 220" in styles.text
+    assert "z-index: 1200" in styles.text
     assert ".v3-project-list" in styles.text
     assert ".v3-project-card" in styles.text
     assert "height: 382px" in styles.text
