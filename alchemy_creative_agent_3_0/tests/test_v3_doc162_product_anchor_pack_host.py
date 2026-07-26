@@ -11,7 +11,10 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image, ImageDraw
 
-from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorGenerationRequest
+from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
+    AnchorCandidateUnavailable,
+    AnchorGenerationRequest,
+)
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
     ProductApiAnchorPackPreparationHost,
 )
@@ -99,7 +102,7 @@ class _SharedProductService:
                 "three_quarter": 5,
                 "profile": 5,
                 "right_front_25": 5,
-                "reverse_three_quarter": 5,
+                "reverse_three_quarter": 6,
                 "rear_head": 5,
             }
             if frozen.get("capture_scope") == "character_card_face_identity"
@@ -1529,6 +1532,11 @@ def test_doc193_character_card_face_gate_ignores_pose_geometry_localization_scop
                 "face_localized_nonidentity_suppression_v1"
             ),
         },
+        {
+            "provider_reference_derivative": False,
+            "identity_face_localization_applied": False,
+            "identity_face_localization_status": "not_applicable",
+        },
     ]
     host._identity_metric_provider = _FramingProfiler(  # noqa: SLF001
         {str(front): 0.160, str(right25): 0.154, selected_path: 0.132},
@@ -1557,6 +1565,49 @@ def test_doc193_character_card_face_gate_ignores_pose_geometry_localization_scop
     assert decision.status == "pass"
     assert "face_localized_identity_evidence_verified" in decision.identity_scores.evidence_codes
     assert "professional_anchor_face_localization_unverified" not in decision.issue_codes
+
+
+@pytest.mark.parametrize("reference_count", [0, 5, 7])
+def test_doc257_reverse_three_quarter_provider_reference_count_is_exact_six(
+    reference_count: int,
+) -> None:
+    service = _SharedProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    job = service.create_professional_anchor_preparation_job(
+        {"user_input": PREPARATION_INTENT},
+        view_role="reverse_three_quarter",
+        reference_evidence_ids=[
+            "v3_asset_root",
+            "v3_output_front",
+            "v3_output_profile",
+            "v3_output_right25",
+        ],
+        capture_scope="character_card_face_identity",
+    )
+    service.generate_job(job.job_id, {})
+    selected = service.output_store.by_job[job.job_id][0]
+    selected.metadata["provider_reference_image_count"] = reference_count
+    request = AnchorGenerationRequest(
+        project_id="project_doc257",
+        people_asset_id="people_doc257",
+        pack_version_id="pack_doc257",
+        view_role="reverse_three_quarter",
+        candidate_index=1,
+        preparation_intent=PREPARATION_INTENT,
+        root_source_asset_id="v3_asset_root",
+        reference_evidence_ids=[
+            "v3_asset_root",
+            "v3_output_front",
+            "v3_output_profile",
+            "v3_output_right25",
+        ],
+        capture_scope="character_card_face_identity",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        host._candidate_and_review(job.job_id, request)  # noqa: SLF001
+
+    assert str(exc_info.value) == "professional_anchor_prompt_reference_parity_unverified"
 
 
 def test_doc193_character_card_face_gate_still_requires_feature_detail_localization(tmp_path) -> None:
@@ -1621,6 +1672,11 @@ def test_doc193_character_card_face_gate_still_requires_feature_detail_localizat
             "identity_nonidentity_pixel_suppression_profile": (
                 "face_localized_nonidentity_suppression_v1"
             ),
+        },
+        {
+            "provider_reference_derivative": False,
+            "identity_face_localization_applied": False,
+            "identity_face_localization_status": "not_applicable",
         },
     ]
     host._identity_metric_provider = _FramingProfiler(  # noqa: SLF001

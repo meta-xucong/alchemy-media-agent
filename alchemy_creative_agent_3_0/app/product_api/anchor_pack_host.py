@@ -76,7 +76,7 @@ class ProductApiAnchorPackPreparationHost:
         "three_quarter": 5,
         "profile": 5,
         "right_front_25": 5,
-        "reverse_three_quarter": 5,
+        "reverse_three_quarter": 6,
         "rear_head": 5,
     }
     _REQUIRED_SCORE_DIMENSIONS = {
