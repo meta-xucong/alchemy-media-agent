@@ -3594,7 +3594,14 @@ def _character_card_stage_mcp_prompt_current(slot_key: str, prompt: str) -> bool
                 "eye-line",
                 "upper-shoulder",
             )
-            return all(term in normalized for term in framing_terms)
+            legacy_framing_current = all(term in normalized for term in framing_terms)
+            model_card_framing_current = (
+                ("model-card" in normalized or "modeling card" in normalized)
+                and ("vertical 2:3" in normalized or "1024x1536" in normalized)
+                and ("head and upper shoulders" in normalized or "upper shoulders" in normalized)
+                and ("white studio" in normalized or "white background" in normalized)
+            )
+            return legacy_framing_current or model_card_framing_current
         return True
     return True
 

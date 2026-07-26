@@ -1,5 +1,9 @@
 from pathlib import Path
 
+from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
+    _character_card_stage_mcp_prompt_current,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -126,6 +130,21 @@ def test_doc257_expression_stage_pins_vertical_model_card_size() -> None:
     assert '"requested_image_size": "1024x1536"' in source
     assert '"quality_mode": "strict"' in source
     assert '"professional_anchor_rendering_contract": "size:1024x1536|quality:strict|reference_card"' in source
+
+
+def test_doc257_laugh_mcp_prompt_current_accepts_simplified_model_card_contract() -> None:
+    current_prompt = (
+        "Professional modeling card vertical 2:3 frame, same child as the face.front reference, "
+        "head and upper shoulders centered, clean white studio background, identical lighting and white balance. "
+        "The child's expression is a genuine joyful laugh caught at a lively keyframe: eyes crinkled into happy crescents, "
+        "cheeks lifted, mouth open in a relaxed laugh with natural small teeth visible, slight spontaneous asymmetry, lively gaze."
+    )
+    old_soft_prompt = (
+        "Same child in a softly amused portrait with a gentle happy look and no explicit model-card framing contract."
+    )
+
+    assert _character_card_stage_mcp_prompt_current("expression.laugh", current_prompt)
+    assert not _character_card_stage_mcp_prompt_current("expression.laugh", old_soft_prompt)
 
 
 def test_doc257_host_no_longer_writes_deprecated_realism_prompt_gate_metadata() -> None:
