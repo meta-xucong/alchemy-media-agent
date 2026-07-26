@@ -87,6 +87,33 @@ def test_doc245_body_review_contract_exposes_framing_dimensions_to_shared_vision
     assert set(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS).issubset(set(contract["score_dimensions"]))
 
 
+def test_doc245_body_review_contract_carries_body_only_wardrobe_contract() -> None:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+
+    quality_contract = stage_metadata["professional_face_identity_quality_contract"]
+    wardrobe_contract = quality_contract["body_silhouette_wardrobe_contract"]
+
+    assert wardrobe_contract["scope"] == "body_silhouette_only"
+    assert wardrobe_contract["top"] == "simple_white_short_sleeve_top"
+    assert wardrobe_contract["bottom"] == "plain_solid_shorts"
+    assert wardrobe_contract["feet"] == "barefoot"
+    assert set(wardrobe_contract["forbidden"]) == {
+        "long_pants",
+        "socks",
+        "shoes",
+        "skirt_or_dress",
+    }
+
+    review_contract = active_review_contract(_body_review_metadata_for_vision("body.front_full"))
+    body_review = review_contract["professional_identity_quality"]["body_silhouette_review"]
+
+    assert body_review["wardrobe_contract"] == wardrobe_contract
+    assert "body_silhouette_wardrobe_contract_drift" in body_review["issue_codes"]
+
+
 def test_doc245_body_rear_review_uses_rear_continuity_instead_of_visible_face() -> None:
     metadata = _body_review_metadata_for_vision("body.rear_full")
     contract = active_review_contract(metadata)
