@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 import hashlib
 import json
+import os
+import queue
+import threading
 from typing import Any
 
 from alchemy_creative_agent_3_0.app.generation_router import (
@@ -42,6 +45,33 @@ _SPECIALIZED_TEMPLATE_SCENARIOS = {
 }
 
 ProfessionalBindingResolver = Callable[..., ProfessionalModeBinding | None]
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0.0 else default
+
+
+_LOCAL_MCP_PLANNING_TIMEOUT_SECONDS = _float_env(
+    "CODEX_NATIVE_IMAGEGEN_PLANNING_TIMEOUT_SECONDS",
+    45.0,
+)
+_LOCAL_MCP_BRAIN_TRANSPORT_TIMEOUT_SECONDS = _float_env(
+    "CODEX_NATIVE_IMAGEGEN_BRAIN_TRANSPORT_TIMEOUT_SECONDS",
+    min(35.0, max(1.0, _LOCAL_MCP_PLANNING_TIMEOUT_SECONDS - 5.0)),
+)
+
+
+class _LocalMcpPlanningTimeout(TimeoutError):
+    """Internal deadline for conversation-only Codex MCP planning."""
+
+
 class PlanningOnlyGenerationRouter:
     """Sentinel injected into ScenarioRuntime so this facade cannot render."""
 
@@ -56,9 +86,21 @@ class CodexNativeImageGenPlanner:
         self,
         runtime_factory: Callable[[], ScenarioRuntime] | None = None,
         professional_binding_resolver: ProfessionalBindingResolver | None = None,
+        planning_timeout_seconds: float | None = None,
+        brain_transport_timeout_seconds: float | None = None,
     ) -> None:
         self._runtime_factory = runtime_factory or self._default_runtime
         self._professional_binding_resolver = professional_binding_resolver
+        self._planning_timeout_seconds = (
+            _LOCAL_MCP_PLANNING_TIMEOUT_SECONDS
+            if planning_timeout_seconds is None
+            else max(0.1, float(planning_timeout_seconds))
+        )
+        self._brain_transport_timeout_seconds = (
+            _LOCAL_MCP_BRAIN_TRANSPORT_TIMEOUT_SECONDS
+            if brain_transport_timeout_seconds is None
+            else max(0.1, min(120.0, float(brain_transport_timeout_seconds)))
+        )
 
     @staticmethod
     def _default_runtime() -> ScenarioRuntime:
@@ -308,27 +350,37 @@ class CodexNativeImageGenPlanner:
     ) -> dict[str, Any]:
         runtime = self._runtime_factory()
         uploaded_assets = self._uploaded_assets(request)
-        result = runtime.plan_job(
-            {
-                "user_input": request.user_input,
-                "scenario_selection": scenario_selection,
-                "metadata": {
-                    "template_id": request.template_id,
-                    "requested_image_count": request.requested_image_count,
-                    "requested_image_size": request.requested_image_size,
-                    # Local Mode has no image transport, but it must plan as a
-                    # real-image job so the shared Runtime requires the same
-                    # remote Central Brain contract as the Web Provider path.
-                    "require_real_images": True,
-                    "real_image_generation": True,
-                    **metadata,
-                },
-                # The source files are passed through the same V3 upload
-                # contract as Web Mode.  The remote Brain compact payload
-                # receives only safe asset evidence, never the local paths.
-                "uploaded_assets": uploaded_assets,
-            }
+        runtime_metadata = {
+            "template_id": request.template_id,
+            "requested_image_count": request.requested_image_count,
+            "requested_image_size": request.requested_image_size,
+            # Local Mode has no image transport, but it must plan as a
+            # real-image job so the shared Runtime requires the same remote
+            # Central Brain contract as the Web Provider path.
+            "require_real_images": True,
+            "real_image_generation": True,
+            **metadata,
+        }
+        runtime_metadata.setdefault(
+            "_brain_transport_timeout_seconds",
+            self._brain_transport_timeout_seconds,
         )
+        runtime_request = {
+            "user_input": request.user_input,
+            "scenario_selection": scenario_selection,
+            "metadata": runtime_metadata,
+            # The source files are passed through the same V3 upload contract
+            # as Web Mode.  The remote Brain compact payload receives only
+            # safe asset evidence, never the local paths.
+            "uploaded_assets": uploaded_assets,
+        }
+        try:
+            result = self._plan_job_with_deadline(runtime, runtime_request)
+        except _LocalMcpPlanningTimeout:
+            return self._blocked(
+                "codex_native_imagegen_planning_timeout",
+                "Codex Native ImageGen planning exceeded the local MCP interaction deadline before any image was created.",
+            )
         if result.status != ScenarioRuntimeStatus.PLANNED or result.planning_result is None:
             return self._blocked_from_runtime(result.metadata, "Codex Native ImageGen planning was blocked before any image was created.")
 
@@ -570,6 +622,38 @@ class CodexNativeImageGenPlanner:
             "human_realism_natural_presence_resigned": human_resigned,
             "human_realism_natural_presence_decision_statuses": decision_statuses,
         }
+
+    def _plan_job_with_deadline(self, runtime: ScenarioRuntime, request: dict[str, Any]) -> Any:
+        """Run the synchronous runtime planner behind a local MCP deadline.
+
+        The remote Brain has its own transport timeout, but this stdio MCP
+        tool must also fail closed before a desktop caller sees an apparently
+        hung tool call. The thread is daemonized because this adapter is
+        planning-only and creates no job, handoff, output, receipt, retry, or
+        delivery state.
+        """
+
+        result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def runner() -> None:
+            try:
+                result_queue.put(("value", runtime.plan_job(request)))
+            except BaseException as exc:  # pragma: no cover - re-raised below
+                result_queue.put(("error", exc))
+
+        thread = threading.Thread(
+            target=runner,
+            name="codex-native-imagegen-planner",
+            daemon=True,
+        )
+        thread.start()
+        try:
+            kind, value = result_queue.get(timeout=self._planning_timeout_seconds)
+        except queue.Empty as exc:
+            raise _LocalMcpPlanningTimeout() from exc
+        if kind == "error":
+            raise value
+        return value
 
     @staticmethod
     def _specialized_lineage_projection(template_id: str, deliverable: Any) -> dict[str, Any]:
