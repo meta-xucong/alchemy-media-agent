@@ -288,21 +288,33 @@ def test_doc190_character_card_reverse_45_uses_original_front_as_framing_referen
     references = provider._reference_assets(request)  # noqa: SLF001
     plan = provider._asset_plan(request, references)  # noqa: SLF001
 
-    assert plan["provider_input_plan"]["reference_image_count"] == 5
+    assert plan["provider_input_plan"]["reference_image_count"] == 6
     assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
         ("root_asset", "portrait_identity_pose_geometry_crop"),
         ("front_output", "portrait_identity_crop"),
         ("front_output", "character_card_full_frame_framing_reference"),
         ("profile_output", "portrait_identity_pose_geometry_crop"),
-        ("right25_output", "portrait_identity_crop"),
+        ("right25_output", "portrait_identity_pose_geometry_crop"),
+        ("right25_output", None),
     ]
+    right25_refs = [
+        item for item in plan["assets"] if item.get("source_asset_id") == "right25_output"
+    ]
+    assert [item.get("identity_evidence_scope") for item in right25_refs] == [
+        "pose_geometry",
+        None,
+    ]
+    assert plan["provider_input_plan"]["reference_image_count"] == 6
+    conditioned = plan["provider_input_plan"]["view_conditioned_evidence"]
+    assert conditioned["reference_budget"] == 6
+    assert conditioned["required_source_scopes"]["right25_output"] == ["pose_geometry"]
     evidence = plan["provider_input_plan"]["view_conditioned_evidence"]
     assert evidence["ready"] is True
     assert evidence["required_source_scopes"] == {
         "root_asset": ["pose_geometry"],
         "front_output": ["feature_detail", "card_framing"],
         "profile_output": ["pose_geometry"],
-        "right25_output": ["feature_detail"],
+        "right25_output": ["pose_geometry"],
     }
     framing_reference = plan["assets"][2]
     assert framing_reference["provider_reference_derivative"] is False
@@ -452,8 +464,13 @@ def test_doc190_provider_request_projection_preserves_character_card_reference_s
         ("front_output", "portrait_identity_crop"),
         ("front_output", "character_card_full_frame_framing_reference"),
         ("profile_output", "portrait_identity_pose_geometry_crop"),
-        ("right25_output", "portrait_identity_crop"),
+        ("right25_output", "portrait_identity_pose_geometry_crop"),
+        ("right25_output", None),
     ]
+    assert plan["provider_input_plan"]["reference_image_count"] == 6
+    assert plan["provider_input_plan"]["view_conditioned_evidence"]["required_source_scopes"][
+        "right25_output"
+    ] == ["pose_geometry"]
 
 
 def test_standard_mode_keeps_both_identity_derivatives(tmp_path: Path) -> None:

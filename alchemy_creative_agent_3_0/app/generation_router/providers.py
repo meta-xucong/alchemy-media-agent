@@ -2504,10 +2504,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 truth_layers=truth_layers,
                 reference_policy=reference_policy,
             )
+            professional_reference_stage = str(
+                self._generation_request_metadata(request).get("professional_reference_stage") or ""
+            ).strip()
+            reverse_45_bridge_source = (
+                professional_reference_stage == "reverse_three_quarter"
+                and str(asset.get("output_id") or asset.get("asset_id") or "").strip()
+                == self._professional_character_card_reverse_45_bridge_source_id(request)
+            )
             if portrait_identity_derivative_kinds in {
                 ("portrait_identity_geometry_crop",),
                 ("portrait_identity_pose_geometry_crop",),
-            }:
+            } and not reverse_45_bridge_source:
                 reference_sanitization = {
                     "applies": True,
                     "reason_codes": ["professional_root_identity_anchor_reused"],
@@ -2516,9 +2524,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 request,
                 asset,
             )
-            professional_reference_stage = str(
-                self._generation_request_metadata(request).get("professional_reference_stage") or ""
-            ).strip()
             if (character_card_full_frame_framing or not reference_sanitization.get("applies")) and self._should_include_original_reference(
                 request=request,
                 asset=asset,
@@ -2529,6 +2534,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 framing_path = str(asset.get("file_path") or "")
                 framing_derivative_kind = "character_card_full_frame_framing_reference"
                 original_constraint = (
+                    (
+                        "Use as an auxiliary right-side pose and serial angle-continuity bridge only: preserve the approved "
+                        "right-front transition direction and card-family crop context, but do not treat this bridge as a "
+                        "feature-detail identity source for the opposite 45-degree slot."
+                    )
+                    if reverse_45_bridge_source
+                    else
                     (
                         "Use as the approved Character Card full-frame framing authority only: match the card-family camera distance, "
                         "head size, head-top margin, upper-shoulders crop, shoulder-line white padding, plain white field and clean card boundaries; "
@@ -3163,13 +3175,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if self._professional_character_card_full_frame_framing_source(request, asset):
                     return ("portrait_identity_crop",)
                 if source_id == self._professional_character_card_reverse_45_bridge_source_id(request):
-                    return ("portrait_identity_crop",)
+                    # The right_front_25 bridge is an auxiliary serial
+                    # angle-continuity source. Its own output metadata does
+                    # not carry reusable face-localized feature-detail
+                    # evidence for the opposite 45-degree formal slot.
+                    return ("portrait_identity_pose_geometry_crop",)
                 # The opposite 45° card uses one pose-depth authority only:
-                # the approved 90° profile.  The right_front_25 bridge keeps
-                # same-side identity/asymmetry but must not compete as a pose
-                # target.  Keep the native 5-input budget: root pose + front
-                # feature + front full-frame framing + profile pose + right25
-                # feature.
+                # the approved 90° profile. The right_front_25 bridge remains
+                # pose/angle continuity plus raw card context; feature detail
+                # stays owned by the root/front/profile chain.
                 return ("portrait_identity_pose_geometry_crop",)
             if self._professional_character_card_full_frame_framing_source(request, asset):
                 return ("portrait_identity_crop",)
@@ -3293,7 +3307,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             raw_metadata = raw_asset.get("metadata") if isinstance(raw_asset.get("metadata"), dict) else {}
             generated = self._is_selected_generated_source({**raw_asset, **raw_metadata})
             expected[source_id] = (
-                ["feature_detail"]
+                ["pose_geometry"]
                 if (
                     generated
                     and stage == "reverse_three_quarter"
@@ -3342,7 +3356,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "three_quarter": 5,
                 "profile": 5,
                 "right_front_25": 5,
-                "reverse_three_quarter": 5,
+                "reverse_three_quarter": 6,
                 "rear_head": 5,
             }[stage],
             "required_source_scopes": expected,
