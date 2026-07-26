@@ -4152,6 +4152,13 @@ button.v2-live-preview:focus-visible {
   font-size: 1.03rem;
 }
 
+.v3-visual-asset-create-toggle[data-open="true"] {
+  padding: 14px;
+  border: 1px solid rgba(88, 124, 255, 0.28);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(238, 242, 255, 0.95), rgba(255, 255, 255, 0.92));
+}
+
 .v3-visual-asset-section-toggle small,
 .v3-visual-asset-collapsed-summary span {
   max-width: 28ch;

@@ -2673,6 +2673,7 @@ const mobileV3State = {
   templatesError: "",
   projectRenderLimit: mobileV3ProjectPageSize,
   outputs: [],
+  workspaceMode: "standard",
   selectedTemplate: "general_template",
   currentProject: null,
   currentJob: null,
@@ -2689,6 +2690,15 @@ const mobileV3State = {
   selectedPhotographerProfileId: "general_photography",
   confirmedPhotographerProfileId: "",
   confirmedPhotographerProfileVersion: "",
+  visualAssets: [],
+  visualAssetsLoaded: false,
+  visualAssetsLoading: false,
+  visualAssetsError: "",
+  visualAssetBusy: false,
+  visualAssetSourceFiles: [],
+  visualAssetSourcePreviewUrls: [],
+  visualAssetPrimarySourceIndex: 0,
+  activeVisualAssetId: "",
 };
 
 function setupMobileV3Adapter() {
@@ -2726,9 +2736,31 @@ function setupMobileV3Adapter() {
     footerLabel: "知道了",
     targets: [document.querySelector("#mobileV3WorkflowPanel")],
   });
+  createMobileSheet({
+    id: "v3-visual-assets",
+    title: "建立和管理视觉资产",
+    eyebrow: "Professional Mode",
+    footerLabel: "返回专业版",
+    targets: [document.querySelector("#mobileV3VisualAssetLibraryPanel")],
+  });
+  createMobileSheet({
+    id: "v3-visual-asset-create",
+    title: "新建人物资产",
+    eyebrow: "People Asset",
+    footerLabel: "稍后再填",
+    targets: [document.querySelector("#mobileV3VisualAssetCreatePanel")],
+  });
+  createMobileSheet({
+    id: "v3-visual-asset-detail",
+    title: "资产内容",
+    eyebrow: "Character Card",
+    footerLabel: "返回资产库",
+    targets: [document.querySelector("#mobileV3VisualAssetDetailPanel")],
+  });
   [tab, els.mobileViewLayer, els.mobileSheetLayer].filter(Boolean).forEach((root) => {
     root.addEventListener("click", handleMobileV3Click);
   });
+  document.querySelector("#mobileV3VisualAssetRootInput")?.addEventListener("change", handleMobileV3VisualAssetSourceFiles);
   document.querySelector("#mobileV3CountInput")?.addEventListener("change", handleMobileV3CountInput);
   document.querySelector("#mobileV3ReferenceInput")?.addEventListener("change", handleMobileV3ReferenceFiles);
   document.querySelector("#mobileV3PhotographySceneInput")?.addEventListener("change", (event) => {
@@ -2768,6 +2800,8 @@ function setupMobileV3Adapter() {
     if (event.target === event.currentTarget) closeMobileV3FullPrompt();
   });
   renderMobileV3ReferenceUploads();
+  renderMobileV3WorkspaceMode();
+  renderMobileV3VisualAssets();
   updateMobileV3ControlState();
 }
 
@@ -2807,10 +2841,369 @@ function normalizeMobileV3HomeSurface() {
     goalInput.rows = 3;
     goalInput.placeholder = "例如：做一组清爽高级的夏季饮料宣传图，适合小红书封面";
   }
+  renderMobileV3WorkspaceMode();
 }
 
 function mobileV3TemplateCards() {
   return Array.isArray(mobileV3State.templates) ? mobileV3State.templates : [];
+}
+
+function setMobileV3WorkspaceMode(mode) {
+  mobileV3State.workspaceMode = mode === "professional" ? "professional" : "standard";
+  renderMobileV3WorkspaceMode();
+  if (mobileV3State.workspaceMode === "professional" && !mobileV3State.visualAssetsLoaded && !mobileV3State.visualAssetsLoading) {
+    loadMobileV3VisualAssets({ silent: true, force: true }).catch(() => {});
+  }
+}
+
+function renderMobileV3WorkspaceMode() {
+  const professional = mobileV3State.workspaceMode === "professional";
+  document.body.dataset.mobileV3Workspace = professional ? "professional" : "standard";
+  document.querySelectorAll("[data-mobile-v3-workspace]").forEach((button) => {
+    const active = button.dataset.mobileV3Workspace === mobileV3State.workspaceMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
+  });
+  const panel = document.querySelector("#mobileV3ProfessionalAssetPanel");
+  if (panel) panel.hidden = !professional;
+  setText(".v3-mobile-home-panel h3", professional ? "专业项目工作区" : "项目式生图");
+  setText(
+    ".v3-mobile-home-panel .section-subcopy",
+    professional
+      ? "先建立或选择视觉资产，再创建专业项目；不会因为人物关键词自动切换。"
+      : "先选模板，再创建项目；后续每次生成都会回到同一个项目里。",
+  );
+  const selected = mobileV3TemplateById(mobileV3State.selectedTemplate);
+  const label = selected?.template_id === "photographer_template" ? "创建摄影项目" : selected?.template_id === "ecommerce_template" ? "创建电商项目" : "创建通用创意项目";
+  setText("#mobileV3CreateProjectBtn", professional ? `${label}（专业版）` : label);
+  renderMobileV3VisualAssetSummary();
+}
+
+function mobileV3VisibleVisualAssets() {
+  return (Array.isArray(mobileV3State.visualAssets) ? mobileV3State.visualAssets : []).filter((asset) => asset?.lifecycle_status !== "archived");
+}
+
+function mobileV3VisualAssetIsActive(asset) {
+  return Boolean(asset?.available_for_projects && asset?.lifecycle_status === "active" && asset?.active_version_id);
+}
+
+function mobileV3CharacterCard(asset) {
+  return asset?.character_card || asset?.latest_preparation?.character_card || null;
+}
+
+function mobileV3CharacterCardModuleStatus(card, module) {
+  const statusFields = {
+    face_identity: card?.face_identity_status,
+    expression_set: card?.expression_set_status,
+    body_silhouette: card?.body_silhouette_status,
+  };
+  return String(statusFields[module] || "empty");
+}
+
+function mobileV3VisualAssetLabel(asset) {
+  if (mobileV3VisualAssetIsActive(asset)) return "已启用，可用于项目";
+  const card = mobileV3CharacterCard(asset);
+  const statuses = ["face_identity", "expression_set", "body_silhouette"].map((module) => mobileV3CharacterCardModuleStatus(card, module));
+  if (statuses.includes("reviewing")) return "等待确认启用";
+  if (statuses.some((status) => ["preparing", "partial", "stale"].includes(status))) return "部分完成，可继续";
+  if (asset?.lifecycle_status === "blocked" || statuses.includes("blocked")) return "需要重新处理";
+  return "已保存，待建立角色卡";
+}
+
+function renderMobileV3VisualAssetSummary() {
+  const node = document.querySelector("#mobileV3VisualAssetSummary");
+  if (!node) return;
+  if (mobileV3State.visualAssetsLoading) {
+    node.textContent = "正在读取视觉资产库。";
+    return;
+  }
+  if (mobileV3State.visualAssetsError) {
+    node.textContent = "视觉资产库暂时不可用，请打开后刷新；已有项目不会自动改用普通版。";
+    return;
+  }
+  const visible = mobileV3VisibleVisualAssets();
+  const active = visible.filter(mobileV3VisualAssetIsActive).length;
+  node.textContent = visible.length
+    ? `已有 ${visible.length} 个当前人物资产，其中 ${active} 个已启用。上传源图不等于启用。`
+    : "还没有视觉资产。可以先新建人物资产，完成角色卡并确认后再用于专业项目。";
+}
+
+function renderMobileV3VisualAssets() {
+  renderMobileV3VisualAssetSummary();
+  const notice = document.querySelector("#mobileV3VisualAssetNotice");
+  const list = document.querySelector("#mobileV3VisualAssetList");
+  if (notice) {
+    notice.textContent = mobileV3State.visualAssetsLoading
+      ? "正在读取视觉资产库。"
+      : mobileV3State.visualAssetsError
+        ? `暂时无法读取：${mobileV3State.visualAssetsError}`
+        : "上传源图只是保存素材；完成角色卡并确认后才可用于专业项目。";
+  }
+  if (!list) return;
+  const visible = mobileV3VisibleVisualAssets();
+  list.innerHTML = "";
+  list.classList.toggle("empty-v2-list", !visible.length);
+  if (!visible.length) {
+    list.textContent = mobileV3State.visualAssetsLoading ? "正在读取视觉资产。" : "还没有视觉资产。";
+    return;
+  }
+  visible.forEach((asset) => {
+    const card = document.createElement("article");
+    card.className = `v3-mobile-visual-asset-card${mobileV3VisualAssetIsActive(asset) ? " active" : ""}`;
+    card.innerHTML = `
+      <div>
+        <span>人物资产</span>
+        <strong>${escapeHtml(asset.display_name || "未命名人物资产")}</strong>
+        <small>${escapeHtml(mobileV3VisualAssetLabel(asset))}</small>
+      </div>
+      <button class="button compact secondary" type="button" data-mobile-v3-visual-asset-open="${escapeHtml(asset.visual_asset_id || "")}">查看资产内容</button>
+    `;
+    list.appendChild(card);
+  });
+}
+
+async function loadMobileV3VisualAssets({ silent = true, force = false } = {}) {
+  if (mobileV3State.visualAssetsLoading || (mobileV3State.visualAssetsLoaded && !force)) return mobileV3State.visualAssets;
+  mobileV3State.visualAssetsLoading = true;
+  mobileV3State.visualAssetsError = "";
+  renderMobileV3VisualAssets();
+  try {
+    const payload = await mobileV3Request("/visual-assets");
+    mobileV3State.visualAssets = Array.isArray(payload?.visual_assets) ? payload.visual_assets : [];
+    mobileV3State.visualAssetsLoaded = true;
+  } catch (error) {
+    mobileV3State.visualAssetsError = friendlyError(error);
+    if (!silent) updateMobileV3Status(`视觉资产读取失败：${mobileV3State.visualAssetsError}`);
+  } finally {
+    mobileV3State.visualAssetsLoading = false;
+    renderMobileV3VisualAssets();
+  }
+  return mobileV3State.visualAssets;
+}
+
+function openMobileV3VisualAssetLibrary(opener = null) {
+  loadMobileV3VisualAssets({ silent: true, force: true }).catch(() => {});
+  openMobileSurface("v3-visual-assets", opener || document.querySelector("#mobileV3OpenVisualAssetLibraryBtn"));
+}
+
+function openMobileV3VisualAssetCreate(opener = null) {
+  renderMobileV3VisualAssetSourceFiles();
+  openMobileSurface("v3-visual-asset-create", opener || document.querySelector("#mobileV3CreateVisualAssetShortcutBtn"));
+}
+
+function openMobileV3VisualAssetDetail(visualAssetId) {
+  const asset = mobileV3VisibleVisualAssets().find((item) => item.visual_asset_id === visualAssetId);
+  const detail = document.querySelector("#mobileV3VisualAssetDetail");
+  if (!asset || !detail) {
+    updateMobileV3Status("没有找到这个人物资产，请刷新资产库后重试。");
+    return;
+  }
+  mobileV3State.activeVisualAssetId = visualAssetId;
+  const card = mobileV3CharacterCard(asset);
+  const rows = [
+    ["人物脸部基础", mobileV3CharacterCardModuleStatus(card, "face_identity")],
+    ["表情包", mobileV3CharacterCardModuleStatus(card, "expression_set")],
+    ["身体轮廓", mobileV3CharacterCardModuleStatus(card, "body_silhouette")],
+  ];
+  detail.innerHTML = `
+    <article class="v3-mobile-visual-asset-detail-card">
+      <span>人物资产</span>
+      <strong>${escapeHtml(asset.display_name || "未命名人物资产")}</strong>
+      <small>${escapeHtml(mobileV3VisualAssetLabel(asset))}</small>
+      <div class="v3-mobile-visual-asset-module-list">
+        ${rows.map(([label, state], index) => {
+          const module = ["face_identity", "expression_set", "body_silhouette"][index];
+          return `<p><strong>${escapeHtml(label)}</strong><span>${escapeHtml(mobileV3CharacterCardStateLabel(state))}</span>${mobileV3CharacterCardModuleAction(asset, module, state)}</p>`;
+        }).join("")}
+      </div>
+      <p>这些按钮调用正式共享角色卡流程；上传源图仍不等于启用。</p>
+    </article>
+  `;
+  openMobileSurface("v3-visual-asset-detail", document.querySelector("#mobileV3VisualAssetList"));
+}
+
+function mobileV3CharacterCardModuleAction(asset, module, state) {
+  if (mobileV3State.visualAssetBusy) return "";
+  const card = mobileV3CharacterCard(asset);
+  const faceActive = mobileV3CharacterCardModuleStatus(card, "face_identity") === "active";
+  const blockedByPrerequisite = (module === "expression_set" || module === "body_silhouette") && !faceActive;
+  if (state === "active") return "<em>已完成</em>";
+  if (state === "reviewing" || state === "winner_selected") {
+    return `<button class="button compact primary" type="button" data-mobile-v3-visual-asset-activate-module="${escapeHtml(module)}">确认启用</button>`;
+  }
+  const label = state === "blocked" || state === "partial" || state === "stale" ? "继续处理" : "开始";
+  const disabled = blockedByPrerequisite ? "disabled" : "";
+  return `<button class="button compact secondary" type="button" data-mobile-v3-visual-asset-prepare-module="${escapeHtml(module)}" ${disabled}>${label}</button>`;
+}
+
+async function prepareMobileV3VisualAssetModule(module) {
+  const assetId = mobileV3State.activeVisualAssetId;
+  if (!assetId || mobileV3State.visualAssetBusy) return;
+  mobileV3State.visualAssetBusy = true;
+  updateMobileV3Status("正在提交角色卡处理，请不要重复点击。");
+  try {
+    const body = { stage: module, generation_channel: "provider" };
+    if (module === "body_silhouette") body.source_class = "brain_inferred";
+    await mobileV3Request(`/visual-assets/${encodeURIComponent(assetId)}/character-card/prepare`, { method: "POST", body });
+    await loadMobileV3VisualAssets({ silent: true, force: true });
+    updateMobileV3Status("角色卡流程已返回，请查看资产内容。");
+    openMobileV3VisualAssetDetail(assetId);
+  } catch (error) {
+    updateMobileV3Status(`角色卡处理失败：${friendlyError(error)}`);
+  } finally {
+    mobileV3State.visualAssetBusy = false;
+  }
+}
+
+async function activateMobileV3VisualAssetModule(module) {
+  const assetId = mobileV3State.activeVisualAssetId;
+  if (!assetId || mobileV3State.visualAssetBusy) return;
+  const ok = window.confirm("确认启用这一部分角色卡吗？启用后，专业项目会按这个版本读取。");
+  if (!ok) return;
+  mobileV3State.visualAssetBusy = true;
+  updateMobileV3Status("正在确认启用。");
+  try {
+    await mobileV3Request(`/visual-assets/${encodeURIComponent(assetId)}/character-card/activate`, {
+      method: "POST",
+      body: { module, confirm_activation: true },
+    });
+    await loadMobileV3VisualAssets({ silent: true, force: true });
+    updateMobileV3Status("这一部分已启用。");
+    openMobileV3VisualAssetDetail(assetId);
+  } catch (error) {
+    updateMobileV3Status(`确认启用失败：${friendlyError(error)}`);
+  } finally {
+    mobileV3State.visualAssetBusy = false;
+  }
+}
+
+function mobileV3CharacterCardStateLabel(state) {
+  const labels = {
+    empty: "空位",
+    preparing: "正在生成",
+    reviewing: "待确认",
+    winner_selected: "待确认",
+    active: "已完成",
+    partial: "部分完成",
+    blocked: "需处理",
+    stale: "需更新",
+  };
+  return labels[String(state || "empty")] || "待处理";
+}
+
+function isMobileV3VisualAssetImageFile(file) {
+  const mediaType = String(file?.type || "").toLowerCase();
+  const filename = String(file?.name || "").toLowerCase();
+  return /^(image\/(png|jpeg|webp))$/.test(mediaType) || /\.(png|jpe?g|webp)$/.test(filename);
+}
+
+function handleMobileV3VisualAssetSourceFiles(event) {
+  const selected = Array.from(event?.target?.files || []).filter(isMobileV3VisualAssetImageFile);
+  if (event?.target) event.target.value = "";
+  if (!selected.length) {
+    setText("#mobileV3VisualAssetCreateFeedback", "请选择 PNG、JPG 或 WebP 人物图片。");
+    return;
+  }
+  const combined = [...mobileV3State.visualAssetSourceFiles, ...selected];
+  if (combined.length > 2) {
+    setText("#mobileV3VisualAssetCreateFeedback", "一个人物资产最多使用 2 张源图：主原型和一张补充参考。");
+    return;
+  }
+  mobileV3State.visualAssetSourcePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+  mobileV3State.visualAssetSourceFiles = combined;
+  mobileV3State.visualAssetSourcePreviewUrls = combined.map((file) => URL.createObjectURL(file));
+  renderMobileV3VisualAssetSourceFiles();
+}
+
+function renderMobileV3VisualAssetSourceFiles() {
+  const list = document.querySelector("#mobileV3VisualAssetSourceList");
+  const summary = document.querySelector("#mobileV3VisualAssetSourceSummary");
+  const files = mobileV3State.visualAssetSourceFiles;
+  if (summary) summary.textContent = files.length ? `已选 ${files.length} 张人物源图。` : "可选 1–2 张：先选主原型。";
+  if (!list) return;
+  list.innerHTML = "";
+  list.classList.toggle("is-empty", !files.length);
+  if (!files.length) {
+    list.textContent = "尚未选择人物源图";
+    return;
+  }
+  files.forEach((file, index) => {
+    const row = document.createElement("div");
+    row.className = "v3-mobile-upload-row";
+    row.innerHTML = `<strong>${escapeHtml(file.name || `人物源图 ${index + 1}`)}</strong><small>${index === 0 ? "主原型" : "补充参考"}</small>`;
+    list.appendChild(row);
+  });
+}
+
+async function uploadMobileV3VisualAssetRoot(file) {
+  const created = await mobileV3Request("/uploads", {
+    method: "POST",
+    body: {
+      filename: file.name || "visual-asset-root.png",
+      mime_type: file.type || "image/png",
+      size_bytes: file.size || 0,
+      role: "face_reference",
+      metadata: { frontend_surface: "mobile_v3_visual_asset_library" },
+    },
+  });
+  await request(created.upload_url || `${mobileV3ApiBase}/uploads/${encodeURIComponent(created.asset_id)}/content`, {
+    method: "PUT",
+    body: { content_base64: await fileToBase64(file), mime_type: file.type || created.mime_type || "image/png" },
+  });
+  return mobileV3Request(`/uploads/${encodeURIComponent(created.asset_id)}/complete`, { method: "POST" });
+}
+
+async function createMobileV3VisualAsset() {
+  if (mobileV3State.visualAssetBusy) return;
+  const displayName = String(document.querySelector("#mobileV3VisualAssetNameInput")?.value || "").trim();
+  const preparationIntent = String(document.querySelector("#mobileV3VisualAssetIntentInput")?.value || "").trim();
+  const consent = Boolean(document.querySelector("#mobileV3VisualAssetConsentInput")?.checked);
+  const files = mobileV3State.visualAssetSourceFiles;
+  const missing = [];
+  if (!displayName) missing.push("资产名称");
+  if (!files.length) missing.push("人物源图");
+  if (!preparationIntent) missing.push("建模说明");
+  if (!consent) missing.push("使用授权确认");
+  if (missing.length) {
+    setText("#mobileV3VisualAssetCreateFeedback", `还需完成：${missing.join("、")}。`);
+    return;
+  }
+  mobileV3State.visualAssetBusy = true;
+  setText("#mobileV3VisualAssetCreateFeedback", "正在保存源图，请不要重复点击。");
+  try {
+    const readySources = [];
+    for (const file of files) {
+      const ready = await uploadMobileV3VisualAssetRoot(file);
+      if (!ready?.asset_id) throw new Error("人物源图没有保存成功。");
+      readySources.push(ready);
+    }
+    await mobileV3Request("/visual-assets", {
+      method: "POST",
+      body: {
+        display_name: displayName,
+        asset_type: "people",
+        root_source_asset_id: readySources[0].asset_id,
+        supplementary_source_asset_ids: readySources.slice(1).map((item) => item.asset_id),
+        consent_reference: "user_confirmed_visual_asset_use",
+        preparation_intent: preparationIntent,
+      },
+    });
+    document.querySelector("#mobileV3VisualAssetNameInput").value = "";
+    document.querySelector("#mobileV3VisualAssetIntentInput").value = "";
+    document.querySelector("#mobileV3VisualAssetConsentInput").checked = false;
+    mobileV3State.visualAssetSourcePreviewUrls.forEach((url) => URL.revokeObjectURL(url));
+    mobileV3State.visualAssetSourceFiles = [];
+    mobileV3State.visualAssetSourcePreviewUrls = [];
+    renderMobileV3VisualAssetSourceFiles();
+    await loadMobileV3VisualAssets({ silent: true, force: true });
+    updateMobileV3Status("人物资产已保存。下一步请在资产内容中继续角色卡流程并确认启用。");
+    closeMobileSurface({ silent: true, fromHistory: true });
+    openMobileV3VisualAssetLibrary();
+  } catch (error) {
+    setText("#mobileV3VisualAssetCreateFeedback", `保存失败：${friendlyError(error)}`);
+  } finally {
+    mobileV3State.visualAssetBusy = false;
+  }
 }
 
 
@@ -3194,6 +3587,42 @@ function handleMobileV3Click(event) {
     handleMobileV3GalleryPreviewClick(event);
     return;
   }
+  const workspaceButton = event.target.closest("[data-mobile-v3-workspace]");
+  if (workspaceButton) {
+    setMobileV3WorkspaceMode(workspaceButton.dataset.mobileV3Workspace || "standard");
+    return;
+  }
+  if (event.target.closest("#mobileV3OpenVisualAssetLibraryBtn")) {
+    openMobileV3VisualAssetLibrary(event.target.closest("button"));
+    return;
+  }
+  if (event.target.closest("#mobileV3CreateVisualAssetShortcutBtn") || event.target.closest("#mobileV3VisualAssetCreateFromListBtn")) {
+    openMobileV3VisualAssetCreate(event.target.closest("button"));
+    return;
+  }
+  if (event.target.closest("#mobileV3RefreshVisualAssetsBtn")) {
+    loadMobileV3VisualAssets({ silent: false, force: true }).catch(() => {});
+    return;
+  }
+  if (event.target.closest("#mobileV3VisualAssetCreateSubmitBtn")) {
+    createMobileV3VisualAsset();
+    return;
+  }
+  const visualAssetOpenButton = event.target.closest("[data-mobile-v3-visual-asset-open]");
+  if (visualAssetOpenButton) {
+    openMobileV3VisualAssetDetail(visualAssetOpenButton.dataset.mobileV3VisualAssetOpen || "");
+    return;
+  }
+  const visualAssetPrepareButton = event.target.closest("[data-mobile-v3-visual-asset-prepare-module]");
+  if (visualAssetPrepareButton) {
+    prepareMobileV3VisualAssetModule(visualAssetPrepareButton.dataset.mobileV3VisualAssetPrepareModule || "");
+    return;
+  }
+  const visualAssetActivateButton = event.target.closest("[data-mobile-v3-visual-asset-activate-module]");
+  if (visualAssetActivateButton) {
+    activateMobileV3VisualAssetModule(visualAssetActivateButton.dataset.mobileV3VisualAssetActivateModule || "");
+    return;
+  }
   const modeButton = event.target.closest("[data-mobile-v3-mode]");
   if (modeButton) {
     setMobileV3Mode(modeButton.dataset.mobileV3Mode || "auto");
@@ -3570,6 +3999,13 @@ async function createMobileV3ProjectFromHome() {
         user_goal: goal,
         title: goal.slice(0, 32),
         primary_template_id: template.template_id,
+        metadata: {
+          frontend_surface: "mobile_v3_project_mode",
+          interaction_style: "mobile_project_card",
+          v3_workspace: mobileV3State.workspaceMode === "professional" ? "professional" : "standard",
+          selected_template_id: template.template_id,
+          selected_scenario_id: mobileV3ScenarioForTemplate(template.template_id),
+        },
       },
     });
     const project = payload.project || payload;

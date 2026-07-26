@@ -322,6 +322,7 @@ const v3State = {
   visualAssetWorkflowStartedAt: null,
   visualAssetWorkflowTimer: null,
   visualAssetLibraryExistingOpen: true,
+  visualAssetLibraryCreateOpen: false,
   visualAssetLibraryExpandedAssetId: "",
   characterCardRunAll: false,
   characterCardBusyModule: "",
@@ -570,6 +571,7 @@ const els = {
   v3VisualAssetLibraryCards: document.querySelector("#v3VisualAssetLibraryCards"),
   v3VisualAssetLibraryList: document.querySelector("#v3VisualAssetLibraryList"),
   v3VisualAssetLibraryPanel: document.querySelector("#v3VisualAssetLibraryPanel"),
+  v3VisualAssetCreateToggle: document.querySelector("[data-v3-visual-asset-action=\"toggle-create-asset\"]"),
   v3VisualAssetCreateForm: document.querySelector("#v3VisualAssetCreateForm"),
   v3VisualAssetNameInput: document.querySelector("#v3VisualAssetNameInput"),
   v3VisualAssetRootInput: document.querySelector("#v3VisualAssetRootInput"),
@@ -5650,13 +5652,21 @@ function handleV3CharacterCardAction(event) {
 
 function openV3CharacterCard(visualAssetId) {
   const asset = v3State.visualAssets.find((item) => item.visual_asset_id === visualAssetId);
-  if (!asset) return;
+  if (!asset) {
+    updateV3Notice("没有找到这个人物资产，请刷新资产库后重试。", "warning");
+    return;
+  }
   v3State.visualAssetWorkflowAssetId = visualAssetId;
   v3State.visualAssetWorkflowStage = "character_card";
+  v3State.visualAssetLibraryCreateOpen = false;
   v3State.characterCardRunAll = false;
   v3State.characterCardGenerationChannel = els.v3CharacterCardGenerationChannelInput?.value === "mcp" ? "mcp" : "provider";
   if (els.v3CharacterCardBodyFacts) els.v3CharacterCardBodyFacts.value = "";
   renderV3VisualAssetLibrary();
+  window.setTimeout(() => {
+    els.v3CharacterCardWorkspace?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    els.v3CloseCharacterCardBtn?.focus?.({ preventScroll: true });
+  }, 0);
 }
 
 function closeV3CharacterCard() {
@@ -5868,6 +5878,12 @@ function resetV3VisualAssetWorkflowForNewDraft() {
 function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
   const dialog = els.v3VisualAssetLibraryDialog;
   if (!dialog) return;
+  if (focusBuilder) {
+    v3State.visualAssetLibraryCreateOpen = true;
+    v3State.visualAssetLibraryExistingOpen = false;
+    v3State.visualAssetWorkflowAssetId = "";
+    v3State.visualAssetWorkflowStage = "idle";
+  }
   renderV3VisualAssetLibrary();
   if (!dialog.open) dialog.showModal();
   void loadV3VisualAssets({ silent: true, force: true });
@@ -6262,12 +6278,29 @@ function handleV3VisualAssetAction(event) {
     renderV3VisualAssetLibrary();
     return;
   }
+  if (action === "toggle-create-asset") {
+    if (v3State.visualAssetBusy) return;
+    v3State.visualAssetLibraryCreateOpen = !v3State.visualAssetLibraryCreateOpen;
+    if (v3State.visualAssetLibraryCreateOpen) {
+      v3State.visualAssetWorkflowAssetId = "";
+      v3State.visualAssetWorkflowStage = "idle";
+    }
+    renderV3VisualAssetLibrary();
+    if (v3State.visualAssetLibraryCreateOpen) {
+      window.setTimeout(() => els.v3VisualAssetNameInput?.focus?.({ preventScroll: true }), 0);
+    }
+    return;
+  }
   if (action === "toggle-asset-details") {
     v3State.visualAssetLibraryExpandedAssetId = v3State.visualAssetLibraryExpandedAssetId === id ? "" : id;
     renderV3VisualAssetLibrary();
     return;
   }
-  if (action === "open-card") openV3CharacterCard(id);
+  if (action === "open-card") {
+    if (id) openV3CharacterCard(id);
+    else updateV3Notice("没有找到这个人物资产，请刷新资产库后重试。", "warning");
+    return;
+  }
   if (action === "prepare") void prepareV3VisualAsset(id);
   if (action === "activate") void activateV3VisualAsset(id);
   if (action === "archive") void archiveV3VisualAsset(id);
@@ -6304,9 +6337,15 @@ function renderV3VisualAssetLibrary() {
   renderV3VisualAssetCreateReadiness();
   renderV3VisualAssetWorkflow();
   const cardOpen = Boolean(v3State.visualAssetWorkflowAssetId);
+  const createOpen = Boolean(v3State.visualAssetLibraryCreateOpen) && !cardOpen;
   if (els.v3VisualAssetLibraryCards) els.v3VisualAssetLibraryCards.hidden = cardOpen;
   if (els.v3VisualAssetLibraryList) els.v3VisualAssetLibraryList.hidden = false;
-  if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.hidden = false;
+  if (els.v3VisualAssetCreateForm) els.v3VisualAssetCreateForm.hidden = !createOpen;
+  if (els.v3VisualAssetCreateToggle) {
+    els.v3VisualAssetCreateToggle.hidden = cardOpen;
+    els.v3VisualAssetCreateToggle.setAttribute("aria-expanded", String(createOpen));
+    els.v3VisualAssetCreateToggle.dataset.open = createOpen ? "true" : "false";
+  }
   if (!els.v3VisualAssetLibraryList) return;
   const existingToggle = els.v3VisualAssetLibraryDialog?.querySelector("[data-v3-visual-asset-action=\"toggle-existing-assets\"]");
   if (existingToggle) {

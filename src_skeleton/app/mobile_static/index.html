@@ -1060,6 +1060,29 @@
                 <span id="mobileV3State" class="state-pill">待同步</span>
               </div>
 
+              <div class="segmented v3-mobile-workspace-switch" role="radiogroup" aria-label="V3 工作模式">
+                <button class="segment active" data-mobile-v3-workspace="standard" role="radio" aria-checked="true" type="button">普通版</button>
+                <button class="segment" data-mobile-v3-workspace="professional" role="radio" aria-checked="false" type="button">专业版</button>
+              </div>
+
+              <section id="mobileV3ProfessionalAssetPanel" class="v3-mobile-professional-panel" hidden aria-label="专业版视觉资产">
+                <div>
+                  <p class="eyebrow">Professional visual assets</p>
+                  <h4>专业版会先使用已启用视觉资产</h4>
+                  <p id="mobileV3VisualAssetSummary">上传人物源图不等于启用；需要完成角色卡并确认后，才能在专业项目中选择。</p>
+                </div>
+                <div class="mobile-summary-grid v3-mobile-professional-actions">
+                  <button id="mobileV3OpenVisualAssetLibraryBtn" class="mobile-entry-card" type="button">
+                    <span>视觉资产库</span>
+                    <strong>建立和管理视觉资产</strong>
+                  </button>
+                  <button id="mobileV3CreateVisualAssetShortcutBtn" class="mobile-entry-card" type="button">
+                    <span>人物资产</span>
+                    <strong>新建人物资产</strong>
+                  </button>
+                </div>
+              </section>
+
               <div class="lab-module-grid v3-mobile-template-grid">
                 <button class="lab-module-card v3-mobile-template-card active" data-mobile-v3-template="general_template" type="button">
                   <span>通用创意</span>
@@ -1097,6 +1120,57 @@
                 <strong id="mobileV3LoadingTitle">正在同步项目</strong>
                 <small id="mobileV3LoadingDetail">先显示框架，再分批加载项目和图片。</small>
               </div>
+            </section>
+
+            <section id="mobileV3VisualAssetLibraryPanel" class="panel flow-section v3-mobile-visual-assets-panel">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">Visual Asset Library</p>
+                  <h3>建立和管理视觉资产</h3>
+                  <p class="section-subcopy">只显示用户需要知道的状态；内部 ID、哈希和 Provider 细节不会直接暴露。</p>
+                </div>
+                <button id="mobileV3RefreshVisualAssetsBtn" class="button compact ghost" type="button">刷新</button>
+              </div>
+              <div id="mobileV3VisualAssetNotice" class="notice-bar" role="status" aria-live="polite">正在等待读取视觉资产。</div>
+              <div id="mobileV3VisualAssetList" class="v3-mobile-visual-asset-list empty-v2-list" aria-live="polite">还没有视觉资产。</div>
+              <button id="mobileV3VisualAssetCreateFromListBtn" class="button primary full-width" type="button">新建人物资产</button>
+            </section>
+
+            <section id="mobileV3VisualAssetCreatePanel" class="panel flow-section v3-mobile-visual-asset-create-panel">
+              <div class="panel-head section-title">
+                <div>
+                  <p class="eyebrow">New people asset</p>
+                  <h3>新建人物资产</h3>
+                  <p class="section-subcopy">先保存源图和建模说明，再回到角色卡流程。上传不等于启用。</p>
+                </div>
+              </div>
+              <label class="field">
+                <span>资产名称</span>
+                <input id="mobileV3VisualAssetNameInput" type="text" maxlength="80" placeholder="例如：童模 A / 品牌代言人小雨" />
+              </label>
+              <label class="field">
+                <span>人物源图</span>
+                <label class="file-drop v3-mobile-visual-asset-file-drop" for="mobileV3VisualAssetRootInput">
+                  <input id="mobileV3VisualAssetRootInput" type="file" accept="image/png,image/jpeg,image/webp" multiple />
+                  <span class="file-title">选择人物源图</span>
+                  <span id="mobileV3VisualAssetSourceSummary" class="file-meta">可选 1–2 张：先选主原型。</span>
+                </label>
+              </label>
+              <div id="mobileV3VisualAssetSourceList" class="v3-mobile-upload-list is-empty" aria-live="polite">尚未选择人物源图</div>
+              <label class="field">
+                <span>建模说明</span>
+                <textarea id="mobileV3VisualAssetIntentInput" rows="3" maxlength="1200" placeholder="例如：建立这个人物自然、不同视角仍可辨认的标准化身份参考。"></textarea>
+              </label>
+              <label class="v3-mobile-confirm-checkbox">
+                <input id="mobileV3VisualAssetConsentInput" type="checkbox" />
+                <span>我确认有权使用这张源图，并同意将其用于建立视觉资产。</span>
+              </label>
+              <p id="mobileV3VisualAssetCreateFeedback" class="notice-bar" role="status" aria-live="polite">请补全资料后保存人物资产。</p>
+              <button id="mobileV3VisualAssetCreateSubmitBtn" class="button primary full-width" type="button">保存源图并回到资产库</button>
+            </section>
+
+            <section id="mobileV3VisualAssetDetailPanel" class="panel flow-section v3-mobile-visual-asset-detail-panel">
+              <div id="mobileV3VisualAssetDetail" class="v3-mobile-visual-asset-detail" aria-live="polite">请选择一个视觉资产。</div>
             </section>
 
             <section class="panel flow-section v3-mobile-projects-panel">
