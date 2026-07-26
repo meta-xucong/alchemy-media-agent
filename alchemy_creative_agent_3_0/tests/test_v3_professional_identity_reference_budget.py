@@ -146,7 +146,6 @@ def _reverse_45_request(root: Path, front: Path, profile: Path, right25: Path) -
     ordered_assets = [
         by_id["root_asset"],
         by_id["front_output"],
-        by_id["profile_output"],
         by_id["right25_output"],
     ]
     metadata = dict(request.metadata)
@@ -157,7 +156,6 @@ def _reverse_45_request(root: Path, front: Path, profile: Path, right25: Path) -
             "uploaded_assets": ordered_assets,
             "professional_anchor_reference_assets": [
                 by_id["front_output"],
-                by_id["profile_output"],
                 by_id["right25_output"],
             ],
         }
@@ -275,7 +273,7 @@ def test_professional_profile_uses_five_references_root_once_and_winners_twice(t
     assert legacy_plan["provider_input_plan"]["reference_image_count"] == 6
 
 
-def test_doc190_character_card_reverse_45_uses_original_front_as_framing_reference_without_mirror(
+def test_doc257_character_card_reverse_45_uses_symmetric_five_reference_plan(
     tmp_path: Path,
 ) -> None:
     request = _reverse_45_request(
@@ -288,15 +286,15 @@ def test_doc190_character_card_reverse_45_uses_original_front_as_framing_referen
     references = provider._reference_assets(request)  # noqa: SLF001
     plan = provider._asset_plan(request, references)  # noqa: SLF001
 
-    assert plan["provider_input_plan"]["reference_image_count"] == 6
+    assert plan["provider_input_plan"]["reference_image_count"] == 5
     assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
         ("root_asset", "portrait_identity_pose_geometry_crop"),
         ("front_output", "portrait_identity_crop"),
         ("front_output", "character_card_full_frame_framing_reference"),
-        ("profile_output", "portrait_identity_pose_geometry_crop"),
         ("right25_output", "portrait_identity_pose_geometry_crop"),
         ("right25_output", None),
     ]
+    assert "profile_output" not in {item["source_asset_id"] for item in plan["assets"]}
     right25_refs = [
         item for item in plan["assets"] if item.get("source_asset_id") == "right25_output"
     ]
@@ -304,16 +302,14 @@ def test_doc190_character_card_reverse_45_uses_original_front_as_framing_referen
         "pose_geometry",
         None,
     ]
-    assert plan["provider_input_plan"]["reference_image_count"] == 6
     conditioned = plan["provider_input_plan"]["view_conditioned_evidence"]
-    assert conditioned["reference_budget"] == 6
+    assert conditioned["reference_budget"] == 5
     assert conditioned["required_source_scopes"]["right25_output"] == ["pose_geometry"]
     evidence = plan["provider_input_plan"]["view_conditioned_evidence"]
     assert evidence["ready"] is True
     assert evidence["required_source_scopes"] == {
         "root_asset": ["pose_geometry"],
         "front_output": ["feature_detail", "card_framing"],
-        "profile_output": ["pose_geometry"],
         "right25_output": ["pose_geometry"],
     }
     framing_reference = plan["assets"][2]
@@ -458,16 +454,15 @@ def test_doc190_provider_request_projection_preserves_character_card_reference_s
     plan = provider._asset_plan(projected, references)  # noqa: SLF001
 
     assert projected.metadata["professional_anchor_capture_scope"] == "character_card_face_identity"
-    assert len(projected.metadata["professional_anchor_reference_assets"]) == 3
+    assert len(projected.metadata["professional_anchor_reference_assets"]) == 2
     assert [(item["source_asset_id"], item["derivative_kind"]) for item in plan["assets"]] == [
         ("root_asset", "portrait_identity_pose_geometry_crop"),
         ("front_output", "portrait_identity_crop"),
         ("front_output", "character_card_full_frame_framing_reference"),
-        ("profile_output", "portrait_identity_pose_geometry_crop"),
         ("right25_output", "portrait_identity_pose_geometry_crop"),
         ("right25_output", None),
     ]
-    assert plan["provider_input_plan"]["reference_image_count"] == 6
+    assert plan["provider_input_plan"]["reference_image_count"] == 5
     assert plan["provider_input_plan"]["view_conditioned_evidence"]["required_source_scopes"][
         "right25_output"
     ] == ["pose_geometry"]

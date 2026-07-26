@@ -276,7 +276,7 @@ class AnchorGenerationRequest(V3BaseModel):
                 "three_quarter": 3,
                 "profile": 3,
                 "right_front_25": 3,
-                "reverse_three_quarter": 4,
+                "reverse_three_quarter": 3,
                 "rear_head": 4,
             }[self.view_role]
         if len(references) != expected_reference_count:
@@ -994,13 +994,11 @@ class AnchorPackPreparationService:
         if view_role == "right_front_25":
             return [root, by_role["standard_front"], by_role["profile"]]
         if view_role == "reverse_three_quarter":
-            # For the final right/front 45° slot, the side-profile card is the
-            # pose-depth authority and the right_front_25 bridge is only the
-            # same-side identity/framing bridge.  Keep front first so the
-            # shared materializer still uses it as the card-family framing
-            # reference, then put profile before the 25° bridge so the renderer
-            # does not collapse back into a shallow near-front view.
-            return [root, by_role["standard_front"], by_role["profile"], by_role["right_front_25"]]
+            # Right/front 45° mirrors the left/front 45° contract: root pose,
+            # approved front identity/framing, and the same-side 25° bridge.
+            # The profile slot remains its own formal view and later rear
+            # continuity authority; it is not an input to 45° generation.
+            return [root, by_role["standard_front"], by_role["right_front_25"]]
         if view_role == "rear_head":
             return [root, by_role["standard_front"], by_role["profile"], by_role["reverse_three_quarter"]]
         return [root, *[view.output_id for view in views if view.active]]

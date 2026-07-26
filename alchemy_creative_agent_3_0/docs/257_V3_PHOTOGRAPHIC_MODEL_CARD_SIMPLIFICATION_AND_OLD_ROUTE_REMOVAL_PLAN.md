@@ -108,6 +108,39 @@ Canvas size, 2:3 output, provider quality, MCP transport, and white background
 are transport/rendering details. They are not proof of景别 and must not become
 a new gate.
 
+## Symmetric 45-degree reference plan
+
+Left and right 45-degree Face slots use one shared product contract:
+
+```text
+root pose geometry
+front winner feature-detail crop
+front winner full-frame model-card framing reference
+same-side 25-degree bridge pose geometry
+same-side 25-degree bridge raw continuity context
+```
+
+This is a five-reference contract, not a fallback from six references. The
+25-degree bridge remains auxiliary: it carries same-side pose and serial
+continuity, but it must not be treated as a face-localized feature-detail
+identity source.
+
+The 90-degree profile slot and rear slot keep their own contracts:
+
+```text
+profile: root + front winner + left 45 winner
+rear: root + front winner + profile winner + right 45 winner
+```
+
+Profile is not an input to 45-degree generation. It remains a formal Face slot
+and a later rear-continuity authority. Expression delivery does not consume
+the Face 25-degree bridge or 45-degree serial reference plan; it only reuses
+the completed Face identity context plus its own affect wording.
+
+If a prior handoff was created with the old six-reference right 45-degree
+contract, keep it append-only and blocked. Do not submit a reduced artifact to
+that handoff. Open a fresh round using the five-reference contract.
+
 ## Expression rule
 
 Expression delivery uses:

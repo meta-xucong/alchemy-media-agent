@@ -102,7 +102,7 @@ class _SharedProductService:
                 "three_quarter": 5,
                 "profile": 5,
                 "right_front_25": 5,
-                "reverse_three_quarter": 6,
+                "reverse_three_quarter": 5,
                 "rear_head": 5,
             }
             if frozen.get("capture_scope") == "character_card_face_identity"
@@ -295,7 +295,6 @@ def _reverse_45_generation_request() -> AnchorGenerationRequest:
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
-            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1524,15 +1523,6 @@ def test_doc193_character_card_face_gate_ignores_pose_geometry_localization_scop
             "identity_face_localization_status": "not_applicable",
         },
         {
-            "provider_reference_derivative": True,
-            "identity_evidence_scope": "feature_detail",
-            "identity_face_localization_applied": True,
-            "identity_face_localization_status": "detected",
-            "identity_nonidentity_pixel_suppression_profile": (
-                "face_localized_nonidentity_suppression_v1"
-            ),
-        },
-        {
             "provider_reference_derivative": False,
             "identity_face_localization_applied": False,
             "identity_face_localization_status": "not_applicable",
@@ -1554,7 +1544,6 @@ def test_doc193_character_card_face_gate_ignores_pose_geometry_localization_scop
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
-            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1567,8 +1556,8 @@ def test_doc193_character_card_face_gate_ignores_pose_geometry_localization_scop
     assert "professional_anchor_face_localization_unverified" not in decision.issue_codes
 
 
-@pytest.mark.parametrize("reference_count", [0, 5, 7])
-def test_doc257_reverse_three_quarter_provider_reference_count_is_exact_six(
+@pytest.mark.parametrize("reference_count", [0, 4, 6])
+def test_doc257_reverse_three_quarter_provider_reference_count_is_exact_five(
     reference_count: int,
 ) -> None:
     service = _SharedProductService()
@@ -1579,7 +1568,6 @@ def test_doc257_reverse_three_quarter_provider_reference_count_is_exact_six(
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
-            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1598,7 +1586,6 @@ def test_doc257_reverse_three_quarter_provider_reference_count_is_exact_six(
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
-            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1625,7 +1612,6 @@ def test_doc193_character_card_face_gate_still_requires_feature_detail_localizat
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
-            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",
@@ -1656,24 +1642,6 @@ def test_doc193_character_card_face_gate_still_requires_feature_detail_localizat
             "identity_face_localization_status": "not_applicable",
         },
         {
-            "provider_reference_derivative": True,
-            "identity_evidence_scope": "feature_detail",
-            "identity_face_localization_applied": True,
-            "identity_face_localization_status": "detected",
-            "identity_nonidentity_pixel_suppression_profile": (
-                "face_localized_nonidentity_suppression_v1"
-            ),
-        },
-        {
-            "provider_reference_derivative": True,
-            "identity_evidence_scope": "pose_geometry",
-            "identity_face_localization_applied": True,
-            "identity_face_localization_status": "detected",
-            "identity_nonidentity_pixel_suppression_profile": (
-                "face_localized_nonidentity_suppression_v1"
-            ),
-        },
-        {
             "provider_reference_derivative": False,
             "identity_face_localization_applied": False,
             "identity_face_localization_status": "not_applicable",
@@ -1695,7 +1663,6 @@ def test_doc193_character_card_face_gate_still_requires_feature_detail_localizat
         reference_evidence_ids=[
             "v3_asset_root",
             "v3_output_front",
-            "v3_output_profile",
             "v3_output_right25",
         ],
         capture_scope="character_card_face_identity",

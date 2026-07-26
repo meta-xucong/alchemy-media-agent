@@ -3180,10 +3180,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     # not carry reusable face-localized feature-detail
                     # evidence for the opposite 45-degree formal slot.
                     return ("portrait_identity_pose_geometry_crop",)
-                # The opposite 45° card uses one pose-depth authority only:
-                # the approved 90° profile. The right_front_25 bridge remains
-                # pose/angle continuity plus raw card context; feature detail
-                # stays owned by the root/front/profile chain.
+                # 45° cards use a symmetric same-side bridge plan: root pose,
+                # front feature/framing, and the same-side 25° pose/raw
+                # continuity.  Profile is not a 45° generation input; it keeps
+                # its own formal slot and later rear-continuity role.
                 return ("portrait_identity_pose_geometry_crop",)
             if self._professional_character_card_full_frame_framing_source(request, asset):
                 return ("portrait_identity_crop",)
@@ -3356,7 +3356,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "three_quarter": 5,
                 "profile": 5,
                 "right_front_25": 5,
-                "reverse_three_quarter": 6,
+                "reverse_three_quarter": 5,
                 "rear_head": 5,
             }[stage],
             "required_source_scopes": expected,
@@ -3446,7 +3446,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if str(metadata.get("professional_reference_stage") or "").strip() != "reverse_three_quarter":
             return ""
         ordered_ids = self._professional_character_card_ordered_generated_reference_ids(request)
-        return ordered_ids[-1] if len(ordered_ids) >= 3 else ""
+        return ordered_ids[-1] if len(ordered_ids) >= 2 else ""
 
     def _is_product_truth_reference(self, asset: dict[str, Any], *, allow_product_language: bool) -> bool:
         text = self._asset_reference_text(asset)
