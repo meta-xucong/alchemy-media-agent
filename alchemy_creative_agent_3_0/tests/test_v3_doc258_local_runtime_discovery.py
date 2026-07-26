@@ -109,6 +109,65 @@ def test_mcp_materialization_rejects_descriptor_without_runtime_identity(
     assert exc.value.code == "mcp_materialization_v3_runtime_descriptor_invalid"
 
 
+def test_mcp_materialization_rejects_descriptor_without_visual_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    descriptor = tmp_path / "local_runtime.json"
+    payload = _descriptor_payload()
+    payload.pop("visual_asset_library_root")
+    descriptor.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.delenv("ALCHEMY_V3_BASE_URL", raising=False)
+    monkeypatch.setenv("ALCHEMY_V3_RUNTIME_DESCRIPTOR", str(descriptor))
+
+    with pytest.raises(MaterializedBridgeError) as exc:
+        V3MaterializedMcpBridge()
+
+    assert exc.value.code == "mcp_materialization_v3_runtime_descriptor_invalid"
+
+
+def test_mcp_materialization_rejects_runtime_response_without_visual_roots(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    descriptor = tmp_path / "local_runtime.json"
+    descriptor.write_text(json.dumps(_descriptor_payload()), encoding="utf-8")
+    monkeypatch.delenv("ALCHEMY_V3_BASE_URL", raising=False)
+    monkeypatch.setenv("ALCHEMY_V3_RUNTIME_DESCRIPTOR", str(descriptor))
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001, ANN202
+        payload = _descriptor_payload(ok=True)
+        payload["visual_asset_library_root"] = ""
+        return _Response(payload)
+
+    monkeypatch.setattr(materialized_bridge, "urlopen", fake_urlopen)
+
+    with pytest.raises(MaterializedBridgeError) as exc:
+        V3MaterializedMcpBridge()
+
+    assert exc.value.code == "mcp_materialization_v3_runtime_health_invalid"
+
+
+def test_mcp_materialization_rejects_descriptor_base_url_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    descriptor = tmp_path / "local_runtime.json"
+    descriptor.write_text(json.dumps(_descriptor_payload(base_url="http://127.0.0.1:49321")), encoding="utf-8")
+    monkeypatch.delenv("ALCHEMY_V3_BASE_URL", raising=False)
+    monkeypatch.setenv("ALCHEMY_V3_RUNTIME_DESCRIPTOR", str(descriptor))
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001, ANN202
+        return _Response(_descriptor_payload(ok=True, base_url="http://127.0.0.1:49322"))
+
+    monkeypatch.setattr(materialized_bridge, "urlopen", fake_urlopen)
+
+    with pytest.raises(MaterializedBridgeError) as exc:
+        V3MaterializedMcpBridge()
+
+    assert exc.value.code == "mcp_materialization_v3_runtime_mismatch"
+
+
 def test_mcp_materialization_accepts_only_explicit_local_v3_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALCHEMY_V3_BASE_URL", "http://127.0.0.1:49322")
 
@@ -158,6 +217,33 @@ def test_runtime_root_detects_docker_app_layout(
     runtime_paths = importlib.import_module("app.runtime_paths")
 
     assert runtime_paths.discover_application_root(module_file) == app_root
+
+
+def test_runtime_root_fails_closed_without_layout_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("ALCHEMY_APP_ROOT", raising=False)
+    monkeypatch.delenv("ALCHEMY_REPO_ROOT", raising=False)
+    loose_file = tmp_path / "loose" / "runtime_paths.py"
+    loose_file.parent.mkdir(parents=True)
+    loose_file.write_text("", encoding="utf-8")
+
+    runtime_paths = importlib.import_module("app.runtime_paths")
+
+    with pytest.raises(RuntimeError, match="ALCHEMY_APP_ROOT"):
+        runtime_paths.discover_application_root(loose_file)
+
+
+def test_runtime_root_rejects_relative_configured_application_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_paths = importlib.import_module("app.runtime_paths")
+    monkeypatch.setenv("ALCHEMY_APP_ROOT", "relative-root")
+    monkeypatch.delenv("ALCHEMY_REPO_ROOT", raising=False)
+
+    with pytest.raises(RuntimeError, match="ALCHEMY_APP_ROOT"):
+        runtime_paths.discover_application_root()
 
 
 def test_v3_runtime_storage_paths_do_not_follow_process_cwd(
@@ -248,3 +334,23 @@ def test_local_runtime_endpoint_is_disabled_until_explicitly_enabled(
     assert payload["runtime_id"]
     assert payload["visual_asset_catalog_root"]
     assert payload["visual_asset_library_root"]
+    assert "descriptor_path" not in payload
+
+
+def test_local_runtime_endpoint_rejects_non_loopback_bind_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi.testclient import TestClient
+
+    main_module = importlib.import_module("app.main")
+    monkeypatch.setenv("ALCHEMY_V3_LOCAL_RUNTIME_DISCOVERY_ENABLED", "true")
+    monkeypatch.setattr(
+        main_module.sys,
+        "argv",
+        ["uvicorn", "src_skeleton.app.main:app", "--host", "0.0.0.0", "--port", "49321"],
+    )
+
+    response = TestClient(main_module.app).get("/api/v3/creative-agent/local-runtime")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "v3_local_runtime_discovery_non_loopback"

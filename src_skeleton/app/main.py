@@ -165,15 +165,26 @@ def _local_http_base_url(value: str) -> str | None:
     return value.rstrip("/")
 
 
+def _current_v3_bind_host() -> str:
+    return (_uvicorn_arg_value("--host") or "127.0.0.1").strip()
+
+
+def _v3_bind_host_is_loopback() -> bool:
+    host = _current_v3_bind_host().strip("[]")
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
 def _current_local_v3_base_url() -> str | None:
+    if not _v3_bind_host_is_loopback():
+        return None
     configured = (os.getenv("ALCHEMY_V3_BASE_URL") or "").strip()
     if configured:
         return _local_http_base_url(configured)
     port = _uvicorn_arg_value("--port")
     if not port:
         return None
-    host = (_uvicorn_arg_value("--host") or "127.0.0.1").strip()
-    if host in {"0.0.0.0", "::", ""}:
+    host = _current_v3_bind_host()
+    if host == "":
         host = "127.0.0.1"
     if host == "::1":
         host = "[::1]"
@@ -202,6 +213,9 @@ def _v3_local_runtime_payload(base_url: str) -> dict:
 
 def _write_v3_local_runtime_descriptor() -> None:
     if not local_runtime_descriptor_enabled():
+        return
+    if not _v3_bind_host_is_loopback():
+        logger.warning("V3 local runtime descriptor not written because the server is not bound to loopback.")
         return
     base_url = _current_local_v3_base_url()
     if not base_url:
@@ -349,6 +363,14 @@ def v3_local_runtime():
             status_code=404,
             detail={"code": "v3_local_runtime_discovery_disabled", "message": "Local V3 runtime discovery is disabled."},
         )
+    if not _v3_bind_host_is_loopback():
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "v3_local_runtime_discovery_non_loopback",
+                "message": "Local V3 runtime discovery is available only for loopback-bound development servers.",
+            },
+        )
     base_url = _current_local_v3_base_url()
     if not base_url:
         raise HTTPException(
@@ -359,7 +381,6 @@ def v3_local_runtime():
             },
         )
     payload = _v3_local_runtime_payload(base_url)
-    payload["descriptor_path"] = str(local_runtime_descriptor_path())
     return payload
 
 

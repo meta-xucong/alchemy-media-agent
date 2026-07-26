@@ -15,7 +15,10 @@ def _configured_application_root() -> Path | None:
     for env_name in ("ALCHEMY_APP_ROOT", "ALCHEMY_REPO_ROOT"):
         raw = str(os.getenv(env_name) or "").strip()
         if raw:
-            return Path(os.path.expandvars(raw)).expanduser().resolve()
+            configured = Path(os.path.expandvars(raw)).expanduser()
+            if not configured.is_absolute():
+                raise RuntimeError(f"{env_name} must be an absolute path.")
+            return configured.resolve()
     return None
 
 
@@ -44,10 +47,9 @@ def discover_application_root(start: Path | None = None) -> Path:
         if (candidate / "app").is_dir() and (candidate / "app" / "main.py").is_file():
             return candidate
 
-    fallback = Path.cwd().resolve()
-    if fallback.anchor and str(fallback) == fallback.anchor:
-        return _path_or_parent(Path(__file__).resolve()).parent
-    return fallback
+    raise RuntimeError(
+        "Alchemy application root could not be discovered. Set ALCHEMY_APP_ROOT to an absolute app root path."
+    )
 
 
 def repository_root() -> Path:

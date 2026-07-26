@@ -11,6 +11,12 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION = "v3_local_runtime_descriptor_v1"
+_REQUIRED_RUNTIME_DESCRIPTOR_FIELDS = (
+    "base_url",
+    "runtime_id",
+    "visual_asset_catalog_root",
+    "visual_asset_library_root",
+)
 
 
 class MaterializedBridgeError(ValueError):
@@ -71,10 +77,10 @@ class V3MaterializedMcpBridge:
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_descriptor_invalid")
         if payload.get("schema_version") != LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION:
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_descriptor_invalid")
-        base_url = str(payload.get("base_url") or "").strip()
-        runtime_id = str(payload.get("runtime_id") or "").strip()
-        if not base_url or not runtime_id:
-            raise MaterializedBridgeError("mcp_materialization_v3_runtime_descriptor_invalid")
+        for key in _REQUIRED_RUNTIME_DESCRIPTOR_FIELDS:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise MaterializedBridgeError("mcp_materialization_v3_runtime_descriptor_invalid")
         return payload
 
     def _verify_discovered_runtime(self, descriptor: dict) -> None:
@@ -96,10 +102,12 @@ class V3MaterializedMcpBridge:
             or payload.get("schema_version") != LOCAL_RUNTIME_DESCRIPTOR_SCHEMA_VERSION
         ):
             raise MaterializedBridgeError("mcp_materialization_v3_runtime_health_invalid")
-        for key in ("runtime_id", "visual_asset_catalog_root", "visual_asset_library_root"):
+        for key in _REQUIRED_RUNTIME_DESCRIPTOR_FIELDS:
             expected = str(descriptor.get(key) or "").strip()
             actual = str(payload.get(key) or "").strip()
-            if expected and actual != expected:
+            if not actual:
+                raise MaterializedBridgeError("mcp_materialization_v3_runtime_health_invalid")
+            if actual != expected:
                 raise MaterializedBridgeError("mcp_materialization_v3_runtime_mismatch")
 
     def get_handoff(self, handoff_id: str) -> dict:
