@@ -1246,7 +1246,7 @@ class V3ProductApiService:
                 "three_quarter": 3,
                 "profile": 3,
                 "right_front_25": 3,
-                "reverse_three_quarter": 4,
+                "reverse_three_quarter": 3,
                 "rear_head": 4,
             }[view_role]
         evidence_ids = [str(item or "").strip() for item in (reference_evidence_ids or [])]
@@ -1267,9 +1267,10 @@ class V3ProductApiService:
         # giving the shared Provider materializer the bounded evidence set it
         # can actually admit.  The two Character Card extension views follow
         # the same 2/3/5 native budget as the base Face Identity stages: the
-        # root geometry anchor plus the two nearest reviewed winners produces
-        # five derivatives.  Older winners remain in append-only lineage and
-        # are not silently deleted or reused as ordinary uploads.
+        # root geometry anchor plus the approved same-side identity/framing
+        # context produces the native derivative budget.  Older winners remain
+        # in append-only lineage and are not silently deleted or reused as
+        # ordinary uploads.
         provider_evidence_ids = self._professional_anchor_provider_evidence_ids(
             view_role=view_role,
             evidence_ids=evidence_ids,

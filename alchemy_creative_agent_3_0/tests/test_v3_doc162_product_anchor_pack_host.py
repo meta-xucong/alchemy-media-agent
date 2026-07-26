@@ -1326,12 +1326,82 @@ def test_doc178_extension_views_keep_lineage_but_bound_provider_evidence_to_five
 
     assert V3ProductApiService._professional_anchor_provider_evidence_ids(
         view_role="reverse_three_quarter",
-        evidence_ids=[root, front, right25, profile],
-    ) == [root, front, right25, profile]
+        evidence_ids=[root, front, right25],
+    ) == [root, front, right25]
     assert V3ProductApiService._professional_anchor_provider_evidence_ids(
         view_role="rear_head",
         evidence_ids=[root, front, profile, reverse],
     ) == [root, profile, reverse]
+
+
+def test_doc257_reverse45_product_api_accepts_exact_three_evidence_ids(tmp_path) -> None:
+    upload_store = V3UploadedAssetStore(tmp_path / "uploads")
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = V3ProductApiService(asset_store=upload_store, output_store=output_store)
+    image = Image.new("RGB", (64, 64), (130, 110, 100))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    upload = service.create_uploaded_asset(
+        {
+            "filename": "root.png",
+            "mime_type": "image/png",
+            "size_bytes": len(buffer.getvalue()),
+            "role": "face_reference",
+        }
+    )
+    service.store_uploaded_asset_content(
+        upload.asset_id,
+        {"content_base64": encoded, "mime_type": "image/png"},
+    )
+    service.complete_uploaded_asset(upload.asset_id)
+    front = output_store.save_base64_output(
+        job_id="front_job",
+        candidate_id="front_candidate",
+        asset_id="front_asset",
+        provider="test",
+        model="test",
+        encoded_image=encoded,
+        mime_type="image/png",
+    )
+    right25 = output_store.save_base64_output(
+        job_id="right25_job",
+        candidate_id="right25_candidate",
+        asset_id="right25_asset",
+        provider="test",
+        model="test",
+        encoded_image=encoded,
+        mime_type="image/png",
+    )
+    profile = output_store.save_base64_output(
+        job_id="profile_job",
+        candidate_id="profile_candidate",
+        asset_id="profile_asset",
+        provider="test",
+        model="test",
+        encoded_image=encoded,
+        mime_type="image/png",
+    )
+    request = CreateCreativeJobRequest(
+        user_input="Prepare a right-front 45 degree model-card view.",
+        uploaded_asset_ids=[upload.asset_id],
+    )
+
+    references = service._professional_anchor_reference_assets(  # noqa: SLF001
+        request,
+        view_role="reverse_three_quarter",
+        capture_scope="character_card_face_identity",
+        reference_evidence_ids=[upload.asset_id, front.output_id, right25.output_id],
+    )
+
+    assert [item["output_id"] for item in references] == [front.output_id, right25.output_id]
+    with pytest.raises(ValueError, match="professional_anchor_reference_chain_invalid"):
+        service._professional_anchor_reference_assets(  # noqa: SLF001
+            request,
+            view_role="reverse_three_quarter",
+            capture_scope="character_card_face_identity",
+            reference_evidence_ids=[upload.asset_id, front.output_id, right25.output_id, profile.output_id],
+        )
 
 
 def test_doc165_provider_failure_without_pixels_does_not_consume_stage_repair() -> None:
