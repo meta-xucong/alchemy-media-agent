@@ -4788,6 +4788,62 @@ body[data-active-module="v3"] .hero-actions {
   flex: 0 0 100%;
 }
 
+.v3-mobile-character-card-preview {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(116, 130, 105, 0.18);
+  border-radius: 14px;
+  background: rgba(248, 246, 238, 0.72);
+}
+
+.v3-mobile-character-card-preview > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.v3-mobile-character-card-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.v3-mobile-character-card-thumb {
+  display: grid;
+  gap: 5px;
+  padding: 0;
+  border: 1px solid rgba(116, 130, 105, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.86);
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.v3-mobile-character-card-thumb img {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  background: rgba(242, 240, 232, 0.72);
+}
+
+.v3-mobile-character-card-thumb span {
+  padding: 0 5px 6px;
+  color: var(--ink);
+}
+
+.v3-mobile-character-card-preview-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .v3-mobile-confirm-checkbox {
   display: flex;
   align-items: flex-start;

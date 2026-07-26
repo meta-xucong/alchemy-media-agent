@@ -2933,6 +2933,73 @@ function mobileV3CharacterCardModuleProof(card, module) {
   };
 }
 
+const mobileV3CharacterCardPreviewSlots = [
+  ["face.front", "正面", "Face"],
+  ["face.front_three_quarter", "左45°", "Face"],
+  ["face.profile", "90°侧面", "Face"],
+  ["face.reverse_three_quarter", "右45°", "Face"],
+  ["face.rear_head", "后脑/背面", "Face"],
+  ["expression.laugh", "笑", "Expression"],
+  ["expression.anger", "怒", "Expression"],
+  ["expression.sad", "悲", "Expression"],
+  ["body.front_full", "全身正面", "Body"],
+  ["body.side_full", "全身侧面", "Body"],
+  ["body.rear_full", "全身背面", "Body"],
+];
+
+function mobileV3CharacterCardPreviewItems(card) {
+  const slots = card?.slots && typeof card.slots === "object" ? card.slots : {};
+  return mobileV3CharacterCardPreviewSlots
+    .map(([slotKey, label, moduleLabel]) => {
+      const slot = slots[slotKey];
+      const previewUrl = mobileV3MediaUrl(slot?.preview_url || "");
+      const downloadUrl = mobileV3MediaUrl(slot?.download_url || slot?.preview_url || "");
+      if (!slot?.available || !previewUrl) return null;
+      return {
+        slotKey,
+        label,
+        moduleLabel,
+        previewUrl,
+        downloadUrl,
+        stateLabel: mobileV3CharacterCardStateLabel(slot?.state || "active", slot?.formal_slot_receipt || {}),
+      };
+    })
+    .filter(Boolean);
+}
+
+function mobileV3CharacterCardPreviewGridMarkup(items) {
+  if (!items.length) {
+    return `<p class="v3-mobile-character-card-preview-empty">角色卡图片完成后会在这里显示缩略图。</p>`;
+  }
+  return `
+    <div class="v3-mobile-character-card-preview-grid" aria-label="标准人物卡图片预览">
+      ${items.map((item, index) => `
+        <button class="v3-mobile-character-card-thumb" type="button" data-mobile-v3-character-card-preview="${index}" aria-label="放大查看${escapeHtml(item.label)}">
+          <img src="${escapeHtml(item.previewUrl)}" alt="${escapeHtml(item.label)}缩略图" loading="lazy" decoding="async" />
+          <span>${escapeHtml(item.label)}</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function openMobileV3CharacterCardPreview(index) {
+  const asset = mobileV3VisibleVisualAssets().find((item) => item.visual_asset_id === mobileV3State.activeVisualAssetId);
+  const item = mobileV3CharacterCardPreviewItems(mobileV3CharacterCard(asset))[index];
+  if (!item) return;
+  openImageLightbox({
+    id: `character-card-${index + 1}`,
+    title: item.label,
+    url: item.downloadUrl || item.previewUrl,
+    downloadUrl: item.downloadUrl || item.previewUrl,
+    thumbnailUrl: item.previewUrl,
+    previewUrl: item.previewUrl,
+    format: "png",
+    meta: `${item.moduleLabel} · ${item.stateLabel}`,
+    promptText: "",
+  });
+}
+
 function mobileV3VisualAssetLabel(asset) {
   if (mobileV3VisualAssetIsActive(asset)) return "已启用，可用于项目";
   const card = mobileV3CharacterCard(asset);
@@ -3038,6 +3105,7 @@ function openMobileV3VisualAssetDetail(visualAssetId) {
   }
   mobileV3State.activeVisualAssetId = visualAssetId;
   const card = mobileV3CharacterCard(asset);
+  const previewItems = mobileV3CharacterCardPreviewItems(card);
   const rows = [
     ["人物脸部基础", mobileV3CharacterCardModuleStatus(card, "face_identity")],
     ["表情包", mobileV3CharacterCardModuleStatus(card, "expression_set")],
@@ -3048,6 +3116,13 @@ function openMobileV3VisualAssetDetail(visualAssetId) {
       <span>人物资产</span>
       <strong>${escapeHtml(asset.display_name || "未命名人物资产")}</strong>
       <small>${escapeHtml(mobileV3VisualAssetLabel(asset))}</small>
+      <section class="v3-mobile-character-card-preview">
+        <div>
+          <span>标准人物卡</span>
+          <small>点开缩略图可以放大查看。</small>
+        </div>
+        ${mobileV3CharacterCardPreviewGridMarkup(previewItems)}
+      </section>
       <div class="v3-mobile-visual-asset-module-list">
         ${rows.map(([label, state], index) => {
           const module = ["face_identity", "expression_set", "body_silhouette"][index];
@@ -3058,6 +3133,13 @@ function openMobileV3VisualAssetDetail(visualAssetId) {
       <p>这些按钮调用正式共享角色卡流程；上传源图仍不等于启用。</p>
     </article>
   `;
+  detail.querySelectorAll("[data-mobile-v3-character-card-preview]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openMobileV3CharacterCardPreview(Number(event.currentTarget.dataset.mobileV3CharacterCardPreview || 0));
+    });
+  });
   openMobileSurface("v3-visual-asset-detail", document.querySelector("#mobileV3VisualAssetList"));
 }
 
@@ -3652,6 +3734,11 @@ function handleMobileV3Click(event) {
   const visualAssetOpenButton = event.target.closest("[data-mobile-v3-visual-asset-open]");
   if (visualAssetOpenButton) {
     openMobileV3VisualAssetDetail(visualAssetOpenButton.dataset.mobileV3VisualAssetOpen || "");
+    return;
+  }
+  const characterCardPreviewButton = event.target.closest("[data-mobile-v3-character-card-preview]");
+  if (characterCardPreviewButton) {
+    openMobileV3CharacterCardPreview(Number(characterCardPreviewButton.dataset.mobileV3CharacterCardPreview || 0));
     return;
   }
   const visualAssetPrepareButton = event.target.closest("[data-mobile-v3-visual-asset-prepare-module]");

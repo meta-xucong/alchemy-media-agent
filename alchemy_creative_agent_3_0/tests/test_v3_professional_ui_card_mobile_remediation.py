@@ -13,7 +13,7 @@ DOC_PATH = (
     / "visual_assets"
     / "PROFESSIONAL_MODE_V3_UI_CARD_AND_MOBILE_REMEDIATION_20260726.md"
 )
-FRONTEND_VERSION = "20260727-v3-mobile-asset-detail-fix"
+FRONTEND_VERSION = "20260727-v3-mobile-card-thumbnails"
 
 
 def _read(path: Path) -> str:
@@ -72,6 +72,12 @@ def test_mobile_v3_has_standard_professional_split_and_card_surfaces() -> None:
     assert 'document.querySelector("#mobileV3OpenVisualAssetLibraryBtn")?.addEventListener("click"' in mobile_js
     assert 'document.querySelector("#mobileV3CreateVisualAssetShortcutBtn")?.addEventListener("click"' in mobile_js
     assert 'card.querySelector("[data-mobile-v3-visual-asset-open]")?.addEventListener("click"' in mobile_js
+    assert "mobileV3CharacterCardPreviewItems" in mobile_js
+    assert "mobileV3CharacterCardPreviewGridMarkup" in mobile_js
+    assert "openMobileV3CharacterCardPreview" in mobile_js
+    assert 'data-mobile-v3-character-card-preview' in mobile_js
+    assert '"face.left_front_25"' not in mobile_js[mobile_js.index("const mobileV3CharacterCardPreviewSlots") : mobile_js.index("function mobileV3CharacterCardPreviewItems")]
+    assert '"face.right_front_25"' not in mobile_js[mobile_js.index("const mobileV3CharacterCardPreviewSlots") : mobile_js.index("function mobileV3CharacterCardPreviewItems")]
     assert "openMobileV3VisualAssetLibrary" in mobile_js
     assert "openMobileV3VisualAssetCreate" in mobile_js
     assert "openMobileV3VisualAssetDetail" in mobile_js
@@ -82,9 +88,13 @@ def test_mobile_v3_has_standard_professional_split_and_card_surfaces() -> None:
 
 def test_mobile_visual_asset_detail_uses_existing_character_card_routes_not_private_runtime() -> None:
     mobile_js = _read(MOBILE_ROOT / "mobile.js")
+    mobile_css = _read(MOBILE_ROOT / "mobile.css")
 
     assert "/character-card/prepare" in mobile_js
     assert "/character-card/activate" in mobile_js
+    assert "v3-mobile-character-card-preview-grid" in mobile_css
+    assert "aspect-ratio: 2 / 3" in mobile_css
+    assert "openImageLightbox({" in mobile_js[mobile_js.index("function openMobileV3CharacterCardPreview") : mobile_js.index("function mobileV3VisualAssetLabel")]
     prepare = mobile_js[
         mobile_js.index("async function prepareMobileV3VisualAssetModule"):
         mobile_js.index("async function activateMobileV3VisualAssetModule")
