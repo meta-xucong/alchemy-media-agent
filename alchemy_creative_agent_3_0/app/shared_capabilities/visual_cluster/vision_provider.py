@@ -658,6 +658,7 @@ def _professional_body_silhouette_review_context(
         "source": body_review.get("source"),
         "framing_baseline": body_review.get("framing_baseline"),
         "wardrobe_contract": body_review.get("wardrobe_contract"),
+        "hair_continuity_contract": body_review.get("hair_continuity_contract"),
         "framing_delta_dimensions": list(body_review.get("framing_delta_dimensions") or []),
         "score_dimensions": list(body_review.get("score_dimensions") or []),
         "issue_codes": list(body_review.get("issue_codes") or []),
@@ -933,6 +934,7 @@ def _professional_identity_quality_contract(
         "body_silhouette_framing_drift",
         "body_silhouette_full_body_framing_missing",
         "body_silhouette_wardrobe_contract_drift",
+        "body_silhouette_hair_continuity_drift",
     ]
     absolute_portrait_realism_issue_codes = [
         "absolute_eye_gaze_alignment_failed",
@@ -1104,6 +1106,7 @@ def _professional_identity_quality_contract(
                 "framing_baseline": "body.slot",
                 "framing_delta_dimensions": list(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS),
                 "wardrobe_contract": contract.get("body_silhouette_wardrobe_contract"),
+                "hair_continuity_contract": contract.get("body_silhouette_hair_continuity_contract"),
             }
             if applies and body_silhouette_review_applies
             else {"applies": False}

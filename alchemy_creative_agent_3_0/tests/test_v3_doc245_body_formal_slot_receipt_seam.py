@@ -114,6 +114,39 @@ def test_doc245_body_review_contract_carries_body_only_wardrobe_contract() -> No
     assert "body_silhouette_wardrobe_contract_drift" in body_review["issue_codes"]
 
 
+def test_doc245_body_review_contract_carries_reference_driven_hair_continuity_without_fixed_style() -> None:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.side_full",
+    )
+
+    quality_contract = stage_metadata["professional_face_identity_quality_contract"]
+    hair_contract = quality_contract["body_silhouette_hair_continuity_contract"]
+
+    assert hair_contract["scope"] == "body_silhouette_only"
+    assert hair_contract["source"] == "current_project_confirmed_face_identity_references"
+    assert hair_contract["fixed_hairstyle_text"] is None
+    assert set(hair_contract["required_continuity"]) == {
+        "same_hairstyle_category",
+        "same_hair_length_tier",
+        "same_bangs_or_parting_pattern",
+        "same_overall_hair_outline",
+    }
+    assert "view_angle" in hair_contract["allowed_variation"]
+    assert "natural_body_view_movement" in hair_contract["allowed_variation"]
+    assert "obvious_hair_length_tier_change" in hair_contract["forbidden"]
+
+    serialized = str(hair_contract).lower()
+    assert "long straight" not in serialized
+    assert "long hair" not in serialized
+
+    review_contract = active_review_contract(_body_review_metadata_for_vision("body.side_full"))
+    body_review = review_contract["professional_identity_quality"]["body_silhouette_review"]
+
+    assert body_review["hair_continuity_contract"] == hair_contract
+    assert "body_silhouette_hair_continuity_drift" in body_review["issue_codes"]
+
+
 def test_doc245_body_rear_review_uses_rear_continuity_instead_of_visible_face() -> None:
     metadata = _body_review_metadata_for_vision("body.rear_full")
     contract = active_review_contract(metadata)

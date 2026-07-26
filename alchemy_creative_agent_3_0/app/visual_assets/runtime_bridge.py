@@ -349,6 +349,26 @@ class ProfessionalModeRuntimeBridge:
                 "forbidden": ["long_pants", "socks", "shoes", "skirt_or_dress"],
                 "scope": "body_silhouette_only",
             }
+            quality_contract["body_silhouette_hair_continuity_contract"] = {
+                "contract_version": "professional_body_silhouette_hair_continuity_v1",
+                "applies": True,
+                "source": "current_project_confirmed_face_identity_references",
+                "required_continuity": [
+                    "same_hairstyle_category",
+                    "same_hair_length_tier",
+                    "same_bangs_or_parting_pattern",
+                    "same_overall_hair_outline",
+                ],
+                "allowed_variation": ["view_angle", "pose", "lighting", "natural_body_view_movement"],
+                "forbidden": [
+                    "unsupported_hairstyle_category_change",
+                    "obvious_hair_length_tier_change",
+                    "unsupported_bangs_or_parting_change",
+                    "unsupported_hair_outline_change",
+                ],
+                "fixed_hairstyle_text": None,
+                "scope": "body_silhouette_only",
+            }
         return {
             "contract_version": "professional_character_card_stage_v1",
             "stage": stage,
