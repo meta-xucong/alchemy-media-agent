@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -32,6 +33,49 @@ def test_codex_native_planner_imports_app_providers_in_clean_process() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
+
+
+def test_codex_native_planner_defaults_cover_two_stage_brain_preparation() -> None:
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env.pop("CODEX_NATIVE_IMAGEGEN_PLANNING_TIMEOUT_SECONDS", None)
+    env.pop("CODEX_NATIVE_IMAGEGEN_BRAIN_TRANSPORT_TIMEOUT_SECONDS", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; "
+                "from services.alchemy_codex_local_adapter.native_planner import "
+                "CodexNativeImageGenPlanner; "
+                "p=CodexNativeImageGenPlanner(runtime_factory=lambda: None); "
+                "print(json.dumps({'planning':p._planning_timeout_seconds,"
+                "'brain':p._brain_transport_timeout_seconds}))"
+            ),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    defaults = json.loads(result.stdout)
+    assert defaults["brain"] <= 120.0
+    assert defaults["planning"] > (2 * defaults["brain"]) + 30.0
+
+
+class _TwoStageProbeRuntime:
+    def __init__(self, delay_seconds: float = 0.05) -> None:
+        self.delay_seconds = delay_seconds
+        self.request_seen = None
+
+    def plan_job(self, request):
+        self.request_seen = request
+        time.sleep(self.delay_seconds)
+        time.sleep(self.delay_seconds)
+        return {"status": "planned", "stages": ["plan", "provider_prompt_finalize"]}
 
 
 class _MetadataProbeRuntime:
@@ -128,6 +172,20 @@ def test_codex_native_specialized_planner_terminates_subprocess_on_timeout(tmp_p
         thread for thread in threading.enumerate()
         if thread.name == "codex-native-imagegen-planner"
     ] == []
+
+
+def test_codex_native_custom_runtime_allows_two_stage_brain_preparation_within_deadline(tmp_path) -> None:
+    runtime = _TwoStageProbeRuntime(delay_seconds=0.02)
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: runtime,
+        planning_timeout_seconds=0.2,
+        brain_transport_timeout_seconds=0.05,
+    )
+
+    result = planner._plan_job_with_deadline(runtime, {"metadata": {}})  # noqa: SLF001 - deadline invariant
+
+    assert result == {"status": "planned", "stages": ["plan", "provider_prompt_finalize"]}
+    assert runtime.request_seen is not None
 
 
 def test_codex_native_specialized_planner_rejects_overlapping_timeout_workers(tmp_path) -> None:
