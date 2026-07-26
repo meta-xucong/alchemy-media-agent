@@ -2760,6 +2760,16 @@ function setupMobileV3Adapter() {
   [tab, els.mobileViewLayer, els.mobileSheetLayer].filter(Boolean).forEach((root) => {
     root.addEventListener("click", handleMobileV3Click);
   });
+  document.querySelector("#mobileV3OpenVisualAssetLibraryBtn")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openMobileV3VisualAssetLibrary(event.currentTarget);
+  });
+  document.querySelector("#mobileV3CreateVisualAssetShortcutBtn")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openMobileV3VisualAssetCreate(event.currentTarget);
+  });
   document.querySelector("#mobileV3VisualAssetRootInput")?.addEventListener("change", handleMobileV3VisualAssetSourceFiles);
   document.querySelector("#mobileV3CountInput")?.addEventListener("change", handleMobileV3CountInput);
   document.querySelector("#mobileV3ReferenceInput")?.addEventListener("change", handleMobileV3ReferenceFiles);
@@ -2846,6 +2856,10 @@ function normalizeMobileV3HomeSurface() {
 
 function mobileV3TemplateCards() {
   return Array.isArray(mobileV3State.templates) ? mobileV3State.templates : [];
+}
+
+function mobileV3TemplateById(templateId) {
+  return mobileV3TemplateCards().find((template) => template?.template_id === templateId) || null;
 }
 
 function setMobileV3WorkspaceMode(mode) {
@@ -2977,6 +2991,11 @@ function renderMobileV3VisualAssets() {
       </div>
       <button class="button compact secondary" type="button" data-mobile-v3-visual-asset-open="${escapeHtml(asset.visual_asset_id || "")}">查看资产内容</button>
     `;
+    card.querySelector("[data-mobile-v3-visual-asset-open]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openMobileV3VisualAssetDetail(event.currentTarget.dataset.mobileV3VisualAssetOpen || "");
+    });
     list.appendChild(card);
   });
 }

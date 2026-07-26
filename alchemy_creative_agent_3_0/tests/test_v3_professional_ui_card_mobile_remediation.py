@@ -13,7 +13,7 @@ DOC_PATH = (
     / "visual_assets"
     / "PROFESSIONAL_MODE_V3_UI_CARD_AND_MOBILE_REMEDIATION_20260726.md"
 )
-FRONTEND_VERSION = "20260726-v3-card-modal-remediation2"
+FRONTEND_VERSION = "20260727-v3-mobile-asset-detail-fix"
 
 
 def _read(path: Path) -> str:
@@ -67,6 +67,11 @@ def test_mobile_v3_has_standard_professional_split_and_card_surfaces() -> None:
     assert 'id="mobileV3VisualAssetCreatePanel"' in mobile_html
     assert 'id="mobileV3VisualAssetDetailPanel"' in mobile_html
     assert "setMobileV3WorkspaceMode" in mobile_js
+    assert "function mobileV3TemplateById(templateId)" in mobile_js
+    assert "mobileV3TemplateCards().find" in mobile_js
+    assert 'document.querySelector("#mobileV3OpenVisualAssetLibraryBtn")?.addEventListener("click"' in mobile_js
+    assert 'document.querySelector("#mobileV3CreateVisualAssetShortcutBtn")?.addEventListener("click"' in mobile_js
+    assert 'card.querySelector("[data-mobile-v3-visual-asset-open]")?.addEventListener("click"' in mobile_js
     assert "openMobileV3VisualAssetLibrary" in mobile_js
     assert "openMobileV3VisualAssetCreate" in mobile_js
     assert "openMobileV3VisualAssetDetail" in mobile_js

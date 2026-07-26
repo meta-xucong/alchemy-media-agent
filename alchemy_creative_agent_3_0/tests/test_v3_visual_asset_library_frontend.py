@@ -16,7 +16,7 @@ APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
 STYLES_CSS = ROOT / "src_skeleton" / "app" / "static" / "styles.css"
 HANDLERS = ROOT / "alchemy_creative_agent_3_0" / "app" / "product_api" / "route_handlers.py"
-FRONTEND_VERSION = "20260726-v3-card-modal-remediation2"
+FRONTEND_VERSION = "20260727-v3-mobile-asset-detail-fix"
 
 
 def _function(source: str, name: str, next_name: str) -> str:
