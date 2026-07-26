@@ -4,6 +4,14 @@ from __future__ import annotations
 
 import pytest
 
+from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
+from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
+    CapabilityActivationPlan,
+    TemplateCapabilityPolicy,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorReviewDecision
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
@@ -27,6 +35,77 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
 from alchemy_creative_agent_3_0.app.visual_assets.library import VisualAssetLibraryLifecycleService
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
+
+
+def _body_slot_delta_runtime_request(slot_key: str = "body.front_full") -> ScenarioRuntimeRequest:
+    return ScenarioRuntimeRequest(
+        user_input=(
+            f"Body slot target: {slot_key}. Render the same child as a full-body professional "
+            "model-card body reference on a clean white studio background. Use a simple white "
+            "short-sleeve top, plain solid shorts, and bare feet."
+        ),
+        scenario_selection={"scenario_id": "general_creative"},
+        metadata={
+            "project_id": "project_doc245_body_recovery",
+            "requested_image_count": 1,
+            "require_real_images": True,
+            "professional_mode": True,
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": slot_key,
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_planning_metadata": ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+                stage="body_silhouette",
+                slot_key=slot_key,
+            ),
+            "professional_anchor_reference_assets": [
+                {
+                    "asset_id": "front_winner_output",
+                    "output_id": "front_winner_output",
+                    "role": "face_reference",
+                    "source_type": "selected_output",
+                    "use_policy": "identity",
+                    "strength": "hard",
+                    "provider_input_required": True,
+                },
+                {
+                    "asset_id": "profile_winner_output",
+                    "output_id": "profile_winner_output",
+                    "role": "face_reference",
+                    "source_type": "selected_output",
+                    "use_policy": "identity",
+                    "strength": "hard",
+                    "provider_input_required": True,
+                },
+                {
+                    "asset_id": "rear_winner_output",
+                    "output_id": "rear_winner_output",
+                    "role": "face_reference",
+                    "source_type": "selected_output",
+                    "use_policy": "identity",
+                    "strength": "hard",
+                    "provider_input_required": True,
+                },
+            ],
+            "generation_channel": "mcp",
+            "mcp_operation_id": f"asset_doc245:body_silhouette:{slot_key}:2:round2",
+        },
+    )
+
+
+def _remote_required_body_brain_result(slot_key: str = "body.front_full"):
+    return build_remote_required_result(
+        BrainRunRequest(
+            user_input=f"Prepare one Character Card {slot_key} body slot.",
+            stage="scenario_runtime",
+            scenario_id="general_creative",
+            template_id="general_template",
+            requested_image_count=1,
+            requested_image_size="1024x1536",
+            metadata=_body_slot_delta_runtime_request(slot_key).metadata,
+        ),
+        "Remote Brain timed out before the Character Card body slot prompt.",
+    )
 
 
 def _generic_body_shared_receipt(*, status: str = "pass") -> dict[str, object]:
@@ -145,6 +224,77 @@ def test_doc245_body_review_contract_carries_reference_driven_hair_continuity_wi
 
     assert body_review["hair_continuity_contract"] == hair_contract
     assert "body_silhouette_hair_continuity_drift" in body_review["issue_codes"]
+
+
+def test_doc245_body_brain_timeout_uses_bounded_body_slot_delta_recovery() -> None:
+    runtime = ScenarioRuntime()
+    request = _body_slot_delta_runtime_request("body.front_full")
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _remote_required_body_brain_result("body.front_full"),
+    )
+
+    assert recovered.canonical_provider_prompts
+    canonical = recovered.canonical_provider_prompts[0]
+    assert "full-body front-view professional model-card photograph" in canonical.prompt
+    assert "simple white short-sleeve top" in canonical.prompt
+    assert "plain solid shorts" in canonical.prompt
+    assert "bare feet" in canonical.prompt
+    assert "same hairstyle category" in canonical.prompt
+    assert "same hair-length tier" in canonical.prompt
+    assert canonical.reference_led_slot_delta_decision is not None
+    assert canonical.reference_led_slot_delta_decision.slot_delta_type == "body_pose"
+    assert canonical.provider_admission_decision is not None
+    assert canonical.provider_admission_decision.provider_admission_status == "admitted"
+    assert recovered.audit["character_card_slot_delta_recovery_prompts_received"] is True
+    assert recovered.audit["character_card_slot_delta_recovery_scope"] == "professional_character_card_body_silhouette"
+    assert recovered.audit["character_card_slot_delta_recovery_slot_key"] == "body.front_full"
+    assert recovered.visual_task_profile is not None
+    assert recovered.visual_task_profile.allowed_changes == [
+        "body_view_pose_and_full_body_framing_only",
+        "body_wardrobe_contract_application",
+        "natural_body_view_hair_movement",
+    ]
+
+    runtime._require_remote_creative_brain(  # noqa: SLF001
+        request,
+        TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+        recovered,
+    )
+    runtime._require_brain_signed_provider_prompts(  # noqa: SLF001
+        request,
+        TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+        recovered,
+        CapabilityActivationPlan(
+            plan_id="plan_doc245_body_recovery",
+            fingerprint="fp_doc245_body_recovery",
+            job_id="job_doc245_body_recovery",
+            task_profile_id="profile_doc245_body_recovery",
+            template_id="general_template",
+            scenario_id="general_creative",
+        ),
+    )
+
+
+def test_doc245_body_slot_delta_recovery_rejects_body_slot_contract_mismatch() -> None:
+    runtime = ScenarioRuntime()
+    request = _body_slot_delta_runtime_request("body.front_full")
+    bad_metadata = dict(request.metadata or {})
+    bad_metadata["professional_character_card_slot"] = "body.side_full"
+    bad_metadata["professional_planning_metadata"] = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    bad_request = request.model_copy(update={"metadata": bad_metadata})
+    brain_result = _remote_required_body_brain_result("body.front_full")
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        bad_request,
+        brain_result,
+    )
+
+    assert not recovered.canonical_provider_prompts
+    assert "character_card_slot_delta_recovery_prompts_received" not in recovered.audit
 
 
 def test_doc245_body_rear_review_uses_rear_continuity_instead_of_visible_face() -> None:

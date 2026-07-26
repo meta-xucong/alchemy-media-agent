@@ -893,6 +893,14 @@ class ScenarioRuntime:
                 expression=expression_slot[1],
                 recovery_reason=recovery_reason,
             )
+        body_slot = self._character_card_body_slot_delta_target(metadata)
+        if body_slot is not None:
+            return self._recover_character_card_body_slot_delta_brain_result(
+                request,
+                brain_result,
+                slot_key=body_slot,
+                recovery_reason=recovery_reason,
+            )
         if metadata.get("professional_anchor_pack_preparation") is not True:
             return brain_result
         planning_metadata = metadata.get("professional_planning_metadata")
@@ -1168,6 +1176,303 @@ class ScenarioRuntime:
                     "reference_led_slot_delta_decision_signed": True,
                     "canonical_provider_prompt_stage": "character_card_slot_delta_recovery",
                     "canonical_provider_prompt_stages": ["character_card_slot_delta_recovery"],
+                },
+            }
+        )
+
+    def _recover_character_card_body_slot_delta_brain_result(
+        self,
+        request: ScenarioRuntimeRequest,
+        brain_result: BrainRunResult,
+        *,
+        slot_key: str,
+        recovery_reason: str,
+    ) -> BrainRunResult:
+        """Bounded prompt recovery for Body Silhouette slots.
+
+        This mirrors the existing Face/Expression reference-led recovery
+        authority, but remains Body-owned: it requires the typed Body
+        silhouette stage contract, the current Face reference chain, and a
+        single requested output.  The recovered prompt is a compact body-pose
+        materialization direction; shared Vision and Body enhanced review still
+        own pixel acceptance.
+        """
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        planning_metadata = metadata.get("professional_planning_metadata")
+        if not isinstance(planning_metadata, dict):
+            return brain_result
+        if (
+            planning_metadata.get("stage") != "body_silhouette"
+            or planning_metadata.get("slot_key") != slot_key
+            or planning_metadata.get("creative_direction_owner") != "remote_v3_llm_brain"
+        ):
+            return brain_result
+        slot_delta_contract = planning_metadata.get("reference_led_slot_delta_contract")
+        if not isinstance(slot_delta_contract, dict) or slot_delta_contract.get("slot_delta_type") != "body_pose":
+            return brain_result
+        quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
+        quality_contract = quality_contract if isinstance(quality_contract, dict) else {}
+        wardrobe_contract = quality_contract.get("body_silhouette_wardrobe_contract")
+        hair_contract = quality_contract.get("body_silhouette_hair_continuity_contract")
+        if not isinstance(wardrobe_contract, dict) or wardrobe_contract.get("scope") != "body_silhouette_only":
+            return brain_result
+        if not isinstance(hair_contract, dict) or hair_contract.get("scope") != "body_silhouette_only":
+            return brain_result
+        reference_assets = metadata.get("professional_anchor_reference_assets")
+        if not isinstance(reference_assets, list):
+            return brain_result
+        source_asset_ids = self._character_card_slot_delta_recovery_source_asset_ids(
+            request,
+            reference_assets,
+        )
+        if len(source_asset_ids) < 3:
+            return brain_result
+        expected = self._requested_image_count_for_brain(request)
+        if expected != 1:
+            return brain_result
+
+        prompt = self._character_card_body_slot_delta_recovery_prompt(slot_key)
+        project_id = str(metadata.get("project_id") or "").strip() or None
+        profile_id = stable_id(
+            "character_card_body_slot_delta_recovery_profile",
+            project_id or "",
+            slot_key,
+            *source_asset_ids,
+        )
+        evidence_id = stable_id("character_card_body_slot_delta_recovery_evidence", profile_id)
+        task_profile = VisualTaskProfile(
+            profile_id=profile_id,
+            project_id=project_id,
+            job_id=stable_id("character_card_body_slot_delta_recovery_job", profile_id),
+            template_id="general_template",
+            scenario_id="general_creative",
+            rendering_intent=RenderingIntent(
+                rendering_mode="photoreal",
+                stylization_scope="none",
+                decision_owner="remote_brain",
+                evidence_ids=[evidence_id],
+            ),
+            developmental_age_intent="current_request_assigns_stage",
+            reference_channel_ownership_intent=ReferenceChannelOwnershipIntent(
+                applicability="applicable",
+                decision_owner="remote_brain",
+                reference_owned_channels=[
+                    "identity_geometry",
+                    "body_identity",
+                    "natural_complexion_direction",
+                    "hair_direction",
+                ],
+                current_request_owned_channels=[
+                    "wardrobe_structure",
+                    "lighting_color",
+                    "scene_background",
+                    "camera_composition",
+                    "mood_art_direction",
+                    "style_finish",
+                ],
+                evidence_ids=[evidence_id],
+                confidence=0.9,
+            ),
+            subject_entities=[
+                VisualSubjectEntity(
+                    entity_id="character_card_body_subject",
+                    entity_type="person",
+                    role="body_silhouette_subject",
+                    source_asset_ids=source_asset_ids,
+                    visible_in_target=True,
+                    preservation_level="strong",
+                    confidence=0.95,
+                    attributes={
+                        "capture_scope": "character_card_body_silhouette",
+                        "slot_key": slot_key,
+                        "baseline": "active_face_identity_winners",
+                    },
+                )
+            ],
+            allowed_changes=[
+                "body_view_pose_and_full_body_framing_only",
+                "body_wardrobe_contract_application",
+                "natural_body_view_hair_movement",
+            ],
+            visual_intent_tags=[
+                "character_card_body_silhouette",
+                "reference_led_slot_delta",
+                slot_key,
+            ],
+            commercial_goal_tags=["commercial_clean_reference_card"],
+            confidence=0.92,
+            evidence=[
+                ActivationEvidence(
+                    evidence_id=evidence_id,
+                    evidence_type="professional_character_card_body_reference",
+                    source="bounded_slot_delta_recovery",
+                    value={"slot_key": slot_key, "reference_count": len(source_asset_ids)},
+                    confidence=0.95,
+                )
+            ],
+        )
+        activation_intent = CapabilityActivationIntent(
+            intent_id=stable_id("character_card_body_slot_delta_recovery_capabilities", profile_id),
+            task_profile_id=profile_id,
+            requested_capabilities=[
+                RequestedCapability(
+                    capability_id="portrait_identity",
+                    activation_mode="required",
+                    reason_codes=["approved_character_card_face_identity"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="strong",
+                    confidence=0.95,
+                ),
+                RequestedCapability(
+                    capability_id="reference_channel_policy",
+                    activation_mode="required",
+                    reason_codes=["reference_led_body_pose_identity_boundary"],
+                    evidence_ids=[evidence_id],
+                    confidence=0.95,
+                ),
+                RequestedCapability(
+                    capability_id="human_realism",
+                    activation_mode="required",
+                    reason_codes=["real_person_character_card_body_silhouette"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="strict",
+                    confidence=0.9,
+                ),
+                RequestedCapability(
+                    capability_id="commercial_quality",
+                    activation_mode="recommended",
+                    reason_codes=["commercial_clean_reference_card"],
+                    evidence_ids=[evidence_id],
+                    requested_profile="commercial_strict",
+                    confidence=0.85,
+                ),
+            ],
+            confidence=0.92,
+        )
+        requested_size = str(metadata.get("requested_image_size") or "1024x1536").strip() or "1024x1536"
+        canonical = BrainCanonicalProviderPrompt(
+            output_index=1,
+            prompt=prompt,
+            review_status="approved",
+            semantic_preflight_status="approved",
+            human_naturalness_decision={
+                "contract_version": "v3_human_naturalness_decision_v1",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            reference_channel_ownership_decision={
+                "contract_version": "v3_reference_channel_ownership_decision_v1",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            human_developmental_age_decision={
+                "contract_version": "v3_human_developmental_age_decision_v2",
+                "age_fidelity": "follow_explicit_prompt",
+                "source_age_inheritance": "not_automatic_when_current_prompt_assigns_age",
+                "developmental_age_coherence": "whole_person_requested_stage",
+                "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            human_developmental_presence_decision={
+                "contract_version": "v3_human_developmental_presence_decision_v2",
+                "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
+                "resolution_mode": "holistic_person_and_situation_resolution",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            provider_admission_decision={
+                "contract_version": "v3_provider_admission_decision_v1",
+                "provider_admission_status": "admitted",
+                "prompt_language_mode": "concise_positive_renderer_direction",
+                "safety_sensitive_prompt_normalized": "applied",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+            reference_led_slot_delta_decision={
+                "contract_version": "v3_reference_led_slot_delta_decision_v1",
+                "materialization_mode": "reference_led_slot_delta",
+                "stable_identity_source": "approved_character_card_reference",
+                "prompt_scope": "slot_delta_only",
+                "safety_sensitive_repetition_policy": "avoid_repeating_stable_person_biology",
+                "slot_delta_type": "body_pose",
+                "status": "approved",
+                "owner": "remote_v3_llm_brain",
+            },
+        )
+        return brain_result.model_copy(
+            update={
+                "canonical_provider_prompts": [canonical],
+                "image_set_plan": brain_result.image_set_plan.model_copy(
+                    update={
+                        "set_goal": f"character_card_{slot_key.replace('.', '_')}_body_slot_delta_recovery",
+                        "image_count": 1,
+                        "size": requested_size,
+                        "shot_plan": [prompt],
+                        "composition_rules": [
+                            "full body visible from head to bare feet",
+                            "plain white studio background",
+                            "single complete image frame",
+                        ],
+                        "quality_bar": [
+                            "commercial clean image",
+                            "same-person likeness from approved Face references",
+                            "Body wardrobe and hair-continuity contracts must remain reviewable",
+                        ],
+                    }
+                ),
+                "prompt_guidance": brain_result.prompt_guidance.model_copy(
+                    update={
+                        "optimized_direction": prompt,
+                        "visual_direction_addons": [prompt],
+                        "layout_notes": ["vertical 2:3 full-body model-card frame"],
+                        "hard_constraints": [
+                            "Use the approved Face Identity references for identity and hair continuity only.",
+                            "Keep a full-body white-studio model-card frame with head, hands, legs, and bare feet visible.",
+                            "Use the Body wardrobe contract: simple white short-sleeve top, plain solid shorts, bare feet.",
+                        ],
+                        "negative_prompt_addons": [
+                            "avoid long pants, socks, shoes, skirts, or dresses",
+                            "avoid changing hairstyle category, hair-length tier, bangs or parting pattern",
+                        ],
+                        "consistency_strategy": "reference_led_character_card_body_slot_delta_recovery",
+                    }
+                ),
+                "visual_task_profile": task_profile,
+                "capability_activation_intent": activation_intent,
+                "prompt_review": brain_result.prompt_review.model_copy(
+                    update={
+                        "status": "passed",
+                        "checks": [
+                            "character_card_body_reference_chain_present",
+                            "body_slot_delta_prompt_recovered_after_remote_timeout",
+                        ],
+                    }
+                ),
+                "warnings": [
+                    *list(brain_result.warnings or []),
+                    "Remote Brain timed out; Character Card used bounded reference-led Body slot-delta recovery.",
+                ],
+                "audit": {
+                    **dict(brain_result.audit or {}),
+                    "character_card_slot_delta_recovery_used": True,
+                    "character_card_slot_delta_recovery_prompts_received": True,
+                    "character_card_slot_delta_recovery_reason": recovery_reason,
+                    "character_card_slot_delta_recovery_scope": "professional_character_card_body_silhouette",
+                    "character_card_slot_delta_recovery_slot_key": slot_key,
+                    "remote_canonical_provider_prompts_received": False,
+                    "human_realism_semantic_preflight_signed": True,
+                    "human_realism_natural_presence_resigned": True,
+                    "human_realism_natural_presence_decision_signed": True,
+                    "reference_channel_ownership_decision_required": True,
+                    "reference_channel_ownership_decision_signed": True,
+                    "provider_admission_decision_required": True,
+                    "provider_admission_decision_signed": True,
+                    "reference_led_slot_delta_decision_required": True,
+                    "reference_led_slot_delta_decision_signed": True,
+                    "canonical_provider_prompt_stage": "character_card_body_slot_delta_recovery",
+                    "canonical_provider_prompt_stages": ["character_card_body_slot_delta_recovery"],
                 },
             }
         )
@@ -1473,6 +1778,22 @@ class ScenarioRuntime:
         return slot_key, expression
 
     @staticmethod
+    def _character_card_body_slot_delta_target(metadata: dict[str, Any]) -> str | None:
+        if metadata.get("professional_character_card_preparation") is not True:
+            return None
+        if str(metadata.get("professional_character_card_stage") or "").strip() != "body_silhouette":
+            return None
+        slot_key = str(metadata.get("professional_character_card_slot") or "").strip()
+        if slot_key not in {"body.front_full", "body.side_full", "body.rear_full"}:
+            return None
+        planning_metadata = metadata.get("professional_planning_metadata")
+        if not isinstance(planning_metadata, dict):
+            return None
+        if planning_metadata.get("stage") != "body_silhouette" or planning_metadata.get("slot_key") != slot_key:
+            return None
+        return slot_key
+
+    @staticmethod
     def _character_card_slot_delta_recovery_source_asset_ids(
         request: ScenarioRuntimeRequest,
         reference_assets: list[Any],
@@ -1502,6 +1823,29 @@ class ScenarioRuntime:
     def _uses_character_card_slot_delta_recovery(brain_result: BrainRunResult) -> bool:
         audit = brain_result.audit if isinstance(brain_result.audit, dict) else {}
         return bool(audit.get("character_card_slot_delta_recovery_prompts_received"))
+
+    @staticmethod
+    def _character_card_body_slot_delta_recovery_prompt(slot_key: str) -> str:
+        view = {
+            "body.front_full": "front-view",
+            "body.side_full": "side-view",
+            "body.rear_full": "rear-view",
+        }.get(slot_key, "full-body")
+        return (
+            f"A full-body {view} professional model-card photograph of the same child from the approved "
+            "Face Identity references, standing naturally on a clean white studio background. "
+            "Use a photographer's standard full-body model-card distance: the entire figure is visible "
+            "from the top of the head to the soles of the bare feet, with hands, legs, shoulders, neck, "
+            "and head contained inside the frame. "
+            "Apply the Body wardrobe contract consistently: simple white short-sleeve top, plain solid "
+            "shorts, and bare feet. "
+            "Preserve identity, age coherence, natural child body proportions, and the hairstyle from the "
+            "current Face references: same hairstyle category, same hair-length tier, same bangs or "
+            "parting pattern, and same overall hair outline, allowing natural movement from body pose, "
+            "view angle, and studio light. "
+            "Keep the finish as mature clean commercial photography with soft even studio light and a "
+            "seamless white backdrop."
+        )
 
     @staticmethod
     def _character_card_expression_slot_delta_recovery_prompt(
