@@ -1,10 +1,15 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **draft correction model; document/report only; no code or generation authorized by this document.**
+Status: **transport diagnostics implemented; real-image gate remains blocked.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
 Non-scope: shared Visual Capability, General Template behavior, Provider/MCP image rendering, route switching, prompt semantics, Formal Core, receipt/slot/activation, frontend, and real image generation.
+
+Implementation note: this document started as the theory-first correction
+model. It is now also the implementation closure record for the focused
+transport-diagnostics milestone. The original blocked facts remain historical
+evidence; the current active gate is the post-`99d3fa9` result in Section 1A.
 
 ## 1. Current blocked fact pattern
 
@@ -33,6 +38,95 @@ Evidence records:
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-4397c91-summary.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/offline-brain-stage-payload-audit-20260727.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/final-blocked-decision-record-20260727.json`
+
+## 1A. Implementation outcome and current gate
+
+Two small mainline commits now separate the local program defects from the
+remaining external Brain blocker:
+
+| Commit | Scope | Outcome |
+| --- | --- | --- |
+| `dffc02b` | Doc259 correction model and old-document authority markers | Documented the two-stage Brain timeout/root-cause model and marked conflicting old timeout/fallback wording. |
+| `99d3fa9` | Brain transport diagnostics in provider, adapter, ScenarioRuntime, Local MCP projection, and focused tests | Implemented safe stage/transport timeout observability without changing Brain creative authority, exact N, prompt semantics, route, Provider rendering, Core, receipt, slot, or activation. |
+
+### Solved local program defects
+
+- The native planner outer deadline is no longer the active blocker after
+  `4397c91`; the child process is bounded and does not leave a late mutation
+  worker.
+- Brain transport timeout failures are no longer projected as an opaque
+  `timeout` string only. They now carry public-safe stage/transport facts:
+  stage, timeout phase, elapsed/cap, response-start flags, complete-response
+  flag, and JSON-parse flags.
+- The Local MCP blocked result can surface those safe facts while still
+  suppressing endpoint URLs, credentials, raw prompts, provider bodies, file
+  paths, internal stacks, and private IDs.
+- Legacy generic provider-error projections remain stable: stage is emitted
+  only when the new transport-diagnostic object exists.
+
+### Verification completed for `99d3fa9`
+
+- Focused regression: 68 passed, with only existing FastAPI deprecation
+  warnings in Doc258 local-runtime discovery tests.
+- `compileall` passed for the touched Brain provider, Brain adapter,
+  ScenarioRuntime, and native planner files.
+- `git diff --check` passed for the touched semantic files with Windows
+  line-ending warnings only.
+- Compatibility checks confirmed old generic provider-error exact assertions
+  remain unchanged unless a typed transport diagnostic is present.
+
+### Post-implementation N=1 planning-only probe
+
+After `99d3fa9`, one corrected N=1 planning-only MCP probe was run with a
+zero-mutation budget. It did not create any job, handoff/materialization,
+output, project, visual asset, receipt, slot, or activation record.
+
+Observed result:
+
+```text
+status=blocked
+code=codex_native_imagegen_remote_creative_brain_required_for_template
+remote_brain_stage=plan
+transport_error_class=timeout
+timeout_phase=unknown_transport_timeout
+timeout_seconds=120.0
+elapsed_ms=120014
+response_started=false
+first_content_observed=false
+complete_response_observed=false
+json_parse_started=false
+json_parse_completed=false
+execution_budget.state=within_budget
+execution_budget.remaining_ms≈139788
+mutation_delta=0
+```
+
+Current interpretation:
+
+- The request reached the Local MCP planning facade and failed closed before
+  any image operation.
+- The local 300s outer planner did not kill the child.
+- The shared logical Brain budget was not exhausted.
+- The failure occurred during the first remote Brain `plan` stage.
+- No response start, complete response, or JSON parse was observed before the
+  120s per-call cap.
+
+Current active blocker:
+
+```text
+external Brain plan-stage response unavailable/too slow for the 120s transport cap
+```
+
+This is **not** currently a local program defect, not a finalizer failure, not
+an exact-count mismatch, not Product API/Provider image generation, and not a
+slot/receipt issue. Real image generation remains prohibited until a future
+reviewer/user gate authorizes another planning-only probe and that probe
+returns schema-valid two-stage Brain output with mutation delta 0.
+
+Additional evidence:
+
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-99d3fa9-corrected-summary.json`
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-99d3fa9-startup-failure.json`
 
 ## 2. Current authority rules
 
@@ -177,7 +271,7 @@ Minimum validation commands after implementation should include:
 ```text
 python -m pytest alchemy_creative_agent_3_0/tests/test_codex_native_imagegen_planner_timeout.py -q
 python -m pytest tests/test_doc130_codex_native_prompt_parity.py tests/test_doc133_codex_native_specialized_relay.py alchemy_creative_agent_3_0/tests/test_v3_llm_brain_provider_timeout.py -q
-python -m compileall -q services/alchemy_codex_local_adapter/native_planner.py alchemy_creative_agent_3_0/app/llm_brain
+python -m compileall alchemy_creative_agent_3_0/app/llm_brain/providers.py alchemy_creative_agent_3_0/app/llm_brain/adapter.py alchemy_creative_agent_3_0/app/scenario_runtime/runtime.py services/alchemy_codex_local_adapter/native_planner.py
 git diff --check -- <touched files>
 ```
 
