@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **plan/finalizer transport diagnostics measured; real-image gate remains blocked.**
+Status: **planning-only gate passed; controlled real-image gate pending.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -8,8 +8,10 @@ Non-scope: shared Visual Capability, General Template behavior, Provider/MCP ima
 
 Implementation note: this document started as the theory-first correction
 model. It is now also the implementation closure record for the focused
-transport-diagnostics milestone. The original blocked facts remain historical
-evidence; the current active gate is the post-`99d3fa9` result in Section 1A.
+transport-diagnostics, finite-budget, and IPC result-return milestones. The
+original blocked facts remain historical evidence; the current active gate is
+controlled real-image generation after the post-`8cd903c` planning-only proof
+in Section 1A.
 
 ## 1. Current blocked fact pattern
 
@@ -41,13 +43,15 @@ Evidence records:
 
 ## 1A. Implementation outcome and current gate
 
-Two small mainline commits now separate the local program defects from the
-remaining external Brain blocker:
+Mainline commits now separate the original local program defects from
+controlled product-image generation:
 
 | Commit | Scope | Outcome |
 | --- | --- | --- |
 | `dffc02b` | Doc259 correction model and old-document authority markers | Documented the two-stage Brain timeout/root-cause model and marked conflicting old timeout/fallback wording. |
 | `99d3fa9` | Brain transport diagnostics in provider, adapter, ScenarioRuntime, Local MCP projection, and focused tests | Implemented safe stage/transport timeout observability without changing Brain creative authority, exact N, prompt semantics, route, Provider rendering, Core, receipt, slot, or activation. |
+| `cb4c787` | finite Brain budget repair | Aligned the measured N=1 two-stage plan/finalizer latency with a finite 150s per-call cap, 320s shared logical budget, and 360s native outer deadline. |
+| `8cd903c` | native planner IPC result return | Fixed the multiprocessing Queue feeder/join deadlock and proved N=1 planning-only through the real Local MCP entry point with mutation delta 0. |
 
 ### Solved local program defects
 
@@ -63,6 +67,9 @@ remaining external Brain blocker:
   paths, internal stacks, and private IDs.
 - Legacy generic provider-error projections remain stable: stage is emitted
   only when the new transport-diagnostic object exists.
+- The post-`cb4c787` 360s timeout is now historical evidence. The trace showed
+  the child had returned `planned`; the remaining defect was parent-side Queue
+  result consumption order, fixed by `8cd903c`.
 
 ### Verification completed for `99d3fa9`
 
@@ -110,6 +117,9 @@ Current interpretation:
 - The failure occurred during the first remote Brain `plan` stage.
 - No response start, complete response, or JSON parse was observed before the
   120s per-call cap.
+- **Historical/superseded by later evidence:** this was the active state after
+  `99d3fa9`; it no longer describes the current gate after `cb4c787` and
+  `8cd903c`.
 
 Follow-up diagnostic:
 
@@ -292,9 +302,66 @@ it is whether the production schema/provider/native clamps and the final
 planning-only MCP wrapper all follow the same finite budget contract without
 waiting on the wrong object.
 
-Real image generation remains prohibited until stage-trace evidence identifies
-the exact boundary and a future N=1 planning-only probe returns schema-valid
-two-stage Brain output with mutation delta 0.
+### IPC result-return correction
+
+The first production-entry planning-only probe after the finite budget repair
+still returned `codex_native_imagegen_planning_timeout`, but the stage trace
+proved a different local defect:
+
+```text
+child.scenario_runtime_plan_job_returned elapsed_ms=201609 terminal_reason=planned
+parent.process_timeout elapsed_ms=360500 terminal_reason=local_mcp_planning_timeout
+mutation_delta=0
+```
+
+Root cause: `_plan_job_in_process` waited for `process.join(timeout=...)`
+before reading the `multiprocessing.Queue`. For a large successful planning
+payload, the child could enter Queue feeder flushing after `result_queue.put`
+while the parent waited for process exit, producing a classic join/queue
+deadlock. The fix is to read the queue first within the planning deadline,
+then perform a bounded join/terminate cleanup.
+
+Commit `8cd903c` implements this IPC repair and focused regressions:
+
+- large successful process payload returns before the outer deadline;
+- exited-without-queue remains fail-closed;
+- timeout and overlap paths still terminate/reject without late mutation.
+
+Verification:
+
+```text
+test_codex_native_imagegen_planner_timeout.py: 12 passed
+Doc130/Doc133/Doc175/Brain timeout/Doc258 focused set: 77 passed
+compileall: passed
+git diff --check: passed
+```
+
+After `8cd903c`, the reviewer-authorized N=1 mutation=0 planning-only MCP
+probe completed through the real entry point:
+
+```text
+report=mcp-planning-only-probe-n1-after-8cd903c-ipc-fix-summary.json
+status=planned_for_codex_native_imagegen
+outputs=1
+elapsed_ms=172734
+child.scenario_runtime_plan_job_returned elapsed_ms=170609 terminal_reason=planned
+parent.process_queue_payload_received elapsed_ms=171672
+parent.process_exited exitcode=0 elapsed_ms=171891
+mutation_delta=0
+```
+
+This is the first schema-valid real-entry planning proof for the N=1 product
+task after the Brain transport and IPC fixes. It is still not a product-image
+result and does not authorize six-image generation by itself; the next step
+requires reviewer approval for the controlled real product-image task.
+
+The previous rule, "wait for a future N=1 planning-only probe," is now
+historical/superseded by the post-`8cd903c` proof. Real image generation is
+still not automatically authorized by this document: it requires a separate
+controlled generation gate, fixed mutation budget, and reviewer/user approval.
+Planning pass proves only that the Local MCP planning chain can return a
+schema-valid one-output plan with mutation delta 0; it does not mean the
+six-image product set has been generated or accepted.
 
 Additional evidence:
 
@@ -305,6 +372,8 @@ Additional evidence:
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-c83c1d3-stage-trace-rerun1-summary.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/direct-brain-plan-payload-diagnostic-150s-20260727.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/direct-brain-finalizer-payload-diagnostic-150s-20260727.json`
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-cb4c787-finite-budget-summary.json`
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-8cd903c-ipc-fix-summary.json`
 
 ## 2. Current authority rules
 
@@ -523,8 +592,10 @@ The first visual target is to avoid plastic/doll face and hand/foot artifacts wh
 
 Rollback point:
 
-- `4397c91` remains the current known-good local deadline repair.
-- Any future transport-observability patch must be a small, separately revertible commit.
+- `8cd903c` is the current known-good planning-only repair after the finite
+  budget and IPC result-return fixes.
+- Any future real-generation patch must be a small, separately revertible
+  commit or append-only validation step.
 
 Immediate stop conditions:
 
@@ -534,7 +605,9 @@ Immediate stop conditions:
 - failure output leaks prompt/path/provider payload/credential/internal IDs;
 - reviewer rejects the correction model.
 
-Until a reviewed code fix and one successful planning-only probe exist, the six-image product set remains incomplete and blocked.
+The reviewed code fix and one successful planning-only probe now exist. The
+six-image product set remains incomplete only because controlled real-image
+generation, visual review, and final product-set acceptance have not yet run.
 
 ## 12. Old-document conflict index
 
