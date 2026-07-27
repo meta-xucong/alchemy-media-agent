@@ -577,15 +577,39 @@ class CodexNativeImageGenPlanner:
         try:
             materialization_metadata: dict[str, Any] = {}
             if isinstance(request, NativeProfessionalImageGenPlanRequest):
-                materialization_metadata = {
-                    "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
-                    "professional_reference_stage": request.professional_reference_stage,
-                }
+                # Product-model plans freeze their
+                # visual_asset_library_product_model_v1 strategy and complete
+                # identity + product truth references in the planning result
+                # metadata.  Keep that source of truth intact.  Only legacy
+                # Professional serial stages may receive the serial strategy
+                # compatibility projection here.
+                if request.professional_reference_stage:
+                    materialization_metadata = {
+                        "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                        "professional_reference_stage": request.professional_reference_stage,
+                    }
             materializations = self._canonical_materializations(
                 result.planning_result,
                 metadata_overrides=materialization_metadata,
             )
-        except (ProviderRuntimeError, ValueError):
+        except ProviderRuntimeError as exc:
+            detail = dict(getattr(exc, "detail", {}) or {})
+            failure_code = str(detail.get("reference_input_failure_code") or "").strip()
+            if isinstance(request, NativeProfessionalImageGenPlanRequest) and failure_code == "reference_input_capability_mismatch":
+                return self._blocked(
+                    "codex_native_imagegen_reference_input_capacity_exceeded",
+                    "V3 cannot admit every required Professional identity and product truth reference within the configured image-input capacity.",
+                )
+            if isinstance(request, NativeProfessionalImageGenPlanRequest) and failure_code == "reference_input_unsupported":
+                return self._blocked(
+                    "codex_native_imagegen_required_reference_unavailable",
+                    "V3 could not admit every required Professional reference image; no substitute provider input is allowed.",
+                )
+            return self._blocked(
+                "codex_native_imagegen_canonical_prompt_unavailable",
+                "V3 could not materialize one canonical Provider prompt for every requested output.",
+            )
+        except ValueError:
             return self._blocked(
                 "codex_native_imagegen_canonical_prompt_unavailable",
                 "V3 could not materialize one canonical Provider prompt for every requested output.",

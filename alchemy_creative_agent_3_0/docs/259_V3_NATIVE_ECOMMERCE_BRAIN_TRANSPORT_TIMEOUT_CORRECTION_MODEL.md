@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **planning-only gate passed; controlled real-image gate paused for Professional identity/product binding repair.**
+Status: **planning-only gate passed; controlled real-image gate paused for Professional identity/product binding and Provider reference-capacity repair.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -10,8 +10,9 @@ Implementation note: this document started as the theory-first correction
 model. It is now also the implementation closure record for the focused
 transport-diagnostics, finite-budget, and IPC result-return milestones. The
 original blocked facts remain historical evidence; the current active gate is
-the Professional identity/product binding repair in Section 13 after the
-post-`8cd903c` planning-only proof in Section 1A.
+the Professional identity/product binding plus Provider reference-capacity
+repair in Section 13 after the post-`8cd903c` planning-only proof in Section
+1A.
 
 ## 1. Current blocked fact pattern
 
@@ -740,6 +741,51 @@ ProjectVisualAssetBinding, missing verified root upload manifest, missing
 active Character Card winner, missing product truth, or a materialization plan
 that drops either class must fail closed before image generation.
 
+### Product-model reference capacity authority
+
+The current GPT Image 2 provider route admits at most five image inputs. For
+Professional E-Commerce product-on-model planning, the active authority is:
+
+```text
+identity: immutable root portrait + active standard-front Character Card winner
+product truth: up to three product_truth images
+```
+
+This chooses the conservative identity-first contract for the current
+product-model seam:
+
+1. the immutable root portrait remains the binding/source-of-truth guard;
+2. the active Character Card winner remains the selected model identity /
+   appearance continuity reference;
+3. all product truth references that fit the remaining capacity must be
+   admitted; and
+4. a request with four product truth images must fail closed with an explicit
+   capacity mismatch instead of silently dropping one image through adaptive
+   reference selection.
+
+The user's four swimsuit references are visually distinct and valid product
+evidence: front full, front print/detail, rear straps, and another front full
+view. The current provider-input limit means they cannot all be sent together
+with both required identity references. This is a real product input contract
+conflict, not an image deduplication issue.
+
+Rejected alternatives for this milestone:
+
+- Do not drop the immutable root silently. That would require a separate
+  Doc95/Professional product-model authority explaining why a generated winner
+  alone can replace root truth for this seam.
+- Do not silently trim the fourth product image through Doc97/adaptive
+  reference selection. Required provider inputs are hard contracts, not
+  optional evidence.
+- Do not raise `max_provider_reference_images` without an explicit Provider
+  capability negotiation proving the current route can accept six references.
+
+If a future task needs all four product truths in one pass, it must first prove
+either a six-reference provider capability or an approved product-model
+identity strategy that uses one identity input plus four product inputs. Until
+then, the active safe behavior is root + winner + up to three product truths,
+and four-product requests remain blocked before any image operation.
+
 ### Runtime-source boundary
 
 Production Professional binding resolution must not scan
@@ -820,6 +866,9 @@ Focused regression must prove:
 - stable view selectors resolve to root + approved Character Card winner;
 - Professional E-Commerce plan includes identity sources and product-truth
   sources in the admitted source set;
+- Professional E-Commerce product-model keeps required product truth inputs
+  through adaptive selection and blocks explicitly when the complete
+  root+winner+product set exceeds the five-image Provider capacity;
 - missing root, missing winner, missing binding, missing identity winner, or
   missing product truth fails closed with no business mutation.
 

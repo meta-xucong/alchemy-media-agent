@@ -2203,9 +2203,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
             max_identity_sources = max(1, min(int(plan.get("max_identity_sources") or 3), 6))
         except (TypeError, ValueError):
             max_identity_sources = 3
-        prepared: list[tuple[dict[str, Any], dict[str, Any] | None, str]] = []
+        prepared: list[tuple[dict[str, Any], dict[str, Any] | None, str, bool]] = []
         for raw in combined_assets:
             data = raw.model_dump(mode="json") if hasattr(raw, "model_dump") else dict(raw or {})
+            raw_metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            provider_input_required = bool(data.get("provider_input_required") or raw_metadata.get("provider_input_required"))
             aliases = [
                 str(value)
                 for value in (
@@ -2220,7 +2222,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ]
             evidence = next((evidence_by_alias[value] for value in aliases if value in evidence_by_alias), None)
             source_id = str(evidence.get("source_id") or aliases[0]) if evidence else (aliases[0] if aliases else "")
-            if evidence and source_id in excluded and source_id not in requested_rank:
+            if evidence and source_id in excluded and source_id not in requested_rank and not provider_input_required:
                 continue
             metadata = dict(data.get("metadata") or {})
             if evidence:
@@ -2235,10 +2237,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     }
                 )
             data["metadata"] = metadata
-            prepared.append((data, evidence, source_id))
+            prepared.append((data, evidence, source_id, provider_input_required))
 
-        identity_entries = [item for item in prepared if item[1] is not None]
-        other_entries = [item for item in prepared if item[1] is None]
+        # Provider-required references are hard input contracts.  Adaptive
+        # reference selection may rank identity support for ordinary jobs, but
+        # it must never silently drop a required image before the provider
+        # capacity gate sees the complete declared set.  If the route cannot
+        # carry every required source, _reference_assets fails closed with a
+        # capability mismatch instead of letting one source disappear.
+        required_entries = [item for item in prepared if item[3]]
+        identity_entries = [item for item in prepared if item[1] is not None and not item[3]]
+        other_entries = [item for item in prepared if item[1] is None and not item[3]]
         identity_entries.sort(
             key=lambda item: self._adaptive_reference_sort_key(
                 item[1] or {},
@@ -2249,8 +2258,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
         )
         identity_entries = identity_entries[:max_identity_sources]
-        applied_ids = [item[2] for item in identity_entries if item[2]]
-        ordered_assets = [item[0] for item in [*identity_entries, *other_entries]]
+        applied_ids = [item[2] for item in [*required_entries, *identity_entries] if item[2]]
+        ordered_assets = [item[0] for item in [*required_entries, *identity_entries, *other_entries]]
         for data in ordered_assets:
             metadata = dict(data.get("metadata") or {})
             metadata["doc97_adaptive_reference_selection"] = {
@@ -3013,6 +3022,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
         for index, asset in enumerate(reference_assets):
             asset_id = str(asset.get("asset_id") or f"reference_{index + 1}")
             source_order.append(asset_id)
+            asset_metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+            codex_native_channel = str(
+                asset.get("codex_native_reference_channel")
+                or asset_metadata.get("codex_native_reference_channel")
+                or ""
+            ).strip()
+            codex_native_server_owned = bool(
+                asset.get("codex_native_server_owned_reference")
+                or asset_metadata.get("codex_native_server_owned_reference")
+            )
             is_selected = self._is_selected_generated_source(asset)
             is_nonhuman = self._is_nonhuman_truth_reference(asset)
             is_product = self._is_product_truth_reference(asset, allow_product_language=allow_product_language)
@@ -3024,8 +3043,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
             layers: list[str] = []
             priority_note = "style_or_context_reference"
             channel_policy = self._reference_channel_policy_for_asset(request, asset)
-            if professional_server_owned_identity_chain and (
-                self._is_uploaded_truth_source(asset) or is_selected
+            if (
+                professional_server_owned_identity_chain
+                and codex_native_server_owned
+                and codex_native_channel in {"portrait_identity", "selected_identity_reference"}
+                and (
+                    str(asset.get("role") or "").strip().lower() == "face_reference"
+                    or is_selected
+                    or "face" in str(asset.get("role") or "").strip().lower()
+                )
             ):
                 layers = ["portrait_identity_truth"]
                 priority_note = "professional_server_owned_identity_anchor_truth"
