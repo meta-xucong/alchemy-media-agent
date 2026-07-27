@@ -272,10 +272,9 @@ def build_professional_ecommerce_identity_preflight(
     actual_indexes: set[int] = set()
     hints_by_output: dict[int, EcommerceProfessionalIdentityRiskHint] = {}
     for raw_index, raw_hint in professional_identity_hints_by_output.items():
-        try:
-            output_index = int(raw_index)
-        except (TypeError, ValueError):
+        if not isinstance(raw_index, int) or isinstance(raw_index, bool):
             raise ValueError("professional_identity_hint_output_index_invalid") from None
+        output_index = raw_index
         if output_index in actual_indexes:
             raise ValueError("professional_identity_hint_output_index_duplicate")
         actual_indexes.add(output_index)

@@ -393,6 +393,28 @@ def test_professional_contributor_never_ranks_or_fills_missing_resolver_hints() 
         )
 
 
+def test_professional_contributor_rejects_non_integer_hint_output_keys() -> None:
+    hint = {
+        "preferred_identity_view_kind": "front",
+        "identity_strategy": "front_primary",
+        "source": "professional_binding_resolver",
+    }
+    for invalid_key in ("1", 1.0, True):
+        with pytest.raises(ValueError, match="professional_identity_hint_output_index_invalid"):
+            build_professional_ecommerce_identity_preflight(
+                requested_image_count=1,
+                professional_identity_hints_by_output={invalid_key: hint},
+                approved_identity_view_kinds={"front"},
+            )
+
+    with pytest.raises(ValueError, match="professional_identity_hint_output_index_out_of_range"):
+        build_professional_ecommerce_identity_preflight(
+            requested_image_count=1,
+            professional_identity_hints_by_output={0: hint},
+            approved_identity_view_kinds={"front"},
+        )
+
+
 def test_preflight_contract_does_not_mutate_core_ecommerce_authorities() -> None:
     preflight = validate_ecommerce_creative_risk_preflight_payload(
         _preflight(),
