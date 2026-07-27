@@ -1242,9 +1242,55 @@ def test_professional_ecommerce_remote_payload_preserves_provider_reference_budg
     assert budget["max_provider_reference_images"] == 5
     assert budget["identity_derivative_reference_count"] == 4
     assert budget["max_product_truth_source_refs_per_output"] == 1
+    assert "identity_source_asset_ids" not in budget
     assert "max_product_truth_source_refs_per_output as a hard renderer-admission budget" in (
         " ".join(payload["ecommerce_context_instructions"].split())
     )
+
+
+def test_professional_ecommerce_native_planner_sends_brain_safe_provider_budget(
+    tmp_path: Path,
+) -> None:
+    root_source_id = "v3_asset_root"
+    output_id = "v3_output_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one professional product-on-model image.",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    capturing_runtime = _CapturingRuntime(
+        ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing_runtime,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    runtime_metadata = capturing_runtime.payloads[0]["metadata"]
+    brain_budget = runtime_metadata["ecommerce_creative_context"]["provider_reference_budget"]
+    assert brain_budget["identity_derivative_reference_count"] == 4
+    assert brain_budget["max_product_truth_source_refs_per_output"] == 1
+    assert "identity_source_asset_ids" not in brain_budget
+    reference_contract = result["outputs"][0]["reference_input_contract"]
+    assert reference_contract["professional_identity_source_asset_ids"] == [root_source_id, output_id]
+    assert reference_contract["selected_product_truth_asset_ids"]
+    assert "provider_reference_budget" not in reference_contract
 
 
 @pytest.mark.parametrize("stage", ["plan", "provider_prompt_finalize"])

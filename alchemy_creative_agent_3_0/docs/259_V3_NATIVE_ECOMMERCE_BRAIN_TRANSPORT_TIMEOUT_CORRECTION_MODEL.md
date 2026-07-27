@@ -1644,6 +1644,57 @@ Next gate:
   one-product selection success with no unselected pool leakage.
 - No new planner-only run or ImageGen call is authorized by this section.
 
+### 13J.1 Post-516d070 fresh planner-only result
+
+Evidence:
+
+- `.controlled-validation/n6-cap-20260727T120415Z/reports/fresh-professional-n6-planning-report.json`
+- `.controlled-validation/n6-cap-20260727T120415Z/reports/corrected-acceptance-summary.json`
+- `.controlled-validation/n6-cap-20260727T120415Z/reports/brain-stage-trace.jsonl`
+
+This run used the capacity-aware selector code from `516d070` and remained
+zero-write:
+
+```text
+planner_only=true
+ImageGen/MCP materialization=false
+job/candidate/handoff/output/receipt/slot/activation mutation_delta=0
+```
+
+It did not prove generation readiness.  The run stopped in the plan stage:
+
+```text
+status=blocked
+code=codex_native_imagegen_remote_creative_brain_required_for_template
+remote_error_class=invalid_response
+remote_brain_two_stage=false
+exact_n=false
+```
+
+The stage trace shows `semantic_plan_blocked` / `invalid_response`, followed
+by `capability_preparation_blocked`, and no `provider_prompt_finalize` stage.
+Therefore this evidence must not be interpreted as:
+
+- a successful capacity pass;
+- a successful two-stage frozen plan;
+- permission to call host ImageGen;
+- permission to relax schema, add fallback, split N=6, or trim references.
+
+The follow-up correction stays code-first and local: deterministic fake Brain
+responses must classify the remaining invalid-response cases under the
+capacity-aware selector contract, especially:
+
+1. budget=1 with detail role selecting one product truth should pass;
+2. budget=2 with detail role selecting two product truths should pass when
+   the fake materializer proves final references fit;
+3. budget=1 with detail role selecting two product truths should fail closed
+   before provider materialization.
+
+Brain-facing `provider_reference_budget` is also narrowed to counts and
+contract fields only.  The local audit receipt may retain identity source IDs,
+but the Remote Brain context does not need and must not receive those internal
+asset IDs merely to perform budget-aware selection.
+
 ## 14. Old-document conflict index
 
 This correction model does not delete historical documents. The following

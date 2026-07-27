@@ -425,14 +425,15 @@ class CodexNativeImageGenPlanner:
                 "photographer_profile_binding": profile_binding.model_dump(mode="json"),
             }
         if professional_product_model:
+            provider_budget = self._professional_product_model_provider_budget(server_owned_identity_references)
             professional_metadata = {
                 "professional_identity_reference_strategy": "visual_asset_library_product_model_v1",
                 "professional_product_model_planning": True,
                 "professional_product_truth_required": True,
             }
             ecommerce_context = dict(metadata.get("ecommerce_creative_context") or {})
-            ecommerce_context["provider_reference_budget"] = (
-                self._professional_product_model_provider_budget(server_owned_identity_references)
+            ecommerce_context["provider_reference_budget"] = self._brain_safe_provider_reference_budget(
+                provider_budget
             )
             metadata["ecommerce_creative_context"] = ecommerce_context
         else:
@@ -532,6 +533,22 @@ class CodexNativeImageGenPlanner:
             "max_product_truth_source_refs_per_output": max(0, max_refs - identity_derivative_count),
             "owner": "codex_native_professional_planner",
             "basis": "provider_materialized_reference_derivative_count",
+        }
+
+    @staticmethod
+    def _brain_safe_provider_reference_budget(provider_budget: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: provider_budget[key]
+            for key in (
+                "contract_version",
+                "max_provider_reference_images",
+                "identity_derivative_reference_count",
+                "product_truth_derivative_reference_count_per_source",
+                "max_product_truth_source_refs_per_output",
+                "owner",
+                "basis",
+            )
+            if key in provider_budget
         }
 
     def _professional_product_truth_selection_by_asset(
