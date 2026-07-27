@@ -1,5 +1,17 @@
+import json
+
 from alchemy_creative_agent_3_0.app.shared_capabilities import CapabilityInput, SharedCapabilityRegistry
+from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
+    ActivatedCapability,
+    CapabilityActivationPlan,
+)
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import HumanPhotorealismLayer
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.plugins.base import (
+    VisualPluginContext,
+)
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.plugins.human_realism import (
+    HumanRealismPlugin,
+)
 
 
 def _build(text: str, *, subject_type: str = "character", metadata: dict | None = None):
@@ -13,6 +25,65 @@ def _build(text: str, *, subject_type: str = "character", metadata: dict | None 
         variation_mode="single_hero",
         has_identity_reference=True,
         metadata=metadata,
+    )
+
+
+def _ecommerce_review_context() -> dict:
+    return {
+        "contract_version": "ecommerce_human_realism_review_context_v1",
+        "owner": "shared_human_realism_review",
+        "source": "ecommerce_creative_risk_preflight",
+        "source_contract_version": "ecommerce_creative_risk_preflight_v1",
+        "applies_to": "ecommerce",
+        "mode": "professional",
+        "requested_image_count": 2,
+        "risk_items_by_output": [
+            {
+                "output_index": 1,
+                "risk_family": ["pasted_face", "head_body_scale_mismatch"],
+                "primary_goal_hint": "emotion_hero",
+                "risk_level": "medium",
+                "strategy_policy": [
+                    "action_triggered_expression",
+                    "separate_composition_reference_from_identity",
+                ],
+                "professional_identity_hint": {
+                    "preferred_identity_view_kind": "front",
+                    "identity_strategy": "coherent_secondary_turn",
+                    "source": "professional_binding_resolver",
+                },
+            }
+        ],
+        "global_risks": ["pasted_face"],
+        "post_review_authority": "shared_human_realism_review",
+        "retry_authority": "shared_human_realism_review",
+        "ecommerce_may_score_pixels": False,
+        "ecommerce_may_trigger_retry": False,
+    }
+
+
+def _human_realism_plugin_contribution(guidance):
+    active = ActivatedCapability(
+        capability_id="human_realism",
+        version="v1",
+        selected_profile="balanced",
+    )
+    plan = CapabilityActivationPlan(
+        plan_id="plan_human_realism",
+        fingerprint="fp_human_realism",
+        job_id="job_human_realism",
+        task_profile_id="profile_human_realism",
+        template_id="ecommerce_template",
+        scenario_id="ecommerce",
+        active_capabilities=[active],
+        dependency_order=["human_realism"],
+    )
+    return HumanRealismPlugin().contribute(
+        VisualPluginContext(
+            plan=plan,
+            active=active,
+            cluster={"human_photorealism_guidance": guidance.model_dump(mode="json")},
+        )
     )
 
 
@@ -118,3 +189,72 @@ def test_visual_cluster_keeps_shared_human_review_and_bounded_retry() -> None:
     assert review["status"] == "retry_recommended"
     assert set(review["issue_codes"]) == {"human_skin_or_retouch", "human_scene_coherence"}
     assert "human_photorealism_layer" in cluster["child_module_ids"]
+
+
+def test_ecommerce_risk_context_reaches_shared_human_review_without_prompt_or_retry_authority() -> None:
+    guidance = _build(
+        "Professional ecommerce photo of a real child model wearing a product in a natural lifestyle scene.",
+        subject_type="product",
+        metadata={
+            "brain_owned_forward_execution": True,
+            "ecommerce_human_realism_review_context": _ecommerce_review_context(),
+        },
+    )
+
+    assert guidance.applies is True
+    assert guidance.positive_prompt_fragments == []
+    assert guidance.negative_prompt_fragments == []
+    assert guidance.retry_patch_templates == {}
+    assert (
+        guidance.metadata["ecommerce_human_realism_review_context"]["owner"]
+        == "shared_human_realism_review"
+    )
+
+    contribution = _human_realism_plugin_contribution(guidance)
+
+    assert contribution.prompt_additions == []
+    assert contribution.negative_additions == []
+    assert (
+        contribution.review_contract["ecommerce_human_realism_review_context"]["source"]
+        == "ecommerce_creative_risk_preflight"
+    )
+    assert contribution.review_contract["post_review_authority"] == "shared_human_realism_review"
+    assert contribution.review_contract["ecommerce_may_score_pixels"] is False
+    assert (
+        contribution.retry_contract["metadata"]["retry_authority"]
+        == "shared_human_realism_review"
+    )
+    assert contribution.retry_contract["metadata"]["ecommerce_may_trigger_retry"] is False
+    serialized = json.dumps(contribution.model_dump(mode="json"), ensure_ascii=False)
+    for forbidden in ("v3_output", "asset_id", "D:", "original.png", "provider_payload"):
+        assert forbidden not in serialized
+
+
+def test_general_human_realism_has_no_ecommerce_review_context() -> None:
+    guidance = _build("Create a realistic portrait of an adult in a studio.")
+
+    contribution = _human_realism_plugin_contribution(guidance)
+
+    assert "ecommerce_human_realism_review_context" not in guidance.metadata
+    assert "ecommerce_human_realism_review_context" not in contribution.review_contract
+    assert "ecommerce_human_realism_review_context" not in contribution.retry_contract.get(
+        "metadata",
+        {},
+    )
+
+
+def test_malformed_ecommerce_review_context_is_not_forwarded_to_shared_review() -> None:
+    unsafe_context = {
+        **_ecommerce_review_context(),
+        "file_path": "D:/unsafe/original.png",
+    }
+    guidance = _build(
+        "Professional ecommerce photo of a real person wearing a product.",
+        subject_type="product",
+        metadata={"ecommerce_human_realism_review_context": unsafe_context},
+    )
+
+    contribution = _human_realism_plugin_contribution(guidance)
+
+    assert "ecommerce_human_realism_review_context" not in guidance.metadata
+    assert "ecommerce_human_realism_review_context" not in contribution.review_contract

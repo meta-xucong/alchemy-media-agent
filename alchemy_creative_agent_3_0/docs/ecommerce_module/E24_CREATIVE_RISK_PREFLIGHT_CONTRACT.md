@@ -1,8 +1,10 @@
 # E24 Creative Risk Preflight Contract
 
-Status: design proposal for reviewer audit; documentation only; no runtime
-code, provider route, Brain schema, storage, slot, receipt, activation, or UI
-behavior is changed by this document.
+Status: phased contract and implementation record. Phase A, Phase B, and
+Phase 4 are merged through `origin/main=3b54d91`; Phase 4B is isolated
+feature-branch work for shared Human Realism review-context projection only.
+No Provider/MCP generation, storage, receipt, slot, activation, UI, or formal
+delivery behavior is changed by Phase 4B.
 
 Owner: E-Commerce specialized module, with Professional Mode and shared Human
 Realism as bounded contributors.
@@ -727,6 +729,100 @@ Tests must prove:
 - a profile/front/other view hint is preserved only when explicitly resolver
   supplied and approved; approved view sets alone do not create hints;
 - missing binding fails closed exactly as today.
+
+### Phase 4B — Shared Human Realism post-review context
+
+Status for this implementation milestone: approved for isolated feature-branch
+work only. Phase 4B does not activate Provider/MCP materialization, UI,
+storage, receipt, slot, activation, real ImageGen, or formal delivery.
+
+Intended behavior:
+
+```text
+E-Commerce typed creative_risk_preflight
+  -> public-safe review-context projection
+  -> ScenarioRuntime active capability metadata
+  -> shared Human Photorealism / Human Realism plugin
+  -> shared post-generation review and retry evidence contracts
+```
+
+The projection is deliberately a thin context bridge. It may tell shared Human
+Realism that an output has closed risks such as `pasted_face`,
+`template_expression`, `head_body_scale_mismatch`, or a resolver-owned
+Professional view hint. It must not become Provider prompt prose, a pixel
+score, a local identity metric, a retry trigger, a product-truth selector, or a
+new E-Commerce-owned review gate.
+
+Current runtime shape for the shared review projection:
+
+```json
+{
+  "contract_version": "ecommerce_human_realism_review_context_v1",
+  "owner": "shared_human_realism_review",
+  "source": "ecommerce_creative_risk_preflight",
+  "source_contract_version": "ecommerce_creative_risk_preflight_v1",
+  "applies_to": "ecommerce",
+  "mode": "professional",
+  "requested_image_count": 2,
+  "risk_items_by_output": [
+    {
+      "output_index": 1,
+      "risk_family": ["pasted_face", "head_body_scale_mismatch"],
+      "primary_goal_hint": "emotion_hero",
+      "risk_level": "medium",
+      "strategy_policy": [
+        "action_triggered_expression",
+        "separate_composition_reference_from_identity"
+      ],
+      "professional_identity_hint": {
+        "preferred_identity_view_kind": "front",
+        "identity_strategy": "secondary_face",
+        "source": "professional_binding_resolver"
+      }
+    }
+  ],
+  "global_risks": ["pasted_face"],
+  "post_review_authority": "shared_human_realism_review",
+  "retry_authority": "shared_human_realism_review",
+  "ecommerce_may_score_pixels": false,
+  "ecommerce_may_trigger_retry": false
+}
+```
+
+Phase 4B explicitly preserves these authorities:
+
+- Shared Human Realism owns anti-AI face, real-camera human materiality,
+  head/body proportion review, hand/skin realism, natural expression
+  assessment, post-review, and retry evidence.
+- E-Commerce owns only the typed scenario risk context and cannot score pixels,
+  create retry patches, or choose a replacement output.
+- General and Photography requests must not receive
+  `ecommerce_human_realism_review_context`.
+- Standard E-Commerce may carry non-Professional closed risk context, but it
+  must not read People Asset / Character Card identity bindings or emit
+  `professional_identity_hint`.
+- Professional identity hints remain resolver-owned and public-safe: approved
+  view kind, closed strategy enum, and `source=professional_binding_resolver`
+  only. Raw asset/output/handoff IDs, paths, hashes, Provider payloads, and
+  prompt fragments are forbidden.
+- Product truth selection, provider reference cap, exact N, Remote Brain prompt
+  authority, Professional binding/view admission, Provider/MCP materialization,
+  UI, storage, receipt, slot, and activation are unchanged.
+
+Stop conditions for Phase 4B:
+
+- malformed or unknown preflight values must fail closed before Brain/provider
+  calls through the existing Phase B runtime gate;
+- unsafe review-context shapes must be rejected by the shared Human Realism
+  allowlist and must not appear in review or retry contracts;
+- no E-Commerce risk field may add prompt fragments, Provider parameters,
+  hidden fallback, extra retry, slot writes, or receipt writes.
+
+The registered follow-up real validation target remains pending after this
+phase: a controlled Professional MCP exactly-N=2 poolside commercial photo set
+using the approved modeled child identity and blue swimsuit product truth,
+covering seated and standing poses. That validation may start only after this
+Human Realism/post-review gate receives reviewer approval.
 
 ### Phase 5 — Acceptance and rollout
 

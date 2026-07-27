@@ -14,6 +14,7 @@ from .contracts import (
     MarketplaceRuleProfile,
     ProductTruthLock,
     build_professional_ecommerce_identity_preflight,
+    ecommerce_human_realism_review_context_from_preflight_payload,
     professional_identity_view_kinds_from_selectors,
     validate_ecommerce_creative_risk_preflight_payload,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "MarketplaceRuleProfile",
     "ProductTruthLock",
     "build_professional_ecommerce_identity_preflight",
+    "ecommerce_human_realism_review_context_from_preflight_payload",
     "professional_identity_view_kinds_from_selectors",
     "validate_ecommerce_creative_risk_preflight_payload",
 ]

@@ -238,6 +238,53 @@ class EcommerceCreativeRiskPreflight(V3BaseModel):
             "preflight_may_author_provider_prompt": False,
         }
 
+    def shared_human_realism_review_context(
+        self,
+        *,
+        requested_image_count: int,
+    ) -> dict[str, Any]:
+        """Project E-Commerce risk context into shared Human Realism review.
+
+        The projection is intentionally not a Provider prompt, retry patch,
+        image metric, or local reviewer decision.  It carries only typed,
+        public-safe risk context so the shared Human Realism/review owner can
+        decide post-generation quality without E-Commerce taking ownership of
+        pixel gates.
+        """
+
+        gate = self.planning_gate(requested_image_count=requested_image_count)
+        if gate.get("status") == "blocked":
+            raise ValueError("creative_risk_preflight_blocked")
+        items: list[dict[str, Any]] = []
+        for item in self.risk_items_by_output:
+            payload = {
+                "output_index": item.output_index,
+                "risk_family": list(item.risk_family),
+                "primary_goal_hint": item.primary_goal_hint,
+                "risk_level": item.risk_level,
+                "strategy_policy": list(item.strategy_policy),
+            }
+            if item.professional_identity_hint is not None:
+                payload["professional_identity_hint"] = (
+                    item.professional_identity_hint.model_dump(mode="json")
+                )
+            items.append(payload)
+        return {
+            "contract_version": "ecommerce_human_realism_review_context_v1",
+            "owner": "shared_human_realism_review",
+            "source": "ecommerce_creative_risk_preflight",
+            "source_contract_version": self.contract_version,
+            "applies_to": "ecommerce",
+            "mode": self.mode,
+            "requested_image_count": requested_image_count,
+            "risk_items_by_output": items,
+            "global_risks": list(self.global_risks),
+            "post_review_authority": "shared_human_realism_review",
+            "retry_authority": "shared_human_realism_review",
+            "ecommerce_may_score_pixels": False,
+            "ecommerce_may_trigger_retry": False,
+        }
+
 
 def professional_identity_view_kinds_from_selectors(
     view_selectors: list[str] | tuple[str, ...] | set[str],
@@ -367,6 +414,28 @@ def validate_ecommerce_creative_risk_preflight_payload(
         if preferred_view != "none" and preferred_view not in approved_identity_view_kinds:
             raise ValueError("preferred_identity_view_not_approved")
     return preflight
+
+
+def ecommerce_human_realism_review_context_from_preflight_payload(
+    payload: dict[str, Any],
+    *,
+    scenario_id: str,
+    mode: str,
+    requested_image_count: int,
+    approved_identity_view_kinds: set[str] | None = None,
+) -> dict[str, Any]:
+    """Validate and project E24 context for the shared review owner only."""
+
+    preflight = validate_ecommerce_creative_risk_preflight_payload(
+        payload,
+        scenario_id=scenario_id,
+        mode=mode,
+        requested_image_count=requested_image_count,
+        approved_identity_view_kinds=approved_identity_view_kinds,
+    )
+    return preflight.shared_human_realism_review_context(
+        requested_image_count=requested_image_count
+    )
 
 
 class ProductTruthLock(V3BaseModel):

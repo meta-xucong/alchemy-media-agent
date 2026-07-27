@@ -27,6 +27,39 @@ HUMAN_REALISM_REVIEW_DIMENSIONS = (
     "human_scene_coherence",
 )
 
+_ECOMMERCE_HUMAN_REALISM_REVIEW_CONTEXT_VERSION = (
+    "ecommerce_human_realism_review_context_v1"
+)
+_ECOMMERCE_REVIEW_CONTEXT_ENUM_RE = re.compile(r"^[a-z0-9_]+$")
+_ECOMMERCE_REVIEW_CONTEXT_ITEM_KEYS = {
+    "output_index",
+    "risk_family",
+    "primary_goal_hint",
+    "risk_level",
+    "strategy_policy",
+    "professional_identity_hint",
+}
+_ECOMMERCE_REVIEW_CONTEXT_HINT_KEYS = {
+    "preferred_identity_view_kind",
+    "identity_strategy",
+    "source",
+}
+_ECOMMERCE_REVIEW_CONTEXT_TOP_LEVEL_KEYS = {
+    "contract_version",
+    "owner",
+    "source",
+    "source_contract_version",
+    "applies_to",
+    "mode",
+    "requested_image_count",
+    "risk_items_by_output",
+    "global_risks",
+    "post_review_authority",
+    "retry_authority",
+    "ecommerce_may_score_pixels",
+    "ecommerce_may_trigger_retry",
+}
+
 _LEGACY_HUMAN_AGE_ALIASES = {
     "adultified_child_model",
     "pageant_polish_child_face",
@@ -100,6 +133,163 @@ def normalize_human_realism_issue_code(issue_code: str) -> str:
     if normalized in _ANTI_AI_FACE_ISSUES:
         return "human_rendering_artifact"
     return normalized
+
+
+def _safe_ecommerce_human_realism_review_context(value: Any) -> dict[str, Any]:
+    """Return the public-safe E-Commerce risk context for shared review only.
+
+    The E-Commerce preflight has already performed typed validation before this
+    point.  This helper is a second defensive boundary for the shared Human
+    Realism owner: it never forwards raw IDs, paths, prompt fragments, provider
+    payloads, or unknown free-text fields.
+    """
+
+    if not isinstance(value, dict):
+        return {}
+    if set(value) - _ECOMMERCE_REVIEW_CONTEXT_TOP_LEVEL_KEYS:
+        return {}
+    if value.get("contract_version") != _ECOMMERCE_HUMAN_REALISM_REVIEW_CONTEXT_VERSION:
+        return {}
+    if value.get("owner") != "shared_human_realism_review":
+        return {}
+    if value.get("source") != "ecommerce_creative_risk_preflight":
+        return {}
+    if value.get("post_review_authority") != "shared_human_realism_review":
+        return {}
+    if value.get("retry_authority") != "shared_human_realism_review":
+        return {}
+    if value.get("ecommerce_may_score_pixels") is not False:
+        return {}
+    if value.get("ecommerce_may_trigger_retry") is not False:
+        return {}
+    requested_image_count = value.get("requested_image_count")
+    if (
+        not isinstance(requested_image_count, int)
+        or isinstance(requested_image_count, bool)
+        or requested_image_count < 1
+    ):
+        return {}
+
+    mode = _safe_context_enum(value.get("mode"))
+    applies_to = _safe_context_enum(value.get("applies_to"))
+    source_contract_version = _safe_context_enum(value.get("source_contract_version"))
+    if not mode or applies_to != "ecommerce" or not source_contract_version:
+        return {}
+
+    risk_items = value.get("risk_items_by_output")
+    if not isinstance(risk_items, list):
+        return {}
+    projected_items: list[dict[str, Any]] = []
+    seen_indexes: set[int] = set()
+    for raw_item in risk_items:
+        item = _safe_ecommerce_review_item(
+            raw_item,
+            requested_image_count=requested_image_count,
+        )
+        if not item:
+            return {}
+        output_index = item["output_index"]
+        if output_index in seen_indexes:
+            return {}
+        seen_indexes.add(output_index)
+        projected_items.append(item)
+
+    global_risks = _safe_context_enum_list(value.get("global_risks"))
+    if global_risks is None:
+        return {}
+    return {
+        "contract_version": _ECOMMERCE_HUMAN_REALISM_REVIEW_CONTEXT_VERSION,
+        "owner": "shared_human_realism_review",
+        "source": "ecommerce_creative_risk_preflight",
+        "source_contract_version": source_contract_version,
+        "applies_to": "ecommerce",
+        "mode": mode,
+        "requested_image_count": requested_image_count,
+        "risk_items_by_output": projected_items,
+        "global_risks": global_risks,
+        "post_review_authority": "shared_human_realism_review",
+        "retry_authority": "shared_human_realism_review",
+        "ecommerce_may_score_pixels": False,
+        "ecommerce_may_trigger_retry": False,
+    }
+
+
+def _safe_ecommerce_review_item(
+    value: Any,
+    *,
+    requested_image_count: int,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    if set(value) - _ECOMMERCE_REVIEW_CONTEXT_ITEM_KEYS:
+        return {}
+    output_index = value.get("output_index")
+    if (
+        not isinstance(output_index, int)
+        or isinstance(output_index, bool)
+        or output_index < 1
+        or output_index > requested_image_count
+    ):
+        return {}
+    risk_family = _safe_context_enum_list(value.get("risk_family"))
+    strategy_policy = _safe_context_enum_list(value.get("strategy_policy"))
+    primary_goal_hint = _safe_context_enum(value.get("primary_goal_hint"))
+    risk_level = _safe_context_enum(value.get("risk_level"))
+    if risk_family is None or strategy_policy is None or not primary_goal_hint or not risk_level:
+        return {}
+    item = {
+        "output_index": output_index,
+        "risk_family": risk_family,
+        "primary_goal_hint": primary_goal_hint,
+        "risk_level": risk_level,
+        "strategy_policy": strategy_policy,
+    }
+    hint = _safe_ecommerce_identity_hint(value.get("professional_identity_hint"))
+    if hint:
+        item["professional_identity_hint"] = hint
+    elif value.get("professional_identity_hint") is not None:
+        return {}
+    return item
+
+
+def _safe_ecommerce_identity_hint(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    if set(value) - _ECOMMERCE_REVIEW_CONTEXT_HINT_KEYS:
+        return {}
+    preferred_view = _safe_context_enum(value.get("preferred_identity_view_kind"))
+    strategy = _safe_context_enum(value.get("identity_strategy"))
+    source = _safe_context_enum(value.get("source"))
+    if not preferred_view or not strategy or source != "professional_binding_resolver":
+        return {}
+    return {
+        "preferred_identity_view_kind": preferred_view,
+        "identity_strategy": strategy,
+        "source": "professional_binding_resolver",
+    }
+
+
+def _safe_context_enum_list(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    items: list[str] = []
+    for item in value:
+        cleaned = _safe_context_enum(item)
+        if not cleaned:
+            return None
+        items.append(cleaned)
+    if len(items) != len(set(items)):
+        return None
+    return items
+
+
+def _safe_context_enum(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
+    if not cleaned or not _ECOMMERCE_REVIEW_CONTEXT_ENUM_RE.fullmatch(cleaned):
+        return ""
+    return cleaned
 
 _HUMAN_TERMS = {
     "portrait",
@@ -447,6 +637,9 @@ class HumanPhotorealismLayer:
         reason = str(activation.get("primary_reason") or activation.get("disabled_reason") or "unknown")
         guidance_id = stable_id("human_photorealism_guidance", project_id, job_id, scenario_id, user_input, variation_mode)
         brain_owned_forward_execution = bool(metadata.get("brain_owned_forward_execution"))
+        ecommerce_review_context = _safe_ecommerce_human_realism_review_context(
+            metadata.get("ecommerce_human_realism_review_context")
+        )
         if not applies:
             return HumanPhotorealismGuidance(
                 guidance_id=guidance_id,
@@ -477,6 +670,7 @@ class HumanPhotorealismLayer:
                 activation=activation,
                 rendering_profile=rendering_profile,
                 brain_owned_forward_execution=brain_owned_forward_execution,
+                ecommerce_review_context=ecommerce_review_context,
             )
         positives = [
             "Render the visible person as a physically credible real-camera photograph; preserve explicit or reference-backed identity and age direction.",
@@ -549,6 +743,11 @@ class HumanPhotorealismLayer:
                 "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": has_identity_reference,
                 "brain_owned_forward_execution": brain_owned_forward_execution,
+                **(
+                    {"ecommerce_human_realism_review_context": ecommerce_review_context}
+                    if ecommerce_review_context
+                    else {}
+                ),
             },
         )
 
@@ -564,6 +763,7 @@ class HumanPhotorealismLayer:
         activation: dict[str, Any],
         rendering_profile: dict[str, Any],
         brain_owned_forward_execution: bool,
+        ecommerce_review_context: dict[str, Any] | None = None,
     ) -> HumanPhotorealismGuidance:
         """Keep the shared human capability precise for a hand/skin detail."""
         positives = [
@@ -623,6 +823,11 @@ class HumanPhotorealismLayer:
                 "universal_rendering_profile": rendering_profile,
                 "has_identity_reference": False,
                 "brain_owned_forward_execution": brain_owned_forward_execution,
+                **(
+                    {"ecommerce_human_realism_review_context": ecommerce_review_context}
+                    if ecommerce_review_context
+                    else {}
+                ),
             },
         )
 
@@ -740,6 +945,9 @@ class HumanPhotorealismLayer:
         )
         plugin_metadata = dict(guidance.metadata.get(HUMAN_REALISM_PLUGIN_METADATA_KEY) or {})
         hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
+        ecommerce_review_context = _safe_ecommerce_human_realism_review_context(
+            guidance.metadata.get("ecommerce_human_realism_review_context")
+        )
         return AntiAIFaceReviewResult(
             review_id=review_id,
             project_id=project_id,
@@ -761,6 +969,12 @@ class HumanPhotorealismLayer:
             metadata={
                 "doc": "65",
                 "retry_evidence_only": brain_owned_forward_execution,
+                "review_owner": "shared_human_realism_review",
+                **(
+                    {"ecommerce_human_realism_review_context": ecommerce_review_context}
+                    if ecommerce_review_context
+                    else {}
+                ),
                 **dict(metadata or {}),
             },
         )

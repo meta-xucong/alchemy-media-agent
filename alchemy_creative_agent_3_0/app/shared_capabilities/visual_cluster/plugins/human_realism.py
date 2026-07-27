@@ -30,6 +30,30 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
                 "photographic_material_requirement",
             )
         }
+        metadata = as_dict(guidance.get("metadata"))
+        ecommerce_review_context = as_dict(
+            metadata.get("ecommerce_human_realism_review_context")
+        )
+        review_contract = {
+            "issue_codes": review_issue_codes,
+            "score_dimensions": ["human_realism"],
+            # This is a frozen review obligation, never provider prompt
+            # prose.  It is copied from the active shared semantic
+            # contract so stale mutable metadata cannot opt a job in.
+            "human_authenticity_contract": human_authenticity_contract,
+            "human_naturalness_verdict_required": (
+                semantic_contract.get("expression_ownership_requirement")
+                == "situation_owned_unless_explicit_user_direction"
+            ),
+        }
+        retry_metadata = {"retry_evidence_only": True}
+        if ecommerce_review_context:
+            review_contract["ecommerce_human_realism_review_context"] = ecommerce_review_context
+            review_contract["post_review_authority"] = "shared_human_realism_review"
+            review_contract["ecommerce_may_score_pixels"] = False
+            retry_metadata["ecommerce_human_realism_review_context"] = ecommerce_review_context
+            retry_metadata["retry_authority"] = "shared_human_realism_review"
+            retry_metadata["ecommerce_may_trigger_retry"] = False
         return self.contribution(
             context,
             # The active capability preserves review ownership and evidence,
@@ -37,21 +61,10 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             # the frozen semantics and later signs the full image language.
             prompt=[],
             negative=[],
-            review={
-                "issue_codes": review_issue_codes,
-                "score_dimensions": ["human_realism"],
-                # This is a frozen review obligation, never provider prompt
-                # prose.  It is copied from the active shared semantic
-                # contract so stale mutable metadata cannot opt a job in.
-                "human_authenticity_contract": human_authenticity_contract,
-                "human_naturalness_verdict_required": (
-                    semantic_contract.get("expression_ownership_requirement")
-                    == "situation_owned_unless_explicit_user_direction"
-                ),
-            },
+            review=review_contract,
             retry={
                 "issue_codes": review_issue_codes,
-                "metadata": {"retry_evidence_only": True},
+                "metadata": retry_metadata,
             },
             stages=["post_generation_review", "retry_patch"],
         )

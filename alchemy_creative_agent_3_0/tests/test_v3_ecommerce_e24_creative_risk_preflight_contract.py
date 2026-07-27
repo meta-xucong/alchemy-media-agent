@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
     build_professional_ecommerce_identity_preflight,
+    ecommerce_human_realism_review_context_from_preflight_payload,
     validate_ecommerce_creative_risk_preflight_payload,
 )
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
@@ -257,6 +258,71 @@ def test_stop_true_requires_fail_closed_reason_and_stop_false_requires_null_reas
                     _risk_item(stop=False, fail_closed_reason="reference_role_conflict")
                 ]
             )
+        )
+
+
+def test_ecommerce_preflight_projects_public_safe_shared_human_review_context() -> None:
+    payload = _preflight(
+        mode="professional",
+        global_risks=["template_expression", "pasted_face"],
+        risk_items_by_output=[
+            _risk_item(
+                1,
+                risk_family=["template_expression", "pasted_face"],
+                primary_goal_hint="emotion_hero",
+                strategy_policy=[
+                    "action_triggered_expression",
+                    "avoid_static_presenter_grin",
+                ],
+                professional_identity_hint={
+                    "preferred_identity_view_kind": "front",
+                    "identity_strategy": "secondary_face",
+                    "source": "professional_binding_resolver",
+                },
+            )
+        ],
+    )
+
+    context = ecommerce_human_realism_review_context_from_preflight_payload(
+        payload,
+        scenario_id="ecommerce",
+        mode="professional",
+        requested_image_count=2,
+        approved_identity_view_kinds={"front"},
+    )
+
+    assert context["contract_version"] == "ecommerce_human_realism_review_context_v1"
+    assert context["owner"] == "shared_human_realism_review"
+    assert context["post_review_authority"] == "shared_human_realism_review"
+    assert context["retry_authority"] == "shared_human_realism_review"
+    assert context["ecommerce_may_score_pixels"] is False
+    assert context["ecommerce_may_trigger_retry"] is False
+    assert context["risk_items_by_output"][0]["professional_identity_hint"] == {
+        "preferred_identity_view_kind": "front",
+        "identity_strategy": "secondary_face",
+        "source": "professional_binding_resolver",
+    }
+    serialized = json.dumps(context, ensure_ascii=False)
+    assert "asset" not in serialized
+    assert "v3_output" not in serialized
+    assert "provider" not in serialized
+    assert "D:" not in serialized
+
+
+def test_ecommerce_preflight_shared_review_projection_respects_stop_gate() -> None:
+    with pytest.raises(ValueError, match="creative_risk_preflight_blocked"):
+        ecommerce_human_realism_review_context_from_preflight_payload(
+            _preflight(
+                risk_items_by_output=[
+                    _risk_item(
+                        stop=True,
+                        fail_closed_reason="reference_role_conflict",
+                    )
+                ]
+            ),
+            scenario_id="ecommerce",
+            mode="standard",
+            requested_image_count=2,
         )
 
 

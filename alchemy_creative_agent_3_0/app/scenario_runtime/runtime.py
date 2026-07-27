@@ -24,7 +24,11 @@ from ..llm_brain.providers import (
     BrainTransportTimeoutError,
 )
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
-from ..scenario_packs.ecommerce import EcommerceCreativeRiskPreflight
+from ..scenario_packs.ecommerce import (
+    EcommerceCreativeRiskPreflight,
+    ecommerce_human_realism_review_context_from_preflight_payload,
+    professional_identity_view_kinds_from_selectors,
+)
 from ..shared_capabilities import (
     VISUAL_CAPABILITY_CLUSTER_ID,
     VISUAL_CLUSTER_CHILD_MODULE_IDS,
@@ -3978,37 +3982,93 @@ class ScenarioRuntime:
             self.visual_capability_registry.executor_ref(item.capability_id)
             for item in plan.base_capabilities
         }
+        active_metadata = {
+            "capability_phase": "active",
+            # The active capability pass may contribute factual
+            # evidence and review obligations, but it must not leave
+            # a second, locally-authored prompt route alive.  The
+            # visual cluster uses this explicit marker to quarantine
+            # legacy phrase/patch fields before its result can enter
+            # the frozen envelope for a new enforced V3 Job.
+            "brain_owned_forward_execution": plan.activation_mode == "enforced",
+            "capability_activation_plan": plan.model_dump(mode="json"),
+            "capability_activation_plan_summary": plan.summary(),
+            # The active executor must consume the semantic decision
+            # already made by the remote Brain.  It is deliberately
+            # not allowed to rediscover whole-image rendering style
+            # from isolated terms such as a print on a garment.
+            "visual_task_profile": (
+                brain_result.visual_task_profile.model_dump(mode="json")
+                if brain_result is not None and brain_result.visual_task_profile is not None
+                else None
+            ),
+        }
+        ecommerce_review_context = self._ecommerce_human_realism_review_context(
+            request,
+            requested_image_count=self._requested_image_count_for_brain(request),
+        )
+        if ecommerce_review_context:
+            active_metadata["ecommerce_human_realism_review_context"] = ecommerce_review_context
         run = self.shared_capability_registry.run(
             self._capability_input(
                 request,
                 resolution,
                 prior_results=list(pre_activation_run.results) if pre_activation_run else [],
-                metadata={
-                    "capability_phase": "active",
-                    # The active capability pass may contribute factual
-                    # evidence and review obligations, but it must not leave
-                    # a second, locally-authored prompt route alive.  The
-                    # visual cluster uses this explicit marker to quarantine
-                    # legacy phrase/patch fields before its result can enter
-                    # the frozen envelope for a new enforced V3 Job.
-                    "brain_owned_forward_execution": plan.activation_mode == "enforced",
-                    "capability_activation_plan": plan.model_dump(mode="json"),
-                    "capability_activation_plan_summary": plan.summary(),
-                    # The active executor must consume the semantic decision
-                    # already made by the remote Brain.  It is deliberately
-                    # not allowed to rediscover whole-image rendering style
-                    # from isolated terms such as a print on a garment.
-                    "visual_task_profile": (
-                        brain_result.visual_task_profile.model_dump(mode="json")
-                        if brain_result is not None and brain_result.visual_task_profile is not None
-                        else None
-                    ),
-                },
+                metadata=active_metadata,
             ),
             module_ids=executor_ids,
             required_module_ids=[item for item in required_executor_ids if item],
         )
         return self._attach_composed_contribution(run, plan, request, resolution)
+
+    def _ecommerce_human_realism_review_context(
+        self,
+        request: ScenarioRuntimeRequest,
+        *,
+        requested_image_count: int,
+    ) -> dict[str, Any]:
+        metadata = dict(request.metadata or {})
+        ecommerce_context = metadata.get("ecommerce_creative_context")
+        if not isinstance(ecommerce_context, dict) or "creative_risk_preflight" not in ecommerce_context:
+            return {}
+        raw_preflight = ecommerce_context.get("creative_risk_preflight")
+        if not isinstance(raw_preflight, dict):
+            raise CapabilityActivationError("ecommerce_creative_risk_review_context_invalid")
+        mode = "professional" if self._is_professional_request(metadata) else "standard"
+        approved_identity_view_kinds = (
+            self._approved_professional_identity_view_kinds_from_request(metadata)
+            if mode == "professional"
+            else None
+        )
+        try:
+            return ecommerce_human_realism_review_context_from_preflight_payload(
+                raw_preflight,
+                scenario_id="ecommerce",
+                mode=mode,
+                requested_image_count=requested_image_count,
+                approved_identity_view_kinds=approved_identity_view_kinds,
+            )
+        except ValueError as exc:
+            raise CapabilityActivationError("ecommerce_creative_risk_review_context_invalid") from exc
+
+    @staticmethod
+    def _is_professional_request(metadata: dict[str, Any]) -> bool:
+        raw_mode = metadata.get("professional_mode")
+        return raw_mode is True or str(raw_mode or "").strip().lower() == "professional"
+
+    @staticmethod
+    def _approved_professional_identity_view_kinds_from_request(metadata: dict[str, Any]) -> set[str]:
+        binding = metadata.get("professional_mode_binding_record") or metadata.get(
+            "professional_mode_binding"
+        )
+        if not isinstance(binding, dict):
+            return set()
+        selectors = binding.get("identity_view_ids")
+        if not isinstance(selectors, list):
+            return set()
+        return professional_identity_view_kinds_from_selectors(
+            [str(item) for item in selectors if isinstance(item, str)]
+        )
 
     @staticmethod
     def _validate_frozen_capability_execution(
