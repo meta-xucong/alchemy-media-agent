@@ -211,7 +211,7 @@ contracts use closed enums, `strategy_policy`, `risk_level`, `stop`, and
         "identity_angle_mismatch",
         "back_structure_occlusion"
       ],
-      "primary_goal_hint": "back_or_lookback_structure",
+      "primary_goal_hint": "back_or_structure",
       "strategy_hints": [
         "prefer profile identity evidence when Professional Mode provides it",
         "do not require full frontal facial clarity",
@@ -246,7 +246,7 @@ Current typed runtime shape:
       "risk_level": "medium",
       "strategy_policy": [
         "action_triggered_expression",
-        "avoid_generic_presenter_smile"
+        "avoid_static_presenter_grin"
       ],
       "stop": false,
       "fail_closed_reason": null,
@@ -259,7 +259,7 @@ Current typed runtime shape:
         "identity_angle_mismatch",
         "back_structure_occlusion"
       ],
-      "primary_goal_hint": "back_or_lookback_structure",
+      "primary_goal_hint": "back_or_structure",
       "risk_level": "high",
       "strategy_policy": [
         "coherent_secondary_turn",

@@ -154,9 +154,10 @@ class EcommerceCreativeRiskItem(V3BaseModel):
 class EcommerceCreativeRiskPreflight(V3BaseModel):
     """Typed E-Commerce-only creative risk preflight contract.
 
-    Phase A only defines and validates this contract. It does not integrate the
-    object into Brain payloads, provider materialization, review, storage, slot
-    receipts, activation, or UI.
+    This model owns only the typed schema and deterministic validation. Brain
+    payload allowlisting and pre-Brain fail-closed gates are owned by the
+    adapter/runtime layers. The model itself still does not own provider
+    materialization, review, storage, slot receipts, activation, or UI.
     """
 
     model_config = ConfigDict(validate_assignment=True, extra="forbid")

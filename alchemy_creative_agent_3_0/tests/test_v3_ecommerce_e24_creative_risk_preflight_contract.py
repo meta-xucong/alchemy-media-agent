@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import re
+
 import pytest
 from pydantic import ValidationError
 
@@ -13,6 +17,14 @@ from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
+
+
+_E24_DOC = (
+    Path(__file__).resolve().parents[1]
+    / "docs"
+    / "ecommerce_module"
+    / "E24_CREATIVE_RISK_PREFLIGHT_CONTRACT.md"
+)
 
 
 def _risk_item(index: int = 1, **overrides: object) -> dict[str, object]:
@@ -41,6 +53,22 @@ def _preflight(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def test_e24_current_typed_runtime_shape_matches_model() -> None:
+    document = _E24_DOC.read_text(encoding="utf-8")
+    marker = "Current typed runtime shape:"
+    assert marker in document
+    section = document.split(marker, 1)[1]
+    match = re.search(r"```json\s*(\{.*?\})\s*```", section, flags=re.DOTALL)
+    assert match is not None
+    payload = json.loads(match.group(1))
+
+    validated = EcommerceCreativeRiskPreflight.model_validate(payload)
+
+    assert validated.mode == "professional"
+    assert validated.risk_items_by_output[1].primary_goal_hint == "back_or_structure"
+    assert "avoid_static_presenter_grin" in validated.risk_items_by_output[0].strategy_policy
 
 
 def test_creative_risk_preflight_accepts_closed_standard_contract() -> None:
