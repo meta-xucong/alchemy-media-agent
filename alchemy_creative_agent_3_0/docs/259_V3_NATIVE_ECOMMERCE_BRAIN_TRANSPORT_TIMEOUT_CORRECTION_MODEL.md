@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **transport diagnostics implemented; real-image gate remains blocked.**
+Status: **plan/finalizer transport diagnostics measured; real-image gate remains blocked.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -236,28 +236,61 @@ mutation_delta=0
 
 This proves that, for the same full plan payload, the 120s read cap can be too
 narrow under the current upstream latency, while a small bounded diagnostic
-extension to 150s can complete the JSON response. This is still not a
-production timeout change: `provider_prompt_finalize` must be measured with an
-equivalent mutation=0 diagnostic before any finite two-stage budget contract is
-implemented.
+extension to 150s can complete the JSON response. This was still not a
+production timeout change until `provider_prompt_finalize` was also measured.
 
-If the finalizer diagnostic also completes inside the bounded window, a future
-code change may align Doc175's per-call cap with evidence while preserving the
-finite two-stage budget and keeping outer native deadlines above the sum of
-the two Brain calls plus local orchestration margin. If finalizer remains
-unstable, the system must stop and classify the remaining blocker at the
-measured stage rather than deleting context, splitting N, falling back, or
-generating images.
+The reviewer-authorized finalizer diagnostic has now completed. It used the
+same real provider/model/route. To avoid a business MCP run, the diagnostic
+first obtained one bounded full plan response with mutation budget 0, replayed
+that plan into local ScenarioRuntime to capture the resulting
+`provider_prompt_finalize` request, and then called only that finalizer request
+with the same bounded 150s read cap:
 
-The post-plan boundary is now partially reopened by the successful plan
-diagnostic. The remaining unproven boundary is the finalizer and local
-post-plan path:
+```text
+report=direct-brain-finalizer-payload-diagnostic-150s-20260727.json
+plan_setup.elapsed_ms=71216
+plan_setup.system_chars=20759
+plan_setup.payload_chars=10075
+plan_setup.content_chars=11335
+plan_setup.json_parse_ok=true
+captured_request.stage=provider_prompt_finalize
+captured_request.requested_image_count=1
+finalizer.timeout_seconds=150.0
+finalizer.elapsed_ms=52858
+finalizer.system_chars=2179
+finalizer.payload_chars=16083
+finalizer.content_chars=1863
+finalizer.json_parse_ok=true
+mutation_delta=0
+```
 
-- whether `provider_prompt_finalize` is slow, repeated, or followed by an
-  unapproved recovery/resign loop;
-- whether local schema/contract validation or ScenarioRuntime capability
-  preparation stalls after the plan response;
-- whether the native MCP child, queue, or wrapper waits on the wrong object.
+The measured two-stage diagnostic total is about `124074ms`
+(`71216ms + 52858ms`) for this N=1 request, and both stages returned complete
+JSON under the bounded 150s diagnostic cap. This supports a minimal finite
+budget repair, but only if all timeout authorities are changed together:
+
+1. Raise the per-call Brain transport cap from 120s to 150s.
+2. Set the shared logical Brain execution budget default to 320s. This remains
+   a finite two-stage budget and does not authorize local creative fallback.
+3. Set the native MCP outer planning deadline default to 360s, leaving explicit
+   local process/orchestration margin beyond `2 * 150s`.
+4. Remove the native planner's hidden 120s clamp for
+   `brain_transport_timeout_seconds` and replace it with the same 150s
+   authority.
+5. Keep prompt semantics, `max_tokens`, route/model, exact N, two-stage
+   `plan -> provider_prompt_finalize`, and strict fail-closed behavior
+   unchanged.
+
+This repair must not be a single environment override. Focused invariants must
+prove that the outer deadline remains greater than `2 * per_call_cap + margin`,
+that a late/blocked child still cannot create job, handoff/materialization,
+output, receipt, slot, activation, retry, or delivery state, and that the
+direct diagnostics are not reported as final MCP/product success.
+
+The remaining risk after this evidence is no longer "finalizer is unmeasured";
+it is whether the production schema/provider/native clamps and the final
+planning-only MCP wrapper all follow the same finite budget contract without
+waiting on the wrong object.
 
 Real image generation remains prohibited until stage-trace evidence identifies
 the exact boundary and a future N=1 planning-only probe returns schema-valid
@@ -271,6 +304,7 @@ Additional evidence:
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-c83c1d3-stage-trace-invalid-runner.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-c83c1d3-stage-trace-rerun1-summary.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/direct-brain-plan-payload-diagnostic-150s-20260727.json`
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/direct-brain-finalizer-payload-diagnostic-150s-20260727.json`
 
 ## 2. Current authority rules
 

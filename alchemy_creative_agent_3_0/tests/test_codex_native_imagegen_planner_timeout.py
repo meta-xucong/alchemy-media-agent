@@ -9,11 +9,16 @@ import sys
 import threading
 import time
 
+import pytest
+
+from alchemy_creative_agent_3_0.app.llm_brain.contracts import BrainRunRequest
+from alchemy_creative_agent_3_0.app.llm_brain.adapter import _brain_transport_timeout_seconds
+from alchemy_creative_agent_3_0.app.llm_brain.providers import V3LLMBrainProvider
+from alchemy_creative_agent_3_0.app.llm_brain.stage_trace import record_stage_event
 from services.alchemy_codex_local_adapter.contracts import (
     NativeSpecializedImageGenPlanRequest,
 )
 from services.alchemy_codex_local_adapter.native_planner import CodexNativeImageGenPlanner
-from alchemy_creative_agent_3_0.app.llm_brain.stage_trace import record_stage_event
 
 
 def test_codex_native_planner_imports_app_providers_in_clean_process() -> None:
@@ -63,8 +68,23 @@ def test_codex_native_planner_defaults_cover_two_stage_brain_preparation() -> No
 
     assert result.returncode == 0, result.stderr
     defaults = json.loads(result.stdout)
-    assert defaults["brain"] <= 120.0
-    assert defaults["planning"] > (2 * defaults["brain"]) + 30.0
+    assert defaults["brain"] == 150.0
+    assert defaults["planning"] == 360.0
+    assert defaults["planning"] >= (2 * defaults["brain"]) + 60.0
+
+
+def test_brain_transport_schema_and_provider_defaults_share_finite_budget(monkeypatch) -> None:
+    monkeypatch.delenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", raising=False)
+    provider = V3LLMBrainProvider()
+
+    assert provider.timeout == 150.0
+    assert provider.execution_budget_seconds == 320.0
+    request = BrainRunRequest(user_input="Plan one image.", transport_timeout_seconds=150.0)
+    assert request.transport_timeout_seconds == 150.0
+    assert _brain_transport_timeout_seconds({"_brain_transport_timeout_seconds": 999.0}) == 150.0
+    with pytest.raises(ValueError):
+        BrainRunRequest(user_input="Plan one image.", transport_timeout_seconds=150.1)
 
 
 class _TwoStageProbeRuntime:
