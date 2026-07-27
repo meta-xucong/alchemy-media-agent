@@ -285,6 +285,77 @@ def test_general_brain_uses_variation_mode_for_candidate_batches(monkeypatch) ->
     assert "human identity and natural variation balanced" in result.prompt_review.checks
 
 
+def test_ecommerce_adapter_preserves_role_specific_lifestyle_context_for_both_brain_stages() -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    adapter = V3LLMBrainAdapter()
+    role_intent = [
+        "joyful laugh",
+        "playful beach/water interaction",
+        "natural walking or looking-back movement",
+        "back/structure garment view",
+    ]
+    metadata = {
+        "requested_image_count": 6,
+        "professional_product_truth_required": True,
+        "professional_product_model_planning": True,
+        "ecommerce_creative_context": {
+            "product_truth": {"pool_asset_ids": ["product_front", "product_detail"]},
+            "product_set_style": "kidswear_beach_lifestyle_product_on_model",
+            "role_specific_creative_intent": role_intent,
+            "unsafe_internal_note": "must_not_cross_adapter_boundary",
+        },
+    }
+
+    plan_request = adapter.build_request(
+        user_input="Create a happy beach-play kidswear product-on-model set.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata=metadata,
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+    finalizer_request = adapter.build_request(
+        user_input="Create a happy beach-play kidswear product-on-model set.",
+        stage="provider_prompt_finalize",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata=metadata,
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    for request in (plan_request, finalizer_request):
+        context = request.metadata["ecommerce_creative_context"]
+        assert context["product_set_style"] == "kidswear_beach_lifestyle_product_on_model"
+        assert context["role_specific_creative_intent"] == role_intent
+        assert "unsafe_internal_note" not in context
+        payload = json.loads(build_remote_payload(request))
+        assert payload["ecommerce_creative_context"]["role_specific_creative_intent"] == role_intent
+        assert "preserve that user-owned creative" in payload["ecommerce_context_instructions"]
+        serialized_payload = json.dumps(payload, ensure_ascii=False)
+        assert "Avoid unsafe or playful action framing" not in serialized_payload
+        assert "must_not_cross_adapter_boundary" not in serialized_payload
+
+    general_request = adapter.build_request(
+        user_input="Create a general beach illustration.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        metadata=metadata,
+    )
+    photography_request = adapter.build_request(
+        user_input="Create a beach portrait session.",
+        stage="plan",
+        scenario_id="photography",
+        template_id="photographer_template",
+        metadata=metadata,
+        template_capability_policy=photography_capability_policy(),
+    )
+
+    assert "ecommerce_creative_context" not in general_request.metadata
+    assert "ecommerce_creative_context" not in photography_request.metadata
+
+
 def test_nonhuman_multiframe_project_context_does_not_invent_person_or_product_evidence(monkeypatch) -> None:
     """A generic Project Mode transport record is not semantic subject truth."""
 

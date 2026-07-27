@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **live Professional identity/product binding passed; product-only image_set_plan schema and product-pool admission safeguards corrected; N=6 planning-only revalidation passed; controlled real-image gate pending reviewer authorization after acceptance-report consistency fix.**
+Status: **controlled real-image materialization stopped: the frozen N=6 plan passed planning-only gates but its host-rendered visual direction was rejected as too static/card-like; a fresh zero-write planning-only correction is required before any further ImageGen.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -1391,6 +1391,95 @@ Current gate:
 - This is still not a generated-image delivery receipt. Host ImageGen
   materialization must remain controlled, append-only, and separately
   authorized/reviewed.
+
+## 13H. Host visual direction rejection: frozen catalogue-card plan superseded
+
+Evidence:
+
+- `.controlled-validation/n6-host-20260727T103600Z/reports/frozen-host-materialization-plan.json`
+- `.controlled-validation/n6-host-20260727T103600Z/reports/output1-host-receipt.json`
+- `.controlled-validation/n6-host-20260727T103600Z/reports/output2-host-receipt.json`
+- `.controlled-validation/n6-host-20260727T103600Z/reports/hard-stop-visual-direction-rejected.json`
+
+The first controlled host materialization proved that the Professional binding,
+product pool, and frozen provider-reference path could reach the renderer, but
+the visual direction was rejected by the user. The rendered direction read too
+much like a stiff product-card / dress-up model frame and not enough like a
+real child naturally participating in a beach lifestyle moment.
+
+Observed mismatch:
+
+- Intended creative direction: the same bound child identity wearing the blue
+  skirted swimsuit in real Taobao/Xiaohongshu-style beach product moments,
+  with joyful laughter, innocent expression, safe child-led movement, sand or
+  water interaction, natural walking / looking-back variation, and at least
+  one garment back-structure view.
+- Actual frozen direction: early output prompts used ordinary expression,
+  front-facing standing, and direct product-display language. The plan was
+  technically valid, but it flattened the user's playful beach intent into a
+  catalogue-card mood.
+- Owning layer: Remote Brain creative direction and specialized E-Commerce
+  output-role prompt contract. This is not a Visual Asset binding defect, not
+  a product truth pool defect, and not a reason to reduce identity references.
+
+Superseded/narrowed wording:
+
+- Historical runner/request wording that asked the planner to avoid playful
+  action framing and keep the task as normal kidswear catalogue photography is
+  superseded for this user-approved product set. The exact historical
+  conflict was preserved append-only in the old runner and must not be copied
+  into a new correction runner:
+  `Avoid unsafe or playful action framing; keep it as normal children clothing
+  product photography.`
+- `ordinary expression`, stiff front-facing standing, and static model-card
+  product display are no longer valid defaults for the whole set. A static
+  front/back view may still appear when it is the specific product-evidence
+  role, but it must not define the set's main emotional direction.
+- The user-provided `假AI` examples are not copied as reference images and do
+  not become shared Visual Capability or General Template rules. Their useful
+  evidence is the role-level intent: happy beach-life participation, props or
+  environment interaction, varied expression/viewpoint, and a back-view product
+  structure shot.
+
+Current Professional E-Commerce role-specific creative contract:
+
+1. Preserve the bound child identity, prompt-owned scene, and swimsuit product
+   truth.
+2. Let Remote Brain organize the N=6 roles as real lifestyle/product moments,
+   not a static card set.
+3. Cover, without hard-coding one pose: joyful laugh; playful beach/water or
+   sand interaction; natural walking or looking-back movement; and one
+   back/garment-structure view.
+4. Keep all child presentation safe, age-appropriate, non-sexualized, and
+   commercially usable.
+5. Avoid exaggerated staged gestures and repeated template poses; the actions
+   should feel triggered by the beach environment, not pasted on after the
+   product shot.
+
+Host evidence handling:
+
+- Existing host-rendered outputs under the `n6-host-20260727T103600Z` evidence
+  root are append-only rejected-direction evidence only.
+- They must not be copied into business storage, V3 outputs, formal receipts,
+  slots, activation, or final delivery.
+- Remaining host bindings from the old frozen plan must not be materialized.
+
+Next gate:
+
+- Update the Professional E-Commerce Brain payload contract so both the plan
+  stage and `provider_prompt_finalize` preserve explicit playful/lifestyle
+  beach intent instead of overwriting it with ordinary expression or static
+  catalogue-card framing.
+- The adapter boundary must pass only server-shaped Professional E-Commerce
+  fields needed for that intent (`product_set_style` and
+  `role_specific_creative_intent`) from `ecommerce_creative_context`; it must
+  not open arbitrary metadata or leak the same context into General or
+  Photography.
+- Add deterministic regression for this payload contract.
+- Run focused tests and commit the correction.
+- Only after reviewer approval may a new mutation=0 N=6 planning-only run be
+  created. The old frozen prompt hashes and output bindings must not be reused
+  for delivery.
 
 ## 14. Old-document conflict index
 

@@ -953,6 +953,61 @@ def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
     assert "apparel_on_model_evidence_profile requests more than one output" not in instructions
 
 
+@pytest.mark.parametrize("stage", ["plan", "provider_prompt_finalize"])
+def test_professional_ecommerce_beach_lifestyle_intent_is_preserved_in_brain_payload(
+    stage: str,
+) -> None:
+    request = BrainRunRequest(
+        user_input=(
+            "Create six Taobao and Xiaohongshu style kidswear beach product photos "
+            "with the bound child model wearing the blue skirted swimsuit. The set "
+            "should feel like happy beach play, natural laughter, water interaction, "
+            "walking or looking back, and one garment back-structure view."
+        ),
+        stage=stage,
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        requested_image_count=6,
+        metadata={
+            "professional_product_truth_required": True,
+            "professional_product_model_planning": True,
+            "ecommerce_creative_context": {
+                "product_set_style": "kidswear_beach_lifestyle_product_on_model",
+                "role_specific_creative_intent": [
+                    "joyful laugh",
+                    "playful beach/water interaction",
+                    "natural walking or looking-back movement",
+                    "back/structure garment view",
+                ],
+            },
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    instructions = payload["ecommerce_context_instructions"]
+    normalized_instructions = " ".join(instructions.split())
+    assert "preserve that user-owned creative" in normalized_instructions
+    assert "static catalogue card" in normalized_instructions
+    assert "naturally participating in the scene" in normalized_instructions
+    assert "age-appropriate joyful expression" in normalized_instructions
+    assert "beach/water interaction" in normalized_instructions
+    assert "natural walking or looking-back movement" in normalized_instructions
+    assert "back/structure garment view" in normalized_instructions
+    assert "ordinary expression" in normalized_instructions
+    assert "must not occupy the set's main emotional direction" in normalized_instructions
+    serialized_payload = json.dumps(payload, ensure_ascii=False)
+    assert "Avoid unsafe or playful action framing" not in serialized_payload
+    assert "keep it as normal children clothing product photography" not in serialized_payload
+    assert "shared Visual Capability" not in instructions
+    assert payload["ecommerce_creative_context"]["role_specific_creative_intent"] == [
+        "joyful laugh",
+        "playful beach/water interaction",
+        "natural walking or looking-back movement",
+        "back/structure garment view",
+    ]
+
+
 def test_general_remote_payload_does_not_require_product_truth_selection() -> None:
     request = BrainRunRequest(
         user_input="Create a simple general image.",

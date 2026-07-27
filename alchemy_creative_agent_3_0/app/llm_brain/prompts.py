@@ -78,7 +78,22 @@ user-approved literal copy, and platform constraints. Decide the complete
 product-specific output set yourself. Return exactly one natural-language
 intent per requested output; do not reuse a stock slot map or prescribe local
 camera, crop, coordinate, typography, safe-area, overlay, or post-processing
-operation."""
+operation. When the current request or ecommerce_creative_context explicitly
+asks for a lifestyle beach, pool, playful, child-led, joyful, candid, or
+Xiaohongshu-style product-on-model set, preserve that user-owned creative
+intent as the specialized E-Commerce direction instead of flattening it into a
+static catalogue card. The child must read as naturally participating in the
+scene, with age-appropriate joyful expression, safe movement, and environment
+interaction driven by the beach/water/sand context. Do not make ordinary
+expression, stiff front-facing standing, or static model-card product display
+the default mood for the whole set. Static front or back structure views may
+appear only as necessary product evidence roles and must not occupy the set's
+main emotional direction. Vary the outputs to cover joyful laugh, playful
+beach/water interaction, natural walking or looking-back movement, and at
+least one back/structure garment view when those roles fit the requested
+product set. Avoid exaggerated staged gestures or repeated template poses;
+let the Remote Brain choose the specific safe actions while preserving product
+truth, bound identity, and prompt-owned scene intent."""
 APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS = """When an active
 apparel_on_model_evidence_profile requests more than one output, return exactly
 one evidence_dimensions_by_output entry per output. Map only its allowed
@@ -1349,6 +1364,10 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         },
         "remote_response_contract": response_contract,
     }
+    ecommerce_context = request.metadata.get("ecommerce_creative_context")
+    if isinstance(ecommerce_context, dict) and ecommerce_context:
+        payload["ecommerce_creative_context"] = ecommerce_context
+        payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
     if isinstance(anchor_view_recovery, dict):
         payload["professional_anchor_view_contract_recovery"] = dict(anchor_view_recovery)
     if is_complete_prompt_resign:
