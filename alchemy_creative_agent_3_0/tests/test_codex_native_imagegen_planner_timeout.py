@@ -142,6 +142,36 @@ def _slow_mutating_process_entrypoint(request: dict, result_queue) -> None:
     result_queue.put({"kind": "error", "error_type": "AssertionError", "message": "should have been terminated"})
 
 
+def _large_success_process_entrypoint(request: dict, result_queue) -> None:
+    marker_dir = _marker_dir_from_request(request)
+    (marker_dir / "large-payload-started.txt").write_text("started", encoding="utf-8")
+    large_result = {
+        "status": "planned",
+        "scenario_resolution": {
+            "selection": {"scenario_id": "ecommerce"},
+            "manifest": {
+                "scenario_id": "ecommerce",
+                "display_name": "E-Commerce",
+                "category": "specialized",
+                "status": "active",
+                "description": "test manifest",
+            },
+            "status": "active",
+            "can_create_jobs": True,
+        },
+        "metadata": {
+            "large_safe_payload": "x" * 5_000_000,
+        },
+    }
+    result_queue.put({"kind": "value", "result": large_result})
+    (marker_dir / "large-payload-put-returned.txt").write_text("put-returned", encoding="utf-8")
+
+
+def _empty_process_entrypoint(request: dict, result_queue) -> None:
+    marker_dir = _marker_dir_from_request(request)
+    (marker_dir / "empty-process-started.txt").write_text("started", encoding="utf-8")
+
+
 def _specialized_request(tmp_path) -> NativeSpecializedImageGenPlanRequest:
     reference = tmp_path / "product.jpg"
     reference.write_bytes(b"fake image bytes")
@@ -166,7 +196,7 @@ def _specialized_request(tmp_path) -> NativeSpecializedImageGenPlanRequest:
 
 def test_codex_native_specialized_planner_terminates_subprocess_on_timeout(tmp_path) -> None:
     planner = CodexNativeImageGenPlanner(
-        planning_timeout_seconds=2.0,
+        planning_timeout_seconds=4.0,
         brain_transport_timeout_seconds=7.0,
         planning_process_entrypoint=_slow_mutating_process_entrypoint,
     )
@@ -175,7 +205,7 @@ def test_codex_native_specialized_planner_terminates_subprocess_on_timeout(tmp_p
     result = planner.prepare_frozen_specialized_native_imagegen_plan(_specialized_request(tmp_path))
     elapsed = time.perf_counter() - started
 
-    assert elapsed < 3.0
+    assert elapsed < 5.0
     assert result == {
         "status": "blocked",
         "code": "codex_native_imagegen_planning_timeout",
@@ -192,6 +222,56 @@ def test_codex_native_specialized_planner_terminates_subprocess_on_timeout(tmp_p
     assert [
         thread for thread in threading.enumerate()
         if thread.name == "codex-native-imagegen-planner"
+    ] == []
+
+
+def test_codex_native_specialized_planner_reports_exited_process_without_queue_payload(tmp_path) -> None:
+    planner = CodexNativeImageGenPlanner(
+        planning_timeout_seconds=5.0,
+        brain_transport_timeout_seconds=7.0,
+        planning_process_entrypoint=_empty_process_entrypoint,
+    )
+    request = _specialized_request(tmp_path)
+
+    try:
+        planner._plan_job_with_deadline(  # noqa: SLF001 - process boundary regression
+            None,
+            {
+                "uploaded_assets": [{"file_path": str(request.reference_inputs[0].file_path)}],
+            },
+        )
+    except RuntimeError as exc:
+        assert "exited without a result" in str(exc)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("empty process should fail closed")
+
+    assert (tmp_path / "empty-process-started.txt").read_text(encoding="utf-8") == "started"
+
+
+def test_codex_native_specialized_planner_reads_large_process_payload_before_join(tmp_path) -> None:
+    planner = CodexNativeImageGenPlanner(
+        planning_timeout_seconds=5.0,
+        brain_transport_timeout_seconds=7.0,
+        planning_process_entrypoint=_large_success_process_entrypoint,
+    )
+    request = _specialized_request(tmp_path)
+
+    started = time.perf_counter()
+    result = planner._plan_job_with_deadline(  # noqa: SLF001 - queue feeder deadlock regression
+        None,
+        {
+            "uploaded_assets": [{"file_path": str(request.reference_inputs[0].file_path)}],
+        }
+    )
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 2.5
+    assert result.status == "planned"
+    assert len(result.metadata["large_safe_payload"]) == 5_000_000
+    assert (tmp_path / "large-payload-started.txt").read_text(encoding="utf-8") == "started"
+    assert [
+        child for child in multiprocessing.active_children()
+        if child.name == "codex-native-imagegen-planner"
     ] == []
 
 
@@ -268,7 +348,7 @@ def test_brain_stage_trace_redacts_untrusted_reasons_and_extra_text(tmp_path, mo
 
 def test_codex_native_specialized_planner_rejects_overlapping_timeout_workers(tmp_path) -> None:
     planner = CodexNativeImageGenPlanner(
-        planning_timeout_seconds=3.0,
+        planning_timeout_seconds=4.0,
         brain_transport_timeout_seconds=7.0,
         planning_process_entrypoint=_slow_mutating_process_entrypoint,
     )

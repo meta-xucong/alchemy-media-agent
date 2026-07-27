@@ -11,6 +11,7 @@ from pathlib import Path
 import queue
 import sys
 import threading
+import time
 from typing import Any
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -763,8 +764,17 @@ class CodexNativeImageGenPlanner:
             record_stage_event("native_planner_parent", "process_starting")
             process.start()
             record_stage_event("native_planner_parent", "process_started")
-            process.join(timeout=self._planning_timeout_seconds)
-            if process.is_alive():
+            deadline = time.monotonic() + self._planning_timeout_seconds
+            payload: Any | None = None
+            while time.monotonic() < deadline:
+                try:
+                    payload = result_queue.get(timeout=0.1)
+                    record_stage_event("native_planner_parent", "process_queue_payload_received")
+                    break
+                except queue.Empty:
+                    if not process.is_alive():
+                        break
+            if payload is None and process.is_alive():
                 record_stage_event(
                     "native_planner_parent",
                     "process_timeout",
@@ -777,19 +787,38 @@ class CodexNativeImageGenPlanner:
                     process.kill()
                     process.join(timeout=1.0)
                 raise _LocalMcpPlanningTimeout()
+            if payload is None:
+                process.join(timeout=1.0)
+                record_stage_event(
+                    "native_planner_parent",
+                    "process_exited",
+                    terminal_reason=str(process.exitcode),
+                    extra={"exitcode": process.exitcode},
+                )
+                try:
+                    payload = result_queue.get_nowait()
+                except queue.Empty as exc:
+                    record_stage_event("native_planner_parent", "process_queue_empty", terminal_reason=str(process.exitcode))
+                    raise RuntimeError(
+                        f"Codex Native ImageGen planning process exited without a result (exitcode={process.exitcode})."
+                    ) from exc
+            process.join(timeout=1.0)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+                if process.is_alive():  # pragma: no cover - platform fallback
+                    process.kill()
+                    process.join(timeout=1.0)
             record_stage_event(
                 "native_planner_parent",
                 "process_exited",
                 terminal_reason=str(process.exitcode),
                 extra={"exitcode": process.exitcode},
             )
-            try:
-                payload = result_queue.get_nowait()
-            except queue.Empty as exc:
-                record_stage_event("native_planner_parent", "process_queue_empty", terminal_reason=str(process.exitcode))
+            if payload is None:
                 raise RuntimeError(
                     f"Codex Native ImageGen planning process exited without a result (exitcode={process.exitcode})."
-                ) from exc
+                )
             if not isinstance(payload, dict):
                 raise RuntimeError("Codex Native ImageGen planning process returned an invalid payload.")
             if payload.get("kind") == "error":
