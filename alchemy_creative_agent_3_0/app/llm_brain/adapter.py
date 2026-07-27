@@ -944,17 +944,18 @@ def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | Non
         "metadata",
     }
     context = {key: raw[key] for key in allowed if key in raw}
-    preflight = _ecommerce_creative_risk_preflight(raw.get("creative_risk_preflight"))
-    if preflight is not None:
-        context["creative_risk_preflight"] = preflight
+    if "creative_risk_preflight" in raw:
+        context["creative_risk_preflight"] = _ecommerce_creative_risk_preflight(
+            raw["creative_risk_preflight"]
+        )
     return context
 
 
-def _ecommerce_creative_risk_preflight(raw: Any) -> dict[str, Any] | None:
+def _ecommerce_creative_risk_preflight(raw: Any) -> dict[str, Any]:
     """Return typed E-Commerce preflight or a sanitized invalid sentinel."""
 
     if raw is None:
-        return None
+        return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
     if not isinstance(raw, dict):
         return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
     try:

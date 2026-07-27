@@ -390,6 +390,7 @@ def test_stop_true_preflight_blocks_before_remote_brain_or_business_mutation() -
         ),
         _preflight(raw_path="D:/private/should_not_cross.png"),
         "not-a-dict-preflight",
+        None,
     ),
 )
 def test_malformed_preflight_blocks_before_remote_brain_without_leaking_payload(
