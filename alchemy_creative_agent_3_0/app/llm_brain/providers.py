@@ -356,35 +356,27 @@ class V3LLMBrainProvider:
         """
 
         try:
-            from openai import OpenAI
-
-            # Keep the DeepSeek-compatible transport to the same one-attempt
-            # contract as Responses and the managed image gateway.
-            _mark_transport_event("client_constructing")
-            kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url, max_retries=0)
-            client = OpenAI(**kwargs)
-            _mark_transport_event("client_constructed")
-            _mark_transport_event("request_dispatched")
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                {
-                    "role": "system",
-                    "content": _system_prompt(request.stage, json_recovery=json_recovery),
-                },
+            timeout_seconds = self._effective_timeout_seconds(request)
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": _system_prompt(request.stage, json_recovery=json_recovery),
+                    },
                     {"role": "user", "content": build_remote_payload(request)},
                 ],
-                response_format={"type": "json_object"},
-                temperature=0,
-                timeout=self._effective_timeout_seconds(request),
-                max_tokens=self.max_tokens,
+                "response_format": {"type": "json_object"},
+                "temperature": 0,
+                "max_tokens": self.max_tokens,
+                "stream": True,
+            }
+            text = _collect_openai_chat_completion_stream(
+                url=_chat_completions_url(base_url),
+                api_key=api_key,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
             )
-            _mark_transport_event("complete_response_observed")
-            choices = getattr(response, "choices", None) or []
-            message = getattr(choices[0], "message", None) if choices else None
-            text = getattr(message, "content", None) or ""
-            if _response_ended_at_output_limit(response, choice=choices[0] if choices else None):
-                raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
             _mark_transport_event("json_parse_started")
             parsed = _loads_json_object(text)
             _mark_transport_event("json_parse_completed")
@@ -560,6 +552,11 @@ def _mark_transport_event(event: str) -> None:
     if normalized in {"complete_response_observed", "json_parse_started", "json_parse_completed"}:
         trace["response_started"] = True
         trace["first_content_observed"] = True
+    if normalized == "response_started":
+        trace["response_started"] = True
+    if normalized == "first_content_observed":
+        trace["response_started"] = True
+        trace["first_content_observed"] = True
     if normalized == "complete_response_observed":
         trace["complete_response_observed"] = True
     if normalized == "json_parse_started":
@@ -597,6 +594,8 @@ def _transport_timeout_phase(trace: dict[str, Any]) -> str:
     last_event = str(trace.get("last_event") or "").strip().lower()
     if last_event in {"client_constructing", "created"}:
         return "connect_timeout"
+    if last_event == "request_dispatched":
+        return "ttfb_timeout"
     return "unknown_transport_timeout"
 
 
@@ -612,6 +611,79 @@ def _safe_transport_timeout_phase(value: str) -> str:
     }:
         return normalized
     return "unknown_transport_timeout"
+
+
+def _chat_completions_url(base_url: str | None) -> str:
+    base = str(base_url or "").rstrip("/")
+    if not base:
+        return "/v1/chat/completions"
+    return f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
+
+
+def _collect_openai_chat_completion_stream(
+    *,
+    url: str,
+    api_key: str,
+    payload: dict[str, Any],
+    timeout_seconds: float,
+) -> str:
+    """Collect one streamed Chat Completions JSON response without repairing it locally."""
+
+    import httpx
+
+    headers = {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
+    timeout = httpx.Timeout(
+        connect=min(20.0, max(0.1, float(timeout_seconds))),
+        read=max(0.1, float(timeout_seconds)),
+        write=min(30.0, max(0.1, float(timeout_seconds))),
+        pool=min(20.0, max(0.1, float(timeout_seconds))),
+    )
+    chunks: list[str] = []
+    done = False
+    _mark_transport_event("client_constructing")
+    with httpx.Client(timeout=timeout) as client:
+        _mark_transport_event("client_constructed")
+        _mark_transport_event("request_dispatched")
+        with client.stream("POST", url, headers=headers, json=payload) as response:
+            _mark_transport_event("response_started")
+            response.raise_for_status()
+            for raw_line in response.iter_lines():
+                line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line or "")
+                line = line.strip()
+                if not line:
+                    continue
+                data = line[5:].strip() if line.startswith("data:") else line
+                if data == "[DONE]":
+                    done = True
+                    _mark_transport_event("complete_response_observed")
+                    break
+                try:
+                    item = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                choices = item.get("choices") if isinstance(item, dict) else None
+                choice = choices[0] if isinstance(choices, list) and choices else None
+                finish_reason = str(choice.get("finish_reason") or "").strip().lower() if isinstance(choice, dict) else ""
+                if isinstance(choice, dict) and (
+                    _response_ended_at_output_limit(item, choice=choice)
+                    or finish_reason
+                    in {
+                        "length",
+                        "max_tokens",
+                        "max_output_tokens",
+                        "output_token_limit",
+                        "output_tokens_limit",
+                    }
+                ):
+                    raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
+                delta = choice.get("delta") if isinstance(choice, dict) else None
+                content = delta.get("content") if isinstance(delta, dict) else None
+                if content:
+                    _mark_transport_event("first_content_observed")
+                    chunks.append(str(content))
+    if not done:
+        raise BrainInvalidJsonResponse("remote brain stream ended before the complete JSON response marker")
+    return "".join(chunks)
 
 
 def _openai_client_kwargs(*, api_key: str, base_url: str | None, **extra: Any) -> dict[str, Any]:
