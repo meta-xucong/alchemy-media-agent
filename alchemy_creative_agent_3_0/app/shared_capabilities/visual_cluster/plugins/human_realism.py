@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from .base import BaseVisualCapabilityPlugin, VisualPluginContext, as_dict
-from ..human_photorealism import HUMAN_REALISM_REVIEW_DIMENSIONS
+from ..human_photorealism import (
+    HUMAN_REALISM_REVIEW_DIMENSIONS,
+    _safe_ecommerce_human_realism_review_context,
+)
 
 
 class HumanRealismPlugin(BaseVisualCapabilityPlugin):
@@ -31,7 +34,7 @@ class HumanRealismPlugin(BaseVisualCapabilityPlugin):
             )
         }
         metadata = as_dict(guidance.get("metadata"))
-        ecommerce_review_context = as_dict(
+        ecommerce_review_context = _safe_ecommerce_human_realism_review_context(
             metadata.get("ecommerce_human_realism_review_context")
         )
         review_contract = {

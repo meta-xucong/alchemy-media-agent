@@ -962,26 +962,7 @@ class HumanPhotorealismLayer:
             if self.is_human_realism_issue_code(code)
         )
         review_id = stable_id("anti_ai_face_review", project_id, job_id, guidance.guidance_id, ",".join(issue_codes))
-        if not guidance.applies:
-            return AntiAIFaceReviewResult(
-                review_id=review_id,
-                project_id=project_id,
-                job_id=job_id,
-                applies=False,
-                status="not_applicable",
-                metadata={"doc": "65", **dict(metadata or {})},
-            )
-        # New enforced jobs send only normalized review evidence back to the
-        # remote Brain.  Even constructing a local Human Realism phrase patch
-        # here would leave an executable compatibility escape hatch.
         brain_owned_forward_execution = bool(guidance.metadata.get("brain_owned_forward_execution"))
-        retry_patch = (
-            {}
-            if brain_owned_forward_execution or not issue_codes
-            else dict(guidance.retry_patch_templates)
-        )
-        plugin_metadata = dict(guidance.metadata.get(HUMAN_REALISM_PLUGIN_METADATA_KEY) or {})
-        hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
         ecommerce_review_context = _safe_ecommerce_human_realism_review_context(
             guidance.metadata.get("ecommerce_human_realism_review_context")
         )
@@ -996,6 +977,25 @@ class HumanPhotorealismLayer:
         )
         if ecommerce_review_context:
             review_metadata["ecommerce_human_realism_review_context"] = ecommerce_review_context
+        if not guidance.applies:
+            return AntiAIFaceReviewResult(
+                review_id=review_id,
+                project_id=project_id,
+                job_id=job_id,
+                applies=False,
+                status="not_applicable",
+                metadata=review_metadata,
+            )
+        # New enforced jobs send only normalized review evidence back to the
+        # remote Brain.  Even constructing a local Human Realism phrase patch
+        # here would leave an executable compatibility escape hatch.
+        retry_patch = (
+            {}
+            if brain_owned_forward_execution or not issue_codes
+            else dict(guidance.retry_patch_templates)
+        )
+        plugin_metadata = dict(guidance.metadata.get(HUMAN_REALISM_PLUGIN_METADATA_KEY) or {})
+        hand_detail = plugin_metadata.get("human_subject_kind") == "hand_or_skin_detail"
         return AntiAIFaceReviewResult(
             review_id=review_id,
             project_id=project_id,

@@ -290,6 +290,81 @@ def test_human_realism_review_drops_external_ecommerce_context_without_guidance_
     assert "provider_payload" not in serialized
 
 
+def test_human_realism_review_not_applicable_branch_drops_external_ecommerce_context() -> None:
+    layer = HumanPhotorealismLayer()
+    guidance = _build(
+        "A blue swimsuit flat lay on a white background, no people.",
+        subject_type="product",
+    )
+
+    assert guidance.applies is False
+    review = layer.review(
+        guidance=guidance,
+        project_id="project_human_realism",
+        job_id="job_human_realism",
+        metadata={
+            "ecommerce_human_realism_review_context": {
+                "file_path": "D:/unsafe/original.png",
+                "provider_payload": {"secret": True},
+            },
+        },
+    )
+
+    assert review.applies is False
+    assert "ecommerce_human_realism_review_context" not in review.metadata
+    serialized = review.model_dump_json()
+    assert "D:/unsafe/original.png" not in serialized
+    assert "provider_payload" not in serialized
+
+
+def test_human_realism_plugin_revalidates_mutated_guidance_ecommerce_context() -> None:
+    guidance = _build(
+        "Professional ecommerce photo of a real child model wearing a product in a natural lifestyle scene.",
+        subject_type="product",
+        metadata={
+            "brain_owned_forward_execution": True,
+            "ecommerce_human_realism_review_context": _ecommerce_review_context(),
+        },
+    )
+    dumped = guidance.model_dump(mode="json")
+    dumped["metadata"]["ecommerce_human_realism_review_context"] = {
+        "file_path": "D:/unsafe/original.png",
+        "provider_payload": {"secret": True},
+    }
+    active = ActivatedCapability(
+        capability_id="human_realism",
+        version="v1",
+        selected_profile="balanced",
+    )
+    plan = CapabilityActivationPlan(
+        plan_id="plan_human_realism",
+        fingerprint="fp_human_realism",
+        job_id="job_human_realism",
+        task_profile_id="profile_human_realism",
+        template_id="ecommerce_template",
+        scenario_id="ecommerce",
+        active_capabilities=[active],
+        dependency_order=["human_realism"],
+    )
+
+    contribution = HumanRealismPlugin().contribute(
+        VisualPluginContext(
+            plan=plan,
+            active=active,
+            cluster={"human_photorealism_guidance": dumped},
+        )
+    )
+
+    assert "ecommerce_human_realism_review_context" not in contribution.review_contract
+    assert "ecommerce_human_realism_review_context" not in contribution.retry_contract.get(
+        "metadata",
+        {},
+    )
+    serialized = contribution.model_dump_json()
+    assert "D:/unsafe/original.png" not in serialized
+    assert "provider_payload" not in serialized
+
+
 def test_general_human_realism_has_no_ecommerce_review_context() -> None:
     guidance = _build("Create a realistic portrait of an adult in a studio.")
 
