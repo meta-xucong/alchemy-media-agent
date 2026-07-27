@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **live Professional identity/product binding passed; product-only image_set_plan schema and product-pool admission safeguards corrected locally; N=6 planning-only revalidation pending; controlled real-image gate paused.**
+Status: **live Professional identity/product binding passed; product-only image_set_plan schema and product-pool admission safeguards corrected; N=6 planning-only revalidation passed; controlled real-image gate pending reviewer authorization after acceptance-report consistency fix.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -1342,6 +1342,55 @@ Next gate:
 - Only after tests pass may one controlled mutation=0 N=6 planning-only
   revalidation be requested.
 - Real ImageGen remains prohibited.
+
+## 13G. Planning-only acceptance report consistency fix
+
+Evidence:
+
+- `.controlled-validation/n6-one-two-20260727T102700Z/reports/fresh-professional-n6-planning-report.json`
+- `.controlled-validation/n6-one-two-20260727T102700Z/reports/brain-stage-trace.jsonl`
+- `.controlled-validation/n6-one-two-20260727T102700Z/reports/helper-acceptance-summary.json`
+
+The `n6-one-two` run after `ae7c890` completed the frozen Professional
+E-Commerce N=6 planning-only gate without business mutation:
+
+```text
+planner_result.status=planned_for_codex_native_imagegen
+planner_result.planning_receipt.remote_brain_call_count=2
+planner_result.planning_receipt.stages=[plan, provider_prompt_finalize]
+exact_n_6=true
+selected_product_truth_from_pool_each_output=true
+final_refs_lte_5_each_output=true
+root_and_front_winner_server_owned_present_each_output=true
+no_unselected_product_truth_leak=true
+pool_hash_parity_stable=true
+mutation_delta.jobs/candidates/handoffs/outputs/formal_receipts/slots/activations=0
+```
+
+The original report's top-level
+`acceptance.remote_brain_two_stage=false` was a controlled-report calculation
+bug, not a planner failure. The runner looked for `planning_receipt` at the
+report top level, while the native planner returns it under
+`planner_result.planning_receipt`.
+
+Correction:
+
+- `CodexNativeImageGenPlanner.planning_only_acceptance_summary()` now evaluates
+  planning-only evidence from the authoritative nested planner result.
+- The helper keeps the check zero-write and records only aggregate booleans:
+  two-stage Brain completion, exact N, selected-product subset, final
+  reference cap, required identity sources, no unselected product leakage,
+  pool hash parity, and mutation delta zero.
+- Deterministic regression proves a report with a stale/empty top-level
+  receipt but valid nested `planner_result.planning_receipt` is accepted as
+  two-stage.
+
+Current gate:
+
+- Planning-only is passed for the current frozen N=6 Professional product set.
+- This is still not a generated-image delivery receipt. Host ImageGen
+  materialization must remain controlled, append-only, and separately
+  authorized/reviewed.
 
 ## 14. Old-document conflict index
 
