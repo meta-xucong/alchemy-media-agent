@@ -1148,7 +1148,7 @@ def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
     assert "Select one product truth for ordinary lifestyle" in normalized_instructions
     assert "Select a second product truth only when product_truth_selection_role is" in normalized_instructions
     assert "max_product_truth_source_refs_per_output as a hard renderer-admission budget" in normalized_instructions
-    assert "When that budget is 1, a detail or print output must still select only" in normalized_instructions
+    assert "When that budget is 1, selected_product_truth_asset_ids must contain exactly one" in normalized_instructions
     assert "fail-closed rather than silently trimming or replacing product truth" in normalized_instructions
     assert "apparel_on_model_evidence_profile requests more than one output" not in instructions
 
@@ -1243,9 +1243,63 @@ def test_professional_ecommerce_remote_payload_preserves_provider_reference_budg
     assert budget["identity_derivative_reference_count"] == 4
     assert budget["max_product_truth_source_refs_per_output"] == 1
     assert "identity_source_asset_ids" not in budget
+    evidence_schema = payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"][0]
+    assert evidence_schema["selected_product_truth_asset_ids"] == [
+        "exactly one uploaded product_truth asset_id string from the frozen product truth pool"
+    ]
+    assert "one or two" not in evidence_schema["selected_product_truth_asset_ids"][0]
+    assert "must select exactly one product_truth asset ID" in evidence_schema[
+        "product_truth_selection_role"
+    ]
+    assert "may select two product_truth asset IDs" not in evidence_schema[
+        "product_truth_selection_role"
+    ]
     assert "max_product_truth_source_refs_per_output as a hard renderer-admission budget" in (
         " ".join(payload["ecommerce_context_instructions"].split())
     )
+    assert "When that budget is 1, selected_product_truth_asset_ids must contain exactly one" in (
+        " ".join(payload["ecommerce_context_instructions"].split())
+    )
+
+
+def test_professional_ecommerce_remote_payload_allows_two_product_truths_when_budget_allows() -> None:
+    request = BrainRunRequest(
+        user_input="Create a professional product-on-model detail set.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        requested_image_count=6,
+        metadata={
+            "professional_product_truth_required": True,
+            "professional_product_model_planning": True,
+            "ecommerce_creative_context": {
+                "provider_reference_budget": {
+                    "contract_version": "professional_ecommerce_provider_reference_budget_v1",
+                    "max_provider_reference_images": 5,
+                    "identity_derivative_reference_count": 3,
+                    "product_truth_derivative_reference_count_per_source": 1,
+                    "max_product_truth_source_refs_per_output": 2,
+                    "owner": "codex_native_professional_planner",
+                    "basis": "provider_materialized_reference_derivative_count",
+                }
+            },
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    budget = payload["ecommerce_creative_context"]["provider_reference_budget"]
+    assert budget["max_provider_reference_images"] == 5
+    assert budget["identity_derivative_reference_count"] == 3
+    assert budget["max_product_truth_source_refs_per_output"] == 2
+    evidence_schema = payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"][0]
+    assert evidence_schema["selected_product_truth_asset_ids"] == [
+        "one or two uploaded product_truth asset_id strings from the frozen product truth pool"
+    ]
+    assert "exactly one" not in evidence_schema["selected_product_truth_asset_ids"][0]
+    assert "may select two product_truth asset IDs" in evidence_schema[
+        "product_truth_selection_role"
+    ]
 
 
 def test_professional_ecommerce_native_planner_sends_brain_safe_provider_budget(

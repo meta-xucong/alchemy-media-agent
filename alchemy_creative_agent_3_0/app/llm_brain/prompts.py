@@ -123,11 +123,12 @@ filenames, paths, or natural-language aliases. Select one product truth for
 ordinary lifestyle, walking/look-back, playful interaction, front, or back/structure
 outputs. If ecommerce_creative_context.provider_reference_budget is present,
 treat max_product_truth_source_refs_per_output as a hard renderer-admission
-budget. Select a second product truth only when product_truth_selection_role is
+budget. When that budget is 1, selected_product_truth_asset_ids must contain
+exactly one product_truth asset_id for every output, including detail or print
+outputs. Select a second product truth only when product_truth_selection_role is
 product_detail_or_print_view, the detail-oriented output needs both a
 whole-garment and close-detail truth source, and the declared budget is at
-least 2. When that budget is 1, a detail or print output must still select only
-the single most relevant product_truth asset. If the selected identity and
+least 2. If the selected identity and
 product references cannot fit the renderer admission cap, the run must stop
 fail-closed rather than silently trimming or replacing product truth. Never
 select the full product truth pool for one output."""
@@ -256,11 +257,28 @@ def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
     return bool(metadata.get("professional_product_truth_required"))
 
 
+def _product_truth_reference_budget(ecommerce_context: dict[str, object] | None) -> int | None:
+    if not isinstance(ecommerce_context, dict):
+        return None
+    provider_budget = ecommerce_context.get("provider_reference_budget")
+    if not isinstance(provider_budget, dict):
+        return None
+    raw_budget = provider_budget.get("max_product_truth_source_refs_per_output")
+    try:
+        budget = int(raw_budget)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if budget <= 0:
+        return None
+    return min(2, budget)
+
+
 def _image_set_evidence_dimensions_schema(
     *,
     requested_image_count: int,
     requires_apparel_evidence_dimensions: bool,
     requires_product_truth_selection: bool,
+    product_truth_reference_budget: int | None = None,
 ) -> list[dict[str, object]]:
     schema: dict[str, object] = {
         "output_index": (
@@ -273,15 +291,28 @@ def _image_set_evidence_dimensions_schema(
         ),
     }
     if requires_product_truth_selection:
-        schema["product_truth_selection_role"] = (
+        role_contract = (
             "one of lifestyle_primary_product_view|playful_environment_interaction_view|"
             "walking_or_lookback_view|back_or_structure_view|product_detail_or_print_view; "
-            "only product_detail_or_print_view may select two product_truth asset IDs when "
-            "ecommerce_creative_context.provider_reference_budget.max_product_truth_source_refs_per_output >= 2"
         )
-        schema["selected_product_truth_asset_ids"] = [
-            "one or two uploaded product_truth asset_id strings from the frozen product truth pool"
-        ]
+        if product_truth_reference_budget == 1:
+            role_contract += (
+                "current provider_reference_budget.max_product_truth_source_refs_per_output is 1, "
+                "so even product_detail_or_print_view must select exactly one product_truth asset ID"
+            )
+            selection_contract = (
+                "exactly one uploaded product_truth asset_id string from the frozen product truth pool"
+            )
+        else:
+            role_contract += (
+                "only product_detail_or_print_view may select two product_truth asset IDs when "
+                "ecommerce_creative_context.provider_reference_budget.max_product_truth_source_refs_per_output >= 2"
+            )
+            selection_contract = (
+                "one or two uploaded product_truth asset_id strings from the frozen product truth pool"
+            )
+        schema["product_truth_selection_role"] = role_contract
+        schema["selected_product_truth_asset_ids"] = [selection_contract]
     return [schema]
 
 
@@ -521,6 +552,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
                     requested_image_count=request.requested_image_count,
                     requires_apparel_evidence_dimensions=requires_apparel_evidence_dimensions,
                     requires_product_truth_selection=requires_product_truth_selection,
+                    product_truth_reference_budget=_product_truth_reference_budget(ecommerce_context),
                 )
             )
         payload["return_schema"] = compact_schema
@@ -711,6 +743,9 @@ def build_remote_payload(request: BrainRunRequest) -> str:
                 requested_image_count=request.requested_image_count,
                 requires_apparel_evidence_dimensions=requires_apparel_evidence_dimensions,
                 requires_product_truth_selection=requires_product_truth_selection,
+                product_truth_reference_budget=_product_truth_reference_budget(
+                    ecommerce_context if isinstance(ecommerce_context, dict) else None
+                ),
             )
         )
     photography_context = request.metadata.get("photography_creative_context")
