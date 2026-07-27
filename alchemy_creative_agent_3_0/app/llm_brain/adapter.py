@@ -125,7 +125,10 @@ class V3LLMBrainAdapter:
                 "brain_adapter",
                 "semantic_plan_schema_validated",
                 stage=request.stage,
-                extra={"remote_contract_rejected_count": len(initial_rejected_sections)},
+                extra={
+                    "remote_contract_rejected_count": len(initial_rejected_sections),
+                    "remote_contract_rejected_sections": initial_rejected_sections,
+                },
             )
             recovery_transport_receipt: dict[str, Any] = {}
             if strict_remote_contract and initial_rejected_sections:
@@ -139,7 +142,10 @@ class V3LLMBrainAdapter:
                     "brain_adapter",
                     "semantic_recovery_provider_call",
                     stage=request.stage,
-                    extra={"remote_contract_rejected_count": len(initial_rejected_sections)},
+                    extra={
+                        "remote_contract_rejected_count": len(initial_rejected_sections),
+                        "remote_contract_rejected_sections": initial_rejected_sections,
+                    },
                 )
                 recovery_request = _semantic_contract_recovery_request(
                     request,

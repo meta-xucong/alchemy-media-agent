@@ -143,6 +143,30 @@ def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
     }
 
 
+_SAFE_REMOTE_CONTRACT_REJECTED_SECTIONS = {
+    "image_set_plan",
+    "prompt_guidance",
+    "prompt_review",
+    "user_visible_summary",
+    "visual_task_profile",
+    "visual_task_profile.rendering_intent",
+    "capability_activation_intent",
+    "canonical_provider_prompts",
+    "checkpoints",
+}
+
+
+def _safe_remote_contract_rejected_sections(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    sections: list[str] = []
+    for item in value:
+        token = str(item or "").strip()
+        if token in _SAFE_REMOTE_CONTRACT_REJECTED_SECTIONS:
+            sections.append(token)
+    return list(dict.fromkeys(sections))[:8]
+
+
 class ScenarioRuntime:
     """Resolve Scenario Packs and safely delegate active scenarios to the central brain."""
 
@@ -3211,6 +3235,14 @@ class ScenarioRuntime:
         else:
             outcome_class = "remote_creative_brain_required"
 
+        rejected_sections = _safe_remote_contract_rejected_sections(
+            details.get("rejected_sections")
+            or audit.get("remote_contract_rejected_sections")
+            or audit.get("remote_semantic_contract_recovery_final_rejected_sections")
+            or audit.get("remote_semantic_contract_recovery_initial_rejected_sections")
+            or []
+        )
+
         safe_outcome = {
             "schema_version": "v3_remote_creative_brain_outcome_v1",
             "state": "blocked",
@@ -3219,11 +3251,7 @@ class ScenarioRuntime:
             "llm_used": bool(brain_result.llm_used),
             "fallback_used": bool(brain_result.fallback_used),
             "remote_provider_available": audit.get("remote_provider_available"),
-            "remote_contract_rejected_sections": [
-                str(item)
-                for item in details.get("rejected_sections", [])
-                if str(item).strip()
-            ],
+            "remote_contract_rejected_sections": rejected_sections,
             **(
                 {"remote_error_class": str(audit["remote_provider_error_class"])}
                 if audit.get("remote_provider_error_class")

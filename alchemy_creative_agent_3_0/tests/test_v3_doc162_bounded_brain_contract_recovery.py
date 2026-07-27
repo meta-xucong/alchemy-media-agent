@@ -5,10 +5,16 @@ from __future__ import annotations
 import json
 
 from PIL import Image
+import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
-from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainProviderError
+from alchemy_creative_agent_3_0.app.llm_brain.providers import (
+    BrainPromptContractInvalid,
+    BrainProviderError,
+    BrainTransportTimeoutError,
+)
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
     active_review_contract,
     inspection_reference_paths,
@@ -69,13 +75,52 @@ class _SequencedSemanticProvider(EcommerceRemoteBrainTestProvider):
         return payload
 
 
-def _strict_request(adapter: V3LLMBrainAdapter):  # noqa: ANN201
+class _CompactPlanOnlyProvider(EcommerceRemoteBrainTestProvider):
+    def run(self, request):  # noqa: ANN001
+        payload = super().run(request)
+        payload.pop("canonical_provider_prompts", None)
+        return payload
+
+
+class _InvalidPlanPromptDraftProvider(EcommerceRemoteBrainTestProvider):
+    def run(self, request):  # noqa: ANN001
+        payload = super().run(request)
+        if request.stage == "plan":
+            payload["canonical_provider_prompts"] = [
+                {
+                    "output_index": 1,
+                    "prompt": "Invalid one-output draft for a larger frozen set.",
+                    "review_status": "approved",
+                }
+            ]
+        return payload
+
+
+class _TimeoutAfterInvalidPlanPromptDraftProvider(_InvalidPlanPromptDraftProvider):
+    def run(self, request):  # noqa: ANN001
+        if len(self.requests) >= 1 and request.stage == "plan":
+            self.requests.append(request.model_dump(mode="json"))
+            raise BrainTransportTimeoutError(
+                stage=request.stage,
+                timeout_seconds=210.0,
+                elapsed_ms=210015,
+                timeout_phase="read_timeout",
+                response_started=True,
+                first_content_observed=False,
+                complete_response_observed=False,
+                json_parse_started=False,
+                json_parse_completed=False,
+            )
+        return super().run(request)
+
+
+def _strict_request(adapter: V3LLMBrainAdapter, *, count: int = 1):  # noqa: ANN201
     return adapter.build_request(
         user_input="Create one factual studio photograph of a ceramic vessel with no person visible.",
         stage="plan",
         scenario_id="general_creative",
         template_id="general_template",
-        metadata={"requested_image_count": 1, "require_real_images": True},
+        metadata={"requested_image_count": count, "require_real_images": True},
     )
 
 
@@ -122,6 +167,98 @@ def test_doc162_two_invalid_semantic_answers_fail_closed_after_exactly_two_calls
     assert result.audit["remote_semantic_contract_recovery_final_rejected_sections"] == [
         "visual_task_profile"
     ]
+
+
+def test_doc259_compact_plan_does_not_require_finalizer_only_canonical_prompts(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    provider = _CompactPlanOnlyProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+
+    result = adapter.run(_strict_request(adapter, count=6))
+
+    assert len(provider.requests) == 1
+    assert result.audit["remote_semantic_contract_recovery_attempted"] is False
+    assert "remote_contract_rejected_sections" not in result.audit
+    assert result.image_set_plan.image_count == 6
+    assert len(result.image_set_plan.shot_plan) == 6
+
+
+def test_doc259_invalid_plan_prompt_draft_is_still_rejected_and_traced(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    trace_file = tmp_path / "brain-stage-trace.jsonl"
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    provider = _InvalidPlanPromptDraftProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+
+    result = adapter.run(_strict_request(adapter, count=6))
+
+    assert len(provider.requests) == 2
+    assert result.audit["remote_contract_rejected_sections"] == ["canonical_provider_prompts"]
+    assert result.audit["remote_semantic_contract_recovery_attempted"] is True
+    trace_events = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rejected_events = [
+        event
+        for event in trace_events
+        if event.get("event") in {"semantic_plan_schema_validated", "semantic_recovery_provider_call"}
+    ]
+    assert rejected_events
+    assert all(
+        event.get("remote_contract_rejected_sections") == ["canonical_provider_prompts"]
+        for event in rejected_events
+        if event.get("remote_contract_rejected_count") == 1
+    )
+    serialized = "\n".join(json.dumps(event, sort_keys=True) for event in trace_events)
+    assert "invalid one-output draft" not in serialized
+    assert str(tmp_path).replace("\\", "\\\\") not in serialized
+
+
+def test_doc259_timeout_after_contract_reanswer_preserves_initial_rejected_section(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    provider = _TimeoutAfterInvalidPlanPromptDraftProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+
+    result = adapter.run(_strict_request(adapter, count=6))
+    error = ScenarioRuntime._remote_creative_brain_block(
+        "remote_creative_brain_required_for_template",
+        result,
+    )
+    outcome = getattr(error, "remote_creative_brain_outcome")
+
+    assert len(provider.requests) == 2
+    assert result.fallback_used is True
+    assert result.audit["remote_semantic_contract_recovery_initial_rejected_sections"] == [
+        "canonical_provider_prompts"
+    ]
+    assert outcome["remote_contract_rejected_sections"] == ["canonical_provider_prompts"]
+    assert outcome["remote_brain_transport_failure"]["timeout_seconds"] == 210.0
+    assert outcome["remote_brain_transport_failure"]["response_started"] is True
+    assert outcome["remote_brain_transport_failure"]["first_content_observed"] is False
+
+
+def test_doc259_finalizer_still_requires_complete_canonical_provider_prompts(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    provider = _CompactPlanOnlyProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = _strict_request(adapter, count=6).model_copy(
+        update={"stage": "provider_prompt_finalize"},
+        deep=True,
+    )
+
+    with pytest.raises(BrainPromptContractInvalid):
+        adapter.finalize_canonical_provider_prompts(request)
 
 
 def test_doc162_recovery_payload_requests_complete_reanswer_not_patch(monkeypatch) -> None:

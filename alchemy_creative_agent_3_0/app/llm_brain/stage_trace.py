@@ -32,10 +32,22 @@ _SAFE_EXTRA_KEYS = {
     "json_parse_started",
     "json_parse_completed",
     "remote_contract_rejected_count",
+    "remote_contract_rejected_sections",
     "semantic_recovery_attempted",
     "finalizer_call_count",
     "remote_brain_call_count",
     "exitcode",
+}
+_SAFE_REJECTED_SECTION_VALUES = {
+    "image_set_plan",
+    "prompt_guidance",
+    "prompt_review",
+    "user_visible_summary",
+    "visual_task_profile",
+    "visual_task_profile.rendering_intent",
+    "capability_activation_intent",
+    "canonical_provider_prompts",
+    "checkpoints",
 }
 _SAFE_REASON_VALUES = {
     "unknown",
@@ -137,6 +149,13 @@ def _safe_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
             cleaned[safe_key] = value
         elif isinstance(value, float):
             cleaned[safe_key] = round(value, 3)
+        elif safe_key == "remote_contract_rejected_sections" and isinstance(value, list):
+            sections = []
+            for item in value:
+                token = _safe_token(item)
+                if token in _SAFE_REJECTED_SECTION_VALUES:
+                    sections.append(token)
+            cleaned[safe_key] = list(dict.fromkeys(sections))[:8]
         elif value is None:
             cleaned[safe_key] = None
         else:

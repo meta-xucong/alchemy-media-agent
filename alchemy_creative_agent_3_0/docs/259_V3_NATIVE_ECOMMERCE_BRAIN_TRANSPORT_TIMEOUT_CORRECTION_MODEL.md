@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **live Professional identity/product binding passed; controlled real-image gate paused for recovered N=6 Brain planning budget repair.**
+Status: **live Professional identity/product binding passed; N=6 planning-only remains blocked at plan-stage contract rejection/transport trace; controlled real-image gate paused.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -974,7 +974,7 @@ valid N=6 planning shape where the observed plan stage may require an
 additional Brain-owned follow-up call after a contract rejection. This section
 does not add local recovery behavior or deterministic creative fallback.
 
-Current authoritative repair:
+Historical finite-budget repair implemented by `ce925e8`:
 
 1. Keep Doc133 exact N, Doc158/175 two-stage Brain ownership, E17 complete
    output-intent requirements, and the Professional product-model reference
@@ -996,9 +996,75 @@ Current authoritative repair:
    `2 * per_call + 120s` and must not be used to hide queue/join or late
    mutation defects.
 
-If a future live N=6 planning-only probe still exceeds this finite budget, the
-correct behavior is another fail-closed planning block with stage evidence,
-not further timeout expansion or real image generation.
+This finite-budget repair was necessary to test the live N=6 shape, but the
+subsequent `live-n6-20260727T082732Z` probe proved it is not sufficient by
+itself. The correct behavior after that result is another fail-closed planning
+block with sharper contract evidence, not further timeout expansion or real
+image generation.
+
+## 13B. Live N=6 post-`ce925e8` probe: product pool passed, first rejection field was not preserved
+
+Evidence:
+
+- `.controlled-validation/live-n6-20260727T082732Z/reports/pre-call-checkpoint.json`
+- `.controlled-validation/live-n6-20260727T082732Z/reports/brain-stage-trace.jsonl`
+- `.controlled-validation/live-n6-20260727T082732Z/reports/fresh-professional-n6-planning-report.json`
+
+Observed facts:
+
+- The runner entered the real Professional native planner; this was not a
+  wrapper/startup failure.
+- Business mutation remained zero: no job, candidate, handoff, output, formal
+  receipt, slot, or activation was created.
+- The Professional identity/product pool contract passed at the planning
+  admission layer: each output had selected product-truth IDs from the frozen
+  pool, final provider-facing references stayed within the current cap, root
+  and active front-winner identity references were server-owned, and unselected
+  product-truth inputs did not leak into provider-facing refs.
+- The first plan-stage Remote Brain response completed JSON at about
+  `107.7s`, then the adapter recorded `remote_contract_rejected_count=1`.
+- The trace/report did not preserve the exact rejected section name; the safe
+  blocked outcome later showed `remote_contract_rejected_sections=[]` because
+  the second plan-stage call timed out and overwrote the earlier diagnostic
+  context.
+- The second plan-stage call dispatched at about `108.3s`, observed an HTTP
+  response at about `271.0s`, observed no first content, produced no complete
+  JSON, and failed closed at the `210s` read cap. The overall child returned a
+  blocked value through the native planner queue; the queue/join IPC repair
+  remained effective.
+
+Correction model:
+
+1. Do not raise the timeout again. The `210/520/540` budget was a finite live
+   hypothesis and did not complete the N=6 frozen plan.
+2. Do not generate images, split the six-image request into six independent
+   Brain plans, remove product/identity context, switch model/route, or use a
+   local creative fallback.
+3. The immediate owning-layer fix is diagnostic and contract-boundary focused:
+   record safe `remote_contract_rejected_sections` in the stage trace and
+   preserve the initial rejected sections in the safe runtime/native blocked
+   outcome even if a later same-stage Remote Brain follow-up times out.
+4. The compact plan schema does not require `canonical_provider_prompts`; those
+   are owned by the later `provider_prompt_finalize` stage. Deterministic
+   regression must therefore prove:
+   - a valid compact N=6 plan without `canonical_provider_prompts` is accepted
+     without a second plan call;
+   - if `canonical_provider_prompts` is present in the plan response but has
+     invalid shape/cardinality, it remains rejected and safely traced; and
+   - `provider_prompt_finalize` still strictly requires a complete canonical
+     prompt set.
+5. Only after the exact rejected section is known from a safe trace may a
+   further minimal code fix be designed. If the only rejected section is
+   `canonical_provider_prompts`, the fix is to keep plan-stage absence valid
+   and reject only malformed present prompt drafts while leaving finalizer
+   validation unchanged.
+
+Current gate:
+
+- Planning-only: blocked until the contract rejection can be safely identified
+  and the deterministic regression suite passes.
+- Real-image generation: still prohibited. A passing unit test or improved
+  trace is not a six-image product delivery.
 
 ## 14. Old-document conflict index
 
