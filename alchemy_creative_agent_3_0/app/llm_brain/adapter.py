@@ -2514,6 +2514,7 @@ def _safe_validation_path(loc: Any, *, section: str) -> str:
         "image_set_plan.evidence_dimensions_by_output.item.output_index",
         "image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions",
         "image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions.item",
+        "image_set_plan.evidence_dimensions_by_output.item.product_truth_selection_role",
         "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids",
         "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids.item",
         "image_set_plan.composition_rules",

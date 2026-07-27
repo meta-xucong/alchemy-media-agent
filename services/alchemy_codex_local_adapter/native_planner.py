@@ -64,6 +64,14 @@ _SPECIALIZED_TEMPLATE_SCENARIOS = {
     "ecommerce_template": "ecommerce",
     "photographer_template": "photography",
 }
+_ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES = {
+    "lifestyle_primary_product_view",
+    "playful_environment_interaction_view",
+    "walking_or_lookback_view",
+    "back_or_structure_view",
+    "product_detail_or_print_view",
+}
+_ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE = "product_detail_or_print_view"
 
 ProfessionalBindingResolver = Callable[..., ProfessionalModeBinding | ProfessionalBindingResolution | None]
 
@@ -565,6 +573,29 @@ class CodexNativeImageGenPlanner:
                     "code": "codex_native_imagegen_product_truth_selection_invalid",
                     "message": "Professional E-Commerce planning selected a product truth reference outside the frozen product pool.",
                 }
+            role = str(
+                generation_metadata.get("product_truth_selection_role")
+                or deliverable_metadata.get("product_truth_selection_role")
+                or ""
+            ).strip()
+            if role not in _ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES:
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_product_truth_selection_invalid",
+                    "message": "Professional E-Commerce planning requires a structured product truth selection role for every output.",
+                }
+            if len(selected) > 2:
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_product_truth_selection_invalid",
+                    "message": "Professional E-Commerce planning selected too many product truth references for one output.",
+                }
+            if len(selected) == 2 and role != _ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE:
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_product_truth_selection_invalid",
+                    "message": "Professional E-Commerce planning may select two product truth references only for a detail or print output role.",
+                }
             selected_reference_count = len(identity_asset_ids) + len(selected)
             if selected_reference_count > ProductionImageGenerationProvider.max_provider_reference_images:
                 return {
@@ -606,6 +637,7 @@ class CodexNativeImageGenPlanner:
                 "selection_source": selection_source,
                 "product_truth_pool_asset_ids": list(product_truth_ids),
                 "product_truth_pool_source_sha256": dict(product_truth_hashes),
+                "product_truth_selection_role": role,
                 "selected_product_truth_asset_ids": list(selected),
                 "omitted_product_truth": omitted,
                 "identity_source_asset_ids": list(identity_asset_ids),
@@ -618,6 +650,7 @@ class CodexNativeImageGenPlanner:
                     "reference_assets": reference_assets,
                     "uploaded_assets": reference_assets,
                     "product_truth_selection": selection_audit,
+                    "product_truth_selection_role": role,
                     "selected_product_truth_asset_ids": list(selected),
                     "admitted_product_truth_asset_ids": list(selected),
                     "product_truth_pool_asset_ids": list(product_truth_ids),
@@ -770,6 +803,27 @@ class CodexNativeImageGenPlanner:
                                 "codex_native_imagegen_product_truth_selection_invalid",
                                 "Professional E-Commerce planning selected a product truth reference outside the frozen product pool.",
                             )
+                        selection_role = str(
+                            selection_contract.get("product_truth_selection_role") or ""
+                        ).strip()
+                        if selection_role not in _ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES:
+                            return self._blocked(
+                                "codex_native_imagegen_product_truth_selection_invalid",
+                                "Professional E-Commerce planning requires a structured product truth selection role for every output.",
+                            )
+                        if len(selected_product_truth_ids) > 2:
+                            return self._blocked(
+                                "codex_native_imagegen_product_truth_selection_invalid",
+                                "Professional E-Commerce planning selected too many product truth references for one output.",
+                            )
+                        if (
+                            len(selected_product_truth_ids) == 2
+                            and selection_role != _ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE
+                        ):
+                            return self._blocked(
+                                "codex_native_imagegen_product_truth_selection_invalid",
+                                "Professional E-Commerce planning may select two product truth references only for a detail or print output role.",
+                            )
                     professional_product_truth_by_asset_id = product_selection
                     materialization_metadata_by_asset_id = {
                         asset_id: dict(selection.get("metadata_overrides") or {})
@@ -862,6 +916,22 @@ class CodexNativeImageGenPlanner:
                         return self._blocked(
                             "codex_native_imagegen_product_truth_selection_invalid",
                             "Professional E-Commerce planning selected a product truth reference outside the frozen product pool.",
+                        )
+                    selection_role = str(selection_contract.get("product_truth_selection_role") or "").strip()
+                    if selection_role not in _ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES:
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_invalid",
+                            "Professional E-Commerce planning requires a structured product truth selection role for every output.",
+                        )
+                    if len(selected_product_truth_list) > 2:
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_invalid",
+                            "Professional E-Commerce planning selected too many product truth references for one output.",
+                        )
+                    if len(selected_product_truth_list) == 2 and selection_role != _ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE:
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_invalid",
+                            "Professional E-Commerce planning may select two product truth references only for a detail or print output role.",
                         )
                     if len(materialization.reference_assets) > ProductionImageGenerationProvider.max_provider_reference_images:
                         return self._blocked(
@@ -1000,6 +1070,27 @@ class CodexNativeImageGenPlanner:
                                     "codex_native_imagegen_product_truth_selection_invalid",
                                     "Professional E-Commerce planning selected a product truth reference outside the frozen product pool.",
                                 )
+                            selection_role = str(
+                                selection_contract.get("product_truth_selection_role") or ""
+                            ).strip()
+                            if selection_role not in _ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES:
+                                return self._blocked(
+                                    "codex_native_imagegen_product_truth_selection_invalid",
+                                    "Professional E-Commerce planning requires a structured product truth selection role for every output.",
+                                )
+                            if len(selected_product_truth_ids) > 2:
+                                return self._blocked(
+                                    "codex_native_imagegen_product_truth_selection_invalid",
+                                    "Professional E-Commerce planning selected too many product truth references for one output.",
+                                )
+                            if (
+                                len(selected_product_truth_ids) == 2
+                                and selection_role != _ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE
+                            ):
+                                return self._blocked(
+                                    "codex_native_imagegen_product_truth_selection_invalid",
+                                    "Professional E-Commerce planning may select two product truth references only for a detail or print output role.",
+                                )
                         else:
                             selection_contract = (
                                 selection_contract if isinstance(selection_contract, dict) else {}
@@ -1019,6 +1110,8 @@ class CodexNativeImageGenPlanner:
                         ] + selected_product_truth_hashes
                         output["reference_input_contract"]["product_truth_pool_asset_ids"] = product_truth_ids
                         output["reference_input_contract"]["product_truth_pool_source_sha256"] = product_truth_pool_hashes
+                        if professional_product_model:
+                            output["reference_input_contract"]["product_truth_selection_role"] = selection_role
                         output["reference_input_contract"]["selected_product_truth_asset_ids"] = selected_product_truth_ids
                         output["reference_input_contract"]["admitted_product_truth_asset_ids"] = [
                             source_id for source_id in dict.fromkeys(

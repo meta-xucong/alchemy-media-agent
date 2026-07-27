@@ -585,11 +585,24 @@ def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
             evidence.append(dimensions[index % len(dimensions)])
         entry = {"output_index": index, "evidence_dimensions": evidence}
         if requires_product_truth_selection and product_truth_ids:
+            entry["product_truth_selection_role"] = _product_truth_selection_role(index)
             entry["selected_product_truth_asset_ids"] = [
                 product_truth_ids[(index - 1) % len(product_truth_ids)]
             ]
         entries.append(entry)
     return entries
+
+
+def _product_truth_selection_role(index: int) -> str:
+    roles = [
+        "lifestyle_primary_product_view",
+        "playful_environment_interaction_view",
+        "walking_or_lookback_view",
+        "back_or_structure_view",
+        "product_detail_or_print_view",
+        "playful_environment_interaction_view",
+    ]
+    return roles[(index - 1) % len(roles)]
 
 
 def _product_truth_asset_ids(request) -> list[str]:  # noqa: ANN001

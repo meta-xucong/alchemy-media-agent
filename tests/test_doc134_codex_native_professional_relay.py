@@ -25,6 +25,10 @@ from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import (
+    ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE,
+    ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES,
+)
 from alchemy_creative_agent_3_0.app.visual_assets import (
     CharacterCardSlot,
     InMemoryVisualAssetCatalog,
@@ -53,6 +57,7 @@ from services.alchemy_codex_local_adapter.contracts import (
 from services.alchemy_codex_local_adapter.facade import CodexNativeImageGenFacade
 from services.alchemy_codex_local_adapter.mcp_server import TOOL_SCHEMAS, dispatch
 from services.alchemy_codex_local_adapter.native_planner import CodexNativeImageGenPlanner
+import services.alchemy_codex_local_adapter.native_planner as native_planner_module
 from services.alchemy_codex_local_adapter.professional_binding import (
     ProfessionalBindingResolution,
     visual_asset_library_professional_binding_resolver,
@@ -114,6 +119,16 @@ class _ProductTruthSelectionFaultProvider(EcommerceRemoteBrainTestProvider):
         elif self.selection_fault == "duplicate":
             selected = product_ids[0] if product_ids else "missing_product_truth_asset"
             first_entry["selected_product_truth_asset_ids"] = [selected, selected]
+        elif self.selection_fault == "missing_role":
+            first_entry.pop("product_truth_selection_role", None)
+        elif self.selection_fault == "unknown_role":
+            first_entry["product_truth_selection_role"] = "unsupported_catalogue_role"
+        elif self.selection_fault == "non_detail_two":
+            first_entry["product_truth_selection_role"] = "lifestyle_primary_product_view"
+            first_entry["selected_product_truth_asset_ids"] = product_ids[:2] or ["missing_a", "missing_b"]
+        elif self.selection_fault == "full_pool":
+            first_entry["product_truth_selection_role"] = "product_detail_or_print_view"
+            first_entry["selected_product_truth_asset_ids"] = list(product_ids)
         return payload
 
 
@@ -133,7 +148,11 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _product_truth_selection_mutator(selection_by_output_index: dict[int, list[str]]):
+def _product_truth_selection_mutator(
+    selection_by_output_index: dict[int, list[str]],
+    *,
+    role_by_output_index: dict[int, str] | None = None,
+):
     def mutate(result, _payload):
         if result.planning_result is None:
             return result
@@ -142,6 +161,8 @@ def _product_truth_selection_mutator(selection_by_output_index: dict[int, list[s
             metadata = dict(generation_plan.metadata or {})
             if index in selection_by_output_index:
                 metadata["selected_product_truth_asset_ids"] = list(selection_by_output_index[index])
+            if role_by_output_index is not None and index in role_by_output_index:
+                metadata["product_truth_selection_role"] = role_by_output_index[index]
             updated_generation_plans.append(generation_plan.model_copy(update={"metadata": metadata}))
         planning_result = result.planning_result.model_copy(
             update={"generation_plans": updated_generation_plans}
@@ -599,6 +620,7 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     assert len(result["outputs"][0]["reference_image_paths"]) == 5
     assert contract["professional_identity_source_asset_ids"] == [root_source_id, output_id]
     assert contract["product_truth_pool_asset_ids"] == product_ids
+    assert contract["product_truth_selection_role"] == "lifestyle_primary_product_view"
     assert contract["selected_product_truth_asset_ids"] == [product_ids[0]]
     assert contract["admitted_product_truth_asset_ids"] == [product_ids[0]]
     assert contract["source_sha256"] == [
@@ -653,6 +675,9 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     bindings = finalizer["metadata"]["canonical_prompt_context"]["reference_bindings"]
     assert [item["role"] for item in bindings] == ["face_reference", "face_reference", "product_reference", "product_reference"]
     assert all("codex_native_reference_channel" not in item for item in bindings)
+    deliverable_context = finalizer["metadata"]["canonical_prompt_context"]["deliverables"][0]
+    assert deliverable_context["metadata"]["product_truth_selection_role"] == "lifestyle_primary_product_view"
+    assert deliverable_context["metadata"]["selected_product_truth_asset_ids"] == [product_ids[0]]
     product_materialized_refs = [
         item
         for item in materialized_reference_assets
@@ -675,7 +700,7 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     )
 
 
-def test_professional_ecommerce_product_truth_over_capacity_fails_closed(
+def test_professional_ecommerce_full_product_pool_selection_fails_before_capacity(
     tmp_path: Path,
 ) -> None:
     root_source_id = "v3_asset_root"
@@ -709,7 +734,10 @@ def test_professional_ecommerce_product_truth_over_capacity_fails_closed(
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: _CapturingRuntime(
             ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
-            mutate_result=_product_truth_selection_mutator({1: product_ids}),
+            mutate_result=_product_truth_selection_mutator(
+                {1: product_ids},
+                role_by_output_index={1: "product_detail_or_print_view"},
+            ),
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
     )
@@ -717,7 +745,7 @@ def test_professional_ecommerce_product_truth_over_capacity_fails_closed(
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
 
     assert result["status"] == "blocked"
-    assert result["code"] == "codex_native_imagegen_reference_input_capacity_exceeded"
+    assert result["code"] == "codex_native_imagegen_product_truth_selection_invalid"
 
 
 def test_professional_ecommerce_two_selected_products_exceed_materialized_provider_capacity(
@@ -753,7 +781,10 @@ def test_professional_ecommerce_two_selected_products_exceed_materialized_provid
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: _CapturingRuntime(
             ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
-            mutate_result=_product_truth_selection_mutator({1: product_ids}),
+            mutate_result=_product_truth_selection_mutator(
+                {1: product_ids},
+                role_by_output_index={1: "product_detail_or_print_view"},
+            ),
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
     )
@@ -848,7 +879,10 @@ def test_professional_ecommerce_two_selected_products_pass_when_materialized_cap
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: _CapturingRuntime(
             ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
-            mutate_result=_product_truth_selection_mutator({1: product_ids}),
+            mutate_result=_product_truth_selection_mutator(
+                {1: product_ids},
+                role_by_output_index={1: "product_detail_or_print_view"},
+            ),
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
     )
@@ -858,6 +892,7 @@ def test_professional_ecommerce_two_selected_products_pass_when_materialized_cap
     assert result["status"] == "planned_for_codex_native_imagegen"
     assert materializer_calls == 1
     contract = result["outputs"][0]["reference_input_contract"]
+    assert contract["product_truth_selection_role"] == "product_detail_or_print_view"
     assert contract["selected_product_truth_asset_ids"] == product_ids
     assert contract["admitted_product_truth_asset_ids"] == product_ids
     assert contract["admitted_reference_count"] == 4
@@ -870,6 +905,8 @@ def test_professional_ecommerce_two_selected_products_pass_when_materialized_cap
         ("empty", "ecommerce_product_truth_selection_invalid"),
         ("unknown", "ecommerce_product_truth_selection_unknown_asset"),
         ("duplicate", "ecommerce_product_truth_selection_duplicate"),
+        ("missing_role", "ecommerce_product_truth_selection_invalid"),
+        ("unknown_role", "ecommerce_product_truth_selection_invalid"),
     ],
 )
 def test_professional_ecommerce_remote_product_selection_fail_closed(
@@ -917,6 +954,55 @@ def test_professional_ecommerce_remote_product_selection_fail_closed(
     assert expected_reason in " ".join(capturing_runtime.last_result.warnings)
 
 
+def test_professional_ecommerce_remote_non_detail_two_product_selection_fails_closed(
+    tmp_path: Path,
+) -> None:
+    root_source_id = "v3_asset_root"
+    output_id = "v3_output_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    products = [
+        _write_png(tmp_path / f"product-{index}.png", color=(80 + index, 145, 210))
+        for index in range(2)
+    ]
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            products[0],
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one controlled product-on-model catalogue image for the supplied garment.",
+            reference_inputs=[
+                {"channel": "product_truth", "file_path": str(product)}
+                for product in products
+            ],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    capturing_runtime = _CapturingRuntime(
+        ScenarioRuntime(
+            llm_brain_adapter=V3LLMBrainAdapter(
+                provider=_ProductTruthSelectionFaultProvider("non_detail_two")
+            )
+        )
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing_runtime,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_planning_blocked"
+    assert capturing_runtime.last_result is not None
+    assert "ecommerce_product_truth_selection_invalid" in " ".join(capturing_runtime.last_result.warnings)
+
+
 @pytest.mark.parametrize("requested_count", [1, 6])
 def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
     requested_count: int,
@@ -940,17 +1026,83 @@ def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
         f"1-based integer from 1 through requested_image_count ({requested_count}); never 0"
     )
     assert evidence_schema["evidence_dimensions"] == []
+    assert evidence_schema["product_truth_selection_role"] == (
+        "one of lifestyle_primary_product_view|playful_environment_interaction_view|"
+        "walking_or_lookback_view|back_or_structure_view|product_detail_or_print_view; "
+        "only product_detail_or_print_view may select two product_truth asset IDs"
+    )
     assert evidence_schema["selected_product_truth_asset_ids"] == [
         "one or two uploaded product_truth asset_id strings from the frozen product truth pool"
     ]
     instructions = payload["ecommerce_context_instructions"]
+    normalized_instructions = " ".join(instructions.split())
     assert "output_index must be a 1-based integer" in instructions
     assert "evidence_dimensions must be exactly an empty list []" in instructions
+    assert "product_truth_selection_role must be exactly one of" in instructions
     assert "selected_product_truth_asset_ids must be a list" in instructions
-    assert "Select one product truth for ordinary catalogue" in instructions
-    assert "Select a second product truth only when a detail-oriented output needs" in instructions
-    assert "fail-closed rather than silently trimming or replacing product truth" in instructions
+    assert "Select one product truth for ordinary lifestyle" in normalized_instructions
+    assert "Select a second product truth only when product_truth_selection_role is" in normalized_instructions
+    assert "fail-closed rather than silently trimming or replacing product truth" in normalized_instructions
     assert "apparel_on_model_evidence_profile requests more than one output" not in instructions
+
+
+def test_professional_ecommerce_product_truth_role_enum_is_consistent_across_boundaries() -> None:
+    request = BrainRunRequest(
+        user_input="Create product-on-model catalogue imagery from supplied identity and product truth.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        requested_image_count=6,
+        metadata={
+            "professional_product_truth_required": True,
+            "professional_product_model_planning": True,
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    role_schema = payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"][0][
+        "product_truth_selection_role"
+    ]
+    schema_roles = set(role_schema.split("one of ", 1)[1].split("; ", 1)[0].split("|"))
+    assert schema_roles == ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES
+    assert schema_roles == native_planner_module._ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES
+    assert ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE == native_planner_module._ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE
+    assert ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE in schema_roles
+
+
+def test_professional_ecommerce_remote_payload_combines_apparel_and_product_selection_contracts() -> None:
+    request = BrainRunRequest(
+        user_input="Create a professional product-on-model apparel set.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        requested_image_count=6,
+        metadata={
+            "professional_product_truth_required": True,
+            "professional_product_model_planning": True,
+            "ecommerce_creative_context": {
+                "apparel_on_model_evidence_profile": {
+                    "applies": True,
+                    "allowed_evidence_dimensions": ["front_apparel_truth", "back_apparel_truth"],
+                    "required_distinct_dimension_count": 2,
+                }
+            },
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    evidence_schema = payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"][0]
+    assert evidence_schema["evidence_dimensions"] == [
+        "allowed active apparel evidence profile values only; every item must be a string"
+    ]
+    assert "product_truth_selection_role" in evidence_schema
+    assert "selected_product_truth_asset_ids" in evidence_schema
+    instructions = payload["ecommerce_context_instructions"]
+    assert "apparel_on_model_evidence_profile requests more than one output" in instructions
+    assert "product_truth_selection_role must be exactly one of" in instructions
+    assert "selected_product_truth_asset_ids must be a list" in instructions
 
 
 @pytest.mark.parametrize("stage", ["plan", "provider_prompt_finalize"])

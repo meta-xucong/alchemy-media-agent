@@ -39,7 +39,8 @@ class BrainOutputEvidenceContract(V3BaseModel):
 
     output_index: int = Field(ge=1)
     evidence_dimensions: list[str] = Field(default_factory=list)
-    selected_product_truth_asset_ids: list[str] = Field(default_factory=list)
+    product_truth_selection_role: str | None = None
+    selected_product_truth_asset_ids: list[str] = Field(default_factory=list, max_length=2)
 
 
 class BrainImageSetPlan(V3BaseModel):

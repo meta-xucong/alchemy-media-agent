@@ -97,6 +97,15 @@ from .specialized_planning import (
     SpecializedScenarioPlanningError,
 )
 
+ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES = {
+    "lifestyle_primary_product_view",
+    "playful_environment_interaction_view",
+    "walking_or_lookback_view",
+    "back_or_structure_view",
+    "product_detail_or_print_view",
+}
+ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE = "product_detail_or_print_view"
+
 
 def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
     """Whitelist remote Brain transport diagnostics for blocked status metadata."""
@@ -2739,6 +2748,20 @@ class ScenarioRuntime:
                     "output_index": item.get("output_index"),
                     "image_intent": item.get("image_intent"),
                     "factual_acceptance": item.get("factual_acceptance", []),
+                    "metadata": {
+                        key: value
+                        for key, value in dict(item.get("metadata") or {}).items()
+                        if key
+                        in {
+                            "product_truth_selection_role",
+                            "selected_product_truth_asset_ids",
+                            "admitted_product_truth_asset_ids",
+                            "product_truth_selection_source",
+                            "product_truth_pool_asset_ids",
+                            "brain_evidence_dimensions",
+                            "specialized_role_key",
+                        }
+                    },
                 }
                 for item in projection.get("deliverables", [])
                 if isinstance(item, dict)
@@ -3614,8 +3637,19 @@ class ScenarioRuntime:
             )
             if evidence_dimensions:
                 deliverable_metadata["brain_evidence_dimensions"] = evidence_dimensions
-            selected_product_truth = product_truth_selection_by_output.get(index, [])
+            product_truth_selection = product_truth_selection_by_output.get(index, {})
+            selected_product_truth = (
+                list(product_truth_selection.get("selected_product_truth_asset_ids") or [])
+                if isinstance(product_truth_selection, dict)
+                else []
+            )
+            product_truth_selection_role = (
+                str(product_truth_selection.get("product_truth_selection_role") or "").strip()
+                if isinstance(product_truth_selection, dict)
+                else ""
+            )
             if selected_product_truth:
+                deliverable_metadata["product_truth_selection_role"] = product_truth_selection_role
                 deliverable_metadata["selected_product_truth_asset_ids"] = list(selected_product_truth)
                 deliverable_metadata["admitted_product_truth_asset_ids"] = list(selected_product_truth)
                 deliverable_metadata["product_truth_selection_source"] = (
@@ -3679,7 +3713,7 @@ class ScenarioRuntime:
         request: ScenarioRuntimeRequest,
         brain_result: BrainRunResult,
         expected_count: int,
-    ) -> dict[int, list[str]]:
+    ) -> dict[int, dict[str, Any]]:
         """Freeze Remote-Brain product-truth selection for Professional E-Commerce.
 
         Product uploads are a truth pool.  The Remote Brain chooses which pool
@@ -3702,17 +3736,31 @@ class ScenarioRuntime:
         if len(raw_entries) != expected_count:
             raise CapabilityActivationError("ecommerce_product_truth_selection_missing_or_incomplete")
         product_truth_id_set = set(product_truth_ids)
-        resolved: dict[int, list[str]] = {}
+        resolved: dict[int, dict[str, Any]] = {}
         for entry in raw_entries:
             index = int(entry.output_index)
+            role = str(getattr(entry, "product_truth_selection_role", "") or "").strip()
             selected = [str(item).strip() for item in entry.selected_product_truth_asset_ids if str(item).strip()]
-            if index in resolved or index < 1 or index > expected_count or not selected:
+            if (
+                index in resolved
+                or index < 1
+                or index > expected_count
+                or role not in ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES
+                or not selected
+            ):
                 raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
             if len(selected) != len(set(selected)):
                 raise CapabilityActivationError("ecommerce_product_truth_selection_duplicate")
             if not set(selected).issubset(product_truth_id_set):
                 raise CapabilityActivationError("ecommerce_product_truth_selection_unknown_asset")
-            resolved[index] = selected
+            if len(selected) > 2:
+                raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+            if len(selected) == 2 and role != ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE:
+                raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+            resolved[index] = {
+                "product_truth_selection_role": role,
+                "selected_product_truth_asset_ids": selected,
+            }
         if sorted(resolved) != list(range(1, expected_count + 1)):
             raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
         return resolved

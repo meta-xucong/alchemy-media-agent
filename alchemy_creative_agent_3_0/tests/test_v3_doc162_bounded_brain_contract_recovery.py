@@ -152,6 +152,7 @@ class _InvalidImageSetSchemaProvider(EcommerceRemoteBrainTestProvider):
             evidence_entry = {
                 "output_index": 1,
                 "evidence_dimensions": ["front_apparel_truth"],
+                "product_truth_selection_role": "lifestyle_primary_product_view",
                 "selected_product_truth_asset_ids": ["product_truth_front"],
             }
             if self.malformed_field == "selected_product_truth_asset_ids":

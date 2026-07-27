@@ -1481,6 +1481,81 @@ Next gate:
   created. The old frozen prompt hashes and output bindings must not be reused
   for delivery.
 
+## 13I. Product truth selector stabilization after playful-beach replan
+
+Evidence:
+
+- `.controlled-validation/n6-play2-20260727T112900Z/reports/fresh-professional-n6-planning-report.json`
+- `.controlled-validation/n6-play2-20260727T112900Z/reports/corrected-acceptance-summary.json`
+
+The fresh playful-beach planning-only runner successfully reached the
+Professional planner and preserved the new lifestyle intent, but it stopped
+before host ImageGen:
+
+```text
+status=blocked
+code=codex_native_imagegen_reference_input_capacity_exceeded
+mutation_delta.jobs/candidates/handoffs/outputs/formal_receipts/slots/activations=0
+```
+
+Reclassification:
+
+- This is not a reason to raise `max_provider_reference_images` from 5.
+- This is not a reason to remove the immutable root portrait or active
+  Character Card front winner. Doc93/95/96 identity authority remains
+  server-owned and mandatory.
+- The blocking branch counted `root + front_winner + selected_product_truth`.
+  Since the identity count is 2, reaching the raw capacity branch means at
+  least one output selected four product_truth assets -- the full product
+  pool -- for one frozen deliverable.
+- Therefore the owning defect is the Professional E-Commerce product selector
+  / Remote Brain contract: the product truth pool was still too easy to read
+  as provider-admitted input, rather than audit material from which each
+  output must select one or two role-bound product references.
+
+Current selector contract:
+
+1. `product_truth` uploads form a full, hash-audited evidence pool.
+2. `image_set_plan.evidence_dimensions_by_output` must include exactly one
+   entry per output with:
+   - `output_index` as a 1-based integer;
+   - `product_truth_selection_role` as one of:
+     `lifestyle_primary_product_view`,
+     `playful_environment_interaction_view`,
+     `walking_or_lookback_view`, `back_or_structure_view`,
+     `product_detail_or_print_view`;
+   - `selected_product_truth_asset_ids` as one or two IDs from the pool.
+3. Ordinary lifestyle / playful / walking / back-structure roles select one
+   product truth. Only `product_detail_or_print_view` may select two.
+4. Missing role, unknown role, empty selection, duplicate ID, unknown ID,
+   more than two IDs, non-detail two-ID selection, or full-pool selection is
+   invalid before Provider materialization.
+5. `provider_prompt_finalize` receives the same frozen role and selected
+   product truth metadata through deliverable context; it must not reconstruct
+   or forget the first-stage selector decision.
+6. Final provider-facing `reference_assets` / `uploaded_assets` contain only
+   server-owned identity references plus the selected product truth subset.
+   The full pool remains in audit metadata only.
+
+The role enum currently appears at the Brain prompt/schema boundary,
+ScenarioRuntime validation boundary, and native planner materialization
+boundary. This remains deliberately local to Professional E-Commerce; parity
+regression guards the three copies. It must not be moved into shared Visual
+Capability, General Template, or a kidswear-specific shared rule.
+
+Next gate:
+
+- Focused deterministic tests must prove the typed selector boundary, role
+  parity, finalizer-context preservation, no full-pool leakage, and explicit
+  fail-closed behavior.
+- After commit/push, run one new append-only, zero-write N=6 planning-only
+  validation. The report must show every output role, selected 1-2 product
+  truths, admitted references <=5, root + front winner present, pool hash
+  parity, no unselected product leakage, and mutation delta zero.
+- If the Remote Brain still returns full-pool or otherwise invalid product
+  selection, the planner must remain blocked. Do not coerce, trim, retry,
+  split into N=1, or proceed to ImageGen.
+
 ## 14. Old-document conflict index
 
 This correction model does not delete historical documents. The following

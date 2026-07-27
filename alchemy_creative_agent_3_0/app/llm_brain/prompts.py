@@ -111,14 +111,22 @@ entry per output. output_index must be a 1-based integer from 1 through
 requested_image_count, never 0. When no active apparel evidence profile is
 present, evidence_dimensions must be exactly an empty list []; do not put
 objects, numbers, natural-language output roles, scene labels, camera labels,
-or product filenames there. selected_product_truth_asset_ids must be a list of
-one or two uploaded product_truth asset_id strings from the frozen product truth
-pool for that output; do not choose identity asset IDs, filenames, paths, or
-natural-language aliases. Select one product truth for ordinary catalogue
-outputs. Select a second product truth only when a detail-oriented output needs
-both a whole-garment and close-detail truth source; if the selected identity and
-product references cannot fit the renderer admission cap, the run must stop
-fail-closed rather than silently trimming or replacing product truth."""
+or product filenames there. product_truth_selection_role must be exactly one of:
+lifestyle_primary_product_view, playful_environment_interaction_view,
+walking_or_lookback_view, back_or_structure_view, product_detail_or_print_view.
+This role is the structured E-Commerce output purpose for choosing product truth
+references; do not put it into evidence_dimensions. The field
+selected_product_truth_asset_ids must be a list of one or two uploaded
+product_truth asset_id strings from the
+frozen product truth pool for that output; do not choose identity asset IDs,
+filenames, paths, or natural-language aliases. Select one product truth for
+ordinary lifestyle, walking/look-back, playful interaction, front, or back/structure
+outputs. Select a second product truth only when product_truth_selection_role is
+product_detail_or_print_view and that detail-oriented output needs both a
+whole-garment and close-detail truth source; if the selected identity and product
+references cannot fit the renderer admission cap, the run must stop fail-closed
+rather than silently trimming or replacing product truth. Never select the full
+product truth pool for one output."""
 PHOTOGRAPHY_CONTEXT_INSTRUCTIONS = """Treat photography_creative_context as a frozen
 non-creative delivery contract. The role IDs only bind output lineage and
 cardinality. Invent the complete photographic composition, scene, camera,
@@ -261,6 +269,11 @@ def _image_set_evidence_dimensions_schema(
         ),
     }
     if requires_product_truth_selection:
+        schema["product_truth_selection_role"] = (
+            "one of lifestyle_primary_product_view|playful_environment_interaction_view|"
+            "walking_or_lookback_view|back_or_structure_view|product_detail_or_print_view; "
+            "only product_detail_or_print_view may select two product_truth asset IDs"
+        )
         schema["selected_product_truth_asset_ids"] = [
             "one or two uploaded product_truth asset_id strings from the frozen product truth pool"
         ]
@@ -678,15 +691,15 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
     if requires_apparel_evidence_dimensions or requires_product_truth_selection:
-        selection_instructions = (
-            APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS
-            if requires_apparel_evidence_dimensions
-            else PRODUCT_TRUTH_SELECTION_INSTRUCTIONS
-        )
+        selection_instruction_parts = []
+        if requires_apparel_evidence_dimensions:
+            selection_instruction_parts.append(APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS)
+        if requires_product_truth_selection:
+            selection_instruction_parts.append(PRODUCT_TRUTH_SELECTION_INSTRUCTIONS)
         payload["ecommerce_context_instructions"] = (
             str(payload.get("ecommerce_context_instructions") or ECOMMERCE_CONTEXT_INSTRUCTIONS)
             + "\n"
-            + selection_instructions
+            + "\n".join(selection_instruction_parts)
         )
         payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"] = (
             _image_set_evidence_dimensions_schema(
