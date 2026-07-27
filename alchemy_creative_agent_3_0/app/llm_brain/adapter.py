@@ -34,6 +34,7 @@ from .providers import (
     BrainProviderUnavailable,
     BrainReferenceChannelOwnershipDecisionMissing,
     BrainSemanticPreflightMissing,
+    BrainTransportTimeoutError,
     V3LLMBrainProvider,
     pop_transport_receipt,
 )
@@ -173,6 +174,7 @@ class V3LLMBrainAdapter:
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
             fallback.warnings.append(str(exc))
             remote_http_status_code = _remote_provider_http_status_code(exc)
+            remote_transport_failure = _remote_brain_transport_failure(exc)
             fallback.audit = {
                 **fallback.audit,
                 "remote_provider_error": str(exc)[:260],
@@ -184,6 +186,11 @@ class V3LLMBrainAdapter:
                 ),
                 "remote_brain_elapsed_ms": _elapsed_ms(started),
                 "remote_brain_stage": request.stage,
+                **(
+                    {"remote_brain_transport_failure": remote_transport_failure}
+                    if remote_transport_failure
+                    else {}
+                ),
                 **(
                     {"remote_brain_execution_budget": self.execution_budget_receipt()}
                     if self.execution_budget_receipt() is not None
@@ -911,6 +918,8 @@ def _remote_provider_error_class(exc: Exception) -> str:
     """Normalize a remote Brain failure for public-safe job provenance."""
 
     chain = _exception_chain(exc)
+    if any(isinstance(item, BrainTransportTimeoutError) for item in chain):
+        return "timeout"
     if any(isinstance(item, BrainExecutionBudgetExceeded) for item in chain):
         return "execution_budget_exhausted"
     if any(isinstance(item, BrainOutputTruncated) for item in chain):
@@ -931,6 +940,15 @@ def _remote_provider_error_class(exc: Exception) -> str:
     ):
         return "upstream_http_error"
     return "provider_error"
+
+
+def _remote_brain_transport_failure(exc: Exception) -> dict[str, Any]:
+    """Extract only safe remote transport diagnostics from known provider errors."""
+
+    for item in _exception_chain(exc):
+        if isinstance(item, BrainTransportTimeoutError):
+            return item.safe_metadata()
+    return {}
 
 
 def _remote_provider_http_status_code(exc: Exception) -> int | None:

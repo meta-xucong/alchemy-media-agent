@@ -19,6 +19,7 @@ from ..llm_brain.providers import (
     BrainProfessionalAnchorViewDecisionMissing,
     BrainReferenceChannelOwnershipDecisionMissing,
     BrainSemanticPreflightMissing,
+    BrainTransportTimeoutError,
 )
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
 from ..shared_capabilities import (
@@ -94,6 +95,51 @@ from .specialized_planning import (
     SpecializedScenarioPlanningAdapter,
     SpecializedScenarioPlanningError,
 )
+
+
+def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
+    """Whitelist remote Brain transport diagnostics for blocked status metadata."""
+
+    if not isinstance(value, dict):
+        return {}
+    schema_version = value.get("schema_version")
+    stage = value.get("stage")
+    error_class = value.get("transport_error_class")
+    timeout_phase = value.get("timeout_phase")
+    timeout_seconds = value.get("timeout_seconds")
+    elapsed_ms = value.get("elapsed_ms")
+    if schema_version != "v3_brain_transport_failure_v1":
+        return {}
+    if not isinstance(stage, str) or not stage.strip():
+        return {}
+    if error_class != "timeout":
+        return {}
+    if timeout_phase not in {
+        "connect_timeout",
+        "ttfb_timeout",
+        "read_timeout",
+        "complete_response_timeout",
+        "json_parse_timeout",
+        "unknown_transport_timeout",
+    }:
+        return {}
+    if not isinstance(timeout_seconds, (int, float)) or float(timeout_seconds) <= 0.0:
+        return {}
+    if not isinstance(elapsed_ms, int) or elapsed_ms < 0:
+        return {}
+    return {
+        "schema_version": "v3_brain_transport_failure_v1",
+        "stage": stage,
+        "transport_error_class": "timeout",
+        "timeout_phase": timeout_phase,
+        "timeout_seconds": round(float(timeout_seconds), 3),
+        "elapsed_ms": elapsed_ms,
+        "response_started": bool(value.get("response_started")),
+        "first_content_observed": bool(value.get("first_content_observed")),
+        "complete_response_observed": bool(value.get("complete_response_observed")),
+        "json_parse_started": bool(value.get("json_parse_started")),
+        "json_parse_completed": bool(value.get("json_parse_completed")),
+    }
 
 
 class ScenarioRuntime:
@@ -2234,6 +2280,21 @@ class ScenarioRuntime:
                             }
                         }
                     )
+                elif isinstance(failure, BrainTransportTimeoutError):
+                    blocked_brain_result = brain_result.model_copy(
+                        update={
+                            "audit": {
+                                **dict(brain_result.audit or {}),
+                                "remote_provider_error": str(failure)[:260],
+                                "remote_provider_error_class": "timeout",
+                                "remote_brain_stage": getattr(failure, "stage", "provider_prompt_finalize"),
+                                "remote_brain_transport_failure": failure.safe_metadata(),
+                                "remote_brain_execution_budget": (
+                                    self.llm_brain_adapter.execution_budget_receipt() or {}
+                                ),
+                            }
+                        }
+                    )
                 raise self._remote_creative_brain_block(
                     (
                         "human_realism_semantic_preflight_missing"
@@ -3091,6 +3152,22 @@ class ScenarioRuntime:
             **(
                 {"remote_error_class": str(audit["remote_provider_error_class"])}
                 if audit.get("remote_provider_error_class")
+                else {}
+            ),
+            **(
+                {"remote_brain_stage": str(audit["remote_brain_stage"])}
+                if audit.get("remote_brain_stage")
+                and isinstance(audit.get("remote_brain_transport_failure"), dict)
+                else {}
+            ),
+            **(
+                {
+                    "remote_brain_transport_failure": _safe_remote_brain_transport_failure(
+                        audit["remote_brain_transport_failure"]
+                    )
+                }
+                if isinstance(audit.get("remote_brain_transport_failure"), dict)
+                and _safe_remote_brain_transport_failure(audit["remote_brain_transport_failure"])
                 else {}
             ),
             **(

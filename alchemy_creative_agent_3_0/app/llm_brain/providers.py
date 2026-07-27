@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import json
 import os
@@ -21,6 +21,53 @@ class BrainProviderUnavailable(RuntimeError):
 
 class BrainProviderError(RuntimeError):
     """Raised when a configured remote brain provider fails."""
+
+
+class BrainTransportTimeoutError(BrainProviderError):
+    """The remote Brain transport exceeded one bounded call window."""
+
+    def __init__(
+        self,
+        *,
+        stage: str,
+        timeout_seconds: float,
+        elapsed_ms: int,
+        timeout_phase: str,
+        response_started: bool = False,
+        first_content_observed: bool = False,
+        complete_response_observed: bool = False,
+        json_parse_started: bool = False,
+        json_parse_completed: bool = False,
+    ) -> None:
+        super().__init__(
+            f"remote Brain provider timed out during {timeout_phase} after {timeout_seconds:.2f} seconds"
+        )
+        self.stage = str(stage or "unknown")
+        self.timeout_seconds = max(0.0, float(timeout_seconds))
+        self.elapsed_ms = max(0, int(elapsed_ms))
+        self.timeout_phase = _safe_transport_timeout_phase(timeout_phase)
+        self.response_started = bool(response_started)
+        self.first_content_observed = bool(first_content_observed)
+        self.complete_response_observed = bool(complete_response_observed)
+        self.json_parse_started = bool(json_parse_started)
+        self.json_parse_completed = bool(json_parse_completed)
+
+    def safe_metadata(self) -> dict[str, Any]:
+        """Return public-safe timeout facts without endpoint, prompt, or body data."""
+
+        return {
+            "schema_version": "v3_brain_transport_failure_v1",
+            "stage": self.stage,
+            "transport_error_class": "timeout",
+            "timeout_phase": self.timeout_phase,
+            "timeout_seconds": round(self.timeout_seconds, 3),
+            "elapsed_ms": self.elapsed_ms,
+            "response_started": self.response_started,
+            "first_content_observed": self.first_content_observed,
+            "complete_response_observed": self.complete_response_observed,
+            "json_parse_started": self.json_parse_started,
+            "json_parse_completed": self.json_parse_completed,
+        }
 
 
 class BrainPromptContractInvalid(BrainProviderError):
@@ -89,6 +136,10 @@ class _BrainExecutionBudget:
 
 _ACTIVE_EXECUTION_BUDGET: ContextVar[_BrainExecutionBudget | None] = ContextVar(
     "v3_active_remote_brain_execution_budget",
+    default=None,
+)
+_ACTIVE_TRANSPORT_TRACE: ContextVar[dict[str, Any] | None] = ContextVar(
+    "v3_active_remote_brain_transport_trace",
     default=None,
 )
 
@@ -195,13 +246,16 @@ class V3LLMBrainProvider:
 
     def _run_remote_attempt(self, runner: Any, request: BrainRunRequest, *, json_recovery: bool) -> dict[str, Any]:
         timeout_seconds = self._effective_timeout_seconds(request)
+        trace = _new_transport_trace(stage=request.stage, json_recovery=json_recovery)
+        token = _ACTIVE_TRANSPORT_TRACE.set(trace)
         try:
             return _call_with_timeout(
                 lambda: runner(request, json_recovery=json_recovery),
                 timeout_seconds=timeout_seconds,
+                trace=trace,
             )
-        except TimeoutError as exc:
-            raise BrainProviderError(str(exc)) from exc
+        finally:
+            _ACTIVE_TRANSPORT_TRACE.reset(token)
 
     def _ensure_budget_available(self) -> None:
         budget = _ACTIVE_EXECUTION_BUDGET.get()
@@ -252,8 +306,11 @@ class V3LLMBrainProvider:
             # Central Brain has one bounded remote attempt.  SDK-level retries
             # would silently multiply a logical request and hide the actual
             # upstream terminal state from the specialized fail-closed gate.
+            _mark_transport_event("client_constructing")
             kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url, max_retries=0)
             client = OpenAI(**kwargs)
+            _mark_transport_event("client_constructed")
+            _mark_transport_event("request_dispatched")
             response = client.responses.create(
                 model=self.model,
                 input=[
@@ -267,12 +324,16 @@ class V3LLMBrainProvider:
                 timeout=self._effective_timeout_seconds(request),
                 max_output_tokens=self.max_tokens,
             )
+            _mark_transport_event("complete_response_observed")
             text = getattr(response, "output_text", None) or ""
             if not text:
                 text = _response_text_from_openai(response)
             if _response_ended_at_output_limit(response):
                 raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
-            return _loads_json_object(text)
+            _mark_transport_event("json_parse_started")
+            parsed = _loads_json_object(text)
+            _mark_transport_event("json_parse_completed")
+            return parsed
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
@@ -299,8 +360,11 @@ class V3LLMBrainProvider:
 
             # Keep the DeepSeek-compatible transport to the same one-attempt
             # contract as Responses and the managed image gateway.
+            _mark_transport_event("client_constructing")
             kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url, max_retries=0)
             client = OpenAI(**kwargs)
+            _mark_transport_event("client_constructed")
+            _mark_transport_event("request_dispatched")
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -315,12 +379,16 @@ class V3LLMBrainProvider:
                 timeout=self._effective_timeout_seconds(request),
                 max_tokens=self.max_tokens,
             )
+            _mark_transport_event("complete_response_observed")
             choices = getattr(response, "choices", None) or []
             message = getattr(choices[0], "message", None) if choices else None
             text = getattr(message, "content", None) or ""
             if _response_ended_at_output_limit(response, choice=choices[0] if choices else None):
                 raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
-            return _loads_json_object(text)
+            _mark_transport_event("json_parse_started")
+            parsed = _loads_json_object(text)
+            _mark_transport_event("json_parse_completed")
+            return parsed
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
@@ -349,13 +417,20 @@ class V3LLMBrainProvider:
                 "system": _system_prompt(request.stage, json_recovery=json_recovery),
                 "messages": [{"role": "user", "content": build_remote_payload(request)}],
             }
+            _mark_transport_event("client_constructing")
             with httpx.Client(timeout=self._effective_timeout_seconds(request)) as client:
+                _mark_transport_event("client_constructed")
+                _mark_transport_event("request_dispatched")
                 response = client.post(url, headers=headers, json=payload)
+                _mark_transport_event("complete_response_observed")
                 response.raise_for_status()
             response_json = response.json()
             if _response_ended_at_output_limit(response_json):
                 raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
-            return _loads_json_object(_anthropic_text(response_json))
+            _mark_transport_event("json_parse_started")
+            parsed = _loads_json_object(_anthropic_text(response_json))
+            _mark_transport_event("json_parse_completed")
+            return parsed
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
@@ -428,26 +503,115 @@ def _request_timeout_cap_seconds(request: BrainRunRequest) -> float | None:
     return max(1.0, min(120.0, value))
 
 
-def _call_with_timeout(callable_obj: Any, *, timeout_seconds: float) -> dict[str, Any]:
+def _call_with_timeout(
+    callable_obj: Any,
+    *,
+    timeout_seconds: float,
+    trace: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {}
+    started = time.perf_counter()
 
     def runner() -> None:
         try:
+            _mark_transport_event("provider_runner_entered")
             result["value"] = callable_obj()
         except BaseException as exc:  # pragma: no cover - re-raised in caller thread
             result["error"] = exc
 
-    thread = threading.Thread(target=runner, name="v3-llm-brain-provider", daemon=True)
+    context = copy_context()
+    thread = threading.Thread(target=lambda: context.run(runner), name="v3-llm-brain-provider", daemon=True)
     thread.start()
     thread.join(timeout=max(0.1, float(timeout_seconds)))
     if thread.is_alive():
-        raise TimeoutError(f"remote Brain provider timed out after {timeout_seconds:.2f} seconds")
+        raise _transport_timeout_from_trace(
+            trace or {},
+            timeout_seconds=float(timeout_seconds),
+            elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
+        )
     if "error" in result:
         raise result["error"]
     value = result.get("value")
     if not isinstance(value, dict):
         raise BrainProviderError("remote brain provider returned an invalid payload")
     return value
+
+
+def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:
+    return {
+        "schema_version": "v3_brain_transport_trace_v1",
+        "stage": str(stage or "unknown"),
+        "json_recovery": bool(json_recovery),
+        "last_event": "created",
+        "response_started": False,
+        "first_content_observed": False,
+        "complete_response_observed": False,
+        "json_parse_started": False,
+        "json_parse_completed": False,
+    }
+
+
+def _mark_transport_event(event: str) -> None:
+    trace = _ACTIVE_TRANSPORT_TRACE.get()
+    if not isinstance(trace, dict):
+        return
+    normalized = str(event or "").strip().lower()
+    trace["last_event"] = normalized
+    if normalized in {"complete_response_observed", "json_parse_started", "json_parse_completed"}:
+        trace["response_started"] = True
+        trace["first_content_observed"] = True
+    if normalized == "complete_response_observed":
+        trace["complete_response_observed"] = True
+    if normalized == "json_parse_started":
+        trace["json_parse_started"] = True
+    if normalized == "json_parse_completed":
+        trace["json_parse_started"] = True
+        trace["json_parse_completed"] = True
+
+
+def _transport_timeout_from_trace(
+    trace: dict[str, Any],
+    *,
+    timeout_seconds: float,
+    elapsed_ms: int,
+) -> BrainTransportTimeoutError:
+    phase = _transport_timeout_phase(trace)
+    return BrainTransportTimeoutError(
+        stage=str(trace.get("stage") or "unknown"),
+        timeout_seconds=timeout_seconds,
+        elapsed_ms=elapsed_ms,
+        timeout_phase=phase,
+        response_started=bool(trace.get("response_started")),
+        first_content_observed=bool(trace.get("first_content_observed")),
+        complete_response_observed=bool(trace.get("complete_response_observed")),
+        json_parse_started=bool(trace.get("json_parse_started")),
+        json_parse_completed=bool(trace.get("json_parse_completed")),
+    )
+
+
+def _transport_timeout_phase(trace: dict[str, Any]) -> str:
+    if bool(trace.get("json_parse_started")) and not bool(trace.get("json_parse_completed")):
+        return "json_parse_timeout"
+    if bool(trace.get("first_content_observed")) or bool(trace.get("response_started")):
+        return "read_timeout"
+    last_event = str(trace.get("last_event") or "").strip().lower()
+    if last_event in {"client_constructing", "created"}:
+        return "connect_timeout"
+    return "unknown_transport_timeout"
+
+
+def _safe_transport_timeout_phase(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {
+        "connect_timeout",
+        "ttfb_timeout",
+        "read_timeout",
+        "complete_response_timeout",
+        "json_parse_timeout",
+        "unknown_transport_timeout",
+    }:
+        return normalized
+    return "unknown_transport_timeout"
 
 
 def _openai_client_kwargs(*, api_key: str, base_url: str | None, **extra: Any) -> dict[str, Any]:

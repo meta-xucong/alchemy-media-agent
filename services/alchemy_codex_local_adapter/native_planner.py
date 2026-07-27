@@ -96,6 +96,51 @@ class _LocalMcpPlanningInProgress(RuntimeError):
 _PLANNING_PROCESS_LOCK = threading.Lock()
 
 
+def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
+    """Keep Local MCP transport diagnostics useful but public-safe."""
+
+    if not isinstance(value, dict):
+        return {}
+    schema_version = value.get("schema_version")
+    stage = value.get("stage")
+    error_class = value.get("transport_error_class")
+    timeout_phase = value.get("timeout_phase")
+    timeout_seconds = value.get("timeout_seconds")
+    elapsed_ms = value.get("elapsed_ms")
+    if schema_version != "v3_brain_transport_failure_v1":
+        return {}
+    if not isinstance(stage, str) or not stage.strip():
+        return {}
+    if error_class != "timeout":
+        return {}
+    if timeout_phase not in {
+        "connect_timeout",
+        "ttfb_timeout",
+        "read_timeout",
+        "complete_response_timeout",
+        "json_parse_timeout",
+        "unknown_transport_timeout",
+    }:
+        return {}
+    if not isinstance(timeout_seconds, (int, float)) or float(timeout_seconds) <= 0.0:
+        return {}
+    if not isinstance(elapsed_ms, int) or elapsed_ms < 0:
+        return {}
+    return {
+        "schema_version": "v3_brain_transport_failure_v1",
+        "stage": stage,
+        "transport_error_class": "timeout",
+        "timeout_phase": timeout_phase,
+        "timeout_seconds": round(float(timeout_seconds), 3),
+        "elapsed_ms": elapsed_ms,
+        "response_started": bool(value.get("response_started")),
+        "first_content_observed": bool(value.get("first_content_observed")),
+        "complete_response_observed": bool(value.get("complete_response_observed")),
+        "json_parse_started": bool(value.get("json_parse_started")),
+        "json_parse_completed": bool(value.get("json_parse_completed")),
+    }
+
+
 class PlanningOnlyGenerationRouter:
     """Sentinel injected into ScenarioRuntime so this facade cannot render."""
 
@@ -902,15 +947,23 @@ class CodexNativeImageGenPlanner:
                 "fallback_used",
                 "remote_provider_available",
                 "remote_error_class",
+                "remote_brain_stage",
                 "remote_http_status_code",
                 "execution_budget",
+                "remote_brain_transport_failure",
                 "remote_contract_rejected_sections",
                 "expected_image_count",
                 "actual_image_count",
                 "actual_direction_count",
             }
-            result["planning_failure"] = {
-                key: value for key, value in remote.items() if key in safe_fields
-            }
+            result["planning_failure"] = {}
+            for key, value in remote.items():
+                if key not in safe_fields:
+                    continue
+                if key == "remote_brain_transport_failure":
+                    value = _safe_remote_brain_transport_failure(value)
+                    if not value:
+                        continue
+                result["planning_failure"][key] = value
             return result
         return self._blocked("codex_native_imagegen_planning_blocked", message)
