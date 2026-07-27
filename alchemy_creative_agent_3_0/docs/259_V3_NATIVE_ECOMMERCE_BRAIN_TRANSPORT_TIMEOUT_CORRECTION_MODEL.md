@@ -605,11 +605,68 @@ Immediate stop conditions:
 - failure output leaks prompt/path/provider payload/credential/internal IDs;
 - reviewer rejects the correction model.
 
-The reviewed code fix and one successful planning-only probe now exist. The
-six-image product set remains incomplete only because controlled real-image
-generation, visual review, and final product-set acceptance have not yet run.
+The reviewed code fix and one successful planning-only probe now exist.
 
-## 12. Old-document conflict index
+## 12. Controlled N=6 real materialization attempt — host output safety blocker
+
+After `e3f3b56`, a reviewer-approved controlled N=6 real task was run through
+the frozen specialized planning relay:
+
+- evidence root:
+  `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z`;
+- planning summary:
+  `reports/mcp-real-n6-product-set-plan-after-e3f3b56-summary.json`;
+- requested output count: `6`;
+- Remote Brain stages: `plan -> provider_prompt_finalize`;
+- `remote_brain_call_count=2`;
+- planning status: `planned_for_codex_native_imagegen`;
+- business mutation during planning: `0` jobs, handoffs, V3 outputs,
+  receipts, slots, or activations.
+
+The first host materialization attempt accidentally produced one combined
+six-panel preview image. That file is retained append-only as a
+`host_combined_contact_sheet_invalid_for_exact_n6_delivery` record, but it does
+not count as six output bindings or as product-set delivery.
+
+Per Doc132/P13 review, the same frozen N=6 plan may be materialized by calling
+the Codex built-in ImageGen host once per frozen output binding, as long as no
+Brain re-planning, prompt editing, role reordering, or independent N=1 planning
+occurs. Under that corrected host policy:
+
+- `codex_native_output_6ddc39a02a_1` was materialized and saved under
+  `native_imagegen_outputs/`;
+- `codex_native_output_6ddc39a02a_2` was blocked by the host ImageGen output
+  safety gate with `code=moderation_blocked`,
+  `moderation_stage=output`, `category=other`;
+- business mutation remained `0` for job, handoff, V3 output, receipt, slot,
+  and activation;
+- no retry, route switch, fallback, local prompt rewrite, or Brain re-plan was
+  performed.
+
+Current classification:
+
+```text
+host_materialization_blocked_before_exact_n6_completion
+```
+
+This is a host output safety gate result, not a Brain/MCP planning, slot,
+receipt, or Formal Core defect. A plausible but unproven hypothesis is that the
+second output's dynamic beach play / walking or skipping semantics triggered a
+conservative output-stage safety decision. That hypothesis must not be reported
+as proven.
+
+The old N=6 plan and its partial host evidence are now historical append-only
+evidence. If work continues, it must start a new, separately recorded N=6
+planning attempt through Remote Brain. The new attempt may ask Remote Brain to
+sign safer commercial-catalog constraints such as static posing, normal
+kidswear catalog composition, beach setting, product fidelity, and no
+running/playing/sitting-on-ground action semantics. It must not reuse the old
+materialized output as a product-set member, edit the old canonical prompts
+locally, or bypass the host safety system.
+
+The six-image product set remains incomplete.
+
+## 13. Old-document conflict index
 
 This correction model does not delete historical documents. The following
 markers identify only proven conflict risk for the present Brain
