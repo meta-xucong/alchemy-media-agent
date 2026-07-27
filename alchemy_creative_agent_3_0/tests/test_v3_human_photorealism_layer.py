@@ -49,7 +49,7 @@ def _ecommerce_review_context() -> dict:
                 ],
                 "professional_identity_hint": {
                     "preferred_identity_view_kind": "front",
-                    "identity_strategy": "coherent_secondary_turn",
+                    "identity_strategy": "secondary_face",
                     "source": "professional_binding_resolver",
                 },
             }
@@ -258,3 +258,143 @@ def test_malformed_ecommerce_review_context_is_not_forwarded_to_shared_review() 
 
     assert "ecommerce_human_realism_review_context" not in guidance.metadata
     assert "ecommerce_human_realism_review_context" not in contribution.review_contract
+
+
+def test_ecommerce_review_context_rejects_unknown_or_invalid_closed_enum_values() -> None:
+    cases = []
+    cases.append({"mode": "other_mode"})
+    cases.append({"source_contract_version": "ecommerce_creative_risk_preflight_v999"})
+    cases.append({"global_risks": ["unknown_risk"]})
+    cases.append({"global_risks": ["pasted_face", "pasted_face"]})
+    cases.append({"global_risks": ["template_expression"]})
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "risk_family": ["unknown_risk"],
+                }
+            ]
+        }
+    )
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "risk_family": [],
+                }
+            ]
+        }
+    )
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "risk_family": ["pasted_face", "pasted_face"],
+                }
+            ]
+        }
+    )
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "strategy_policy": [],
+                }
+            ]
+        }
+    )
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "strategy_policy": [
+                        "action_triggered_expression",
+                        "action_triggered_expression",
+                    ],
+                }
+            ]
+        }
+    )
+    cases.append(
+        {
+            "risk_items_by_output": [
+                _ecommerce_review_context()["risk_items_by_output"][0],
+                _ecommerce_review_context()["risk_items_by_output"][0],
+            ]
+        }
+    )
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "primary_goal_hint": "unknown_goal",
+                }
+            ]
+        }
+    )
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "risk_level": "severe",
+                }
+            ]
+        }
+    )
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "strategy_policy": ["unknown_strategy"],
+                }
+            ]
+        }
+    )
+    bad_hint = {
+        **_ecommerce_review_context()["risk_items_by_output"][0]["professional_identity_hint"],
+        "preferred_identity_view_kind": "sideways",
+    }
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "professional_identity_hint": bad_hint,
+                }
+            ]
+        }
+    )
+    bad_strategy_hint = {
+        **_ecommerce_review_context()["risk_items_by_output"][0]["professional_identity_hint"],
+        "identity_strategy": "coherent_secondary_turn",
+    }
+    cases.append(
+        {
+            "risk_items_by_output": [
+                {
+                    **_ecommerce_review_context()["risk_items_by_output"][0],
+                    "professional_identity_hint": bad_strategy_hint,
+                }
+            ]
+        }
+    )
+
+    for override in cases:
+        context = {**_ecommerce_review_context(), **override}
+        guidance = _build(
+            "Professional ecommerce photo of a real person wearing a product.",
+            subject_type="product",
+            metadata={"ecommerce_human_realism_review_context": context},
+        )
+        contribution = _human_realism_plugin_contribution(guidance)
+
+        assert "ecommerce_human_realism_review_context" not in guidance.metadata
+        assert "ecommerce_human_realism_review_context" not in contribution.review_contract

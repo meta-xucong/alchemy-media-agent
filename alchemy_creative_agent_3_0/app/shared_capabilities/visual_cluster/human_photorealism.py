@@ -30,7 +30,6 @@ HUMAN_REALISM_REVIEW_DIMENSIONS = (
 _ECOMMERCE_HUMAN_REALISM_REVIEW_CONTEXT_VERSION = (
     "ecommerce_human_realism_review_context_v1"
 )
-_ECOMMERCE_REVIEW_CONTEXT_ENUM_RE = re.compile(r"^[a-z0-9_]+$")
 _ECOMMERCE_REVIEW_CONTEXT_ITEM_KEYS = {
     "output_index",
     "risk_family",
@@ -170,9 +169,12 @@ def _safe_ecommerce_human_realism_review_context(value: Any) -> dict[str, Any]:
     ):
         return {}
 
-    mode = _safe_context_enum(value.get("mode"))
-    applies_to = _safe_context_enum(value.get("applies_to"))
-    source_contract_version = _safe_context_enum(value.get("source_contract_version"))
+    mode = _safe_enum_value(value.get("mode"), "mode")
+    applies_to = value.get("applies_to")
+    source_contract_version = _safe_enum_value(
+        value.get("source_contract_version"),
+        "contract_version",
+    )
     if not mode or applies_to != "ecommerce" or not source_contract_version:
         return {}
 
@@ -194,8 +196,17 @@ def _safe_ecommerce_human_realism_review_context(value: Any) -> dict[str, Any]:
         seen_indexes.add(output_index)
         projected_items.append(item)
 
-    global_risks = _safe_context_enum_list(value.get("global_risks"))
-    if global_risks is None:
+    global_risks = _safe_enum_list(
+        value.get("global_risks"),
+        "global_risks",
+        allow_empty=True,
+    )
+    risk_families = {
+        risk
+        for item in projected_items
+        for risk in item.get("risk_family", [])
+    }
+    if global_risks is None or not set(global_risks).issubset(risk_families):
         return {}
     return {
         "contract_version": _ECOMMERCE_HUMAN_REALISM_REVIEW_CONTEXT_VERSION,
@@ -231,10 +242,10 @@ def _safe_ecommerce_review_item(
         or output_index > requested_image_count
     ):
         return {}
-    risk_family = _safe_context_enum_list(value.get("risk_family"))
-    strategy_policy = _safe_context_enum_list(value.get("strategy_policy"))
-    primary_goal_hint = _safe_context_enum(value.get("primary_goal_hint"))
-    risk_level = _safe_context_enum(value.get("risk_level"))
+    risk_family = _safe_enum_list(value.get("risk_family"), "risk_family")
+    strategy_policy = _safe_enum_list(value.get("strategy_policy"), "strategy_policy")
+    primary_goal_hint = _safe_enum_value(value.get("primary_goal_hint"), "primary_goal_hint")
+    risk_level = _safe_enum_value(value.get("risk_level"), "risk_level")
     if risk_family is None or strategy_policy is None or not primary_goal_hint or not risk_level:
         return {}
     item = {
@@ -257,9 +268,12 @@ def _safe_ecommerce_identity_hint(value: Any) -> dict[str, str]:
         return {}
     if set(value) - _ECOMMERCE_REVIEW_CONTEXT_HINT_KEYS:
         return {}
-    preferred_view = _safe_context_enum(value.get("preferred_identity_view_kind"))
-    strategy = _safe_context_enum(value.get("identity_strategy"))
-    source = _safe_context_enum(value.get("source"))
+    preferred_view = _safe_enum_value(
+        value.get("preferred_identity_view_kind"),
+        "preferred_identity_view_kind",
+    )
+    strategy = _safe_enum_value(value.get("identity_strategy"), "identity_strategy")
+    source = _safe_enum_value(value.get("source"), "professional_identity_hint_source")
     if not preferred_view or not strategy or source != "professional_binding_resolver":
         return {}
     return {
@@ -269,12 +283,19 @@ def _safe_ecommerce_identity_hint(value: Any) -> dict[str, str]:
     }
 
 
-def _safe_context_enum_list(value: Any) -> list[str] | None:
+def _safe_enum_list(
+    value: Any,
+    key: str,
+    *,
+    allow_empty: bool = False,
+) -> list[str] | None:
     if not isinstance(value, list):
+        return None
+    if not value and not allow_empty:
         return None
     items: list[str] = []
     for item in value:
-        cleaned = _safe_context_enum(item)
+        cleaned = _safe_enum_value(item, key)
         if not cleaned:
             return None
         items.append(cleaned)
@@ -283,13 +304,25 @@ def _safe_context_enum_list(value: Any) -> list[str] | None:
     return items
 
 
-def _safe_context_enum(value: Any) -> str:
+def _safe_enum_value(value: Any, key: str) -> str:
     if not isinstance(value, str):
         return ""
     cleaned = value.strip()
-    if not cleaned or not _ECOMMERCE_REVIEW_CONTEXT_ENUM_RE.fullmatch(cleaned):
+    allowed_values = _ecommerce_creative_risk_allowed_values().get(key, ())
+    if cleaned not in allowed_values:
         return ""
     return cleaned
+
+
+def _ecommerce_creative_risk_allowed_values() -> dict[str, tuple[str, ...]]:
+    # Local import avoids an import-time cycle: E-Commerce contracts import a
+    # shared capability model, while this shared review boundary needs the
+    # E-Commerce enum table only when an E-Commerce review context is present.
+    from ...scenario_packs.ecommerce.contracts import (  # noqa: PLC0415
+        ECOMMERCE_CREATIVE_RISK_ALLOWED_VALUES,
+    )
+
+    return ECOMMERCE_CREATIVE_RISK_ALLOWED_VALUES
 
 _HUMAN_TERMS = {
     "portrait",

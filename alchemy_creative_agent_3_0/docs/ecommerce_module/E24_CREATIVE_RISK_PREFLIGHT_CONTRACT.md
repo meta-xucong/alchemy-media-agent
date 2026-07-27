@@ -814,7 +814,15 @@ Stop conditions for Phase 4B:
 - malformed or unknown preflight values must fail closed before Brain/provider
   calls through the existing Phase B runtime gate;
 - unsafe review-context shapes must be rejected by the shared Human Realism
-  allowlist and must not appear in review or retry contracts;
+  allowlist and must not appear in review or retry contracts. The shared
+  allowlist must reuse the current E24 closed enum values for `mode`,
+  `risk_family`, `global_risks`, `primary_goal_hint`, `risk_level`,
+  `strategy_policy`, `preferred_identity_view_kind`, and `identity_strategy`;
+  regex-shaped but unknown values are not valid;
+- `risk_family` and `strategy_policy` must be non-empty and duplicate-free per
+  output item; `global_risks` must be duplicate-free and a subset of the
+  emitted output risk families; `source_contract_version` must exactly match
+  the current preflight contract version;
 - no E-Commerce risk field may add prompt fragments, Provider parameters,
   hidden fallback, extra retry, slot writes, or receipt writes.
 

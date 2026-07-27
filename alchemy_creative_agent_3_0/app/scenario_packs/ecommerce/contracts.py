@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, get_args
 
 from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
 
@@ -81,6 +81,19 @@ ProfessionalIdentityStrategy = Literal[
 ]
 
 CreativeRiskMode = Literal["standard", "professional"]
+
+ECOMMERCE_CREATIVE_RISK_ALLOWED_VALUES: dict[str, tuple[str, ...]] = {
+    "contract_version": ("ecommerce_creative_risk_preflight_v1",),
+    "mode": get_args(CreativeRiskMode),
+    "risk_family": get_args(CreativeRiskFamily),
+    "global_risks": get_args(CreativeRiskFamily),
+    "primary_goal_hint": get_args(CreativeRiskPrimaryGoalHint),
+    "risk_level": get_args(CreativeRiskLevel),
+    "strategy_policy": get_args(CreativeRiskStrategyPolicy),
+    "preferred_identity_view_kind": get_args(ProfessionalIdentityViewKind),
+    "identity_strategy": get_args(ProfessionalIdentityStrategy),
+    "professional_identity_hint_source": ("professional_binding_resolver",),
+}
 
 
 _PROFESSIONAL_VIEW_KIND_BY_SELECTOR = {
