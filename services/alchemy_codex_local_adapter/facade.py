@@ -14,6 +14,7 @@ from .contracts import (
 )
 from .native_planner import CodexNativeImageGenPlanner
 from .professional_binding import persistent_professional_binding_resolver
+from .professional_binding import visual_asset_library_professional_binding_resolver
 
 
 class CodexNativeImageGenFacade:
@@ -38,7 +39,13 @@ class CodexNativeImageGenFacade:
         else:
             resolver = professional_binding_resolver
             if resolver is None and professional_asset_catalog_root is not None:
-                resolver = persistent_professional_binding_resolver(professional_asset_catalog_root)
+                from pathlib import Path
+
+                catalog_root = Path(professional_asset_catalog_root)
+                if (catalog_root / "library").is_dir():
+                    resolver = visual_asset_library_professional_binding_resolver(catalog_root)
+                else:
+                    resolver = persistent_professional_binding_resolver(catalog_root)
             self._planner = CodexNativeImageGenPlanner(
                 professional_binding_resolver=resolver,
             )

@@ -2811,6 +2811,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
         derivatives: list[dict[str, Any]],
         reference_policy: dict[str, Any],
     ) -> bool:
+        if request is not None and asset is not None:
+            metadata = self._generation_request_metadata(request)
+            if (
+                metadata.get("professional_identity_reference_strategy")
+                == "visual_asset_library_product_model_v1"
+                and bool(asset.get("codex_native_server_owned_reference"))
+            ):
+                return True
         if request is not None and asset is not None and self._professional_character_card_full_frame_framing_source(
             request,
             asset,
@@ -3000,6 +3008,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         ) in {
             "serial_anchor_pack_root_reuse_v1",
             "character_card_shared_identity_v1",
+            "visual_asset_library_product_model_v1",
         }
         for index, asset in enumerate(reference_assets):
             asset_id = str(asset.get("asset_id") or f"reference_{index + 1}")
@@ -3106,6 +3115,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         provider_layers = [layer for layer in truth_layers if layer in {"portrait_identity_truth", "product_identity_truth", "structured_appearance_truth"}]
         if not provider_layers:
             return []
+        if portrait_identity_derivative_kinds == ():
+            return []
         try:
             from app.services.provider_reference import prepare_reference_truth_derivatives
 
@@ -3144,6 +3155,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 # inputs; do not expand each into a pair and exceed the
                 # shared Provider reference budget.
                 return ("portrait_identity_crop",)
+        if metadata.get("professional_identity_reference_strategy") == "visual_asset_library_product_model_v1":
+            if bool(asset.get("codex_native_server_owned_reference")):
+                return ()
+            return None
         if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
             return None
         stage = str(metadata.get("professional_reference_stage") or "").strip()
@@ -3400,6 +3415,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if strategy not in {
             "serial_anchor_pack_root_reuse_v1",
             "character_card_shared_identity_v1",
+            "visual_asset_library_product_model_v1",
         }:
             return []
         if strategy == "serial_anchor_pack_root_reuse_v1" and metadata.get("professional_anchor_capture_scope") != "character_card_face_identity":

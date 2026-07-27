@@ -710,3 +710,26 @@ def test_plugin_launcher_resolves_only_explicit_professional_catalog_configurati
                 "ALCHEMY_CODEX_LOCAL_PROFESSIONAL_ASSET_CATALOG_ROOT": str(tmp_path / "missing")
             },
         )
+
+
+def test_plugin_launcher_uses_repo_root_visual_asset_library_when_pointer_is_stale(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    launcher = _load_plugin_launcher()
+    stale = tmp_path / "old-worktree" / "catalog"
+    (tmp_path / ".codex-local-professional-catalog-path").write_text(
+        str(stale), encoding="utf-8"
+    )
+    library_root = tmp_path / ".media_storage" / "v3_visual_asset_library"
+    (library_root / "library" / "local_default").mkdir(parents=True)
+
+    resolved = launcher.resolve_professional_catalog_root(
+        repository_root=tmp_path,
+        environ={},
+    )
+
+    assert resolved == library_root.resolve()
+    captured = capsys.readouterr()
+    assert "unavailable Professional catalog pointer" in captured.err
+    assert "Visual Asset Library" in captured.err

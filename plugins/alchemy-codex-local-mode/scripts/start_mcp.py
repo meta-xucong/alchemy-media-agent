@@ -13,6 +13,7 @@ _ENV_FILE_ENV = "ALCHEMY_CODEX_LOCAL_ENV_FILE"
 _PROFESSIONAL_CATALOG_ENV = "ALCHEMY_CODEX_LOCAL_PROFESSIONAL_ASSET_CATALOG_ROOT"
 _LOCAL_ENV_PATH_FILE = ".codex-local-env-path"
 _LOCAL_PROFESSIONAL_CATALOG_PATH_FILE = ".codex-local-professional-catalog-path"
+_DEFAULT_VISUAL_ASSET_LIBRARY_ROOT = ".media_storage/v3_visual_asset_library"
 
 
 def _is_alchemy_root(path: Path) -> bool:
@@ -131,9 +132,10 @@ def resolve_professional_catalog_root(
 
     values = environ if environ is not None else os.environ
     configured = str(values.get(_PROFESSIONAL_CATALOG_ENV) or "").strip()
-    candidates: list[Path] = []
+    candidates: list[tuple[str, Path]] = []
+    stale_pointer: Path | None = None
     if configured:
-        candidates.append(Path(configured).expanduser())
+        candidates.append(("configured", Path(configured).expanduser()))
     else:
         pointer = repository_root / _LOCAL_PROFESSIONAL_CATALOG_PATH_FILE
         if pointer.is_file():
@@ -142,18 +144,34 @@ def resolve_professional_catalog_root(
             except OSError as exc:
                 raise RuntimeError(f"Could not read {pointer}: {exc}") from exc
             if pointer_value:
-                candidates.append(Path(pointer_value).expanduser())
+                pointer_candidate = Path(pointer_value).expanduser()
+                candidates.append(("pointer", pointer_candidate))
+                stale_pointer = pointer_candidate
+        default_library = repository_root / _DEFAULT_VISUAL_ASSET_LIBRARY_ROOT
+        candidates.append(("repo_default_visual_asset_library", default_library))
 
-    for candidate in candidates:
+    for source, candidate in candidates:
         try:
             resolved = candidate.resolve(strict=True)
         except (OSError, RuntimeError, ValueError):
             continue
         if resolved.is_dir():
+            if source == "repo_default_visual_asset_library" and stale_pointer is not None:
+                print(
+                    "Codex Local Mode ignored an unavailable Professional catalog pointer "
+                    "and selected the repo-root Visual Asset Library.",
+                    file=sys.stderr,
+                )
             return resolved
     if configured:
         raise RuntimeError(
             f"Configured {_PROFESSIONAL_CATALOG_ENV} is not an available catalog directory."
+        )
+    if stale_pointer is not None:
+        print(
+            "Codex Local Mode ignored an unavailable Professional catalog pointer; "
+            "no repo-root Visual Asset Library was available.",
+            file=sys.stderr,
         )
     return None
 

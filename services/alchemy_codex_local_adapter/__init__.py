@@ -16,7 +16,11 @@ from .contracts import (
 from .facade import CodexNativeImageGenFacade
 from .native_planner import CodexNativeImageGenPlanner, PlanningOnlyGenerationRouter
 from .provenance import renderer_parity_receipt
-from .professional_binding import persistent_professional_binding_resolver
+from .professional_binding import (
+    ProfessionalBindingResolution,
+    persistent_professional_binding_resolver,
+    visual_asset_library_professional_binding_resolver,
+)
 
 __all__ = [
     "CONVERSATION_ONLY_DELIVERY_STATE",
@@ -33,6 +37,8 @@ __all__ = [
     "NativeSpecializedImageGenPlanRequest",
     "NativeReferenceInput",
     "PlanningOnlyGenerationRouter",
+    "ProfessionalBindingResolution",
     "renderer_parity_receipt",
     "persistent_professional_binding_resolver",
+    "visual_asset_library_professional_binding_resolver",
 ]

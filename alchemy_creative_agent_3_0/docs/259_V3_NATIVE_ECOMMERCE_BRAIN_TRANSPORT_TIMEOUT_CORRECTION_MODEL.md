@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **planning-only gate passed; controlled real-image gate pending.**
+Status: **planning-only gate passed; controlled real-image gate paused for Professional identity/product binding repair.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -10,8 +10,8 @@ Implementation note: this document started as the theory-first correction
 model. It is now also the implementation closure record for the focused
 transport-diagnostics, finite-budget, and IPC result-return milestones. The
 original blocked facts remain historical evidence; the current active gate is
-controlled real-image generation after the post-`8cd903c` planning-only proof
-in Section 1A.
+the Professional identity/product binding repair in Section 13 after the
+post-`8cd903c` planning-only proof in Section 1A.
 
 ## 1. Current blocked fact pattern
 
@@ -607,7 +607,7 @@ Immediate stop conditions:
 
 The reviewed code fix and one successful planning-only probe now exist.
 
-## 12. Controlled N=6 real materialization attempt — host output safety blocker
+## 12. Controlled N=6 real materialization attempt — historical host output safety blocker
 
 After `e3f3b56`, a reviewer-approved controlled N=6 real task was run through
 the frozen specialized planning relay:
@@ -666,7 +666,164 @@ locally, or bypass the host safety system.
 
 The six-image product set remains incomplete.
 
-## 13. Old-document conflict index
+Historical/superseded gate note: this safety blocker is no longer the first
+active blocker. Later audit found that the same attempt used the Specialized
+Native ImageGen endpoint rather than the Professional Native ImageGen endpoint,
+and the frozen outputs admitted only product-truth references while their
+prompts described a generic girl. That means the run was not bound to the
+server-owned Professional Character Card identity, so its partial materialized
+evidence cannot be continued or certified as the requested product-on-model
+task.
+
+## 13. Professional product-model identity/product binding repair
+
+### Observed mismatch
+
+The controlled N=6 plan used `prepare_frozen_specialized_native_imagegen_plan`.
+The request carried an identity-looking field, but the resulting output
+contracts admitted only product-truth crops and the canonical prompts described
+a generic child model rather than the selected Professional model. This is an
+identity-binding mismatch, not a product prompt, Core, slot, receipt, or host
+rendering defect.
+
+Additional storage evidence showed that two current stores were not connected:
+
+- the active Character Card asset lives in
+  `.media_storage/v3_visual_asset_library/library/local_default/visual_assets.json`;
+- the old Professional native resolver looked for
+  `PersistentVisualAssetCatalog` people assets and active packs, but the
+  current `.media_storage/v3_visual_assets/.../people_assets.json` is empty;
+- `.codex-local-professional-catalog-path` may still point at a stale worktree,
+  so runtime discovery must not silently fall back to a raw output path or the
+  Specialized endpoint;
+- the active library asset records
+  `root_source_provenance.source_asset_id=v3_asset_054b1c4728614187`, while the
+  current `.media_storage/v3_uploads` store may not contain that upload unless
+  it has been reconciled from verified append-only evidence.
+
+The verified root upload evidence found in controlled validation has:
+
+```text
+source_asset_id=v3_asset_054b1c4728614187
+sha256=afe6ac2e7b116e0b1802cf44d63790dc51fe32a686796204476db70b0991b35d
+role=face_reference
+status=ready
+consent_reference=user-authorized-local-reference-20260722-mcp-standard-modeling
+```
+
+That evidence may be used only as reconciliation evidence. It must not make
+`.controlled-validation/` an implicit production resolver root.
+
+### Current authority
+
+Professional product-on-model planning must use the Professional Native
+ImageGen entry point and server-owned binding evidence:
+
+```text
+project_id + people_asset_id + professional_identity_view_ids
+```
+
+The selected identity asset must be resolved through an explicit
+ProjectVisualAssetBinding snapshot. The asset's original modeling
+`provenance.project_id` is historical modeling context; it is not a substitute
+for joining the asset to an arbitrary product project.
+
+Reference inputs are now separated by authority:
+
+1. server-owned Professional identity chain:
+   immutable root portrait (`portrait_identity`) plus one or more approved
+   Character Card winners (`selected_identity_reference`);
+2. user/product-owned product truth inputs (`product_truth`).
+
+Both classes must be admitted by the provider materialization contract. Missing
+ProjectVisualAssetBinding, missing verified root upload manifest, missing
+active Character Card winner, missing product truth, or a materialization plan
+that drops either class must fail closed before image generation.
+
+### Runtime-source boundary
+
+Production Professional binding resolution must not scan
+`.controlled-validation/`, glob historical runs, or guess IDs from raw
+`v3_output.../original.png` paths. Correct source options are:
+
+1. reconcile the verified root upload into the current server-owned
+   `.media_storage/v3_uploads/<source_asset_id>/` store with an append-only
+   manifest recording source evidence path, target path, SHA-256, asset.json
+   fields, and timestamp; or
+2. inject an explicit trusted source-root resolver/config for a controlled
+   validation run, with the descriptor recording that source root.
+
+The default repository runtime reads the current server-owned media root only.
+Tests must simulate a complete runtime store under a temporary `.media_storage`
+tree and must not require the production resolver to search evidence roots.
+
+### Real-runtime pre-generation gate
+
+The focused tests prove the contract with a complete temporary runtime store.
+They do not prove the current live `.media_storage` store is ready for product
+generation. Before any new real MCP planning or ImageGen materialization, the
+live runtime must show both of these server-owned facts:
+
+1. `ProjectVisualAssetBinding` exists for the target consuming product project,
+   the selected `visual_asset_id`, the selected active version, asset type
+   `people`, status `active`, and owner scope. The historical/modeling
+   `asset.provenance.project_id` is not accepted as this binding.
+2. `.media_storage/v3_uploads/v3_asset_054b1c4728614187/original.png` and
+   `asset.json` exist and match the verified root evidence:
+   `source_asset_id=v3_asset_054b1c4728614187`,
+   `sha256=afe6ac2e7b116e0b1802cf44d63790dc51fe32a686796204476db70b0991b35d`,
+   `status=ready`, `role=face_reference`, and non-empty consent reference.
+
+Current live-store audit indicates both live preconditions are still missing:
+the existing `project_bindings` frozen job bindings are empty, and the current
+`.media_storage/v3_uploads/v3_asset_054b1c4728614187` directory is absent.
+Therefore the new resolver is expected to fail closed in the live repository
+until a separate, append-only reconciliation step restores the verified root to
+the current media store and the formal binding workflow joins the selected
+people asset to the consuming product project.
+
+This gate must not be bypassed by:
+
+- using the modeling/preparation project id as the consuming project binding;
+- passing raw `v3_output.../original.png` paths as identity inputs;
+- making the resolver scan `.controlled-validation/`;
+- using the Specialized Native ImageGen endpoint as a fallback;
+- omitting product-truth inputs or treating product images as identity-chain
+  views.
+
+### Implemented repair boundary
+
+The focused repair keeps Brain, route/model, exact N, prompt semantics, Core,
+receipt, slot, activation, and host rendering unchanged. It changes only the
+Professional binding/projection seam:
+
+- VisualAssetLibrary-backed Professional resolver reads the current library
+  root, requires an active ProjectVisualAssetBinding, freezes a binding
+  snapshot, validates the immutable root upload manifest, and validates the
+  active Character Card winner output manifest.
+- Professional Native ImageGen product-model planning accepts server-owned
+  identity references separately from product-truth references.
+- The provider materialization strategy
+  `visual_asset_library_product_model_v1` preserves server-owned identity
+  references and product truth references while allowing internal provider
+  evidence derivatives; parity is checked by admitted source IDs, not by raw
+  derivative path count.
+- Runtime discovery ignores stale local catalog pointers when the repo-root
+  VisualAssetLibrary exists, and records the selection through the existing
+  launcher boundary rather than by scanning validation evidence.
+
+Focused regression must prove:
+
+- product-truth references do not infer a serial Professional identity stage;
+- VisualAssetLibrary resolver requires a verified root upload manifest;
+- VisualAssetLibrary resolver requires an active ProjectVisualAssetBinding;
+- stable view selectors resolve to root + approved Character Card winner;
+- Professional E-Commerce plan includes identity sources and product-truth
+  sources in the admitted source set;
+- missing root, missing winner, missing binding, missing identity winner, or
+  missing product truth fails closed with no business mutation.
+
+## 14. Old-document conflict index
 
 This correction model does not delete historical documents. The following
 markers identify only proven conflict risk for the present Brain

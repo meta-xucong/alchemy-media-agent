@@ -49,11 +49,13 @@ from alchemy_creative_agent_3_0.app.photography_profiles import (
 from .contracts import (
     NATIVE_EXECUTION_CHANNEL,
     NativeImageGenPlanRequest,
+    NativeReferenceInput,
     NativeProfessionalImageGenPlanRequest,
     NativeSpecializedImageGenPlanRequest,
     reference_mime_type,
     reference_role_for_channel,
 )
+from .professional_binding import ProfessionalBindingResolution
 from .provenance import native_plan_provenance
 
 
@@ -63,7 +65,7 @@ _SPECIALIZED_TEMPLATE_SCENARIOS = {
     "photographer_template": "photography",
 }
 
-ProfessionalBindingResolver = Callable[..., ProfessionalModeBinding | None]
+ProfessionalBindingResolver = Callable[..., ProfessionalModeBinding | ProfessionalBindingResolution | None]
 
 
 def _float_env(name: str, default: float) -> float:
@@ -337,7 +339,7 @@ class CodexNativeImageGenPlanner:
 
         job_id = self._professional_job_id(request)
         try:
-            binding = self._professional_binding_resolver(
+            binding_resolution = self._professional_binding_resolver(
                 project_id=request.project_id,
                 people_asset_id=request.people_asset_id,
                 job_id=job_id,
@@ -348,6 +350,14 @@ class CodexNativeImageGenPlanner:
                 "codex_native_imagegen_professional_binding_invalid",
                 "The server-owned Professional binding could not be resolved.",
             )
+        if isinstance(binding_resolution, ProfessionalBindingResolution):
+            binding = binding_resolution.binding
+            server_owned_identity_references = tuple(binding_resolution.identity_references)
+            binding_snapshot = binding_resolution.binding_snapshot
+        else:
+            binding = binding_resolution
+            server_owned_identity_references = ()
+            binding_snapshot = None
         if not isinstance(binding, ProfessionalModeBinding):
             return self._blocked(
                 "codex_native_imagegen_professional_binding_unavailable",
@@ -363,6 +373,24 @@ class CodexNativeImageGenPlanner:
                 "codex_native_imagegen_professional_binding_invalid",
                 "The server-owned Professional binding does not match the requested job selectors.",
             )
+        professional_product_model = (
+            request.template_id == "ecommerce_template"
+            and request.professional_reference_stage is None
+        )
+        if professional_product_model and not server_owned_identity_references:
+            return self._blocked(
+                "codex_native_imagegen_professional_identity_references_missing",
+                "Professional E-Commerce planning requires server-owned identity references from the selected Character Card asset.",
+            )
+        if professional_product_model:
+            if server_owned_identity_references[0].channel != "portrait_identity" or not any(
+                item.channel == "selected_identity_reference"
+                for item in server_owned_identity_references[1:]
+            ):
+                return self._blocked(
+                    "codex_native_imagegen_professional_identity_references_missing",
+                    "Professional E-Commerce planning requires the immutable root portrait and at least one reviewed Character Card identity view.",
+                )
 
         scenario_selection: dict[str, Any] = {
             "scenario_id": scenario_id,
@@ -388,15 +416,17 @@ class CodexNativeImageGenPlanner:
             metadata = {
                 "photographer_profile_binding": profile_binding.model_dump(mode="json"),
             }
-        anchor_preparation_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
-            view_role=request.professional_reference_stage or "standard_front"
-        )
-        metadata.update(
-            {
-                "professional_mode": "professional",
-                "project_id": request.project_id,
-                "professional_mode_binding_record": binding.model_dump(mode="json"),
-                "local_mcp_professional_relay": True,
+        if professional_product_model:
+            professional_metadata = {
+                "professional_identity_reference_strategy": "visual_asset_library_product_model_v1",
+                "professional_product_model_planning": True,
+                "professional_product_truth_required": True,
+            }
+        else:
+            anchor_preparation_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+                view_role=request.professional_reference_stage or "standard_front"
+            )
+            professional_metadata = {
                 # The serial relay is a conversation-only projection of the
                 # formal anchor-preparation path, not an ordinary Professional
                 # delivery.  Reuse the typed server contract so the Remote
@@ -411,21 +441,45 @@ class CodexNativeImageGenPlanner:
                     else {}
                 ),
             }
+        metadata.update(
+            {
+                "professional_mode": "professional",
+                "project_id": request.project_id,
+                "professional_mode_binding_record": binding.model_dump(mode="json"),
+                **(
+                    {"professional_visual_asset_binding_snapshot": binding_snapshot.to_brain_evidence()}
+                    if binding_snapshot is not None
+                    else {}
+                ),
+                "local_mcp_professional_relay": True,
+                **professional_metadata,
+            }
         )
         result = self._prepare_frozen_plan(
             request,
             scenario_id=scenario_id,
             scenario_selection=scenario_selection,
             metadata=metadata,
+            server_owned_references=server_owned_identity_references,
         )
         if result.get("status") == "planned_for_codex_native_imagegen":
+            identity_strategy = (
+                "visual_asset_library_product_model_v1"
+                if professional_product_model
+                else "serial_anchor_pack_root_reuse_v1"
+            )
             result["provenance"].update(
                 {
                     "professional_mode": True,
                     "professional_binding": binding.to_brain_evidence(),
                     "professional_identity_view_ids": list(binding.identity_view_ids),
                     "professional_reference_stage": request.professional_reference_stage,
-                    "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                    "professional_identity_reference_strategy": identity_strategy,
+                    **(
+                        {"professional_visual_asset_binding_snapshot": binding_snapshot.to_brain_evidence()}
+                        if binding_snapshot is not None
+                        else {}
+                    ),
                     "professional_serial_intent_sha256": hashlib.sha256(
                         request.user_input.encode("utf-8")
                     ).hexdigest(),
@@ -451,9 +505,10 @@ class CodexNativeImageGenPlanner:
         scenario_id: str,
         scenario_selection: dict[str, Any],
         metadata: dict[str, Any],
+        server_owned_references: tuple[NativeReferenceInput, ...] = (),
     ) -> dict[str, Any]:
         runtime = None if self._uses_default_runtime_factory else self._runtime_factory()
-        uploaded_assets = self._uploaded_assets(request)
+        uploaded_assets = self._uploaded_assets(request, server_owned_references=server_owned_references)
         runtime_metadata = {
             "template_id": request.template_id,
             "requested_image_count": request.requested_image_count,
@@ -536,16 +591,39 @@ class CodexNativeImageGenPlanner:
                 "V3 could not materialize one canonical Provider prompt for every requested output.",
             )
         if isinstance(request, NativeProfessionalImageGenPlanRequest):
+            professional_product_model = (
+                request.template_id == "ecommerce_template"
+                and request.professional_reference_stage is None
+            )
             for materialization in materializations:
                 admitted_source_ids = {
                     str(item.get("source_asset_id") or item.get("asset_id") or "").strip()
                     for item in materialization.reference_assets
                     if isinstance(item, dict)
                 }
-                missing_source_ids = [
+                identity_source_ids = {item.asset_id for item in server_owned_references}
+                product_truth_source_ids = {
+                    item.asset_id for item in request.reference_inputs if item.channel == "product_truth"
+                }
+                if professional_product_model:
+                    if not identity_source_ids or not product_truth_source_ids:
+                        return self._blocked(
+                            "codex_native_imagegen_professional_product_binding_incomplete",
+                            "Professional E-Commerce planning requires both selected identity references and product truth references.",
+                        )
+                    if not identity_source_ids.issubset(admitted_source_ids):
+                        return self._blocked(
+                            "codex_native_imagegen_professional_identity_reference_missing",
+                            "The shared Provider materializer did not admit the selected Professional identity references; no image was created.",
+                        )
+                    if not product_truth_source_ids.issubset(admitted_source_ids):
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_reference_missing",
+                            "The shared Provider materializer did not admit every product truth reference; no image was created.",
+                        )
+                elif [
                     item.asset_id for item in request.reference_inputs if item.asset_id not in admitted_source_ids
-                ]
-                if missing_source_ids:
+                ]:
                     return self._blocked(
                         "codex_native_imagegen_professional_reference_parity_mismatch",
                         "The shared Provider materializer did not admit every Professional serial-chain reference; no image was created.",
@@ -584,9 +662,11 @@ class CodexNativeImageGenPlanner:
                     "reference_image_paths": reference_paths,
                     "reference_input_contract": {
                         "operation": "image_edit" if reference_paths else "image_generate",
-                        "declared_reference_count": len(request.reference_inputs),
+                        "declared_reference_count": len(request.reference_inputs) + len(server_owned_references),
                         "admitted_reference_count": len(reference_paths),
-                        "source_sha256": [item.source_sha256 for item in request.reference_inputs],
+                        "source_sha256": [
+                            item.source_sha256 for item in (*server_owned_references, *request.reference_inputs)
+                        ],
                     },
                 }
                 # Keep the legacy NativeImageGenPlanRequest contract stable;
@@ -598,6 +678,15 @@ class CodexNativeImageGenPlanner:
                         for item in materialization.reference_assets
                         if isinstance(item, dict)
                     ]
+                    if server_owned_references:
+                        output["reference_input_contract"]["professional_identity_source_asset_ids"] = [
+                            item.asset_id for item in server_owned_references
+                        ]
+                    product_truth_ids = [
+                        item.asset_id for item in request.reference_inputs if item.channel == "product_truth"
+                    ]
+                    if product_truth_ids:
+                        output["reference_input_contract"]["product_truth_source_asset_ids"] = product_truth_ids
                 output.update(self._specialized_lineage_projection(request.template_id, deliverables[index - 1]))
             except ValueError:
                 return self._blocked(
@@ -904,6 +993,8 @@ class CodexNativeImageGenPlanner:
     @staticmethod
     def _uploaded_assets(
         request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest | NativeProfessionalImageGenPlanRequest,
+        *,
+        server_owned_references: tuple[NativeReferenceInput, ...] = (),
     ) -> list[UploadedAssetInfo]:
         """Translate explicit local files into the ordinary V3 upload shape.
 
@@ -912,6 +1003,7 @@ class CodexNativeImageGenPlanner:
         subsequent decision, including a fail-closed rejection.
         """
 
+        references = (*server_owned_references, *request.reference_inputs)
         return [
             UploadedAssetInfo(
                 asset_id=item.asset_id,
@@ -922,6 +1014,7 @@ class CodexNativeImageGenPlanner:
                 metadata={
                     "provider_input_required": True,
                     "source_integrity_id": item.source_sha256,
+                    "codex_native_server_owned_reference": item.server_owned,
                     # Keep the shared Brain's existing public channel vocabulary
                     # stable; the adapter-only source label remains separate.
                     "codex_native_reference_channel": (
@@ -941,7 +1034,7 @@ class CodexNativeImageGenPlanner:
                     "v3_owned_upload": True,
                 },
             )
-            for item in request.reference_inputs
+            for item in references
         ]
 
     @staticmethod

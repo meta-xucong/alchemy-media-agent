@@ -105,6 +105,9 @@ class NativeReferenceInput:
     channel: str
     file_path: str
     source_sha256: str
+    source_asset_id: str | None = None
+    output_id: str | None = None
+    server_owned: bool = False
 
     @property
     def required(self) -> bool:
@@ -114,6 +117,8 @@ class NativeReferenceInput:
 
     @property
     def asset_id(self) -> str:
+        if self.source_asset_id:
+            return self.source_asset_id
         return f"codex_local_reference_{self.source_sha256[:24]}"
 
     @classmethod
@@ -391,12 +396,22 @@ class NativeProfessionalImageGenPlanRequest:
         )
 
         stage_value = value.get("professional_reference_stage")
+        reference_channels = [item.channel for item in common.reference_inputs]
+        inferred_serial_identity_stage = (
+            len(reference_channels) in {1, 2, 3}
+            and reference_channels[0] == "portrait_identity"
+            and all(channel == "selected_identity_reference" for channel in reference_channels[1:])
+        )
         if stage_value is None:
-            professional_reference_stage = {
-                1: "standard_front",
-                2: "three_quarter",
-                3: "profile",
-            }.get(len(common.reference_inputs))
+            professional_reference_stage = (
+                {
+                    1: "standard_front",
+                    2: "three_quarter",
+                    3: "profile",
+                }[len(common.reference_inputs)]
+                if inferred_serial_identity_stage
+                else None
+            )
         elif isinstance(stage_value, str) and stage_value.strip() in {"standard_front", "three_quarter", "profile"}:
             professional_reference_stage = stage_value.strip()
         else:
