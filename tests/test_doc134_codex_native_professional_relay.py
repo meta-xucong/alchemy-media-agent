@@ -21,6 +21,8 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     build_provider_generation_request,
 )
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.visual_assets import (
     CharacterCardSlot,
@@ -57,15 +59,61 @@ from services.alchemy_codex_local_adapter.professional_binding import (
 
 
 class _CapturingRuntime:
-    def __init__(self, runtime: ScenarioRuntime) -> None:
+    def __init__(self, runtime: ScenarioRuntime, *, mutate_result=None) -> None:
         self.runtime = runtime
+        self.mutate_result = mutate_result
         self.payloads: list[dict[str, Any]] = []
         self.last_result = None
 
     def plan_job(self, payload: dict[str, Any]):
         self.payloads.append(payload)
         self.last_result = self.runtime.plan_job(payload)
+        if self.mutate_result is not None:
+            self.last_result = self.mutate_result(self.last_result, payload)
         return self.last_result
+
+
+class _ProductTruthSelectionFaultProvider(EcommerceRemoteBrainTestProvider):
+    def __init__(self, selection_fault: str) -> None:
+        super().__init__()
+        self.selection_fault = selection_fault
+
+    def run(self, request):
+        payload = super().run(request)
+        if request.stage != "plan":
+            return payload
+        image_set_plan = payload.get("image_set_plan")
+        entries = (
+            image_set_plan.get("evidence_dimensions_by_output")
+            if isinstance(image_set_plan, dict)
+            else None
+        )
+        if not isinstance(entries, list) or not entries:
+            return payload
+        first_entry = entries[0]
+        if not isinstance(first_entry, dict):
+            return payload
+        product_ids = [
+            str(item.get("asset_id") or "").strip()
+            for item in request.uploaded_assets
+            if isinstance(item, dict)
+            and (
+                str((item.get("metadata") or {}).get("codex_native_reference_channel") or "").strip()
+                == "product_truth"
+                or str(item.get("role") or "").strip() == "product_reference"
+            )
+            and str(item.get("asset_id") or "").strip()
+        ]
+        if self.selection_fault == "missing":
+            first_entry.pop("selected_product_truth_asset_ids", None)
+        elif self.selection_fault == "empty":
+            first_entry["selected_product_truth_asset_ids"] = []
+        elif self.selection_fault == "unknown":
+            first_entry["selected_product_truth_asset_ids"] = ["unknown_product_truth_asset"]
+        elif self.selection_fault == "duplicate":
+            selected = product_ids[0] if product_ids else "missing_product_truth_asset"
+            first_entry["selected_product_truth_asset_ids"] = [selected, selected]
+        return payload
 
 
 def _write_png(path: Path, *, color: tuple[int, int, int] = (129, 91, 77)) -> Path:
@@ -82,6 +130,24 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _product_truth_selection_mutator(selection_by_output_index: dict[int, list[str]]):
+    def mutate(result, _payload):
+        if result.planning_result is None:
+            return result
+        updated_generation_plans = []
+        for index, generation_plan in enumerate(result.planning_result.generation_plans, start=1):
+            metadata = dict(generation_plan.metadata or {})
+            if index in selection_by_output_index:
+                metadata["selected_product_truth_asset_ids"] = list(selection_by_output_index[index])
+            updated_generation_plans.append(generation_plan.model_copy(update={"metadata": metadata}))
+        planning_result = result.planning_result.model_copy(
+            update={"generation_plans": updated_generation_plans}
+        )
+        return result.model_copy(update={"planning_result": planning_result})
+
+    return mutate
 
 
 def _resolver(catalog: InMemoryVisualAssetCatalog):
@@ -471,31 +537,6 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     )
     product_a = _write_png(tmp_path / "product-front.png", color=(80, 145, 210))
     product_b = _write_png(tmp_path / "product-back.png", color=(88, 150, 220))
-    brain = EcommerceRemoteBrainTestProvider()
-    capturing = _CapturingRuntime(ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)))
-    planner = CodexNativeImageGenPlanner(
-        runtime_factory=lambda: capturing,
-        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
-    )
-    materialization_overrides: list[dict[str, Any] | None] = []
-    materialized_reference_assets: list[dict[str, Any]] = []
-    original_materializer = CodexNativeImageGenPlanner._canonical_materializations
-
-    def capture_materializations(planning_result, *, metadata_overrides=None):
-        materialization_overrides.append(metadata_overrides)
-        materializations = original_materializer(
-            planning_result,
-            metadata_overrides=metadata_overrides,
-        )
-        materialized_reference_assets.extend(materializations[0].reference_assets)
-        return materializations
-
-    monkeypatch.setattr(
-        CodexNativeImageGenPlanner,
-        "_canonical_materializations",
-        staticmethod(capture_materializations),
-    )
-
     request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
         _arguments(
             product_a,
@@ -510,6 +551,37 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
             professional_identity_view_ids=["face_front"],
         )
     )
+    product_ids = [item.asset_id for item in request.reference_inputs]
+    brain = EcommerceRemoteBrainTestProvider()
+    capturing = _CapturingRuntime(
+        ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+    materialization_overrides: list[dict[str, Any] | None] = []
+    materialization_overrides_by_asset_id: list[dict[str, dict[str, Any]] | None] = []
+    materialized_reference_assets: list[dict[str, Any]] = []
+    original_materializer = CodexNativeImageGenPlanner._canonical_materializations
+
+    def capture_materializations(planning_result, *, metadata_overrides=None, metadata_overrides_by_asset_id=None):
+        materialization_overrides.append(metadata_overrides)
+        materialization_overrides_by_asset_id.append(metadata_overrides_by_asset_id)
+        materializations = original_materializer(
+            planning_result,
+            metadata_overrides=metadata_overrides,
+            metadata_overrides_by_asset_id=metadata_overrides_by_asset_id,
+        )
+        materialized_reference_assets.extend(materializations[0].reference_assets)
+        return materializations
+
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_canonical_materializations",
+        staticmethod(capture_materializations),
+    )
+
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
 
     assert result["status"] == "planned_for_codex_native_imagegen"
@@ -518,18 +590,41 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         "visual_asset_library_product_model_v1"
     )
     contract = result["outputs"][0]["reference_input_contract"]
-    product_ids = [item.asset_id for item in request.reference_inputs]
     assert contract["declared_reference_count"] == 4
-    assert contract["admitted_reference_count"] >= 4
+    # The canonical Provider materializer expands the two identity sources into
+    # feature-detail + geometry inputs, then admits the one selected product
+    # truth crop: 2*identity + 1*product = 5 renderer references.
+    assert contract["admitted_reference_count"] == 5
+    assert len(result["outputs"][0]["reference_image_paths"]) == 5
     assert contract["professional_identity_source_asset_ids"] == [root_source_id, output_id]
-    assert contract["product_truth_source_asset_ids"] == product_ids
+    assert contract["product_truth_pool_asset_ids"] == product_ids
+    assert contract["selected_product_truth_asset_ids"] == [product_ids[0]]
+    assert contract["admitted_product_truth_asset_ids"] == [product_ids[0]]
+    assert contract["source_sha256"] == [
+        _sha256(library_root.parent / "v3_uploads" / root_source_id / "original.png"),
+        _sha256(library_root.parent / "v3_outputs" / output_id / "original.png"),
+        contract["product_truth_pool_source_sha256"][product_ids[0]],
+    ]
+    assert [item["asset_id"] for item in contract["omitted_product_truth"]] == [product_ids[1]]
     assert set(contract["admitted_reference_source_asset_ids"]) == {
         root_source_id,
         output_id,
-        *product_ids,
+        product_ids[0],
     }
+    assert contract["admitted_reference_derivative_asset_ids"]
+    assert set(contract["admitted_reference_derivative_asset_ids"]).isdisjoint(
+        {root_source_id, output_id, *product_ids}
+    )
     assert capturing.payloads[0]["metadata"]["professional_product_model_planning"] is True
     assert materialization_overrides == [{}]
+    assert len(materialization_overrides_by_asset_id) == 1
+    per_asset_overrides = materialization_overrides_by_asset_id[0] or {}
+    assert len(per_asset_overrides) == 1
+    provider_facing_assets = next(iter(per_asset_overrides.values()))["reference_assets"]
+    assert {
+        item["asset_id"]
+        for item in provider_facing_assets
+    } == {root_source_id, output_id, product_ids[0]}
     assert capturing.payloads[0]["metadata"]["professional_identity_reference_strategy"] == (
         "visual_asset_library_product_model_v1"
     )
@@ -563,6 +658,10 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         if str(item.get("source_asset_id") or item.get("asset_id") or "") in product_ids
     ]
     assert product_materialized_refs
+    assert {
+        str(item.get("source_asset_id") or item.get("asset_id") or "")
+        for item in product_materialized_refs
+    } == {product_ids[0]}
     assert all(item.get("role") != "portrait_identity" for item in product_materialized_refs)
     assert all(
         not str(item.get("derivative_kind") or "").startswith("portrait_identity")
@@ -590,12 +689,6 @@ def test_professional_ecommerce_product_truth_over_capacity_fails_closed(
         _write_png(tmp_path / f"product-{index}.png", color=(80 + index, 145, 210))
         for index in range(4)
     ]
-    brain = EcommerceRemoteBrainTestProvider()
-    planner = CodexNativeImageGenPlanner(
-        runtime_factory=lambda: ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
-        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
-    )
-
     request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
         _arguments(
             products[0],
@@ -610,10 +703,258 @@ def test_professional_ecommerce_product_truth_over_capacity_fails_closed(
             professional_identity_view_ids=["face_front"],
         )
     )
+    product_ids = [item.asset_id for item in request.reference_inputs]
+    brain = EcommerceRemoteBrainTestProvider()
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: _CapturingRuntime(
+            ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
+            mutate_result=_product_truth_selection_mutator({1: product_ids}),
+        ),
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
 
     assert result["status"] == "blocked"
     assert result["code"] == "codex_native_imagegen_reference_input_capacity_exceeded"
+
+
+def test_professional_ecommerce_two_selected_products_exceed_materialized_provider_capacity(
+    tmp_path: Path,
+) -> None:
+    root_source_id = "v3_asset_root"
+    output_id = "v3_output_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    products = [
+        _write_png(tmp_path / f"product-{index}.png", color=(80 + index, 145, 210))
+        for index in range(2)
+    ]
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            products[0],
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one controlled product-on-model catalogue image for the supplied garment.",
+            reference_inputs=[
+                {"channel": "product_truth", "file_path": str(product)}
+                for product in products
+            ],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    product_ids = [item.asset_id for item in request.reference_inputs]
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: _CapturingRuntime(
+            ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
+            mutate_result=_product_truth_selection_mutator({1: product_ids}),
+        ),
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_reference_input_capacity_exceeded"
+
+
+@pytest.mark.parametrize(
+    ("selection_fault", "expected_reason"),
+    [
+        ("missing", "ecommerce_product_truth_selection_invalid"),
+        ("empty", "ecommerce_product_truth_selection_invalid"),
+        ("unknown", "ecommerce_product_truth_selection_unknown_asset"),
+        ("duplicate", "ecommerce_product_truth_selection_duplicate"),
+    ],
+)
+def test_professional_ecommerce_remote_product_selection_fail_closed(
+    tmp_path: Path,
+    selection_fault: str,
+    expected_reason: str,
+) -> None:
+    root_source_id = "v3_asset_root"
+    output_id = "v3_output_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one controlled product-on-model catalogue image for the supplied garment.",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    capturing_runtime = _CapturingRuntime(
+        ScenarioRuntime(
+            llm_brain_adapter=V3LLMBrainAdapter(
+                provider=_ProductTruthSelectionFaultProvider(selection_fault)
+            )
+        )
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing_runtime,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_planning_blocked"
+    assert capturing_runtime.last_result is not None
+    assert expected_reason in " ".join(capturing_runtime.last_result.warnings)
+
+
+@pytest.mark.parametrize("requested_count", [1, 6])
+def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
+    requested_count: int,
+) -> None:
+    request = BrainRunRequest(
+        user_input="Create product-on-model catalogue imagery from supplied identity and product truth.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        requested_image_count=requested_count,
+        metadata={
+            "professional_product_truth_required": True,
+            "professional_product_model_planning": True,
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    evidence_schema = payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"][0]
+    assert evidence_schema["selected_product_truth_asset_ids"] == [
+        "one product_truth asset_id from uploaded_assets"
+    ]
+
+
+def test_general_remote_payload_does_not_require_product_truth_selection() -> None:
+    request = BrainRunRequest(
+        user_input="Create a simple general image.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={},
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    assert "selected_product_truth_asset_ids" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_professional_ecommerce_n6_uses_product_truth_pool_per_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_source_id = "v3_asset_root"
+    output_id = "v3_output_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    products = [
+        _write_png(tmp_path / f"product-{index}.png", color=(80 + index, 145, 210))
+        for index in range(4)
+    ]
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            products[0],
+            template_id="ecommerce_template",
+            requested_image_count=6,
+            platform_profile="generic",
+            user_input="Create six controlled product-on-model catalogue images for the supplied garment.",
+            reference_inputs=[
+                {"channel": "product_truth", "file_path": str(product)}
+                for product in products
+            ],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    product_ids = [item.asset_id for item in request.reference_inputs]
+    selection_by_output = {
+        1: [product_ids[0]],
+        2: [product_ids[1]],
+        3: [product_ids[2]],
+        4: [product_ids[3]],
+        5: [product_ids[0]],
+        6: [product_ids[1]],
+    }
+    brain = EcommerceRemoteBrainTestProvider()
+    capturing = _CapturingRuntime(
+        ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+    materialized_by_output: dict[int, list[dict[str, Any]]] = {}
+    original_materializer = CodexNativeImageGenPlanner._canonical_materializations
+
+    def capture_materializations(planning_result, *, metadata_overrides=None, metadata_overrides_by_asset_id=None):
+        materializations = original_materializer(
+            planning_result,
+            metadata_overrides=metadata_overrides,
+            metadata_overrides_by_asset_id=metadata_overrides_by_asset_id,
+        )
+        for index, materialization in enumerate(materializations, start=1):
+            materialized_by_output[index] = list(materialization.reference_assets)
+        return materializations
+
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_canonical_materializations",
+        staticmethod(capture_materializations),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert len(result["outputs"]) == 6
+    assert len({tuple(item) for item in selection_by_output.values()}) > 1
+    for output in result["outputs"]:
+        index = output["output_index"]
+        contract = output["reference_input_contract"]
+        expected_selected = selection_by_output[index]
+        assert contract["professional_identity_source_asset_ids"] == [root_source_id, output_id]
+        assert contract["product_truth_pool_asset_ids"] == product_ids
+        assert contract["selected_product_truth_asset_ids"] == expected_selected
+        assert contract["admitted_product_truth_asset_ids"] == expected_selected
+        assert contract["admitted_reference_count"] == 5
+        assert len(output["reference_image_paths"]) == 5
+        assert contract["source_sha256"][2:] == [
+            contract["product_truth_pool_source_sha256"][asset_id]
+            for asset_id in expected_selected
+        ]
+        assert {
+            item.get("source_asset_id") or item.get("asset_id")
+            for item in materialized_by_output[index]
+        } == {root_source_id, output_id, *expected_selected}
+        assert contract["admitted_reference_derivative_asset_ids"]
+        assert set(contract["admitted_reference_derivative_asset_ids"]).isdisjoint(
+            {root_source_id, output_id, *product_ids}
+        )
+        assert all(
+            omitted["asset_id"] not in expected_selected
+            and omitted["reason"] == "not_selected_for_this_frozen_deliverable"
+            for omitted in contract["omitted_product_truth"]
+        )
 
 
 def test_professional_ecommerce_plan_fails_closed_when_binding_parts_are_missing(
@@ -630,12 +971,6 @@ def test_professional_ecommerce_plan_fails_closed_when_binding_parts_are_missing
     product = _write_png(tmp_path / "product.png", color=(80, 145, 210))
 
     def plan_with_resolver(resolver):
-        planner = CodexNativeImageGenPlanner(
-            runtime_factory=lambda: ScenarioRuntime(
-                llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
-            ),
-            professional_binding_resolver=resolver,
-        )
         request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
             _arguments(
                 product,
@@ -645,6 +980,15 @@ def test_professional_ecommerce_plan_fails_closed_when_binding_parts_are_missing
                 people_asset_id=asset.visual_asset_id,
                 professional_identity_view_ids=["face_front"],
             )
+        )
+        product_ids = [item.asset_id for item in request.reference_inputs]
+        planner = CodexNativeImageGenPlanner(
+            runtime_factory=lambda: _CapturingRuntime(
+                ScenarioRuntime(
+                    llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
+                ),
+            ),
+            professional_binding_resolver=resolver,
         )
         return planner.prepare_frozen_professional_native_imagegen_plan(request)
 

@@ -572,6 +572,14 @@ class V3LLMBrainAdapter:
             "provider_native_text_requirements": provider_native_text_requirements,
             "specialized_scenario_plan_present": specialized_plan_present,
         }
+        if metadata.get("professional_product_truth_required") is not None:
+            request_metadata["professional_product_truth_required"] = bool(
+                metadata.get("professional_product_truth_required")
+            )
+        if metadata.get("professional_product_model_planning") is not None:
+            request_metadata["professional_product_model_planning"] = bool(
+                metadata.get("professional_product_model_planning")
+            )
         if ecommerce_creative_context:
             # Deliberately absent from General and Photography requests.
             request_metadata["ecommerce_creative_context"] = ecommerce_creative_context

@@ -741,50 +741,86 @@ ProjectVisualAssetBinding, missing verified root upload manifest, missing
 active Character Card winner, missing product truth, or a materialization plan
 that drops either class must fail closed before image generation.
 
-### Product-model reference capacity authority
+### Product-model reference pool and final renderer-capacity authority
 
-The current GPT Image 2 provider route admits at most five image inputs. For
-Professional E-Commerce product-on-model planning, the active authority is:
+Superseded historical note: the immediately previous repair model treated all
+`product_truth` inputs as hard provider inputs and therefore described
+`root + winner + up to three product_truth images` as the active capacity
+boundary. That model is now superseded for Professional E-Commerce
+product-on-model planning.
+
+Current authority: product references form a frozen product-truth pool. The
+Remote Brain must choose, per frozen output, the product truth asset IDs that
+are relevant to that output role. The native relay and Provider materializer
+must then admit only:
 
 ```text
 identity: immutable root portrait + active standard-front Character Card winner
-product truth: up to three product_truth images
+product truth: selected_product_truth_asset_ids for that one output
 ```
 
-This chooses the conservative identity-first contract for the current
-product-model seam:
+The complete product pool remains audit evidence, not provider-facing
+`uploaded_assets` or `reference_assets`. Each output must record:
 
-1. the immutable root portrait remains the binding/source-of-truth guard;
-2. the active Character Card winner remains the selected model identity /
-   appearance continuity reference;
-3. all product truth references that fit the remaining capacity must be
-   admitted; and
-4. a request with four product truth images must fail closed with an explicit
-   capacity mismatch instead of silently dropping one image through adaptive
-   reference selection.
+1. `product_truth_pool_asset_ids` and `product_truth_pool_source_sha256`;
+2. `selected_product_truth_asset_ids` from frozen structured
+   generation/deliverable metadata;
+3. `omitted_product_truth` with `not_selected_for_this_frozen_deliverable`;
+4. final source hashes and admitted source IDs; and
+5. derivative IDs separately from source IDs.
 
-The user's four swimsuit references are visually distinct and valid product
-evidence: front full, front print/detail, rear straps, and another front full
-view. The current provider-input limit means they cannot all be sent together
-with both required identity references. This is a real product input contract
-conflict, not an image deduplication issue.
+Selection is fail-closed:
+
+- missing, empty, duplicate, or unknown selected product IDs are blocked;
+- selected product IDs must be a subset of the frozen product pool;
+- product selection must come from structured frozen metadata, never prompt
+  text, filenames, list order, shared adaptive selection, or content dedupe;
+- unselected product truth may not leak into final provider refs.
+
+The Provider limit is enforced after canonical materialization, because the
+shared materializer may expand one source into multiple renderer inputs. The
+current identity strategy expands the immutable root and active winner into
+two identity derivatives each. Therefore:
+
+```text
+root source + winner source + one selected product source
+=> 2 root derivatives + 2 winner derivatives + 1 product_truth_crop
+=> 5 final renderer image inputs
+```
+
+Selecting two product truth images for a single output would materialize more
+than five renderer inputs under the current route and must be blocked before
+any ImageGen operation. The selected product truth uses a focused
+`product_truth_crop`; the product full frame is suppressed for the provider in
+this product-model seam so background/composition from the product photo does
+not become an unintended scene reference.
+
+The user's four swimsuit references are all valid product-pool evidence:
+front full, front print/detail, rear straps, and another front full view. They
+should not be content-deduped or globally rejected merely because there are
+four images. Different N=6 outputs may select different single product truth
+assets from that pool while keeping the same identity chain.
 
 Rejected alternatives for this milestone:
 
 - Do not drop the immutable root silently. That would require a separate
   Doc95/Professional product-model authority explaining why a generated winner
   alone can replace root truth for this seam.
-- Do not silently trim the fourth product image through Doc97/adaptive
-  reference selection. Required provider inputs are hard contracts, not
-  optional evidence.
+- Do not silently trim product images through Doc97/adaptive reference
+  selection. Product selection belongs to the Professional E-Commerce frozen
+  deliverable/plan contract, not the shared Visual Capability selector.
 - Do not raise `max_provider_reference_images` without an explicit Provider
-  capability negotiation proving the current route can accept six references.
+  capability negotiation proving the current route can accept more final
+  renderer inputs.
+- Do not infer selected product truth from prompt text, filename, upload order,
+  image content, or local ecommerce heuristics.
 
-If a future task needs all four product truths in one pass, it must first prove
-either a six-reference provider capability or an approved product-model
-identity strategy that uses one identity input plus four product inputs. Until
-then, the active safe behavior is root + winner + up to three product truths,
-and four-product requests remain blocked before any image operation.
+If a future task needs two or more product truth images in the same rendered
+output, it must first prove either a higher final renderer-input capability or
+an approved product-model identity strategy with fewer identity derivatives.
+Until then, the active safe behavior is per-output selection from the full
+product pool, with one selected product truth admitted alongside the immutable
+root and active winner.
 
 ### Runtime-source boundary
 
@@ -865,10 +901,14 @@ Focused regression must prove:
 - VisualAssetLibrary resolver requires an active ProjectVisualAssetBinding;
 - stable view selectors resolve to root + approved Character Card winner;
 - Professional E-Commerce plan includes identity sources and product-truth
-  sources in the admitted source set;
-- Professional E-Commerce product-model keeps required product truth inputs
-  through adaptive selection and blocks explicitly when the complete
-  root+winner+product set exceeds the five-image Provider capacity;
+  pool evidence while admitting only the selected product truth per output;
+- Professional E-Commerce product-model keeps the identity chain and the
+  selected product truth through adaptive/provider selection, blocks when the
+  final materialized renderer refs exceed the five-image Provider capacity,
+  and separately records source IDs and derivative IDs;
+- N=6 Professional E-Commerce can use a four-image product pool by selecting
+  different product truth assets per output without passing the whole pool to
+  the Provider;
 - missing root, missing winner, missing binding, missing identity winner, or
   missing product truth fails closed with no business mutation.
 

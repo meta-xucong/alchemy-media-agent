@@ -560,19 +560,51 @@ def _reference_channel_ownership_intent(request) -> dict:  # noqa: ANN001
 def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
     context = request.metadata.get("ecommerce_creative_context") if isinstance(request.metadata, dict) else None
     profile = context.get("apparel_on_model_evidence_profile") if isinstance(context, dict) else None
-    if not isinstance(profile, dict) or not profile.get("applies") or count <= 1:
+    product_truth_ids = _product_truth_asset_ids(request)
+    requires_product_truth_selection = bool(
+        isinstance(request.metadata, dict)
+        and request.metadata.get("professional_product_truth_required")
+    )
+    if (
+        not requires_product_truth_selection
+        and (not isinstance(profile, dict) or not profile.get("applies") or count <= 1)
+    ):
         return []
-    dimensions = [str(item) for item in profile.get("allowed_evidence_dimensions", []) if str(item).strip()]
-    if not dimensions:
-        return []
+    dimensions = [
+        str(item)
+        for item in (profile.get("allowed_evidence_dimensions", []) if isinstance(profile, dict) else [])
+        if str(item).strip()
+    ]
     entries = []
     for index in range(1, count + 1):
-        primary = dimensions[(index - 1) % len(dimensions)]
-        evidence = [primary]
-        if index > len(dimensions):
+        evidence = []
+        if dimensions:
+            primary = dimensions[(index - 1) % len(dimensions)]
+            evidence = [primary]
+        if dimensions and index > len(dimensions):
             evidence.append(dimensions[index % len(dimensions)])
-        entries.append({"output_index": index, "evidence_dimensions": evidence})
+        entry = {"output_index": index, "evidence_dimensions": evidence}
+        if requires_product_truth_selection and product_truth_ids:
+            entry["selected_product_truth_asset_ids"] = [
+                product_truth_ids[(index - 1) % len(product_truth_ids)]
+            ]
+        entries.append(entry)
     return entries
+
+
+def _product_truth_asset_ids(request) -> list[str]:  # noqa: ANN001
+    ids: list[str] = []
+    for item in request.uploaded_assets:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        channel = str(metadata.get("codex_native_reference_channel") or "").strip()
+        role = str(item.get("role") or "").strip()
+        if channel == "product_truth" or role == "product_reference":
+            asset_id = str(item.get("asset_id") or "").strip()
+            if asset_id:
+                ids.append(asset_id)
+    return list(dict.fromkeys(ids))
 
 
 def ecommerce_test_service(

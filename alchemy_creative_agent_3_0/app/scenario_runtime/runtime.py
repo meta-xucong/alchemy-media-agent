@@ -3492,6 +3492,11 @@ class ScenarioRuntime:
             brain_result=brain_result,
             expected_count=expected,
         )
+        product_truth_selection_by_output = self._validated_ecommerce_product_truth_selection_by_output(
+            request=request,
+            brain_result=brain_result,
+            expected_count=expected,
+        )
         role_recipes = (
             specialized_plan.execution_plan.get("role_recipes", [])
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
@@ -3530,6 +3535,18 @@ class ScenarioRuntime:
             )
             if evidence_dimensions:
                 deliverable_metadata["brain_evidence_dimensions"] = evidence_dimensions
+            selected_product_truth = product_truth_selection_by_output.get(index, [])
+            if selected_product_truth:
+                deliverable_metadata["selected_product_truth_asset_ids"] = list(selected_product_truth)
+                deliverable_metadata["admitted_product_truth_asset_ids"] = list(selected_product_truth)
+                deliverable_metadata["product_truth_selection_source"] = (
+                    "remote_brain_image_set_plan.evidence_dimensions_by_output"
+                )
+                deliverable_metadata["product_truth_pool_asset_ids"] = [
+                    asset.asset_id
+                    for asset in request.uploaded_assets
+                    if self._uploaded_asset_reference_channel(asset) == "product_truth"
+                ]
             deliverables.append(
                 TemplateDeliverable(
                     deliverable_id=stable_id("template_deliverable", normalized_intent.intent_id, index, direction),
@@ -3562,6 +3579,64 @@ class ScenarioRuntime:
                 }
             ],
         )
+
+    @staticmethod
+    def _uploaded_asset_reference_channel(asset: Any) -> str:
+        metadata = getattr(asset, "metadata", None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        channel = str(metadata.get("codex_native_reference_channel") or "").strip()
+        if channel:
+            return channel
+        role = str(getattr(asset, "role", "") or "").strip()
+        if role == "product_reference":
+            return "product_truth"
+        if role == "face_reference":
+            return "portrait_identity"
+        return role
+
+    def _validated_ecommerce_product_truth_selection_by_output(
+        self,
+        *,
+        request: ScenarioRuntimeRequest,
+        brain_result: BrainRunResult,
+        expected_count: int,
+    ) -> dict[int, list[str]]:
+        """Freeze Remote-Brain product-truth selection for Professional E-Commerce.
+
+        Product uploads are a truth pool.  The Remote Brain chooses which pool
+        member each output needs; local code validates cardinality and IDs but
+        does not infer selection from filenames, upload order, prompt text, or
+        image content.
+        """
+
+        metadata = dict(request.metadata or {})
+        if not metadata.get("professional_product_truth_required"):
+            return {}
+        product_truth_ids = [
+            asset.asset_id
+            for asset in request.uploaded_assets
+            if self._uploaded_asset_reference_channel(asset) == "product_truth"
+        ]
+        if not product_truth_ids:
+            raise CapabilityActivationError("ecommerce_product_truth_selection_pool_missing")
+        raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
+        if len(raw_entries) != expected_count:
+            raise CapabilityActivationError("ecommerce_product_truth_selection_missing_or_incomplete")
+        product_truth_id_set = set(product_truth_ids)
+        resolved: dict[int, list[str]] = {}
+        for entry in raw_entries:
+            index = int(entry.output_index)
+            selected = [str(item).strip() for item in entry.selected_product_truth_asset_ids if str(item).strip()]
+            if index in resolved or index < 1 or index > expected_count or not selected:
+                raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+            if len(selected) != len(set(selected)):
+                raise CapabilityActivationError("ecommerce_product_truth_selection_duplicate")
+            if not set(selected).issubset(product_truth_id_set):
+                raise CapabilityActivationError("ecommerce_product_truth_selection_unknown_asset")
+            resolved[index] = selected
+        if sorted(resolved) != list(range(1, expected_count + 1)):
+            raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+        return resolved
 
     @staticmethod
     def _validated_ecommerce_apparel_evidence_dimensions(

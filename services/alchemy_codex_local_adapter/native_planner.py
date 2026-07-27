@@ -498,6 +498,134 @@ class CodexNativeImageGenPlanner:
         payload = json.dumps(binding.to_brain_evidence(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    def _professional_product_truth_selection_by_asset(
+        self,
+        *,
+        request: NativeProfessionalImageGenPlanRequest,
+        planning_result: Any,
+        deliverables: list[Any],
+        server_owned_references: tuple[NativeReferenceInput, ...],
+        uploaded_assets: list[UploadedAssetInfo],
+    ) -> dict[str, dict[str, Any]]:
+        product_truth_pool = [item for item in request.reference_inputs if item.channel == "product_truth"]
+        product_truth_ids = [item.asset_id for item in product_truth_pool]
+        if not product_truth_ids:
+            return {
+                "blocked": True,
+                "code": "codex_native_imagegen_professional_product_binding_incomplete",
+                "message": "Professional E-Commerce planning requires product truth references.",
+            }
+        uploaded_by_asset_id = {item.asset_id: item for item in uploaded_assets}
+        identity_asset_ids = [item.asset_id for item in server_owned_references]
+        product_truth_hashes = {item.asset_id: item.source_sha256 for item in product_truth_pool}
+        generation_plans = {item.asset_id: item for item in planning_result.generation_plans}
+        selection_by_asset_id: dict[str, dict[str, Any]] = {}
+        for index, asset in enumerate(planning_result.series_plan.assets, start=1):
+            deliverable = deliverables[index - 1] if index <= len(deliverables) else {}
+            generation_plan = generation_plans.get(asset.asset_id)
+            generation_metadata = (
+                dict(generation_plan.metadata)
+                if generation_plan is not None and isinstance(generation_plan.metadata, dict)
+                else {}
+            )
+            deliverable_metadata = deliverable.get("metadata") if isinstance(deliverable, dict) else None
+            deliverable_metadata = dict(deliverable_metadata) if isinstance(deliverable_metadata, dict) else {}
+            selection_source = "generation_plan.metadata"
+            raw_selected = generation_metadata.get("selected_product_truth_asset_ids")
+            if raw_selected is None:
+                raw_selected = generation_metadata.get("admitted_product_truth_asset_ids")
+            if raw_selected is None:
+                raw_selected = deliverable_metadata.get("selected_product_truth_asset_ids")
+                selection_source = "template_deliverable.metadata"
+            if raw_selected is None:
+                raw_selected = deliverable_metadata.get("admitted_product_truth_asset_ids")
+                selection_source = "template_deliverable.metadata"
+            if not isinstance(raw_selected, list):
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_product_truth_selection_missing",
+                    "message": "Professional E-Commerce planning requires structured per-output product truth selection metadata.",
+                }
+            selected = [str(item).strip() for item in raw_selected if str(item).strip()]
+            if not selected:
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_product_truth_selection_missing",
+                    "message": "Professional E-Commerce planning selected no product truth reference for an output.",
+                }
+            if len(selected) != len(set(selected)):
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_product_truth_selection_invalid",
+                    "message": "Professional E-Commerce planning selected duplicate product truth references.",
+                }
+            if not set(selected).issubset(set(product_truth_ids)):
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_product_truth_selection_invalid",
+                    "message": "Professional E-Commerce planning selected a product truth reference outside the frozen product pool.",
+                }
+            selected_reference_count = len(identity_asset_ids) + len(selected)
+            if selected_reference_count > ProductionImageGenerationProvider.max_provider_reference_images:
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_reference_input_capacity_exceeded",
+                    "message": "V3 cannot admit every required Professional identity and selected product truth reference within the configured image-input capacity.",
+                }
+            omitted = [
+                {
+                    "asset_id": asset_id,
+                    "reason": "not_selected_for_this_frozen_deliverable",
+                    "source_sha256": product_truth_hashes.get(asset_id),
+                }
+                for asset_id in product_truth_ids
+                if asset_id not in selected
+            ]
+            selected_ids = set(selected)
+            provider_asset_ids = [*identity_asset_ids, *selected]
+            reference_assets = []
+            for asset_id in provider_asset_ids:
+                uploaded = uploaded_by_asset_id.get(asset_id)
+                if uploaded is None:
+                    continue
+                data = uploaded.model_dump(mode="json")
+                metadata = dict(data.get("metadata") or {})
+                if asset_id in selected_ids:
+                    metadata["reference_sanitization"] = {
+                        "suppress_full_frame_provider_reference": True,
+                        "reason_codes": ["professional_product_model_uses_selected_product_truth_crop"],
+                    }
+                data["metadata"] = metadata
+                reference_assets.append(data)
+            final_hashes = [
+                str((item.get("metadata") or {}).get("source_integrity_id") or "")
+                for item in reference_assets
+                if isinstance(item, dict)
+            ]
+            selection_audit = {
+                "selection_source": selection_source,
+                "product_truth_pool_asset_ids": list(product_truth_ids),
+                "product_truth_pool_source_sha256": dict(product_truth_hashes),
+                "selected_product_truth_asset_ids": list(selected),
+                "omitted_product_truth": omitted,
+                "identity_source_asset_ids": list(identity_asset_ids),
+                "final_reference_source_sha256": final_hashes,
+                "selection_policy": "remote_brain_structured_frozen_metadata_only",
+            }
+            selection_by_asset_id[asset.asset_id] = {
+                **selection_audit,
+                "metadata_overrides": {
+                    "reference_assets": reference_assets,
+                    "uploaded_assets": reference_assets,
+                    "product_truth_selection": selection_audit,
+                    "selected_product_truth_asset_ids": list(selected),
+                    "admitted_product_truth_asset_ids": list(selected),
+                    "product_truth_pool_asset_ids": list(product_truth_ids),
+                    "omitted_product_truth": omitted,
+                },
+            }
+        return selection_by_asset_id
+
     def _prepare_frozen_plan(
         self,
         request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest | NativeProfessionalImageGenPlanRequest,
@@ -576,6 +704,8 @@ class CodexNativeImageGenPlanner:
             return self._blocked("codex_native_imagegen_envelope_missing_id", "V3 planning did not provide an admission envelope identity.")
         try:
             materialization_metadata: dict[str, Any] = {}
+            materialization_metadata_by_asset_id: dict[str, dict[str, Any]] = {}
+            professional_product_truth_by_asset_id: dict[str, dict[str, Any]] = {}
             if isinstance(request, NativeProfessionalImageGenPlanRequest):
                 # Product-model plans freeze their
                 # visual_asset_library_product_model_v1 strategy and complete
@@ -583,7 +713,26 @@ class CodexNativeImageGenPlanner:
                 # metadata.  Keep that source of truth intact.  Only legacy
                 # Professional serial stages may receive the serial strategy
                 # compatibility projection here.
-                if request.professional_reference_stage:
+                professional_product_model = (
+                    request.template_id == "ecommerce_template"
+                    and request.professional_reference_stage is None
+                )
+                if professional_product_model:
+                    product_selection = self._professional_product_truth_selection_by_asset(
+                        request=request,
+                        planning_result=result.planning_result,
+                        deliverables=deliverables,
+                        server_owned_references=server_owned_references,
+                        uploaded_assets=uploaded_assets,
+                    )
+                    if isinstance(product_selection, dict) and product_selection.get("blocked"):
+                        return self._blocked(str(product_selection["code"]), str(product_selection["message"]))
+                    professional_product_truth_by_asset_id = product_selection
+                    materialization_metadata_by_asset_id = {
+                        asset_id: dict(selection.get("metadata_overrides") or {})
+                        for asset_id, selection in professional_product_truth_by_asset_id.items()
+                    }
+                elif request.professional_reference_stage:
                     materialization_metadata = {
                         "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
                         "professional_reference_stage": request.professional_reference_stage,
@@ -591,6 +740,7 @@ class CodexNativeImageGenPlanner:
             materializations = self._canonical_materializations(
                 result.planning_result,
                 metadata_overrides=materialization_metadata,
+                metadata_overrides_by_asset_id=materialization_metadata_by_asset_id,
             )
         except ProviderRuntimeError as exc:
             detail = dict(getattr(exc, "detail", {}) or {})
@@ -614,22 +764,39 @@ class CodexNativeImageGenPlanner:
                 "codex_native_imagegen_canonical_prompt_unavailable",
                 "V3 could not materialize one canonical Provider prompt for every requested output.",
             )
+        if len(materializations) != request.requested_image_count:
+            return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not materialize the requested number of canonical Provider prompts.")
+        materialization_asset_ids = [
+            str(asset.asset_id)
+            for asset in result.planning_result.series_plan.assets
+        ]
+        if len(materialization_asset_ids) != len(materializations):
+            return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not preserve one stable output asset binding for every materialized Provider prompt.")
         if isinstance(request, NativeProfessionalImageGenPlanRequest):
             professional_product_model = (
                 request.template_id == "ecommerce_template"
                 and request.professional_reference_stage is None
             )
-            for materialization in materializations:
+            for asset_id, materialization in zip(materialization_asset_ids, materializations):
                 admitted_source_ids = {
                     str(item.get("source_asset_id") or item.get("asset_id") or "").strip()
                     for item in materialization.reference_assets
                     if isinstance(item, dict)
                 }
+                selection_contract = professional_product_truth_by_asset_id.get(asset_id, {})
                 identity_source_ids = {item.asset_id for item in server_owned_references}
                 product_truth_source_ids = {
                     item.asset_id for item in request.reference_inputs if item.channel == "product_truth"
                 }
+                selected_product_truth_source_ids = set(
+                    selection_contract.get("selected_product_truth_asset_ids") or product_truth_source_ids
+                )
                 if professional_product_model:
+                    if len(materialization.reference_assets) > ProductionImageGenerationProvider.max_provider_reference_images:
+                        return self._blocked(
+                            "codex_native_imagegen_reference_input_capacity_exceeded",
+                            "V3 cannot admit every required Professional identity and selected product truth reference within the configured image-input capacity.",
+                        )
                     if not identity_source_ids or not product_truth_source_ids:
                         return self._blocked(
                             "codex_native_imagegen_professional_product_binding_incomplete",
@@ -640,10 +807,16 @@ class CodexNativeImageGenPlanner:
                             "codex_native_imagegen_professional_identity_reference_missing",
                             "The shared Provider materializer did not admit the selected Professional identity references; no image was created.",
                         )
-                    if not product_truth_source_ids.issubset(admitted_source_ids):
+                    if not selected_product_truth_source_ids.issubset(admitted_source_ids):
                         return self._blocked(
                             "codex_native_imagegen_product_truth_reference_missing",
-                            "The shared Provider materializer did not admit every product truth reference; no image was created.",
+                            "The shared Provider materializer did not admit every selected product truth reference; no image was created.",
+                        )
+                    unselected_product_truth_source_ids = product_truth_source_ids - selected_product_truth_source_ids
+                    if unselected_product_truth_source_ids.intersection(admitted_source_ids):
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_leaked",
+                            "The shared Provider materializer admitted product truth references that were not selected for this frozen output.",
                         )
                 elif [
                     item.asset_id for item in request.reference_inputs if item.asset_id not in admitted_source_ids
@@ -652,8 +825,6 @@ class CodexNativeImageGenPlanner:
                         "codex_native_imagegen_professional_reference_parity_mismatch",
                         "The shared Provider materializer did not admit every Professional serial-chain reference; no image was created.",
                     )
-        if len(materializations) != request.requested_image_count:
-            return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not materialize the requested number of canonical Provider prompts.")
         canonical_prompt_signing = self._canonical_prompt_signing_provenance(
             llm_brain,
             active_capability_ids=envelope.get("active_capability_ids"),
@@ -663,7 +834,7 @@ class CodexNativeImageGenPlanner:
                 "codex_native_imagegen_human_resigning_missing",
                 "V3 did not produce the required shared Human Realism Brain re-signing receipt.",
             )
-        for index, materialization in enumerate(materializations, start=1):
+        for index, (asset_id, materialization) in enumerate(zip(materialization_asset_ids, materializations), start=1):
             reference_paths = [str(item["file_path"]) for item in materialization.reference_assets if item.get("file_path")]
             try:
                 output = {
@@ -698,9 +869,18 @@ class CodexNativeImageGenPlanner:
                 # admitted source lineage needed for serial-chain parity.
                 if isinstance(request, NativeProfessionalImageGenPlanRequest):
                     output["reference_input_contract"]["admitted_reference_source_asset_ids"] = [
-                        str(item.get("source_asset_id") or item.get("asset_id") or "")
+                        source_id for source_id in dict.fromkeys(
+                            str(item.get("source_asset_id") or item.get("asset_id") or "")
+                            for item in materialization.reference_assets
+                            if isinstance(item, dict)
+                        ) if source_id
+                    ]
+                    output["reference_input_contract"]["admitted_reference_derivative_asset_ids"] = [
+                        str(item.get("asset_id") or "")
                         for item in materialization.reference_assets
                         if isinstance(item, dict)
+                        and item.get("provider_reference_derivative") is True
+                        and str(item.get("asset_id") or "")
                     ]
                     if server_owned_references:
                         output["reference_input_contract"]["professional_identity_source_asset_ids"] = [
@@ -710,7 +890,33 @@ class CodexNativeImageGenPlanner:
                         item.asset_id for item in request.reference_inputs if item.channel == "product_truth"
                     ]
                     if product_truth_ids:
-                        output["reference_input_contract"]["product_truth_source_asset_ids"] = product_truth_ids
+                        selection_contract = professional_product_truth_by_asset_id.get(asset_id, {})
+                        selected_product_truth_ids = list(
+                            selection_contract.get("selected_product_truth_asset_ids") or product_truth_ids
+                        )
+                        omitted_product_truth = list(selection_contract.get("omitted_product_truth") or [])
+                        product_truth_pool_hashes = dict(
+                            selection_contract.get("product_truth_pool_source_sha256") or {}
+                        )
+                        selected_product_truth_hashes = [
+                            product_truth_pool_hashes.get(asset_id)
+                            for asset_id in selected_product_truth_ids
+                            if product_truth_pool_hashes.get(asset_id)
+                        ]
+                        output["reference_input_contract"]["source_sha256"] = [
+                            item.source_sha256 for item in server_owned_references
+                        ] + selected_product_truth_hashes
+                        output["reference_input_contract"]["product_truth_pool_asset_ids"] = product_truth_ids
+                        output["reference_input_contract"]["product_truth_pool_source_sha256"] = product_truth_pool_hashes
+                        output["reference_input_contract"]["selected_product_truth_asset_ids"] = selected_product_truth_ids
+                        output["reference_input_contract"]["admitted_product_truth_asset_ids"] = [
+                            source_id for source_id in dict.fromkeys(
+                                source_id
+                                for source_id in output["reference_input_contract"]["admitted_reference_source_asset_ids"]
+                                if source_id in set(selected_product_truth_ids)
+                            )
+                        ]
+                        output["reference_input_contract"]["omitted_product_truth"] = omitted_product_truth
                 output.update(self._specialized_lineage_projection(request.template_id, deliverables[index - 1]))
             except ValueError:
                 return self._blocked(
@@ -1066,6 +1272,7 @@ class CodexNativeImageGenPlanner:
         planning_result: Any,
         *,
         metadata_overrides: dict[str, Any] | None = None,
+        metadata_overrides_by_asset_id: dict[str, dict[str, Any]] | None = None,
     ) -> list[Any]:
         """Materialize every output through the exact Web Provider boundary.
 
@@ -1085,7 +1292,16 @@ class CodexNativeImageGenPlanner:
         materializations: list[Any] = []
         for asset in planning_result.series_plan.assets:
             generation_plan = generation_plans[asset.asset_id]
-            if metadata_overrides:
+            asset_metadata_overrides = (
+                dict(metadata_overrides_by_asset_id.get(asset.asset_id) or {})
+                if isinstance(metadata_overrides_by_asset_id, dict)
+                else {}
+            )
+            combined_metadata_overrides = {
+                **(metadata_overrides or {}),
+                **asset_metadata_overrides,
+            }
+            if combined_metadata_overrides:
                 generation_plan = generation_plan.model_copy(
                     update={
                         "metadata": {
@@ -1094,7 +1310,7 @@ class CodexNativeImageGenPlanner:
                                 if isinstance(generation_plan.metadata, dict)
                                 else {}
                             ),
-                            **metadata_overrides,
+                            **combined_metadata_overrides,
                         }
                     }
                 )
@@ -1106,6 +1322,19 @@ class CodexNativeImageGenPlanner:
                 generation_plan=generation_plan,
                 job_id=planning_result.creative_job.job_id,
             )
+            if combined_metadata_overrides:
+                request = request.model_copy(
+                    update={
+                        "metadata": {
+                            **request.metadata,
+                            **{
+                                key: value
+                                for key, value in combined_metadata_overrides.items()
+                                if key in {"reference_assets", "uploaded_assets"}
+                            },
+                        }
+                    }
+                )
             materializations.append(materializer.materialize_final_prompt(request))
         return materializations
 
