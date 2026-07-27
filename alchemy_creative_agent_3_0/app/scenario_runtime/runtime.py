@@ -182,6 +182,20 @@ def _safe_remote_image_set_cardinality_audit(value: Any) -> dict[str, Any]:
     return audit
 
 
+def _safe_remote_image_set_validation_audit(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    audit: dict[str, Any] = {}
+    count = value.get("validation_error_count")
+    if isinstance(count, int):
+        audit["validation_error_count"] = count
+    for key in ("validation_error_paths", "validation_error_types"):
+        values = value.get(key)
+        if isinstance(values, list):
+            audit[key] = [str(item) for item in values if str(item).strip()][:8]
+    return audit
+
+
 class ScenarioRuntime:
     """Resolve Scenario Packs and safely delegate active scenarios to the central brain."""
 
@@ -3302,6 +3316,17 @@ class ScenarioRuntime:
                 }
                 if _safe_remote_image_set_cardinality_audit(
                     audit.get("remote_image_set_cardinality_audit")
+                )
+                else {}
+            ),
+            **(
+                {
+                    "remote_image_set_validation_audit": _safe_remote_image_set_validation_audit(
+                        audit["remote_image_set_validation_audit"]
+                    )
+                }
+                if _safe_remote_image_set_validation_audit(
+                    audit.get("remote_image_set_validation_audit")
                 )
                 else {}
             ),

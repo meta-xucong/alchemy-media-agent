@@ -141,6 +141,41 @@ class _InvalidImageSetCardinalityProvider(EcommerceRemoteBrainTestProvider):
         return payload
 
 
+class _InvalidImageSetSchemaProvider(EcommerceRemoteBrainTestProvider):
+    def __init__(self, *, malformed_field: str = "selected_product_truth_asset_ids") -> None:
+        super().__init__()
+        self.malformed_field = malformed_field
+
+    def run(self, request):  # noqa: ANN001
+        payload = super().run(request)
+        if request.stage == "plan":
+            evidence_entry = {
+                "output_index": 1,
+                "evidence_dimensions": ["front_apparel_truth"],
+                "selected_product_truth_asset_ids": ["product_truth_front"],
+            }
+            if self.malformed_field == "selected_product_truth_asset_ids":
+                evidence_entry["selected_product_truth_asset_ids"] = (
+                    "secret_product_truth_id_must_not_leak"
+                )
+            elif self.malformed_field == "evidence_dimensions":
+                evidence_entry["evidence_dimensions"] = "secret_dimension_must_not_leak"
+            payload["image_set_plan"] = {
+                "set_goal": "Schema fixture with valid cardinality",
+                "image_count": request.requested_image_count,
+                "size": request.requested_image_size,
+                "shot_plan": [
+                    f"safe fixture direction {index}"
+                    for index in range(1, request.requested_image_count + 1)
+                ],
+                "evidence_dimensions_by_output": [evidence_entry],
+                "composition_rules": [],
+                "quality_bar": [],
+            }
+            payload.pop("canonical_provider_prompts", None)
+        return payload
+
+
 def _strict_request(adapter: V3LLMBrainAdapter, *, count: int = 1):  # noqa: ANN201
     return adapter.build_request(
         user_input="Create one factual studio photograph of a ceramic vessel with no person visible.",
@@ -324,6 +359,76 @@ def test_doc259_image_set_plan_rejection_records_only_safe_cardinality_numbers(
     assert rejected[0]["cardinality_valid"] is False
     serialized = "\n".join(json.dumps(event, sort_keys=True) for event in trace_events)
     assert "secret shot text" not in serialized
+    assert str(tmp_path).replace("\\", "\\\\") not in serialized
+
+
+@pytest.mark.parametrize(
+    ("malformed_field", "expected_path"),
+    [
+        (
+            "selected_product_truth_asset_ids",
+            "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids",
+        ),
+        (
+            "evidence_dimensions",
+            "image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions",
+        ),
+    ],
+)
+def test_doc259_image_set_plan_validation_failure_records_only_safe_field_paths(
+    monkeypatch,
+    tmp_path,
+    malformed_field,
+    expected_path,
+) -> None:
+    trace_file = tmp_path / "brain-stage-trace.jsonl"
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    provider = _InvalidImageSetSchemaProvider(malformed_field=malformed_field)
+    adapter = V3LLMBrainAdapter(provider=provider)
+
+    result = adapter.run(_strict_request(adapter, count=6))
+    error = ScenarioRuntime._remote_creative_brain_block(
+        "remote_creative_brain_image_set_plan_invalid",
+        result,
+        rejected_sections=result.audit["remote_contract_rejected_sections"],
+    )
+    outcome = getattr(error, "remote_creative_brain_outcome")
+
+    assert result.audit["remote_contract_rejected_sections"] == ["image_set_plan"]
+    assert result.audit["remote_image_set_cardinality_audit"] == {
+        "expected_image_count": 6,
+        "remote_image_count": 6,
+        "remote_shot_plan_count": 6,
+        "cardinality_valid": True,
+    }
+    validation_audit = result.audit["remote_image_set_validation_audit"]
+    assert validation_audit["validation_error_count"] >= 1
+    assert expected_path in validation_audit["validation_error_paths"]
+    assert validation_audit["validation_error_types"]
+    assert outcome["remote_image_set_validation_audit"]["validation_error_paths"] == (
+        validation_audit["validation_error_paths"]
+    )
+    trace_events = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rejected = [
+        event
+        for event in trace_events
+        if event.get("event") == "semantic_plan_schema_validated"
+        and event.get("remote_contract_rejected_sections") == ["image_set_plan"]
+    ]
+    assert rejected
+    assert rejected[0]["cardinality_valid"] is True
+    assert expected_path in rejected[0]["validation_error_paths"]
+    assert rejected[0]["validation_error_types"]
+    serialized = "\n".join(json.dumps(event, sort_keys=True) for event in trace_events)
+    assert "secret_product_truth_id" not in serialized
+    assert "secret_dimension" not in serialized
+    assert "safe fixture direction" not in serialized
     assert str(tmp_path).replace("\\", "\\\\") not in serialized
 
 

@@ -122,6 +122,7 @@ class V3LLMBrainAdapter:
             )
             initial_rejected_sections = _remote_contract_rejected_sections(result)
             image_set_cardinality_audit = _remote_image_set_cardinality_audit(result)
+            image_set_validation_audit = _remote_image_set_validation_audit(result)
             record_stage_event(
                 "brain_adapter",
                 "semantic_plan_schema_validated",
@@ -130,6 +131,7 @@ class V3LLMBrainAdapter:
                     "remote_contract_rejected_count": len(initial_rejected_sections),
                     "remote_contract_rejected_sections": initial_rejected_sections,
                     **image_set_cardinality_audit,
+                    **image_set_validation_audit,
                 },
             )
             recovery_transport_receipt: dict[str, Any] = {}
@@ -148,6 +150,7 @@ class V3LLMBrainAdapter:
                         "remote_contract_rejected_count": len(initial_rejected_sections),
                         "remote_contract_rejected_sections": initial_rejected_sections,
                         **image_set_cardinality_audit,
+                        **image_set_validation_audit,
                     },
                 )
                 recovery_request = _semantic_contract_recovery_request(
@@ -644,6 +647,7 @@ class V3LLMBrainAdapter:
         payload = fallback.model_dump(mode="json")
         rejected_sections: list[str] = []
         cardinality_audit: dict[str, Any] = {}
+        image_set_validation_audit: dict[str, Any] = {}
         for key in [
             "intent_summary",
             "project_memory_digest",
@@ -705,8 +709,18 @@ class V3LLMBrainAdapter:
                     cardinality_audit = candidate_cardinality_audit
                     rejected_sections.append(key)
                     continue
-                payload, accepted = _merge_validated_section(payload, key, candidate)
+                if key == "image_set_plan":
+                    payload, accepted, validation_audit = _merge_validated_section_with_audit(
+                        payload,
+                        key,
+                        candidate,
+                    )
+                else:
+                    payload, accepted = _merge_validated_section(payload, key, candidate)
+                    validation_audit = {}
                 if not accepted:
+                    if key == "image_set_plan" and validation_audit:
+                        image_set_validation_audit = validation_audit
                     rejected_sections.append(key)
         # Rendering medium and its scope are semantic decisions. A local
         # keyword hit (for example a cartoon print on a real garment) may
@@ -779,6 +793,13 @@ class V3LLMBrainAdapter:
                     if "image_set_plan" in rejected_sections and cardinality_audit
                     else {}
                 ),
+                **(
+                    {
+                        "remote_image_set_validation_audit": image_set_validation_audit,
+                    }
+                    if "image_set_plan" in rejected_sections and image_set_validation_audit
+                    else {}
+                ),
             }
         return BrainRunResult.model_validate(payload)
 
@@ -820,6 +841,21 @@ def _remote_image_set_cardinality_audit(result: BrainRunResult) -> dict[str, Any
             audit[key] = value
     if isinstance(raw.get("cardinality_valid"), bool):
         audit["cardinality_valid"] = bool(raw["cardinality_valid"])
+    return audit
+
+
+def _remote_image_set_validation_audit(result: BrainRunResult) -> dict[str, Any]:
+    raw = result.audit.get("remote_image_set_validation_audit") if isinstance(result.audit, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    audit: dict[str, Any] = {}
+    count = raw.get("validation_error_count")
+    if isinstance(count, int):
+        audit["validation_error_count"] = count
+    for key in ("validation_error_paths", "validation_error_types"):
+        values = raw.get(key)
+        if isinstance(values, list):
+            audit[key] = [str(item) for item in values if str(item).strip()][:8]
     return audit
 
 
@@ -2415,14 +2451,85 @@ def _merge_validated_section(
 ) -> tuple[dict[str, Any], bool]:
     """Accept one remote section only when the complete Brain contract remains valid."""
 
+    payload, accepted, _ = _merge_validated_section_with_audit(payload, key, candidate)
+    return payload, accepted
+
+
+def _merge_validated_section_with_audit(
+    payload: dict[str, Any],
+    key: str,
+    candidate: Any,
+) -> tuple[dict[str, Any], bool, dict[str, Any]]:
+    """Accept one remote section and return public-safe validation metadata on failure."""
+
     probe = dict(payload)
     probe[key] = candidate
     try:
         validated = BrainRunResult.model_validate(probe).model_dump(mode="json")
-    except ValidationError:
-        return payload, False
+    except ValidationError as exc:
+        return payload, False, _safe_validation_error_audit(exc, section=key)
     payload[key] = validated[key]
-    return payload, True
+    return payload, True, {}
+
+
+def _safe_validation_error_audit(exc: ValidationError, *, section: str) -> dict[str, Any]:
+    paths: list[str] = []
+    types: list[str] = []
+    for error in exc.errors():
+        path = _safe_validation_path(error.get("loc"), section=section)
+        if path:
+            paths.append(path)
+            types.append(_safe_validation_type(error.get("type")))
+    paths = list(dict.fromkeys(paths))[:8]
+    types = list(dict.fromkeys(types))[:8]
+    return {
+        "validation_error_count": len(paths),
+        "validation_error_paths": paths,
+        "validation_error_types": types,
+    }
+
+
+def _safe_validation_path(loc: Any, *, section: str) -> str:
+    if not isinstance(loc, (list, tuple)):
+        return ""
+    parts = [str(item).strip() for item in loc if str(item).strip()]
+    if not parts:
+        return ""
+    if parts[0] != section:
+        parts = [section, *parts]
+    if parts[0] != "image_set_plan":
+        return ""
+    safe_parts: list[str] = []
+    for part in parts:
+        safe_parts.append("item" if part.isdigit() else part)
+    path = ".".join(safe_parts)
+    allowed_prefixes = (
+        "image_set_plan",
+        "image_set_plan.image_count",
+        "image_set_plan.shot_plan",
+        "image_set_plan.evidence_dimensions_by_output",
+        "image_set_plan.evidence_dimensions_by_output.item",
+        "image_set_plan.evidence_dimensions_by_output.item.output_index",
+        "image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions",
+        "image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions.item",
+        "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids",
+        "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids.item",
+        "image_set_plan.composition_rules",
+        "image_set_plan.quality_bar",
+        "image_set_plan.size",
+        "image_set_plan.set_goal",
+    )
+    if path in allowed_prefixes or any(path.startswith(prefix + ".") for prefix in allowed_prefixes):
+        return path
+    return "image_set_plan"
+
+
+def _safe_validation_type(value: Any) -> str:
+    token = str(value or "unknown").strip().lower()
+    allowed = []
+    for char in token[:64]:
+        allowed.append(char if char.isalnum() or char in {"_", "-", "."} else "_")
+    return "".join(allowed).strip("_") or "unknown"
 
 
 def _merge_checkpoints(base: list[Any], patch: list[Any]) -> list[dict[str, Any]]:

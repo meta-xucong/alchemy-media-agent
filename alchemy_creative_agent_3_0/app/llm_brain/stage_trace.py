@@ -37,6 +37,9 @@ _SAFE_EXTRA_KEYS = {
     "remote_image_count",
     "remote_shot_plan_count",
     "cardinality_valid",
+    "validation_error_count",
+    "validation_error_paths",
+    "validation_error_types",
     "semantic_recovery_attempted",
     "finalizer_call_count",
     "remote_brain_call_count",
@@ -160,6 +163,8 @@ def _safe_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
                 if token in _SAFE_REJECTED_SECTION_VALUES:
                     sections.append(token)
             cleaned[safe_key] = list(dict.fromkeys(sections))[:8]
+        elif safe_key in {"validation_error_paths", "validation_error_types"} and isinstance(value, list):
+            cleaned[safe_key] = list(dict.fromkeys(_safe_token(item) for item in value))[:8]
         elif value is None:
             cleaned[safe_key] = None
         else:

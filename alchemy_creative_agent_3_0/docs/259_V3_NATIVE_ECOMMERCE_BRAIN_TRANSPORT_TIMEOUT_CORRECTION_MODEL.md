@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **live Professional identity/product binding passed; N=6 planning-only remains blocked at plan-stage contract rejection/transport trace; controlled real-image gate paused.**
+Status: **live Professional identity/product binding passed; product-only image_set_plan schema and product-pool admission safeguards corrected locally; N=6 planning-only revalidation pending; controlled real-image gate paused.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -1159,6 +1159,111 @@ Next gate:
   the compact plan schema/prompt/adapter diagnostics at the owning layer.
 - Do not raise timeout, split N, remove context, switch route/model, or
   generate images.
+
+## 13E. Image-set plan validation paths and product-only schema correction
+
+Evidence:
+
+- `.controlled-validation/n6-schema-20260727T094125Z/reports/fresh-professional-n6-planning-report.json`
+- `.controlled-validation/n6-schema-20260727T094125Z/reports/brain-stage-trace.jsonl`
+
+The approved planning-only schema diagnostic remained mutation-free:
+
+```text
+elapsed_ms=471399
+planner_only=true
+mutation_delta.jobs=0
+mutation_delta.candidates=0
+mutation_delta.handoffs=0
+mutation_delta.outputs=0
+mutation_delta.formal_receipts=0
+mutation_delta.slots=0
+mutation_delta.activations=0
+product_pool/identity/capacity/no-leakage=true
+```
+
+The trace proved that `image_set_plan` cardinality was correct:
+
+```text
+expected_image_count=6
+remote_image_count=6
+remote_shot_plan_count=6
+cardinality_valid=true
+```
+
+The actual first-stage rejection was Pydantic shape validation inside
+`image_set_plan.evidence_dimensions_by_output`, safely traced as field paths
+and error classes only:
+
+```text
+image_set_plan.evidence_dimensions_by_output.item.output_index -> greater_than_equal
+image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions.item -> string_type
+```
+
+No prompt text, shot-plan text, product IDs, output IDs, file paths, URLs, or
+provider payload values are recorded in the trace. The failure is not a product
+pool, identity binding, Provider capacity, exact-count cardinality, or ImageGen
+problem.
+
+Correction model:
+
+1. The adapter/runtime must not coerce or repair the Remote Brain response.
+   `BrainOutputEvidenceContract` stays strict: `output_index` is 1-based
+   (`>=1`), and every `evidence_dimensions` item must be a string.
+2. The Remote Brain product-only contract now explicitly distinguishes
+   product-truth selection from apparel evidence:
+   - `output_index` must be a 1-based integer from 1 through
+     `requested_image_count`, never 0;
+   - when no active `apparel_on_model_evidence_profile` is present,
+     `evidence_dimensions` must be exactly `[]`;
+   - `selected_product_truth_asset_ids` must be one or more uploaded
+     `product_truth` asset ID strings from the frozen product truth pool; and
+   - product-only selection must not attach apparel evidence profile
+     instructions or allowed-vocabulary semantics.
+3. If an active apparel evidence profile is present, apparel evidence
+   instructions remain scoped to that profile. Product-truth selection remains
+   the per-output provider admission selector and does not become a shared
+   Visual Capability or General Template selector.
+
+Native planner product-pool guard correction:
+
+- The planner now treats `product_truth` as a full audit pool and requires each
+  output to have a frozen, structured, non-empty per-output selection before
+  Provider materialization.
+- Missing selection contract, missing selected field, empty selection,
+  duplicate selected IDs, unknown IDs, or output-asset mapping mismatch all
+  fail closed before canonical materialization.
+- The output `reference_input_contract` projects only the verified selected
+  product IDs plus pool/omission lineage. It no longer falls back to admitting
+  the whole product pool when selection is absent or malformed.
+- Legacy Professional serial paths keep their compatibility semantics and do
+  not crash when product-truth audit metadata is absent.
+
+Deterministic regression coverage:
+
+- image-set plan ValidationError diagnostics record only safe paths/types when
+  cardinality is valid but schema shape is invalid;
+- product-only payload schema requires 1-based output index, empty
+  `evidence_dimensions`, and structured product-truth selected IDs;
+- General payloads do not contain product-truth selection fields;
+- Professional E-Commerce N=1/N=6 product pool selection remains per-output,
+  keeps unselected pool members out of provider-facing references, and records
+  pool/selected/omitted/hash lineage;
+- direct native planner defenses block mapping missing, empty selection, and
+  mapping mismatch before Provider materialization; and
+- selecting too many products still fails closed at the provider reference
+  capacity boundary.
+
+Current gate:
+
+- A second controlled N=6 planning-only run is required before any ImageGen
+  host materialization.
+- Success criteria for that run remain: two-stage Remote Brain completion,
+  exact N=6, valid `image_set_plan`, each output has structured selected
+  product truth from the pool, final admitted refs are within the configured
+  cap, no unselected product leaks, and mutation delta remains 0.
+- Real product image generation remains prohibited until that planning-only
+  gate passes and reviewer explicitly authorizes host ImageGen.
 
 ## 14. Old-document conflict index
 

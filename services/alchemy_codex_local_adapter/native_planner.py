@@ -727,6 +727,49 @@ class CodexNativeImageGenPlanner:
                     )
                     if isinstance(product_selection, dict) and product_selection.get("blocked"):
                         return self._blocked(str(product_selection["code"]), str(product_selection["message"]))
+                    product_truth_ids = {
+                        item.asset_id for item in request.reference_inputs if item.channel == "product_truth"
+                    }
+                    for output_asset in result.planning_result.series_plan.assets:
+                        output_asset_id = str(output_asset.asset_id)
+                        selection_contract = (
+                            product_selection.get(output_asset_id)
+                            if isinstance(product_selection, dict)
+                            else None
+                        )
+                        if not isinstance(selection_contract, dict):
+                            return self._blocked(
+                                "codex_native_imagegen_product_truth_selection_missing",
+                                "Professional E-Commerce planning requires structured per-output product truth selection metadata.",
+                            )
+                        raw_selected_product_truth = selection_contract.get(
+                            "selected_product_truth_asset_ids"
+                        )
+                        if not isinstance(raw_selected_product_truth, list):
+                            return self._blocked(
+                                "codex_native_imagegen_product_truth_selection_missing",
+                                "Professional E-Commerce planning requires structured per-output product truth selection metadata.",
+                            )
+                        selected_product_truth_ids = [
+                            str(item).strip()
+                            for item in raw_selected_product_truth
+                            if str(item).strip()
+                        ]
+                        if not selected_product_truth_ids:
+                            return self._blocked(
+                                "codex_native_imagegen_product_truth_selection_missing",
+                                "Professional E-Commerce planning selected no product truth reference for an output.",
+                            )
+                        if len(selected_product_truth_ids) != len(set(selected_product_truth_ids)):
+                            return self._blocked(
+                                "codex_native_imagegen_product_truth_selection_invalid",
+                                "Professional E-Commerce planning selected duplicate product truth references.",
+                            )
+                        if not set(selected_product_truth_ids).issubset(product_truth_ids):
+                            return self._blocked(
+                                "codex_native_imagegen_product_truth_selection_invalid",
+                                "Professional E-Commerce planning selected a product truth reference outside the frozen product pool.",
+                            )
                     professional_product_truth_by_asset_id = product_selection
                     materialization_metadata_by_asset_id = {
                         asset_id: dict(selection.get("metadata_overrides") or {})
@@ -783,15 +826,43 @@ class CodexNativeImageGenPlanner:
                     for item in materialization.reference_assets
                     if isinstance(item, dict)
                 }
-                selection_contract = professional_product_truth_by_asset_id.get(asset_id, {})
+                selection_contract = professional_product_truth_by_asset_id.get(asset_id)
                 identity_source_ids = {item.asset_id for item in server_owned_references}
                 product_truth_source_ids = {
                     item.asset_id for item in request.reference_inputs if item.channel == "product_truth"
                 }
-                selected_product_truth_source_ids = set(
-                    selection_contract.get("selected_product_truth_asset_ids") or product_truth_source_ids
-                )
+                selected_product_truth_source_ids: set[str] = set()
                 if professional_product_model:
+                    if not isinstance(selection_contract, dict):
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_missing",
+                            "Professional E-Commerce planning requires structured per-output product truth selection metadata.",
+                        )
+                    raw_selected_product_truth = selection_contract.get("selected_product_truth_asset_ids")
+                    if not isinstance(raw_selected_product_truth, list):
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_missing",
+                            "Professional E-Commerce planning requires structured per-output product truth selection metadata.",
+                        )
+                    selected_product_truth_list = [
+                        str(item).strip() for item in raw_selected_product_truth if str(item).strip()
+                    ]
+                    if not selected_product_truth_list:
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_missing",
+                            "Professional E-Commerce planning selected no product truth reference for an output.",
+                        )
+                    if len(selected_product_truth_list) != len(set(selected_product_truth_list)):
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_invalid",
+                            "Professional E-Commerce planning selected duplicate product truth references.",
+                        )
+                    selected_product_truth_source_ids = set(selected_product_truth_list)
+                    if not selected_product_truth_source_ids.issubset(product_truth_source_ids):
+                        return self._blocked(
+                            "codex_native_imagegen_product_truth_selection_invalid",
+                            "Professional E-Commerce planning selected a product truth reference outside the frozen product pool.",
+                        )
                     if len(materialization.reference_assets) > ProductionImageGenerationProvider.max_provider_reference_images:
                         return self._blocked(
                             "codex_native_imagegen_reference_input_capacity_exceeded",
@@ -890,10 +961,50 @@ class CodexNativeImageGenPlanner:
                         item.asset_id for item in request.reference_inputs if item.channel == "product_truth"
                     ]
                     if product_truth_ids:
-                        selection_contract = professional_product_truth_by_asset_id.get(asset_id, {})
-                        selected_product_truth_ids = list(
-                            selection_contract.get("selected_product_truth_asset_ids") or product_truth_ids
+                        professional_product_model = (
+                            request.template_id == "ecommerce_template"
+                            and request.professional_reference_stage is None
                         )
+                        selection_contract = professional_product_truth_by_asset_id.get(asset_id)
+                        if professional_product_model:
+                            if not isinstance(selection_contract, dict):
+                                return self._blocked(
+                                    "codex_native_imagegen_product_truth_selection_missing",
+                                    "Professional E-Commerce planning requires structured per-output product truth selection metadata.",
+                                )
+                            raw_selected_product_truth = selection_contract.get(
+                                "selected_product_truth_asset_ids"
+                            )
+                            if not isinstance(raw_selected_product_truth, list):
+                                return self._blocked(
+                                    "codex_native_imagegen_product_truth_selection_missing",
+                                    "Professional E-Commerce planning requires structured per-output product truth selection metadata.",
+                                )
+                            selected_product_truth_ids = [
+                                str(item).strip()
+                                for item in raw_selected_product_truth
+                                if str(item).strip()
+                            ]
+                            if not selected_product_truth_ids:
+                                return self._blocked(
+                                    "codex_native_imagegen_product_truth_selection_missing",
+                                    "Professional E-Commerce planning selected no product truth reference for an output.",
+                                )
+                            if len(selected_product_truth_ids) != len(set(selected_product_truth_ids)):
+                                return self._blocked(
+                                    "codex_native_imagegen_product_truth_selection_invalid",
+                                    "Professional E-Commerce planning selected duplicate product truth references.",
+                                )
+                            if not set(selected_product_truth_ids).issubset(set(product_truth_ids)):
+                                return self._blocked(
+                                    "codex_native_imagegen_product_truth_selection_invalid",
+                                    "Professional E-Commerce planning selected a product truth reference outside the frozen product pool.",
+                                )
+                        else:
+                            selection_contract = (
+                                selection_contract if isinstance(selection_contract, dict) else {}
+                            )
+                            selected_product_truth_ids = list(product_truth_ids)
                         omitted_product_truth = list(selection_contract.get("omitted_product_truth") or [])
                         product_truth_pool_hashes = dict(
                             selection_contract.get("product_truth_pool_source_sha256") or {}

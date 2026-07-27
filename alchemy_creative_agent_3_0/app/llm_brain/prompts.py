@@ -88,6 +88,18 @@ scene, camera, crop, pose, or output-order recipe. For product-on-model outputs,
 also return selected_product_truth_asset_ids as one uploaded product_truth asset_id
 chosen from the supplied product truth pool for that output; do not choose identity
 asset IDs, filenames, or natural-language aliases."""
+PRODUCT_TRUTH_SELECTION_INSTRUCTIONS = """For Professional E-Commerce product-on-model
+planning, evidence_dimensions_by_output is the frozen product-truth selection
+contract, not an apparel evidence profile unless an active
+apparel_on_model_evidence_profile is explicitly present. Return exactly one
+entry per output. output_index must be a 1-based integer from 1 through
+requested_image_count, never 0. When no active apparel evidence profile is
+present, evidence_dimensions must be exactly an empty list []; do not put
+objects, numbers, natural-language output roles, scene labels, camera labels,
+or product filenames there. selected_product_truth_asset_ids must be a list of
+one or more uploaded product_truth asset_id strings from the frozen product
+truth pool for that output; do not choose identity asset IDs, filenames, paths,
+or natural-language aliases."""
 PHOTOGRAPHY_CONTEXT_INSTRUCTIONS = """Treat photography_creative_context as a frozen
 non-creative delivery contract. The role IDs only bind output lineage and
 cardinality. Invent the complete photographic composition, scene, camera,
@@ -211,6 +223,29 @@ def _requires_apparel_evidence_dimensions(
 def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     return bool(metadata.get("professional_product_truth_required"))
+
+
+def _image_set_evidence_dimensions_schema(
+    *,
+    requested_image_count: int,
+    requires_apparel_evidence_dimensions: bool,
+    requires_product_truth_selection: bool,
+) -> list[dict[str, object]]:
+    schema: dict[str, object] = {
+        "output_index": (
+            f"1-based integer from 1 through requested_image_count ({requested_image_count}); never 0"
+        ),
+        "evidence_dimensions": (
+            ["allowed active apparel evidence profile values only; every item must be a string"]
+            if requires_apparel_evidence_dimensions
+            else []
+        ),
+    }
+    if requires_product_truth_selection:
+        schema["selected_product_truth_asset_ids"] = [
+            "one or more uploaded product_truth asset_id strings from the frozen product truth pool"
+        ]
+    return [schema]
 
 
 def _compact_specialized_project_context(project_context: dict[str, object]) -> dict[str, object]:
@@ -444,17 +479,13 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         requires_product_truth_selection = _requires_product_truth_selection(request)
         compact_schema = _compact_required_remote_creative_schema()
         if requires_apparel_evidence_dimensions or requires_product_truth_selection:
-            compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = [
-                {
-                    "output_index": "integer",
-                    "evidence_dimensions": (
-                        ["allowed profile values only"]
-                        if requires_apparel_evidence_dimensions
-                        else []
-                    ),
-                    "selected_product_truth_asset_ids": ["one product_truth asset_id from uploaded_assets"],
-                }
-            ]
+            compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = (
+                _image_set_evidence_dimensions_schema(
+                    requested_image_count=request.requested_image_count,
+                    requires_apparel_evidence_dimensions=requires_apparel_evidence_dimensions,
+                    requires_product_truth_selection=requires_product_truth_selection,
+                )
+            )
         payload["return_schema"] = compact_schema
         payload["remote_response_contract"] = (
             "Return only this compact schema as strictly valid JSON. Every "
@@ -628,22 +659,23 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
     if requires_apparel_evidence_dimensions or requires_product_truth_selection:
+        selection_instructions = (
+            APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS
+            if requires_apparel_evidence_dimensions
+            else PRODUCT_TRUTH_SELECTION_INSTRUCTIONS
+        )
         payload["ecommerce_context_instructions"] = (
             str(payload.get("ecommerce_context_instructions") or ECOMMERCE_CONTEXT_INSTRUCTIONS)
             + "\n"
-            + APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS
+            + selection_instructions
         )
-        payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"] = [
-            {
-                "output_index": "integer",
-                "evidence_dimensions": (
-                    ["allowed profile values only"]
-                    if requires_apparel_evidence_dimensions
-                    else []
-                ),
-                "selected_product_truth_asset_ids": ["one product_truth asset_id from uploaded_assets"],
-            }
-        ]
+        payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"] = (
+            _image_set_evidence_dimensions_schema(
+                requested_image_count=request.requested_image_count,
+                requires_apparel_evidence_dimensions=requires_apparel_evidence_dimensions,
+                requires_product_truth_selection=requires_product_truth_selection,
+            )
+        )
     photography_context = request.metadata.get("photography_creative_context")
     if isinstance(photography_context, dict) and photography_context:
         payload["photography_creative_context"] = photography_context
