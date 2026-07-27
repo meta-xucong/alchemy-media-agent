@@ -168,15 +168,33 @@ class EcommerceCreativeRiskPreflight(V3BaseModel):
         """Return the exact-N gate implied by this preflight without mutation."""
 
         reasons: list[str] = []
+        if requested_image_count < 1:
+            reasons.append("requested_image_count_invalid")
+
+        seen_indexes: set[int] = set()
         for item in self.risk_items_by_output:
+            if item.output_index in seen_indexes and "duplicate_output_index" not in reasons:
+                reasons.append("duplicate_output_index")
+            seen_indexes.add(item.output_index)
+            if (
+                requested_image_count >= 1
+                and item.output_index > requested_image_count
+                and "output_index_out_of_range" not in reasons
+            ):
+                reasons.append("output_index_out_of_range")
             if item.stop and item.fail_closed_reason:
                 reason = str(item.fail_closed_reason)
                 if reason not in reasons:
                     reasons.append(reason)
+        output_indexes_preserved = (
+            list(range(1, requested_image_count + 1))
+            if requested_image_count >= 1
+            else []
+        )
         return {
             "status": "blocked" if reasons else "ready",
             "requested_image_count": requested_image_count,
-            "output_indexes_preserved": list(range(1, requested_image_count + 1)),
+            "output_indexes_preserved": output_indexes_preserved,
             "deleted_output_indexes": [],
             "split_allowed": False,
             "fallback_allowed": False,

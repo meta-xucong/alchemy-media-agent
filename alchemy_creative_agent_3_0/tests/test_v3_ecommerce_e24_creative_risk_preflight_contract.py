@@ -167,6 +167,51 @@ def test_stop_true_blocks_whole_exact_n_request_without_fallback_or_prompt_patch
     }
 
 
+def test_planning_gate_direct_call_fail_closes_invalid_request_context() -> None:
+    preflight = EcommerceCreativeRiskPreflight.model_validate(
+        _preflight(risk_items_by_output=[_risk_item(1)])
+    )
+
+    gate = preflight.planning_gate(requested_image_count=0)
+
+    assert gate["status"] == "blocked"
+    assert gate["requested_image_count"] == 0
+    assert gate["output_indexes_preserved"] == []
+    assert gate["deleted_output_indexes"] == []
+    assert gate["split_allowed"] is False
+    assert gate["fallback_allowed"] is False
+    assert gate["prompt_patch_allowed"] is False
+    assert gate["fail_closed_reasons"] == ["requested_image_count_invalid"]
+
+
+def test_planning_gate_direct_call_fail_closes_duplicate_or_out_of_range_items() -> None:
+    duplicate = EcommerceCreativeRiskPreflight.model_validate(
+        _preflight(risk_items_by_output=[_risk_item(1), _risk_item(1)])
+    )
+    duplicate_gate = duplicate.planning_gate(requested_image_count=2)
+
+    assert duplicate_gate["status"] == "blocked"
+    assert duplicate_gate["output_indexes_preserved"] == [1, 2]
+    assert duplicate_gate["deleted_output_indexes"] == []
+    assert duplicate_gate["split_allowed"] is False
+    assert duplicate_gate["fallback_allowed"] is False
+    assert duplicate_gate["prompt_patch_allowed"] is False
+    assert duplicate_gate["fail_closed_reasons"] == ["duplicate_output_index"]
+
+    out_of_range = EcommerceCreativeRiskPreflight.model_validate(
+        _preflight(risk_items_by_output=[_risk_item(2)])
+    )
+    out_of_range_gate = out_of_range.planning_gate(requested_image_count=1)
+
+    assert out_of_range_gate["status"] == "blocked"
+    assert out_of_range_gate["output_indexes_preserved"] == [1]
+    assert out_of_range_gate["deleted_output_indexes"] == []
+    assert out_of_range_gate["split_allowed"] is False
+    assert out_of_range_gate["fallback_allowed"] is False
+    assert out_of_range_gate["prompt_patch_allowed"] is False
+    assert out_of_range_gate["fail_closed_reasons"] == ["output_index_out_of_range"]
+
+
 def test_stop_true_requires_fail_closed_reason_and_stop_false_requires_null_reason() -> None:
     with pytest.raises(ValidationError):
         EcommerceCreativeRiskPreflight.model_validate(
