@@ -230,6 +230,66 @@ def test_ecommerce_risk_context_reaches_shared_human_review_without_prompt_or_re
         assert forbidden not in serialized
 
 
+def test_human_realism_review_metadata_cannot_override_safe_ecommerce_context() -> None:
+    layer = HumanPhotorealismLayer()
+    guidance = _build(
+        "Professional ecommerce photo of a real child model wearing a product in a natural lifestyle scene.",
+        subject_type="product",
+        metadata={
+            "brain_owned_forward_execution": True,
+            "ecommerce_human_realism_review_context": _ecommerce_review_context(),
+        },
+    )
+
+    review = layer.review(
+        guidance=guidance,
+        project_id="project_human_realism",
+        job_id="job_human_realism",
+        metadata={
+            "ecommerce_human_realism_review_context": {
+                "file_path": "D:/unsafe/original.png",
+                "provider_payload": {"secret": True},
+            },
+            "caller_note": "safe_note",
+        },
+    )
+
+    assert review.metadata["caller_note"] == "safe_note"
+    assert (
+        review.metadata["ecommerce_human_realism_review_context"]["source"]
+        == "ecommerce_creative_risk_preflight"
+    )
+    serialized = review.model_dump_json()
+    assert "D:/unsafe/original.png" not in serialized
+    assert "provider_payload" not in serialized
+    assert "secret" not in serialized
+
+
+def test_human_realism_review_drops_external_ecommerce_context_without_guidance_context() -> None:
+    layer = HumanPhotorealismLayer()
+    guidance = _build(
+        "Professional ecommerce photo of a real child model wearing a product.",
+        subject_type="product",
+    )
+
+    review = layer.review(
+        guidance=guidance,
+        project_id="project_human_realism",
+        job_id="job_human_realism",
+        metadata={
+            "ecommerce_human_realism_review_context": {
+                "file_path": "D:/unsafe/original.png",
+                "provider_payload": {"secret": True},
+            },
+        },
+    )
+
+    assert "ecommerce_human_realism_review_context" not in review.metadata
+    serialized = review.model_dump_json()
+    assert "D:/unsafe/original.png" not in serialized
+    assert "provider_payload" not in serialized
+
+
 def test_general_human_realism_has_no_ecommerce_review_context() -> None:
     guidance = _build("Create a realistic portrait of an adult in a studio.")
 

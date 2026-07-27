@@ -985,6 +985,17 @@ class HumanPhotorealismLayer:
         ecommerce_review_context = _safe_ecommerce_human_realism_review_context(
             guidance.metadata.get("ecommerce_human_realism_review_context")
         )
+        review_metadata = dict(metadata or {})
+        review_metadata.pop("ecommerce_human_realism_review_context", None)
+        review_metadata.update(
+            {
+                "doc": "65",
+                "retry_evidence_only": brain_owned_forward_execution,
+                "review_owner": "shared_human_realism_review",
+            }
+        )
+        if ecommerce_review_context:
+            review_metadata["ecommerce_human_realism_review_context"] = ecommerce_review_context
         return AntiAIFaceReviewResult(
             review_id=review_id,
             project_id=project_id,
@@ -1003,17 +1014,7 @@ class HumanPhotorealismLayer:
                 if issue_codes
                 else ["Hand and skin realism will be checked after generation"] if hand_detail else ["Face realism will be checked after generation"]
             ),
-            metadata={
-                "doc": "65",
-                "retry_evidence_only": brain_owned_forward_execution,
-                "review_owner": "shared_human_realism_review",
-                **(
-                    {"ecommerce_human_realism_review_context": ecommerce_review_context}
-                    if ecommerce_review_context
-                    else {}
-                ),
-                **dict(metadata or {}),
-            },
+            metadata=review_metadata,
         )
 
     @classmethod
