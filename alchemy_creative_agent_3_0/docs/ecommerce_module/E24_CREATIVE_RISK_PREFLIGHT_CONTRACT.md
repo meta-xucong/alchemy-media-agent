@@ -239,8 +239,8 @@ Required top-level fields:
 | `owner` | enum | `ecommerce_specialized_preflight` | E-Commerce specialized module |
 | `applies_to` | enum | `ecommerce` | E-Commerce specialized module |
 | `mode` | enum | `standard`, `professional` | caller mode, validated by runtime |
-| `risk_items_by_output` | array | one item per planned output when output-level risks exist | E-Commerce preflight |
-| `global_risks` | array of enum | only closed risk-family values | E-Commerce preflight |
+| `risk_items_by_output` | array | empty only when no output-level risk is present; otherwise unique 1-based `output_index` values within requested N | E-Commerce preflight |
+| `global_risks` | array of enum | subset of the closed `risk_family` enum; no additional values | E-Commerce preflight |
 
 Required per-output fields:
 
@@ -252,8 +252,21 @@ Required per-output fields:
 | `risk_level` | enum | `low`, `medium`, `high` |
 | `strategy_policy` | array of enum | see allowed strategy values below |
 | `stop` | boolean | true only when the risk cannot be represented safely |
-| `fail_closed_reason` | enum or null | required when `stop=true`; null otherwise |
+| `fail_closed_reason` | enum or null | required closed enum when `stop=true`; null otherwise |
 | `professional_identity_hint` | object or null | present only in Professional Mode and only after an approved binding/view set exists |
+
+`risk_items_by_output` cardinality rules:
+
+- It may be `[]` only when the preflight found no output-level risk that needs
+  to be carried forward.
+- When non-empty, each item must refer to a unique `output_index`.
+- `output_index` is 1-based and must be within `1..requested_image_count`.
+- Duplicate, zero, negative, non-integer, or greater-than-N output indexes are
+  schema-invalid and must fail closed before any Remote Brain planning payload
+  is accepted.
+- Missing an output is allowed only when that output has no risk item; missing
+  an output must not be interpreted as permission to drop that output from the
+  exact-count set.
 
 Allowed `risk_family` values:
 
@@ -271,6 +284,11 @@ Allowed `risk_family` values:
 - `stiff_catalogue_card_direction`
 - `ai_polish_or_plasticity`
 
+`global_risks` must use this same closed `risk_family` enum and may contain
+only risks that apply to the whole request or set. Unknown values, free-text
+phrases, duplicate entries, or values outside the `risk_family` enum are
+invalid. `global_risks` must not introduce a second risk vocabulary.
+
 Allowed `strategy_policy` values:
 
 - `action_triggered_expression`
@@ -284,6 +302,29 @@ Allowed `strategy_policy` values:
 - `preserve_environment_integration`
 - `use_detail_role_for_close_product_evidence`
 - `fail_closed_if_reference_roles_conflict`
+
+Allowed `fail_closed_reason` values:
+
+- `unsafe_or_unrepresentable_reference_mix`
+- `missing_required_professional_binding`
+- `missing_approved_identity_view`
+- `identity_strategy_unavailable`
+- `reference_role_conflict`
+- `product_truth_selection_contract_conflict`
+- `provider_reference_capacity_unrepresentable`
+- `exact_count_contract_conflict`
+- `unknown_or_invalid_preflight_enum`
+- `internal_field_leak_risk`
+
+Unknown `fail_closed_reason` values are invalid and must be rejected rather
+than logged as free text.
+
+When any per-output item has `stop=true`, the whole N-output planning request
+fails closed before Remote Brain planning or finalizer sign-off is accepted.
+The system must not silently delete that output, reduce N, split the request
+into smaller jobs, switch routes, fall back to local creative logic, patch the
+prompt, or continue by ignoring the stopped output. Exact-count authority
+remains stronger than preflight convenience.
 
 The `professional_identity_hint` object is a Professional-only contributor. It
 may contain only:
