@@ -11,6 +11,7 @@ from ..creative_core.pipeline import run_creative_planning, run_generation_loop
 from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
+from ..llm_brain.stage_trace import record_stage_event
 from ..llm_brain.providers import (
     BrainDevelopmentalPresenceDecisionMissing,
     BrainExecutionBudgetExceeded,
@@ -186,9 +187,17 @@ class ScenarioRuntime:
             raise
 
     def plan_job(self, request: ScenarioRuntimeRequest | dict[str, Any]) -> ScenarioRuntimeResult:
+        record_stage_event("scenario_runtime", "plan_job_entered")
         runtime_request = self._coerce_request(request)
+        requested_count = self._requested_image_count_for_brain(runtime_request)
+        record_stage_event(
+            "scenario_runtime",
+            "request_coerced",
+            extra={"requested_image_count": requested_count},
+        )
         resolution = self.scenario_registry.resolve(runtime_request.scenario_selection)
         if not resolution.can_create_jobs:
+            record_stage_event("scenario_runtime", "scenario_blocked", terminal_reason="cannot_create_jobs")
             return ScenarioRuntimeResult(
                 status=ScenarioRuntimeStatus.BLOCKED,
                 scenario_resolution=resolution,
@@ -196,9 +205,22 @@ class ScenarioRuntime:
                 metadata=self._runtime_metadata(runtime_request, "blocked"),
             )
         try:
+            record_stage_event(
+                "scenario_runtime",
+                "capability_preparation_call",
+                stage="plan",
+                extra={"requested_image_count": requested_count},
+            )
             preparation = self._prepare_capability_execution(runtime_request, resolution, stage="plan")
         except CapabilityActivationError as exc:
+            record_stage_event(
+                "scenario_runtime",
+                "capability_preparation_blocked",
+                stage="plan",
+                terminal_reason="capability_activation_error",
+            )
             return self._activation_blocked_result(runtime_request, resolution, exc)
+        record_stage_event("scenario_runtime", "capability_preparation_returned", stage="plan")
         capability_run = preparation.combined_capability_run
         if capability_run is not None and capability_run.status == CapabilityRunStatus.FAILED:
             return ScenarioRuntimeResult(
@@ -458,15 +480,35 @@ class ScenarioRuntime:
             pre_activation_capabilities=self._capability_metadata(pre_activation_run),
             template_capability_policy=policy,
         )
+        record_stage_event(
+            "scenario_runtime",
+            "semantic_plan_returned",
+            stage=stage,
+            extra={
+                "requested_image_count": self._requested_image_count_for_brain(request),
+                "remote_contract_rejected_count": len(
+                    brain_result.audit.get("remote_contract_rejected_sections") or []
+                )
+                if isinstance(brain_result.audit, dict)
+                else 0,
+            },
+        )
+        record_stage_event("scenario_runtime", "slot_delta_recovery_call", stage=stage)
         brain_result = self._recover_character_card_slot_delta_brain_result(
             request,
             brain_result,
         )
+        record_stage_event("scenario_runtime", "slot_delta_recovery_returned", stage=stage)
+        record_stage_event("scenario_runtime", "remote_brain_requirement_validation_call", stage=stage)
         self._require_remote_creative_brain(request, policy, brain_result)
+        record_stage_event("scenario_runtime", "remote_brain_requirement_validation_returned", stage=stage)
+        record_stage_event("scenario_runtime", "professional_task_profile_bind_call", stage=stage)
         brain_result = self._bind_professional_task_profile(
             brain_result,
             professional_request,
         )
+        record_stage_event("scenario_runtime", "professional_task_profile_bind_returned", stage=stage)
+        record_stage_event("scenario_runtime", "activation_plan_build_call", stage=stage)
         plan = self._reuse_or_build_activation_plan(
             request,
             resolution,
@@ -475,6 +517,8 @@ class ScenarioRuntime:
             catalog.catalog_version,
             mode,
         )
+        record_stage_event("scenario_runtime", "activation_plan_build_returned", stage=stage)
+        record_stage_event("scenario_runtime", "template_deliverable_plan_build_call", stage=stage)
         deliverable_plan = self._build_template_deliverable_plan(
             request,
             normalized_intent,
@@ -482,6 +526,8 @@ class ScenarioRuntime:
             brain_result,
             specialized_plan,
         )
+        record_stage_event("scenario_runtime", "template_deliverable_plan_build_returned", stage=stage)
+        record_stage_event("scenario_runtime", "active_capabilities_call", stage=stage)
         active_run = self._run_active_capabilities(
             request,
             resolution,
@@ -489,8 +535,14 @@ class ScenarioRuntime:
             pre_activation_run,
             brain_result=brain_result,
         )
+        record_stage_event("scenario_runtime", "active_capabilities_returned", stage=stage)
+        record_stage_event("scenario_runtime", "frozen_capability_validation_call", stage=stage)
         self._validate_frozen_capability_execution(plan, active_run)
+        record_stage_event("scenario_runtime", "frozen_capability_validation_returned", stage=stage)
+        record_stage_event("scenario_runtime", "combine_capability_runs_call", stage=stage)
         combined = self._combine_capability_runs(request, resolution, pre_activation_run, active_run, plan)
+        record_stage_event("scenario_runtime", "combine_capability_runs_returned", stage=stage)
+        record_stage_event("scenario_runtime", "resolved_constraint_ledger_build_call", stage=stage)
         ledger = self._build_resolved_constraint_ledger(
             request,
             plan,
@@ -499,12 +551,21 @@ class ScenarioRuntime:
             deliverable_plan,
             brain_result=brain_result,
         )
+        record_stage_event("scenario_runtime", "resolved_constraint_ledger_build_returned", stage=stage)
+        record_stage_event("scenario_runtime", "capability_execution_envelope_build_call", stage=stage)
         envelope = self._build_capability_execution_envelope(
             plan,
             combined,
             normalized_intent,
             deliverable_plan,
             ledger,
+        )
+        record_stage_event("scenario_runtime", "capability_execution_envelope_build_returned", stage=stage)
+        record_stage_event(
+            "scenario_runtime",
+            "canonical_finalizer_call",
+            stage="provider_prompt_finalize",
+            extra={"requested_image_count": self._requested_image_count_for_brain(request)},
         )
         brain_result = self._finalize_canonical_provider_prompts(
             request,
@@ -514,6 +575,19 @@ class ScenarioRuntime:
             plan,
             envelope,
             ledger,
+        )
+        record_stage_event(
+            "scenario_runtime",
+            "canonical_finalizer_returned",
+            stage="provider_prompt_finalize",
+            extra={
+                "requested_image_count": self._requested_image_count_for_brain(request),
+                "remote_brain_call_count": (
+                    brain_result.audit.get("remote_brain_call_count")
+                    if isinstance(brain_result.audit, dict)
+                    else None
+                ),
+            },
         )
         self._require_brain_signed_provider_prompts(request, policy, brain_result, plan)
         plan, envelope, professional_preparation = self._finalize_professional_mode(
@@ -1225,6 +1299,7 @@ class ScenarioRuntime:
                 },
             }
         )
+        record_stage_event("scenario_runtime", "creative_planning_returned", stage="plan")
 
     def _recover_character_card_body_slot_delta_brain_result(
         self,

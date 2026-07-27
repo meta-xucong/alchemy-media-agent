@@ -33,6 +33,7 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import (
     ScenarioRuntimeResult,
     ScenarioRuntimeStatus,
 )
+from alchemy_creative_agent_3_0.app.llm_brain.stage_trace import record_stage_event
 from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
 from alchemy_creative_agent_3_0.app.visual_assets import (
@@ -150,10 +151,23 @@ class PlanningOnlyGenerationRouter:
 
 def _plan_job_process_entrypoint(request: dict[str, Any], result_queue: Any) -> None:
     try:
+        record_stage_event("native_planner_child", "process_entrypoint_started")
         runtime = ScenarioRuntime(generation_router=PlanningOnlyGenerationRouter())
+        record_stage_event("native_planner_child", "scenario_runtime_constructed")
+        record_stage_event("native_planner_child", "scenario_runtime_plan_job_call")
         result = runtime.plan_job(request)
+        record_stage_event(
+            "native_planner_child",
+            "scenario_runtime_plan_job_returned",
+            terminal_reason=getattr(result.status, "value", result.status),
+        )
         result_queue.put({"kind": "value", "result": result.model_dump(mode="json")})
     except BaseException as exc:  # pragma: no cover - exercised through parent process
+        record_stage_event(
+            "native_planner_child",
+            "process_entrypoint_error",
+            terminal_reason=exc.__class__.__name__,
+        )
         result_queue.put(
             {
                 "kind": "error",
@@ -737,6 +751,7 @@ class CodexNativeImageGenPlanner:
 
     def _plan_job_in_process(self, request: dict[str, Any]) -> ScenarioRuntimeResult:
         if not _PLANNING_PROCESS_LOCK.acquire(blocking=False):
+            record_stage_event("native_planner_parent", "planning_overlap_rejected")
             raise _LocalMcpPlanningInProgress()
         result_queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
         process = multiprocessing.Process(
@@ -745,18 +760,33 @@ class CodexNativeImageGenPlanner:
             name="codex-native-imagegen-planner",
         )
         try:
+            record_stage_event("native_planner_parent", "process_starting")
             process.start()
+            record_stage_event("native_planner_parent", "process_started")
             process.join(timeout=self._planning_timeout_seconds)
             if process.is_alive():
+                record_stage_event(
+                    "native_planner_parent",
+                    "process_timeout",
+                    terminal_reason="local_mcp_planning_timeout",
+                    extra={"timeout_seconds": self._planning_timeout_seconds},
+                )
                 process.terminate()
                 process.join(timeout=1.0)
                 if process.is_alive():  # pragma: no cover - platform fallback
                     process.kill()
                     process.join(timeout=1.0)
                 raise _LocalMcpPlanningTimeout()
+            record_stage_event(
+                "native_planner_parent",
+                "process_exited",
+                terminal_reason=str(process.exitcode),
+                extra={"exitcode": process.exitcode},
+            )
             try:
                 payload = result_queue.get_nowait()
             except queue.Empty as exc:
+                record_stage_event("native_planner_parent", "process_queue_empty", terminal_reason=str(process.exitcode))
                 raise RuntimeError(
                     f"Codex Native ImageGen planning process exited without a result (exitcode={process.exitcode})."
                 ) from exc
@@ -765,9 +795,12 @@ class CodexNativeImageGenPlanner:
             if payload.get("kind") == "error":
                 error_type = str(payload.get("error_type") or "RuntimeError")
                 message = str(payload.get("message") or "planning process failed")
+                record_stage_event("native_planner_parent", "process_returned_error", terminal_reason=error_type)
                 raise RuntimeError(f"{error_type}: {message}")
             if payload.get("kind") != "value" or not isinstance(payload.get("result"), dict):
+                record_stage_event("native_planner_parent", "process_returned_invalid_payload")
                 raise RuntimeError("Codex Native ImageGen planning process returned an invalid result.")
+            record_stage_event("native_planner_parent", "process_returned_value")
             return ScenarioRuntimeResult.model_validate(payload["result"])
         finally:
             result_queue.close()
@@ -786,13 +819,18 @@ class CodexNativeImageGenPlanner:
         """
 
         if not _PLANNING_PROCESS_LOCK.acquire(blocking=False):
+            record_stage_event("native_planner_thread", "planning_overlap_rejected")
             raise _LocalMcpPlanningInProgress()
         result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def runner() -> None:
             try:
-                result_queue.put(("value", runtime.plan_job(request)))
+                record_stage_event("native_planner_thread", "scenario_runtime_plan_job_call")
+                result = runtime.plan_job(request)
+                record_stage_event("native_planner_thread", "scenario_runtime_plan_job_returned")
+                result_queue.put(("value", result))
             except BaseException as exc:  # pragma: no cover - re-raised below
+                record_stage_event("native_planner_thread", "scenario_runtime_plan_job_error", terminal_reason=exc.__class__.__name__)
                 result_queue.put(("error", exc))
             finally:
                 _PLANNING_PROCESS_LOCK.release()
@@ -806,6 +844,12 @@ class CodexNativeImageGenPlanner:
         try:
             kind, value = result_queue.get(timeout=self._planning_timeout_seconds)
         except queue.Empty as exc:
+            record_stage_event(
+                "native_planner_thread",
+                "thread_timeout",
+                terminal_reason="local_mcp_planning_timeout",
+                extra={"timeout_seconds": self._planning_timeout_seconds},
+            )
             raise _LocalMcpPlanningTimeout() from exc
         if kind == "error":
             raise value

@@ -38,6 +38,7 @@ from .providers import (
     V3LLMBrainProvider,
     pop_transport_receipt,
 )
+from .stage_trace import record_stage_event
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapabilityPolicy, general_capability_policy
 
 
@@ -100,7 +101,14 @@ class V3LLMBrainAdapter:
         semantic_recovery_attempted = False
         initial_rejected_sections: list[str] = []
         try:
+            record_stage_event(
+                "brain_adapter",
+                "semantic_plan_provider_call",
+                stage=request.stage,
+                extra={"requested_image_count": request.requested_image_count},
+            )
             data = self.provider.run(request)
+            record_stage_event("brain_adapter", "semantic_plan_provider_returned", stage=request.stage)
             transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
             transport_receipt = _with_elapsed_transport_receipt(
                 transport_receipt,
@@ -113,6 +121,12 @@ class V3LLMBrainAdapter:
                 requires_complete_image_set=strict_remote_contract,
             )
             initial_rejected_sections = _remote_contract_rejected_sections(result)
+            record_stage_event(
+                "brain_adapter",
+                "semantic_plan_schema_validated",
+                stage=request.stage,
+                extra={"remote_contract_rejected_count": len(initial_rejected_sections)},
+            )
             recovery_transport_receipt: dict[str, Any] = {}
             if strict_remote_contract and initial_rejected_sections:
                 # A valid transport JSON object can still violate the frozen
@@ -121,12 +135,19 @@ class V3LLMBrainAdapter:
                 # is not local JSON repair and it happens before any image
                 # Provider operation.
                 semantic_recovery_attempted = True
+                record_stage_event(
+                    "brain_adapter",
+                    "semantic_recovery_provider_call",
+                    stage=request.stage,
+                    extra={"remote_contract_rejected_count": len(initial_rejected_sections)},
+                )
                 recovery_request = _semantic_contract_recovery_request(
                     request,
                     rejected_sections=initial_rejected_sections,
                 )
                 recovery_started = time.perf_counter()
                 recovery_data = self.provider.run(recovery_request)
+                record_stage_event("brain_adapter", "semantic_recovery_provider_returned", stage=request.stage)
                 recovery_transport_receipt = (
                     pop_transport_receipt(recovery_data) if isinstance(recovery_data, dict) else {}
                 )
@@ -172,6 +193,12 @@ class V3LLMBrainAdapter:
             }
             return result
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
+            record_stage_event(
+                "brain_adapter",
+                "semantic_plan_blocked",
+                stage=request.stage,
+                terminal_reason=_remote_provider_error_class(exc),
+            )
             fallback.warnings.append(str(exc))
             remote_http_status_code = _remote_provider_http_status_code(exc)
             remote_transport_failure = _remote_brain_transport_failure(exc)
@@ -230,10 +257,24 @@ class V3LLMBrainAdapter:
             raise BrainProviderUnavailable("Remote Brain is unavailable for canonical prompt signing.")
         started = time.perf_counter()
         try:
+            record_stage_event(
+                "brain_adapter",
+                "canonical_finalizer_provider_call",
+                stage=request.stage,
+                extra={"requested_image_count": request.requested_image_count},
+            )
             data = self.provider.run(request)
+            record_stage_event("brain_adapter", "canonical_finalizer_provider_returned", stage=request.stage)
         except (BrainProviderError, BrainProviderUnavailable):
+            record_stage_event("brain_adapter", "canonical_finalizer_provider_error", stage=request.stage)
             raise
         except Exception as exc:  # pragma: no cover - defensive provider boundary
+            record_stage_event(
+                "brain_adapter",
+                "canonical_finalizer_provider_error",
+                stage=request.stage,
+                terminal_reason=exc.__class__.__name__,
+            )
             raise BrainProviderError("Remote Brain failed while signing the canonical provider prompt.") from exc
         transport_receipt = pop_transport_receipt(data) if isinstance(data, dict) else {}
         transport_receipt = _with_elapsed_transport_receipt(
@@ -243,6 +284,12 @@ class V3LLMBrainAdapter:
         )
         prompts_raw = data.get("canonical_provider_prompts") if isinstance(data, dict) else None
         expected_count = request.requested_image_count
+        record_stage_event(
+            "brain_adapter",
+            "canonical_finalizer_schema_validation_started",
+            stage=request.stage,
+            extra={"requested_image_count": expected_count},
+        )
         if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
             raise BrainPromptContractInvalid("Remote Brain returned an invalid canonical provider-prompt contract.")
         semantic_preflight_required = _requires_human_semantic_preflight(request)
@@ -353,6 +400,12 @@ class V3LLMBrainAdapter:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
             raise BrainPromptContractInvalid("Remote Brain returned an invalid canonical provider-prompt contract.") from exc
+        record_stage_event(
+            "brain_adapter",
+            "canonical_finalizer_schema_validated",
+            stage=request.stage,
+            extra={"requested_image_count": expected_count},
+        )
         return (
             prompts,
             {

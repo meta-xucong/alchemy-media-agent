@@ -13,6 +13,7 @@ from services.alchemy_codex_local_adapter.contracts import (
     NativeSpecializedImageGenPlanRequest,
 )
 from services.alchemy_codex_local_adapter.native_planner import CodexNativeImageGenPlanner
+from alchemy_creative_agent_3_0.app.llm_brain.stage_trace import record_stage_event
 
 
 def test_codex_native_planner_imports_app_providers_in_clean_process() -> None:
@@ -186,6 +187,63 @@ def test_codex_native_custom_runtime_allows_two_stage_brain_preparation_within_d
 
     assert result == {"status": "planned", "stages": ["plan", "provider_prompt_finalize"]}
     assert runtime.request_seen is not None
+
+
+def test_codex_native_planner_stage_trace_is_safe_and_opt_in(tmp_path, monkeypatch) -> None:
+    trace_file = tmp_path / "stage-trace.jsonl"
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+    runtime = _TwoStageProbeRuntime(delay_seconds=0.01)
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: runtime,
+        planning_timeout_seconds=0.2,
+        brain_transport_timeout_seconds=0.05,
+    )
+
+    result = planner._plan_job_with_deadline(  # noqa: SLF001 - diagnostic invariant
+        runtime,
+        {
+            "user_input": "SECRET PROMPT TEXT MUST NOT LEAK",
+            "metadata": {"requested_image_count": 1},
+            "uploaded_assets": [{"file_path": str(tmp_path / "secret-product.png")}],
+        },
+    )
+
+    assert result == {"status": "planned", "stages": ["plan", "provider_prompt_finalize"]}
+    records = [json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines()]
+    assert [record["event"] for record in records] == [
+        "scenario_runtime_plan_job_call",
+        "scenario_runtime_plan_job_returned",
+    ]
+    serialized = json.dumps(records).lower()
+    assert "secret" not in serialized
+    assert "product.png" not in serialized
+    assert "http" not in serialized
+
+
+def test_brain_stage_trace_redacts_untrusted_reasons_and_extra_text(tmp_path, monkeypatch) -> None:
+    trace_file = tmp_path / "stage-trace.jsonl"
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+
+    record_stage_event(
+        "scenario_runtime",
+        "capability_preparation_blocked",
+        stage="plan",
+        terminal_reason="C:/secret/path leaked https://brain.example sk-key raw prompt",
+        extra={
+            "error_class": "https://brain.example/provider/raw",
+            "terminal_reason": "D:/private/project/raw prompt",
+            "requested_image_count": 1,
+            "timeout_seconds": 120.0,
+        },
+    )
+
+    records = [json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines()]
+    assert records[0]["terminal_reason"] == "unknown"
+    assert records[0]["error_class"] == "unknown"
+    assert records[0]["requested_image_count"] == 1
+    serialized = json.dumps(records).lower()
+    for forbidden in ("secret", "https", "brain.example", "sk-key", "raw prompt", "private", "path"):
+        assert forbidden not in serialized
 
 
 def test_codex_native_specialized_planner_rejects_overlapping_timeout_workers(tmp_path) -> None:

@@ -13,6 +13,7 @@ from typing import Any
 
 from .contracts import BrainRunRequest
 from .prompts import build_remote_payload, system_prompt_for_stage
+from .stage_trace import record_stage_event
 
 
 class BrainProviderUnavailable(RuntimeError):
@@ -357,6 +358,15 @@ class V3LLMBrainProvider:
 
         try:
             timeout_seconds = self._effective_timeout_seconds(request)
+            record_stage_event(
+                "brain_provider",
+                "stream_request_prepared",
+                stage=request.stage,
+                extra={
+                    "requested_image_count": request.requested_image_count,
+                    "timeout_seconds": timeout_seconds,
+                },
+            )
             payload = {
                 "model": self.model,
                 "messages": [
@@ -377,8 +387,10 @@ class V3LLMBrainProvider:
                 payload=payload,
                 timeout_seconds=timeout_seconds,
             )
+            record_stage_event("brain_provider", "json_parse_started", stage=request.stage)
             _mark_transport_event("json_parse_started")
             parsed = _loads_json_object(text)
+            record_stage_event("brain_provider", "json_parse_completed", stage=request.stage)
             _mark_transport_event("json_parse_completed")
             return parsed
         except BrainInvalidJsonResponse:
@@ -641,11 +653,15 @@ def _collect_openai_chat_completion_stream(
     chunks: list[str] = []
     done = False
     _mark_transport_event("client_constructing")
+    record_stage_event("brain_provider", "stream_client_constructing")
     with httpx.Client(timeout=timeout) as client:
         _mark_transport_event("client_constructed")
+        record_stage_event("brain_provider", "stream_client_constructed")
         _mark_transport_event("request_dispatched")
+        record_stage_event("brain_provider", "stream_request_dispatched")
         with client.stream("POST", url, headers=headers, json=payload) as response:
             _mark_transport_event("response_started")
+            record_stage_event("brain_provider", "stream_response_started")
             response.raise_for_status()
             for raw_line in response.iter_lines():
                 line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line or "")
@@ -656,6 +672,7 @@ def _collect_openai_chat_completion_stream(
                 if data == "[DONE]":
                     done = True
                     _mark_transport_event("complete_response_observed")
+                    record_stage_event("brain_provider", "stream_complete_response_observed")
                     break
                 try:
                     item = json.loads(data)
@@ -680,6 +697,7 @@ def _collect_openai_chat_completion_stream(
                 content = delta.get("content") if isinstance(delta, dict) else None
                 if content:
                     _mark_transport_event("first_content_observed")
+                    record_stage_event("brain_provider", "stream_first_content_observed")
                     chunks.append(str(content))
     if not done:
         raise BrainInvalidJsonResponse("remote brain stream ended before the complete JSON response marker")

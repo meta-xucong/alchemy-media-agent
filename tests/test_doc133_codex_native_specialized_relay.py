@@ -159,6 +159,64 @@ def test_ecommerce_specialized_relay_projects_exact_brain_count_and_canonical_pr
         assert output["provider_prompt_sha256"] == hashlib.sha256(output["imagegen_prompt"].encode("utf-8")).hexdigest()
 
 
+def test_ecommerce_specialized_relay_stage_trace_shows_one_plan_and_one_finalizer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trace_file = tmp_path / "brain-stage-trace.jsonl"
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+    monkeypatch.setattr(V3ProjectModeService, "create_project", _forbid_project_side_effect)
+    monkeypatch.setattr(V3ProjectModeService, "create_project_job", _forbid_project_side_effect)
+    monkeypatch.setattr(V3ProjectModeService, "generate_project_job", _forbid_project_side_effect)
+    reference = _write_png(tmp_path / "product.png")
+    brain = EcommerceRemoteBrainTestProvider()
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: ScenarioRuntime(
+            llm_brain_adapter=V3LLMBrainAdapter(provider=brain)
+        )
+    )
+
+    result = planner.prepare_frozen_specialized_native_imagegen_plan(
+        NativeSpecializedImageGenPlanRequest.from_mcp_arguments(
+            _arguments(
+                requested_image_count=2,
+                user_input="Create two safe product images.",
+                reference_inputs=[{"channel": "product_truth", "file_path": str(reference)}],
+            )
+        )
+    )
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert result["requested_output_count"] == 2
+    assert [request["stage"] for request in brain.requests] == ["plan", "provider_prompt_finalize"]
+    records = [json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines()]
+    events = [record["event"] for record in records]
+    assert events.count("semantic_plan_provider_call") == 1
+    assert events.count("semantic_plan_provider_returned") == 1
+    assert events.count("canonical_finalizer_provider_call") == 1
+    assert events.count("canonical_finalizer_provider_returned") == 1
+    assert "semantic_recovery_provider_call" not in events
+    ordered_boundaries = [
+        "semantic_plan_provider_returned",
+        "slot_delta_recovery_call",
+        "slot_delta_recovery_returned",
+        "professional_task_profile_bind_call",
+        "active_capabilities_call",
+        "active_capabilities_returned",
+        "resolved_constraint_ledger_build_call",
+        "capability_execution_envelope_build_returned",
+        "canonical_finalizer_call",
+        "canonical_finalizer_provider_call",
+        "canonical_finalizer_provider_returned",
+    ]
+    boundary_positions = [events.index(event) for event in ordered_boundaries]
+    assert boundary_positions == sorted(boundary_positions)
+    assert all(record.get("requested_image_count") in {None, 2} for record in records)
+    serialized = json.dumps(records).lower()
+    assert "product.png" not in serialized
+    assert "create two safe product images" not in serialized
+
+
 def test_photography_specialized_relay_preserves_only_existing_lineage_roles_and_provider_prompt_parity(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

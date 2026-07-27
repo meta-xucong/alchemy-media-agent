@@ -139,7 +139,7 @@ json_parse_ok=true
 mutation=none_remote_brain_only
 ```
 
-Revised current active blocker:
+Revised current active blocker after the streaming diagnostic:
 
 ```text
 DeepSeek/OpenAI-compatible non-streaming Chat Completions integration waits for
@@ -147,13 +147,40 @@ the complete plan response opaquely and times out, while the same full plan
 request can complete as a streamed JSON response inside the 120s cap.
 ```
 
-This is now classified as a local Brain transport integration defect for the
-DeepSeek/OpenAI-compatible chat path, not an external model outage. It is still
-not a finalizer failure, exact-count mismatch, Product API/Provider image
-generation issue, or slot/receipt issue. Real image generation remains
-prohibited until the streaming collector is implemented, tested, committed, and
-a future reviewer/user gate authorizes another planning-only probe that returns
-schema-valid two-stage Brain output with mutation delta 0.
+This first proved a local Brain transport integration defect for the
+DeepSeek/OpenAI-compatible chat path, not an external model outage. Commit
+`58832e0` implemented the streaming collector and a same-provider minimal
+stream smoke then returned a complete parseable JSON response in about 4.4s
+with mutation delta 0.
+
+However, a full N=1 MCP planning-only probe after `58832e0` still blocked at
+the local MCP interaction boundary:
+
+```text
+code=codex_native_imagegen_planning_timeout
+elapsed_ms=301507
+mutation_delta=0
+```
+
+The earlier full plan-stage streaming diagnostic remains decisive evidence:
+the same real provider/model, full plan payload, `system_chars=20759`,
+`payload_chars=10075`, `max_tokens=8000`, and `stream=true` completed in
+`80820ms`, with `http_status=200`, `first_content_ms=42939`,
+`done_ms=80819`, and `json_parse_ok=true`.
+
+Therefore the current `301507ms` MCP timeout must not be generalized as
+"external Brain plan is unavailable." The active investigation shifts to the
+post-plan boundary:
+
+- whether `provider_prompt_finalize` is slow, repeated, or followed by an
+  unapproved recovery/resign loop;
+- whether local schema/contract validation or ScenarioRuntime capability
+  preparation stalls after the plan response;
+- whether the native MCP child, queue, or wrapper waits on the wrong object.
+
+Real image generation remains prohibited until stage-trace evidence identifies
+the exact boundary and a future N=1 planning-only probe returns schema-valid
+two-stage Brain output with mutation delta 0.
 
 Additional evidence:
 
@@ -191,7 +218,12 @@ The present failure was previously visible only as `remote_error_class=timeout`.
 | TTFB / first token | Did the remote model start responding but not complete JSON? | Not observable with the current non-streaming SDK call. |
 | Read / full response | Did a partial response arrive but exceed the cap before full JSON? | Not observable with the current non-streaming SDK call. |
 | JSON parse / schema | Did complete text arrive but fail JSON/schema validation? | Current live probe reports timeout, not parse/schema; fake provider schema path passes. |
-| Remote model / upstream queue | Did the model/gateway spend >120s before completing the first planning response? | This is the leading hypothesis but is not yet decomposed into queue vs inference vs streaming/read. |
+| Remote model / upstream queue | Did the model/gateway spend >120s before completing the first planning response? | No longer the leading hypothesis for the plan stage: the full plan payload streamed to valid JSON in 80.820s. Finalizer/upstream latency remains unproven. |
+
+Stage-trace instrumentation is now the next bounded diagnostic. It must record
+only safe component/stage/elapsed/terminal events and must not record URL,
+credentials, prompt text, file paths, provider bodies, job IDs, handoff IDs, or
+output IDs.
 
 The next code work, if authorized, must improve this layer distinction before attempting another real probe.
 
@@ -284,14 +316,31 @@ Only after Phase A/B evidence exists:
 | E. Split six outputs into serial one-image tasks | Easier short calls | Breaks Doc133 exact-count/set-level contract unless redesigned | Rejected for current task |
 | F. Route/model fallback | Could bypass current provider latency | Changes authority/capability surface | Out of scope; separate capability task only |
 
-Post-diagnostic decision: Option B is now the selected minimal repair for the
-DeepSeek/OpenAI-compatible Chat Completions path. The repair is transport-only:
-collect streamed content until `[DONE]`, then parse and validate the same
-complete JSON object that the non-streaming path expected. Incomplete streams,
-missing content, malformed JSON, schema mismatch, provider HTTP errors, and
-timeouts still fail closed. The change must not alter Brain prompts, requested
-N, max token budget, route/model selection, Product API, Provider rendering,
-Formal Core, receipt/slot/activation, or E-Commerce deliverable contracts.
+Post-`58832e0` decision: Option B has already been implemented and verified as
+the correct transport repair for the DeepSeek/OpenAI-compatible Chat
+Completions path. The streaming collector preserves one remote request, collects
+until `[DONE]`, and then parses/validates the same complete JSON object that the
+non-streaming path expected.
+
+The remaining failure is no longer "the full plan stage cannot respond." A
+full plan-stage streaming diagnostic using the same real provider/model and
+full plan payload returned valid JSON in 80.820s. Therefore the active repair
+is now **stage-boundary instrumentation after semantic plan returns**:
+
+- record native planner parent/child lifecycle without leaking private request
+  material;
+- record ScenarioRuntime semantic-plan return, slot-delta recovery, professional
+  profile binding, active capability execution, frozen capability validation,
+  constraint ledger/envelope construction, and canonical finalizer call/return;
+- record Brain provider stream request/response/JSON-parse milestones;
+- keep every trace line public-safe: no URL, key, prompt text, file path,
+  provider body, job ID, handoff ID, output ID, stack trace, or raw exception
+  text.
+
+This instrumentation is diagnostic only. It must not alter Brain prompts,
+requested N, max token budget, route/model selection, Product API, Provider
+rendering, Formal Core, receipt/slot/activation, E-Commerce deliverable
+contracts, or real-image generation gates.
 
 ## 8. Focused tests required before any real probe
 
