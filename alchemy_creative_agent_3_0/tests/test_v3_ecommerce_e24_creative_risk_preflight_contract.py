@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
+    build_professional_ecommerce_identity_preflight,
     validate_ecommerce_creative_risk_preflight_payload,
 )
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
@@ -317,6 +318,46 @@ def test_professional_identity_hint_requires_approved_binding_and_view_kind() ->
     )
 
 
+def test_professional_contributor_builds_hint_only_from_approved_view_kinds() -> None:
+    preflight = build_professional_ecommerce_identity_preflight(
+        requested_image_count=2,
+        approved_identity_view_kinds={"front", "profile"},
+    )
+
+    assert preflight.mode == "professional"
+    assert [item.output_index for item in preflight.risk_items_by_output] == [1, 2]
+    for item in preflight.risk_items_by_output:
+        assert item.professional_identity_hint is not None
+        assert item.professional_identity_hint.model_dump(mode="json") == {
+            "preferred_identity_view_kind": "profile",
+            "identity_strategy": "secondary_face",
+            "source": "professional_binding_resolver",
+        }
+
+    payload = preflight.model_dump(mode="json")
+    validate_ecommerce_creative_risk_preflight_payload(
+        payload,
+        scenario_id="ecommerce",
+        mode="professional",
+        requested_image_count=2,
+        approved_identity_view_kinds={"front", "profile"},
+    )
+    serialized = preflight.model_dump_json()
+    assert "face_profile" not in serialized
+    assert "asset_id" not in serialized
+    assert "output_id" not in serialized
+    assert "path" not in serialized
+    assert "provider_payload" not in serialized
+
+
+def test_professional_contributor_requires_at_least_one_approved_view_kind() -> None:
+    with pytest.raises(ValueError, match="missing_approved_identity_view"):
+        build_professional_ecommerce_identity_preflight(
+            requested_image_count=1,
+            approved_identity_view_kinds=set(),
+        )
+
+
 def test_preflight_contract_does_not_mutate_core_ecommerce_authorities() -> None:
     preflight = validate_ecommerce_creative_risk_preflight_payload(
         _preflight(),
@@ -430,3 +471,88 @@ def test_malformed_preflight_blocks_before_remote_brain_without_leaking_payload(
     assert "unknown_risk_family" not in serialized_result
     assert "D:/private/should_not_cross.png" not in serialized_result
     assert "not-a-dict-preflight" not in serialized_result
+
+
+def test_professional_preflight_missing_binding_blocks_before_remote_brain() -> None:
+    provider = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+    professional_preflight = _preflight(
+        mode="professional",
+        risk_items_by_output=[_risk_item(professional_identity_hint=None)],
+    )
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one professional ecommerce image.",
+            "scenario_selection": {
+                "scenario_id": "ecommerce",
+                "parameters": {"requested_image_count": 1},
+            },
+            "metadata": {
+                "requested_image_count": 1,
+                "professional_mode": "professional",
+                "ecommerce_creative_context": {
+                    "context_id": "ctx_e24_professional_missing_binding",
+                    "source_version": "ecommerce_creative_context_v2",
+                    "product_truth": {"hard_facts": ["blue swimsuit"]},
+                    "creative_risk_preflight": professional_preflight,
+                },
+            },
+            "product_profile": {"product_category": "kidswear swimsuit"},
+        }
+    )
+
+    assert result.status == ScenarioRuntimeStatus.BLOCKED
+    assert result.generation_result is None
+    assert provider.requests == []
+    assert "remote_creative_brain_outcome" not in result.metadata
+    assert any("professional_mode_binding_invalid" in item for item in result.warnings)
+
+
+def test_professional_preflight_unapproved_view_hint_blocks_before_remote_brain() -> None:
+    provider = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+    profile_hint = {
+        "preferred_identity_view_kind": "profile",
+        "identity_strategy": "profile_primary",
+        "source": "professional_binding_resolver",
+    }
+    professional_preflight = _preflight(
+        mode="professional",
+        risk_items_by_output=[_risk_item(professional_identity_hint=profile_hint)],
+    )
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one professional ecommerce image.",
+            "scenario_selection": {
+                "scenario_id": "ecommerce",
+                "parameters": {"requested_image_count": 1},
+            },
+            "metadata": {
+                "requested_image_count": 1,
+                "professional_mode": "professional",
+                "professional_mode_binding_record": {
+                    "job_id": "job_professional",
+                    "project_id": "project_professional",
+                    "people_asset_id": "person_1",
+                    "face_module_id": "face_v1",
+                    "pack_version_id": "pack_v1",
+                    "identity_view_ids": ["face_front"],
+                },
+                "ecommerce_creative_context": {
+                    "context_id": "ctx_e24_professional_unapproved_view",
+                    "source_version": "ecommerce_creative_context_v2",
+                    "product_truth": {"hard_facts": ["blue swimsuit"]},
+                    "creative_risk_preflight": professional_preflight,
+                },
+            },
+            "product_profile": {"product_category": "kidswear swimsuit"},
+        }
+    )
+
+    assert result.status == ScenarioRuntimeStatus.BLOCKED
+    assert result.generation_result is None
+    assert provider.requests == []
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["reason_code"] == "ecommerce_creative_risk_preflight_invalid"

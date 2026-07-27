@@ -36,6 +36,10 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import (
 )
 from alchemy_creative_agent_3_0.app.llm_brain.stage_trace import record_stage_event
 from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
+    build_professional_ecommerce_identity_preflight,
+    professional_identity_view_kinds_from_selectors,
+)
 from alchemy_creative_agent_3_0.app.shared_capabilities import AssetRole, UploadedAssetInfo
 from alchemy_creative_agent_3_0.app.visual_assets import (
     ProfessionalModeBinding,
@@ -426,6 +430,19 @@ class CodexNativeImageGenPlanner:
             }
         if professional_product_model:
             provider_budget = self._professional_product_model_provider_budget(server_owned_identity_references)
+            approved_view_kinds = professional_identity_view_kinds_from_selectors(
+                list(binding.identity_view_ids)
+            )
+            try:
+                creative_risk_preflight = build_professional_ecommerce_identity_preflight(
+                    requested_image_count=request.requested_image_count,
+                    approved_identity_view_kinds=approved_view_kinds,
+                )
+            except ValueError:
+                return self._blocked(
+                    "codex_native_imagegen_professional_identity_hint_unavailable",
+                    "Professional E-Commerce planning requires an approved identity view kind before creative risk preflight can be frozen.",
+                )
             professional_metadata = {
                 "professional_identity_reference_strategy": "visual_asset_library_product_model_v1",
                 "professional_product_model_planning": True,
@@ -434,6 +451,9 @@ class CodexNativeImageGenPlanner:
             ecommerce_context = dict(metadata.get("ecommerce_creative_context") or {})
             ecommerce_context["provider_reference_budget"] = self._brain_safe_provider_reference_budget(
                 provider_budget
+            )
+            ecommerce_context["creative_risk_preflight"] = creative_risk_preflight.model_dump(
+                mode="json"
             )
             metadata["ecommerce_creative_context"] = ecommerce_context
         else:

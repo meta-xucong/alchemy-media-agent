@@ -83,6 +83,27 @@ ProfessionalIdentityStrategy = Literal[
 CreativeRiskMode = Literal["standard", "professional"]
 
 
+_PROFESSIONAL_VIEW_KIND_BY_SELECTOR = {
+    "front": "front",
+    "face_front": "front",
+    "standard_front": "front",
+    "front_1": "front",
+    "front_three_quarter": "front_three_quarter",
+    "face_front_three_quarter": "front_three_quarter",
+    "three_quarter": "front_three_quarter",
+    "three_quarter_1": "front_three_quarter",
+    "left_front_45": "front_three_quarter",
+    "right_front_45": "front_three_quarter",
+    "profile": "profile",
+    "face_profile": "profile",
+    "profile_1": "profile",
+    "side": "profile",
+    "back": "back",
+    "rear_head": "back",
+    "face_rear_head": "back",
+}
+
+
 class EcommerceProfessionalIdentityRiskHint(V3BaseModel):
     """Professional-only identity strategy hint for E-Commerce preflight.
 
@@ -215,6 +236,94 @@ class EcommerceCreativeRiskPreflight(V3BaseModel):
             "preflight_may_change_output_count": False,
             "preflight_may_author_provider_prompt": False,
         }
+
+
+def professional_identity_view_kinds_from_selectors(
+    view_selectors: list[str] | tuple[str, ...] | set[str],
+) -> set[str]:
+    """Project server-owned view selectors into the public E24 view-kind enum."""
+
+    kinds: set[str] = set()
+    for selector in view_selectors:
+        cleaned = str(selector or "").strip().lower()
+        kind = _PROFESSIONAL_VIEW_KIND_BY_SELECTOR.get(cleaned)
+        if kind:
+            kinds.add(kind)
+    return kinds
+
+
+def professional_identity_hint_from_view_kinds(
+    approved_identity_view_kinds: set[str],
+) -> EcommerceProfessionalIdentityRiskHint:
+    """Choose a closed Professional identity strategy from approved view kinds only."""
+
+    approved = {str(item).strip() for item in approved_identity_view_kinds if str(item).strip()}
+    if "profile" in approved:
+        return EcommerceProfessionalIdentityRiskHint(
+            preferred_identity_view_kind="profile",
+            identity_strategy="secondary_face",
+        )
+    if "front_three_quarter" in approved:
+        return EcommerceProfessionalIdentityRiskHint(
+            preferred_identity_view_kind="front_three_quarter",
+            identity_strategy="secondary_face",
+        )
+    if "front" in approved:
+        return EcommerceProfessionalIdentityRiskHint(
+            preferred_identity_view_kind="front",
+            identity_strategy="front_primary",
+        )
+    if "back" in approved:
+        return EcommerceProfessionalIdentityRiskHint(
+            preferred_identity_view_kind="back",
+            identity_strategy="identity_not_primary",
+        )
+    raise ValueError("missing_approved_identity_view")
+
+
+def build_professional_ecommerce_identity_preflight(
+    *,
+    requested_image_count: int,
+    approved_identity_view_kinds: set[str],
+) -> EcommerceCreativeRiskPreflight:
+    """Build the Phase 4 Professional-only identity coherence preflight.
+
+    The contributor emits only closed risk enums and a view-kind/strategy hint
+    derived from already-approved binding views. It does not read People Asset
+    storage, choose product truth, change exact N, or author prompt fragments.
+    """
+
+    if requested_image_count < 1:
+        raise ValueError("requested_image_count_invalid")
+    hint = professional_identity_hint_from_view_kinds(approved_identity_view_kinds)
+    return EcommerceCreativeRiskPreflight(
+        mode="professional",
+        global_risks=[
+            "identity_angle_mismatch",
+            "pasted_face",
+            "head_body_scale_mismatch",
+        ],
+        risk_items_by_output=[
+            EcommerceCreativeRiskItem(
+                output_index=index,
+                risk_family=[
+                    "identity_angle_mismatch",
+                    "pasted_face",
+                    "head_body_scale_mismatch",
+                ],
+                primary_goal_hint="balanced_lifestyle_product",
+                risk_level="medium",
+                strategy_policy=[
+                    "coherent_secondary_turn",
+                    "avoid_over_twisted_head",
+                    "prefer_body_led_motion",
+                    "separate_composition_reference_from_identity",
+                ],
+                professional_identity_hint=hint,
+            )
+            for index in range(1, requested_image_count + 1)
+        ],
+    )
 
 
 def validate_ecommerce_creative_risk_preflight_payload(

@@ -608,6 +608,50 @@ Tests must prove:
 Add a Professional-only contributor that can emit identity-angle risk hints
 after server-owned binding resolution.
 
+#### Phase 4 correction model and call graph
+
+Status for this implementation milestone: approved for isolated feature-branch
+work only. Phase 4 does not activate Human Realism post-review, Provider/MCP
+materialization, UI, storage, receipt, slot, activation, or real ImageGen.
+
+Intended behavior:
+
+1. Standard, General, and Photography requests must not read People Asset
+   state and must not receive `professional_identity_hint`.
+2. Professional E-Commerce may receive `professional_identity_hint` only after
+   the host has already resolved an approved server-owned binding and admitted
+   the requested view selectors.
+3. The hint may contain only approved view kinds (`front`,
+   `front_three_quarter`, `profile`, `back`, `none`), a closed identity
+   strategy enum, and `source=professional_binding_resolver`.
+4. The contributor never selects product truth, changes provider reference
+   capacity, changes exact N, rewrites prompts, or provides a local creative
+   fallback. Remote Brain still owns shot plan and canonical prompts.
+5. Missing binding, malformed binding, or an existing hint that asks for an
+   unapproved view must fail closed before Remote Brain. It must not silently
+   omit the hint and continue as if no Professional preflight existed.
+
+Call graph:
+
+```text
+Professional host/native planner
+  -> server-owned Professional binding resolver
+  -> approved identity view selectors are normalized to closed view kinds only
+  -> E-Commerce preflight contributor adds professional_identity_hint
+  -> V3LLMBrainAdapter E-Commerce allowlist validates/sanitizes the object
+  -> ScenarioRuntime pre-Brain planning_gate may fail closed
+  -> Remote Brain receives only typed risk context, never raw IDs/paths/hashes
+```
+
+Authority split:
+
+- The binding resolver owns project/people asset/view admission.
+- The Phase 4 contributor owns only the closed hint projection from already
+  admitted view kinds.
+- E-Commerce product truth selection remains owned by `image_set_plan`.
+- Shared Human Realism/post-review remains a later phase and may consume risk
+  context only through its own review authority.
+
 Tests must prove:
 
 - no People Asset lookup in Standard Mode;

@@ -444,6 +444,142 @@ def test_ecommerce_adapter_preserves_creative_risk_preflight_for_both_brain_stag
     assert "creative_risk_preflight" not in build_remote_payload(photography_request)
 
 
+def test_ecommerce_adapter_adds_professional_identity_hint_only_from_resolved_binding() -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    adapter = V3LLMBrainAdapter()
+    professional_preflight = {
+        "contract_version": "ecommerce_creative_risk_preflight_v1",
+        "owner": "ecommerce_specialized_preflight",
+        "applies_to": "ecommerce",
+        "mode": "professional",
+        "risk_items_by_output": [
+            {
+                "output_index": 1,
+                "risk_family": ["identity_angle_mismatch", "pasted_face"],
+                "primary_goal_hint": "walking_or_lookback",
+                "risk_level": "high",
+                "strategy_policy": ["coherent_secondary_turn", "avoid_over_twisted_head"],
+                "stop": False,
+                "fail_closed_reason": None,
+                "professional_identity_hint": None,
+            }
+        ],
+        "global_risks": ["identity_angle_mismatch"],
+    }
+    metadata = {
+        "requested_image_count": 1,
+        "professional_mode": "professional",
+        "professional_mode_binding_record": {
+            "job_id": "job_professional",
+            "project_id": "project_professional",
+            "people_asset_id": "person_1",
+            "face_module_id": "face_v1",
+            "pack_version_id": "pack_v1",
+            "identity_view_ids": ["face_front", "face_profile"],
+        },
+        "ecommerce_creative_context": {
+            "product_truth": {"hard_facts": ["blue swimsuit"]},
+            "creative_risk_preflight": professional_preflight,
+        },
+    }
+
+    plan_request = adapter.build_request(
+        user_input="Create a professional ecommerce product-on-model image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata=metadata,
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+    finalizer_request = adapter.build_request(
+        user_input="Create a professional ecommerce product-on-model image.",
+        stage="provider_prompt_finalize",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata=metadata,
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    for request in (plan_request, finalizer_request):
+        preflight = request.metadata["ecommerce_creative_context"]["creative_risk_preflight"]
+        hint = preflight["risk_items_by_output"][0]["professional_identity_hint"]
+        assert hint == {
+            "preferred_identity_view_kind": "profile",
+            "identity_strategy": "secondary_face",
+            "source": "professional_binding_resolver",
+        }
+        payload = json.loads(build_remote_payload(request))
+        payload_hint = payload["ecommerce_creative_context"]["creative_risk_preflight"][
+            "risk_items_by_output"
+        ][0]["professional_identity_hint"]
+        assert payload_hint == hint
+        serialized_payload = json.dumps(payload, ensure_ascii=False)
+        assert "face_profile" not in serialized_payload
+        assert "face_front" not in serialized_payload
+        assert "person_1" not in serialized_payload
+        assert "job_professional" not in serialized_payload
+        assert "pack_v1" not in serialized_payload
+
+
+def test_standard_ecommerce_adapter_does_not_inject_professional_identity_hint() -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    adapter = V3LLMBrainAdapter()
+    standard_preflight = {
+        "contract_version": "ecommerce_creative_risk_preflight_v1",
+        "owner": "ecommerce_specialized_preflight",
+        "applies_to": "ecommerce",
+        "mode": "standard",
+        "risk_items_by_output": [
+            {
+                "output_index": 1,
+                "risk_family": ["template_expression"],
+                "primary_goal_hint": "emotion_hero",
+                "risk_level": "medium",
+                "strategy_policy": ["action_triggered_expression"],
+                "stop": False,
+                "fail_closed_reason": None,
+                "professional_identity_hint": None,
+            }
+        ],
+        "global_risks": ["template_expression"],
+    }
+    metadata = {
+        "requested_image_count": 1,
+        "professional_mode_binding_record": {
+            "job_id": "job_should_not_cross",
+            "project_id": "project_should_not_cross",
+            "people_asset_id": "person_should_not_cross",
+            "face_module_id": "face_v1",
+            "pack_version_id": "pack_v1",
+            "identity_view_ids": ["face_profile"],
+        },
+        "ecommerce_creative_context": {
+            "product_truth": {"hard_facts": ["blue swimsuit"]},
+            "creative_risk_preflight": standard_preflight,
+        },
+    }
+
+    request = adapter.build_request(
+        user_input="Create a standard ecommerce product image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata=metadata,
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    preflight = request.metadata["ecommerce_creative_context"]["creative_risk_preflight"]
+    assert preflight == standard_preflight
+    assert preflight["risk_items_by_output"][0]["professional_identity_hint"] is None
+    payload = json.loads(build_remote_payload(request))
+    serialized_payload = json.dumps(payload, ensure_ascii=False)
+    assert "face_profile" not in serialized_payload
+    assert "person_should_not_cross" not in serialized_payload
+    assert "job_should_not_cross" not in serialized_payload
+
+
 def test_nonhuman_multiframe_project_context_does_not_invent_person_or_product_evidence(monkeypatch) -> None:
     """A generic Project Mode transport record is not semantic subject truth."""
 

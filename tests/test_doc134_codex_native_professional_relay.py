@@ -639,6 +639,23 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         {root_source_id, output_id, *product_ids}
     )
     assert capturing.payloads[0]["metadata"]["professional_product_model_planning"] is True
+    creative_context = capturing.payloads[0]["metadata"]["ecommerce_creative_context"]
+    preflight = creative_context["creative_risk_preflight"]
+    assert preflight["mode"] == "professional"
+    assert len(preflight["risk_items_by_output"]) == request.requested_image_count
+    professional_hint = preflight["risk_items_by_output"][0]["professional_identity_hint"]
+    assert professional_hint == {
+        "preferred_identity_view_kind": "front",
+        "identity_strategy": "front_primary",
+        "source": "professional_binding_resolver",
+    }
+    serialized_preflight = json.dumps(preflight, ensure_ascii=False)
+    assert root_source_id not in serialized_preflight
+    assert output_id not in serialized_preflight
+    assert "face_front" not in serialized_preflight
+    assert "original.png" not in serialized_preflight
+    plan_brain_context = brain.requests[0]["metadata"]["ecommerce_creative_context"]
+    assert plan_brain_context["creative_risk_preflight"] == preflight
     assert materialization_overrides == [{}]
     assert len(materialization_overrides_by_asset_id) == 1
     per_asset_overrides = materialization_overrides_by_asset_id[0] or {}

@@ -39,7 +39,12 @@ from .providers import (
     pop_transport_receipt,
 )
 from .stage_trace import record_stage_event
-from ..scenario_packs.ecommerce import EcommerceCreativeRiskPreflight
+from ..scenario_packs.ecommerce import (
+    EcommerceCreativeRiskPreflight,
+    professional_identity_hint_from_view_kinds,
+    professional_identity_view_kinds_from_selectors,
+    validate_ecommerce_creative_risk_preflight_payload,
+)
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapabilityPolicy, general_capability_policy
 
 
@@ -558,7 +563,11 @@ class V3LLMBrainAdapter:
         )
         scenario_parameters = as_dict(metadata.get("scenario_parameters"))
         provider_native_text_requirements = _provider_native_text_requirements(metadata, scenario_parameters)
-        ecommerce_creative_context = _ecommerce_creative_context(metadata, scenario_id)
+        ecommerce_creative_context = _ecommerce_creative_context(
+            metadata,
+            scenario_id,
+            requested_image_count=requested_count,
+        )
         photography_creative_context = _photography_creative_context(metadata, scenario_id)
         approved_literal_copy = ecommerce_creative_context.get("approved_literal_copy")
         if isinstance(approved_literal_copy, str) and approved_literal_copy.strip():
@@ -918,7 +927,12 @@ def _visual_asset_library_binding(metadata: dict[str, Any]) -> dict[str, Any]:
     } | {"claims": safe_claims}
 
 
-def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | None) -> dict[str, Any]:
+def _ecommerce_creative_context(
+    metadata: dict[str, Any],
+    scenario_id: str | None,
+    *,
+    requested_image_count: int,
+) -> dict[str, Any]:
     """Pass only the server-shaped factual context to the E-Commerce Brain."""
 
     if str(scenario_id or "").strip().lower() != "ecommerce":
@@ -946,12 +960,19 @@ def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | Non
     context = {key: raw[key] for key in allowed if key in raw}
     if "creative_risk_preflight" in raw:
         context["creative_risk_preflight"] = _ecommerce_creative_risk_preflight(
-            raw["creative_risk_preflight"]
+            raw["creative_risk_preflight"],
+            metadata=metadata,
+            requested_image_count=requested_image_count,
         )
     return context
 
 
-def _ecommerce_creative_risk_preflight(raw: Any) -> dict[str, Any]:
+def _ecommerce_creative_risk_preflight(
+    raw: Any,
+    *,
+    metadata: dict[str, Any],
+    requested_image_count: int,
+) -> dict[str, Any]:
     """Return typed E-Commerce preflight or a sanitized invalid sentinel."""
 
     if raw is None:
@@ -959,9 +980,56 @@ def _ecommerce_creative_risk_preflight(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
     try:
-        return EcommerceCreativeRiskPreflight.model_validate(raw).model_dump(mode="json")
+        preflight = EcommerceCreativeRiskPreflight.model_validate(raw)
     except ValueError:
         return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
+    if preflight.mode != "professional":
+        return preflight.model_dump(mode="json")
+    approved_view_kinds = _approved_professional_identity_view_kinds(metadata)
+    if not approved_view_kinds:
+        return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
+    try:
+        default_hint = professional_identity_hint_from_view_kinds(approved_view_kinds)
+        enriched_items = []
+        for item in preflight.risk_items_by_output:
+            if item.professional_identity_hint is not None:
+                enriched_items.append(item)
+                continue
+            enriched_items.append(
+                item.model_copy(update={"professional_identity_hint": default_hint})
+            )
+        enriched = preflight.model_copy(update={"risk_items_by_output": enriched_items})
+        validate_ecommerce_creative_risk_preflight_payload(
+            enriched.model_dump(mode="json"),
+            scenario_id="ecommerce",
+            mode="professional",
+            requested_image_count=requested_image_count,
+            approved_identity_view_kinds=approved_view_kinds,
+        )
+    except ValueError:
+        return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
+    return enriched.model_dump(mode="json")
+
+
+def _approved_professional_identity_view_kinds(metadata: dict[str, Any]) -> set[str]:
+    raw_mode = metadata.get("professional_mode")
+    if raw_mode is True:
+        mode = "professional"
+    else:
+        mode = str(raw_mode or "").strip().lower()
+    if mode != "professional":
+        return set()
+    binding = metadata.get("professional_mode_binding_record") or metadata.get(
+        "professional_mode_binding"
+    )
+    if not isinstance(binding, dict):
+        return set()
+    selectors = binding.get("identity_view_ids")
+    if not isinstance(selectors, list):
+        return set()
+    return professional_identity_view_kinds_from_selectors(
+        [str(item) for item in selectors if isinstance(item, str)]
+    )
 
 
 def _photography_creative_context(metadata: dict[str, Any], scenario_id: str | None) -> dict[str, Any]:

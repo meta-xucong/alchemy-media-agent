@@ -13,6 +13,9 @@ from .contracts import (
     EcommercePackOutput,
     MarketplaceRuleProfile,
     ProductTruthLock,
+    build_professional_ecommerce_identity_preflight,
+    professional_identity_hint_from_view_kinds,
+    professional_identity_view_kinds_from_selectors,
     validate_ecommerce_creative_risk_preflight_payload,
 )
 from .pack import EcommerceScenarioPack, EcommerceScenarioPackPlanner
@@ -32,5 +35,8 @@ __all__ = [
     "EcommerceScenarioPackPlanner",
     "MarketplaceRuleProfile",
     "ProductTruthLock",
+    "build_professional_ecommerce_identity_preflight",
+    "professional_identity_hint_from_view_kinds",
+    "professional_identity_view_kinds_from_selectors",
     "validate_ecommerce_creative_risk_preflight_payload",
 ]
