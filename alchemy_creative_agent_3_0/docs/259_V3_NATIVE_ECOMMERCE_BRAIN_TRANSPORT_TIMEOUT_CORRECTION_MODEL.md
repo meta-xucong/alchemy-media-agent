@@ -1120,6 +1120,46 @@ Current gate:
   mismatch class and implement the smallest owning-layer correction.
 - Real-image generation remains prohibited.
 
+## 13D. Image-set plan numeric diagnostics before any schema fix
+
+After the live `image_set_plan` rejection was identified, the next allowed
+step is observability at the owning validation boundary, not another upstream
+call.
+
+Implemented diagnostic model:
+
+- At the adapter `image_set_plan` cardinality rejection boundary, record only
+  public-safe numeric fields:
+  - `expected_image_count`;
+  - `remote_image_count` as an integer or `null`;
+  - `remote_shot_plan_count` as the count of non-empty string directions; and
+  - `cardinality_valid`.
+- The diagnostic must never record shot-plan text, prompt text, file paths,
+  source IDs, output IDs, product IDs, provider payloads, URLs, or credentials.
+- Stage trace and blocked outcome may carry the same safe numeric fields.
+- This is a diagnostic improvement only. It does not make the live N=6 plan
+  valid, does not relax exact N, and does not authorize ImageGen.
+
+Deterministic regression coverage:
+
+- valid compact N=6 plan without finalizer-only
+  `canonical_provider_prompts` is accepted without a same-stage re-answer;
+- malformed present `canonical_provider_prompts` remains rejected and traced;
+- `provider_prompt_finalize` still requires a complete canonical prompt set;
+- `image_set_plan` non-dict response, wrong `image_count`, and wrong
+  non-empty `shot_plan` count all fail closed with only safe numeric
+  diagnostics; and
+- compact schema/recovery payload preserve the same requested N=6 contract.
+
+Next gate:
+
+- Use the numeric diagnostic only after reviewer approval for another
+  mutation=0 planning-only trace.
+- If the trace shows missing/wrong `image_count` or `shot_plan` count, repair
+  the compact plan schema/prompt/adapter diagnostics at the owning layer.
+- Do not raise timeout, split N, remove context, switch route/model, or
+  generate images.
+
 ## 14. Old-document conflict index
 
 This correction model does not delete historical documents. The following

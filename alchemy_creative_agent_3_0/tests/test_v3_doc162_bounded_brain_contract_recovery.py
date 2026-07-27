@@ -114,6 +114,33 @@ class _TimeoutAfterInvalidPlanPromptDraftProvider(_InvalidPlanPromptDraftProvide
         return super().run(request)
 
 
+class _InvalidImageSetCardinalityProvider(EcommerceRemoteBrainTestProvider):
+    def __init__(self, *, mode: str = "shot_plan_count") -> None:
+        super().__init__()
+        self.mode = mode
+
+    def run(self, request):  # noqa: ANN001
+        payload = super().run(request)
+        if request.stage == "plan":
+            if self.mode == "not_dict":
+                payload["image_set_plan"] = "secret path C:/do/not/leak"
+            else:
+                payload["image_set_plan"] = {
+                    "set_goal": "Invalid cardinality fixture",
+                    "image_count": (
+                        request.requested_image_count - 1
+                        if self.mode == "wrong_image_count"
+                        else request.requested_image_count
+                    ),
+                    "size": request.requested_image_size,
+                    "shot_plan": ["secret shot text must not appear in trace"],
+                    "composition_rules": [],
+                    "quality_bar": [],
+                }
+            payload.pop("canonical_provider_prompts", None)
+        return payload
+
+
 def _strict_request(adapter: V3LLMBrainAdapter, *, count: int = 1):  # noqa: ANN201
     return adapter.build_request(
         user_input="Create one factual studio photograph of a ceramic vessel with no person visible.",
@@ -247,6 +274,119 @@ def test_doc259_timeout_after_contract_reanswer_preserves_initial_rejected_secti
     assert outcome["remote_brain_transport_failure"]["first_content_observed"] is False
 
 
+def test_doc259_image_set_plan_rejection_records_only_safe_cardinality_numbers(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    trace_file = tmp_path / "brain-stage-trace.jsonl"
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    provider = _InvalidImageSetCardinalityProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+
+    result = adapter.run(_strict_request(adapter, count=6))
+    error = ScenarioRuntime._remote_creative_brain_block(
+        "remote_creative_brain_image_set_plan_invalid",
+        result,
+        rejected_sections=result.audit["remote_contract_rejected_sections"],
+    )
+    outcome = getattr(error, "remote_creative_brain_outcome")
+
+    assert result.audit["remote_contract_rejected_sections"] == ["image_set_plan"]
+    assert result.audit["remote_image_set_cardinality_audit"] == {
+        "expected_image_count": 6,
+        "remote_image_count": 6,
+        "remote_shot_plan_count": 1,
+        "cardinality_valid": False,
+    }
+    assert outcome["remote_image_set_cardinality_audit"] == {
+        "expected_image_count": 6,
+        "remote_image_count": 6,
+        "remote_shot_plan_count": 1,
+        "cardinality_valid": False,
+    }
+    trace_events = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rejected = [
+        event
+        for event in trace_events
+        if event.get("event") == "semantic_plan_schema_validated"
+        and event.get("remote_contract_rejected_sections") == ["image_set_plan"]
+    ]
+    assert rejected
+    assert rejected[0]["expected_image_count"] == 6
+    assert rejected[0]["remote_image_count"] == 6
+    assert rejected[0]["remote_shot_plan_count"] == 1
+    assert rejected[0]["cardinality_valid"] is False
+    serialized = "\n".join(json.dumps(event, sort_keys=True) for event in trace_events)
+    assert "secret shot text" not in serialized
+    assert str(tmp_path).replace("\\", "\\\\") not in serialized
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_audit"),
+    [
+        (
+            "not_dict",
+            {
+                "expected_image_count": 6,
+                "remote_image_count": None,
+                "remote_shot_plan_count": 0,
+                "cardinality_valid": False,
+            },
+        ),
+        (
+            "wrong_image_count",
+            {
+                "expected_image_count": 6,
+                "remote_image_count": 5,
+                "remote_shot_plan_count": 1,
+                "cardinality_valid": False,
+            },
+        ),
+    ],
+)
+def test_doc259_image_set_plan_numeric_audit_handles_non_dict_and_wrong_count(
+    monkeypatch,
+    tmp_path,
+    mode,
+    expected_audit,
+) -> None:
+    trace_file = tmp_path / "brain-stage-trace.jsonl"
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
+    provider = _InvalidImageSetCardinalityProvider(mode=mode)
+    adapter = V3LLMBrainAdapter(provider=provider)
+
+    result = adapter.run(_strict_request(adapter, count=6))
+
+    assert result.audit["remote_contract_rejected_sections"] == ["image_set_plan"]
+    assert result.audit["remote_image_set_cardinality_audit"] == expected_audit
+    trace_events = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rejected = [
+        event
+        for event in trace_events
+        if event.get("event") == "semantic_plan_schema_validated"
+        and event.get("remote_contract_rejected_sections") == ["image_set_plan"]
+    ]
+    assert rejected
+    for key, value in expected_audit.items():
+        assert rejected[0][key] == value
+    serialized = "\n".join(json.dumps(event, sort_keys=True) for event in trace_events)
+    assert "secret path" not in serialized
+    assert "secret shot text" not in serialized
+    assert str(tmp_path).replace("\\", "\\\\") not in serialized
+
+
 def test_doc259_finalizer_still_requires_complete_canonical_provider_prompts(monkeypatch) -> None:
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
     monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "true")
@@ -286,6 +426,40 @@ def test_doc162_recovery_payload_requests_complete_reanswer_not_patch(monkeypatc
     assert payload["semantic_contract_recovery"]["rejected_sections"] == ["visual_task_profile"]
     assert "Re-author the complete compact contract" in payload["remote_response_contract"]
     assert "do not return a patch" in payload["remote_response_contract"]
+
+
+def test_doc259_compact_schema_and_recovery_payload_preserve_exact_requested_count(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    adapter = V3LLMBrainAdapter(provider=_SequencedSemanticProvider(recover=True))
+    request = _strict_request(adapter, count=6)
+    payload = json.loads(build_remote_payload(request))
+
+    assert payload["requested_image_count"] == 6
+    assert payload["return_schema"]["image_set_plan"]["image_count"] == (
+        "integer exactly equal to requested_image_count"
+    )
+    assert payload["return_schema"]["image_set_plan"]["shot_plan"] == [
+        "one original whole-image natural-language direction per requested output"
+    ]
+
+    recovery_request = request.model_copy(
+        update={
+            "metadata": {
+                **request.metadata,
+                "remote_semantic_contract_recovery": {
+                    "contract_version": "v3_remote_semantic_contract_recovery_v1",
+                    "attempt": 1,
+                    "rejected_sections": ["image_set_plan"],
+                    "same_frozen_request": True,
+                },
+            }
+        },
+        deep=True,
+    )
+    recovery_payload = json.loads(build_remote_payload(recovery_request))
+    assert recovery_payload["requested_image_count"] == 6
+    assert recovery_payload["semantic_contract_recovery"]["same_frozen_request"] is True
+    assert recovery_payload["semantic_contract_recovery"]["rejected_sections"] == ["image_set_plan"]
 
 
 def test_doc162_transport_failure_does_not_trigger_semantic_recovery(monkeypatch) -> None:

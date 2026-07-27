@@ -167,6 +167,21 @@ def _safe_remote_contract_rejected_sections(value: Any) -> list[str]:
     return list(dict.fromkeys(sections))[:8]
 
 
+def _safe_remote_image_set_cardinality_audit(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    audit: dict[str, Any] = {}
+    for key in ("expected_image_count", "remote_image_count", "remote_shot_plan_count"):
+        raw = value.get(key)
+        if raw is None:
+            audit[key] = None
+        elif isinstance(raw, int):
+            audit[key] = raw
+    if isinstance(value.get("cardinality_valid"), bool):
+        audit["cardinality_valid"] = bool(value["cardinality_valid"])
+    return audit
+
+
 class ScenarioRuntime:
     """Resolve Scenario Packs and safely delegate active scenarios to the central brain."""
 
@@ -3277,6 +3292,17 @@ class ScenarioRuntime:
                 {"remote_http_status_code": int(audit["remote_provider_http_status_code"])}
                 if isinstance(audit.get("remote_provider_http_status_code"), int)
                 and 100 <= int(audit["remote_provider_http_status_code"]) <= 599
+                else {}
+            ),
+            **(
+                {
+                    "remote_image_set_cardinality_audit": _safe_remote_image_set_cardinality_audit(
+                        audit["remote_image_set_cardinality_audit"]
+                    )
+                }
+                if _safe_remote_image_set_cardinality_audit(
+                    audit.get("remote_image_set_cardinality_audit")
+                )
                 else {}
             ),
             **(

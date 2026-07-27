@@ -121,6 +121,7 @@ class V3LLMBrainAdapter:
                 requires_complete_image_set=strict_remote_contract,
             )
             initial_rejected_sections = _remote_contract_rejected_sections(result)
+            image_set_cardinality_audit = _remote_image_set_cardinality_audit(result)
             record_stage_event(
                 "brain_adapter",
                 "semantic_plan_schema_validated",
@@ -128,6 +129,7 @@ class V3LLMBrainAdapter:
                 extra={
                     "remote_contract_rejected_count": len(initial_rejected_sections),
                     "remote_contract_rejected_sections": initial_rejected_sections,
+                    **image_set_cardinality_audit,
                 },
             )
             recovery_transport_receipt: dict[str, Any] = {}
@@ -145,6 +147,7 @@ class V3LLMBrainAdapter:
                     extra={
                         "remote_contract_rejected_count": len(initial_rejected_sections),
                         "remote_contract_rejected_sections": initial_rejected_sections,
+                        **image_set_cardinality_audit,
                     },
                 )
                 recovery_request = _semantic_contract_recovery_request(
@@ -640,6 +643,7 @@ class V3LLMBrainAdapter:
     ) -> BrainRunResult:
         payload = fallback.model_dump(mode="json")
         rejected_sections: list[str] = []
+        cardinality_audit: dict[str, Any] = {}
         for key in [
             "intent_summary",
             "project_memory_digest",
@@ -656,10 +660,11 @@ class V3LLMBrainAdapter:
                 # contract-shaped fallback.  Otherwise an empty remote list
                 # would be ignored by _merge_dict and the fallback directions
                 # could be mistaken for a real E-Commerce decision.
-                if not isinstance(remote_section, dict) or not _matches_image_set_cardinality(
+                cardinality_audit = _image_set_cardinality_audit(
                     remote_section,
                     expected_count=fallback.image_set_plan.image_count,
-                ):
+                )
+                if not cardinality_audit["cardinality_valid"]:
                     rejected_sections.append(key)
                     continue
             if key == "visual_task_profile" and requires_complete_image_set:
@@ -691,10 +696,13 @@ class V3LLMBrainAdapter:
                 # auditable.  Templates that require a remote creative Brain
                 # reject this marker in ScenarioRuntime rather than turning a
                 # malformed remote set into local E-Commerce directions.
-                if key == "image_set_plan" and not _matches_image_set_cardinality(
-                    candidate,
-                    expected_count=fallback.image_set_plan.image_count,
-                ):
+                if key == "image_set_plan":
+                    candidate_cardinality_audit = _image_set_cardinality_audit(
+                        candidate,
+                        expected_count=fallback.image_set_plan.image_count,
+                    )
+                if key == "image_set_plan" and not candidate_cardinality_audit["cardinality_valid"]:
+                    cardinality_audit = candidate_cardinality_audit
                     rejected_sections.append(key)
                     continue
                 payload, accepted = _merge_validated_section(payload, key, candidate)
@@ -764,6 +772,13 @@ class V3LLMBrainAdapter:
                 **dict(payload.get("audit") or {}),
                 "remote_contract_partial_fallback": True,
                 "remote_contract_rejected_sections": rejected_sections,
+                **(
+                    {
+                        "remote_image_set_cardinality_audit": cardinality_audit,
+                    }
+                    if "image_set_plan" in rejected_sections and cardinality_audit
+                    else {}
+                ),
             }
         return BrainRunResult.model_validate(payload)
 
@@ -790,6 +805,22 @@ def _remote_contract_rejected_sections(result: BrainRunResult) -> list[str]:
     if not isinstance(raw, list):
         return []
     return list(dict.fromkeys(str(item).strip() for item in raw if str(item).strip()))
+
+
+def _remote_image_set_cardinality_audit(result: BrainRunResult) -> dict[str, Any]:
+    raw = result.audit.get("remote_image_set_cardinality_audit") if isinstance(result.audit, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    audit: dict[str, Any] = {}
+    for key in ("expected_image_count", "remote_image_count", "remote_shot_plan_count"):
+        value = raw.get(key)
+        if value is None:
+            audit[key] = None
+        elif isinstance(value, int):
+            audit[key] = value
+    if isinstance(raw.get("cardinality_valid"), bool):
+        audit["cardinality_valid"] = bool(raw["cardinality_valid"])
+    return audit
 
 
 def _semantic_contract_recovery_request(
@@ -1092,6 +1123,25 @@ def _matches_image_set_cardinality(candidate: dict[str, Any], *, expected_count:
         return False
     directions = [str(item).strip() for item in candidate.get("shot_plan", []) if str(item).strip()]
     return image_count == expected_count and len(directions) == expected_count
+
+
+def _image_set_cardinality_audit(candidate: Any, *, expected_count: int) -> dict[str, Any]:
+    image_count: int | None = None
+    shot_plan_count = 0
+    if isinstance(candidate, dict):
+        try:
+            image_count = int(candidate.get("image_count"))
+        except (TypeError, ValueError):
+            image_count = None
+        shot_plan = candidate.get("shot_plan")
+        if isinstance(shot_plan, list):
+            shot_plan_count = len([str(item).strip() for item in shot_plan if str(item).strip()])
+    return {
+        "expected_image_count": int(expected_count),
+        "remote_image_count": image_count,
+        "remote_shot_plan_count": shot_plan_count,
+        "cardinality_valid": image_count == expected_count and shot_plan_count == expected_count,
+    }
 
 
 def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_count: int) -> bool:
