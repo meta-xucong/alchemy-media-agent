@@ -85,9 +85,9 @@ one evidence_dimensions_by_output entry per output. Map only its allowed
 evidence dimensions, use enough distinct dimensions to meet its declared
 count, and treat each entry as a reviewable evidence purpose--never as a stock role,
 scene, camera, crop, pose, or output-order recipe. For product-on-model outputs,
-also return selected_product_truth_asset_ids as one uploaded product_truth asset_id
-chosen from the supplied product truth pool for that output; do not choose identity
-asset IDs, filenames, or natural-language aliases."""
+also return selected_product_truth_asset_ids as one or two uploaded product_truth
+asset_id strings chosen from the supplied product truth pool for that output; do
+not choose identity asset IDs, filenames, or natural-language aliases."""
 PRODUCT_TRUTH_SELECTION_INSTRUCTIONS = """For Professional E-Commerce product-on-model
 planning, evidence_dimensions_by_output is the frozen product-truth selection
 contract, not an apparel evidence profile unless an active
@@ -97,9 +97,13 @@ requested_image_count, never 0. When no active apparel evidence profile is
 present, evidence_dimensions must be exactly an empty list []; do not put
 objects, numbers, natural-language output roles, scene labels, camera labels,
 or product filenames there. selected_product_truth_asset_ids must be a list of
-one or more uploaded product_truth asset_id strings from the frozen product
-truth pool for that output; do not choose identity asset IDs, filenames, paths,
-or natural-language aliases."""
+one or two uploaded product_truth asset_id strings from the frozen product truth
+pool for that output; do not choose identity asset IDs, filenames, paths, or
+natural-language aliases. Select one product truth for ordinary catalogue
+outputs. Select a second product truth only when a detail-oriented output needs
+both a whole-garment and close-detail truth source; if the selected identity and
+product references cannot fit the renderer admission cap, the run must stop
+fail-closed rather than silently trimming or replacing product truth."""
 PHOTOGRAPHY_CONTEXT_INSTRUCTIONS = """Treat photography_creative_context as a frozen
 non-creative delivery contract. The role IDs only bind output lineage and
 cardinality. Invent the complete photographic composition, scene, camera,
@@ -243,7 +247,7 @@ def _image_set_evidence_dimensions_schema(
     }
     if requires_product_truth_selection:
         schema["selected_product_truth_asset_ids"] = [
-            "one or more uploaded product_truth asset_id strings from the frozen product truth pool"
+            "one or two uploaded product_truth asset_id strings from the frozen product truth pool"
         ]
     return [schema]
 

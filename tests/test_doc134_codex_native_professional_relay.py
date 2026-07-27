@@ -20,6 +20,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     ProductionImageGenerationProvider,
     build_provider_generation_request,
 )
+from alchemy_creative_agent_3_0.app.generation_router.providers import ProviderPromptMaterialization
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
@@ -763,6 +764,105 @@ def test_professional_ecommerce_two_selected_products_exceed_materialized_provid
     assert result["code"] == "codex_native_imagegen_reference_input_capacity_exceeded"
 
 
+def test_professional_ecommerce_two_selected_products_pass_when_materialized_capacity_allows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_source_id = "v3_asset_root"
+    output_id = "v3_output_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    products = [
+        _write_png(tmp_path / f"product-{index}.png", color=(80 + index, 145, 210))
+        for index in range(2)
+    ]
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            products[0],
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one detail-oriented product-on-model catalogue image for the supplied garment.",
+            reference_inputs=[
+                {"channel": "product_truth", "file_path": str(product)}
+                for product in products
+            ],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    product_ids = [item.asset_id for item in request.reference_inputs]
+    materializer_calls = 0
+
+    def capacity_allowing_materializations(
+        planning_result,
+        *,
+        metadata_overrides=None,
+        metadata_overrides_by_asset_id=None,
+    ):
+        nonlocal materializer_calls
+        materializer_calls += 1
+        output_asset_id = str(planning_result.series_plan.assets[0].asset_id)
+        provider_assets = list(
+            ((metadata_overrides_by_asset_id or {}).get(output_asset_id) or {}).get("reference_assets")
+            or []
+        )
+        assert {
+            item["asset_id"]
+            for item in provider_assets
+        } == {root_source_id, output_id, *product_ids}
+        compact_reference_assets = []
+        for item in provider_assets:
+            asset_id = str(item.get("asset_id") or "")
+            compact_reference_assets.append(
+                {
+                    "asset_id": asset_id,
+                    "source_asset_id": asset_id,
+                    "file_path": item.get("file_path"),
+                }
+            )
+        assert len(compact_reference_assets) == 4
+        return [
+            ProviderPromptMaterialization(
+                generation_prompt="Frozen detail product-on-model prompt.",
+                prompt_sha256="0" * 64,
+                size="1024x1536",
+                quality="high",
+                output_format="png",
+                reference_assets=compact_reference_assets,
+                asset_plan={},
+                protected_user_direction="",
+                prompt_audit={},
+                input_fidelity=None,
+            )
+        ]
+
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_canonical_materializations",
+        staticmethod(capacity_allowing_materializations),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: _CapturingRuntime(
+            ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
+            mutate_result=_product_truth_selection_mutator({1: product_ids}),
+        ),
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert materializer_calls == 1
+    contract = result["outputs"][0]["reference_input_contract"]
+    assert contract["selected_product_truth_asset_ids"] == product_ids
+    assert contract["admitted_product_truth_asset_ids"] == product_ids
+    assert contract["admitted_reference_count"] == 4
+
+
 @pytest.mark.parametrize(
     ("selection_fault", "expected_reason"),
     [
@@ -841,12 +941,15 @@ def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
     )
     assert evidence_schema["evidence_dimensions"] == []
     assert evidence_schema["selected_product_truth_asset_ids"] == [
-        "one or more uploaded product_truth asset_id strings from the frozen product truth pool"
+        "one or two uploaded product_truth asset_id strings from the frozen product truth pool"
     ]
     instructions = payload["ecommerce_context_instructions"]
     assert "output_index must be a 1-based integer" in instructions
     assert "evidence_dimensions must be exactly an empty list []" in instructions
     assert "selected_product_truth_asset_ids must be a list" in instructions
+    assert "Select one product truth for ordinary catalogue" in instructions
+    assert "Select a second product truth only when a detail-oriented output needs" in instructions
+    assert "fail-closed rather than silently trimming or replacing product truth" in instructions
     assert "apparel_on_model_evidence_profile requests more than one output" not in instructions
 
 

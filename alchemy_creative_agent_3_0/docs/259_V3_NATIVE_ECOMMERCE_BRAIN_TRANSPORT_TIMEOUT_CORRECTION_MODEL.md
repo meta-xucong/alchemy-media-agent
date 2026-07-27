@@ -1216,8 +1216,11 @@ Correction model:
      `requested_image_count`, never 0;
    - when no active `apparel_on_model_evidence_profile` is present,
      `evidence_dimensions` must be exactly `[]`;
-   - `selected_product_truth_asset_ids` must be one or more uploaded
-     `product_truth` asset ID strings from the frozen product truth pool; and
+   - `selected_product_truth_asset_ids` must be one or two uploaded
+     `product_truth` asset ID strings from the frozen product truth pool; one
+     is the conservative default for ordinary catalogue outputs, while a
+     detail-oriented output may select a second truth source only when both
+     selected product inputs fit the final renderer reference capacity; and
    - product-only selection must not attach apparel evidence profile
      instructions or allowed-vocabulary semantics.
 3. If an active apparel evidence profile is present, apparel evidence
@@ -1244,7 +1247,7 @@ Deterministic regression coverage:
 - image-set plan ValidationError diagnostics record only safe paths/types when
   cardinality is valid but schema shape is invalid;
 - product-only payload schema requires 1-based output index, empty
-  `evidence_dimensions`, and structured product-truth selected IDs;
+  `evidence_dimensions`, and structured one-or-two product-truth selected IDs;
 - General payloads do not contain product-truth selection fields;
 - Professional E-Commerce N=1/N=6 product pool selection remains per-output,
   keeps unselected pool members out of provider-facing references, and records
@@ -1264,6 +1267,81 @@ Current gate:
   cap, no unselected product leaks, and mutation delta remains 0.
 - Real product image generation remains prohibited until that planning-only
   gate passes and reviewer explicitly authorizes host ImageGen.
+
+## 13F. Post-schema planning-only result: schema valid, capacity gate still active
+
+Evidence:
+
+- `.controlled-validation/n6-schema3-20260727T101138Z/reports/fresh-professional-n6-planning-report.json`
+- `.controlled-validation/n6-schema3-20260727T101138Z/reports/brain-stage-trace.jsonl`
+
+The second controlled planning-only run after `f7eb847` has been confirmed
+present in the append-only evidence root. It proves the product-only schema
+fix reached both Remote Brain stages without the earlier `image_set_plan`
+ValidationError:
+
+```text
+semantic_plan_schema_validated.remote_contract_rejected_count=0
+remote_brain_call_count=2
+mutation_delta.jobs=0
+mutation_delta.candidates=0
+mutation_delta.handoffs=0
+mutation_delta.outputs=0
+mutation_delta.formal_receipts=0
+mutation_delta.slots=0
+mutation_delta.activations=0
+```
+
+It did not complete the final N=6 acceptance gate. The remaining block moved
+to the Provider-admission capacity gate before any image/job/output mutation:
+
+```text
+code=codex_native_imagegen_reference_input_capacity_exceeded
+delivery_state=no_image_created
+product_pool/identity/no-leakage=true
+```
+
+Observed boundary:
+
+- Current Professional product-model identity requires two server-owned source
+  identities: immutable root portrait and active Character Card front winner.
+- The Provider materializer expands each identity source into the required
+  provider derivatives.
+- Under the configured `max_provider_reference_images=5`, a one-product
+  selection is the conservative default that fits the current identity
+  derivative footprint. A two-product selection remains contractually legal
+  only for detail-oriented output roles when the final materialized reference
+  count still fits the cap.
+- If a two-product selection causes the final renderer reference set to exceed
+  the cap, the planner must return
+  `codex_native_imagegen_reference_input_capacity_exceeded` before host
+  ImageGen. It must not silently trim a product truth, swap product truth,
+  remove the immutable root, remove the active Character Card winner, split
+  the plan, or re-plan locally.
+
+Current correction:
+
+- Keep the full four-image product truth pool for Brain planning and audit.
+- Keep product selection owned by the Professional E-Commerce Remote Brain
+  `image_set_plan.evidence_dimensions_by_output`.
+- Treat one selected product truth as the current conservative/default
+  selection for ordinary outputs.
+- Preserve the approved two-product branch for detail or pattern-oriented
+  outputs when final materialization stays within capacity.
+- Keep capacity failure explicit before host ImageGen when the final
+  materialized reference count exceeds the current cap.
+- Do not raise `max_provider_reference_images`, silently trim product refs,
+  split the N=6 plan, or use local selection fallback. A future capability
+  negotiation may revisit wider renderer admission as a separate task.
+
+Next gate:
+
+- Run focused deterministic prompt/schema and planner/materializer tests after
+  restoring the one-or-two selection wording and preserving the explicit
+  capacity block.
+- Only after tests pass may one controlled mutation=0 N=6 planning-only
+  revalidation be requested.
+- Real ImageGen remains prohibited.
 
 ## 14. Old-document conflict index
 
