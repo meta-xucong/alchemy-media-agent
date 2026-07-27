@@ -170,7 +170,14 @@ Add a structured `creative_risk_preflight` object to the E-Commerce planning
 context after factual context and Professional binding have been resolved, but
 before the Remote Brain authors the image set.
 
-Example shape:
+Historical illustrative shape — superseded for runtime implementation:
+
+The early design sketch below used free-text `strategy_hints` and
+`authority_notes`. Those fields are not part of the current
+`EcommerceCreativeRiskPreflight` model and must not be emitted by runtime code.
+They are retained only as historical design context; Phase A/4 runtime
+contracts use closed enums, `strategy_policy`, `risk_level`, `stop`, and
+`fail_closed_reason`.
 
 ```json
 {
@@ -223,16 +230,71 @@ Example shape:
 }
 ```
 
+Current typed runtime shape:
+
+```json
+{
+  "contract_version": "ecommerce_creative_risk_preflight_v1",
+  "owner": "ecommerce_specialized_preflight",
+  "applies_to": "ecommerce",
+  "mode": "professional",
+  "risk_items_by_output": [
+    {
+      "output_index": 1,
+      "risk_family": ["template_expression", "pasted_face"],
+      "primary_goal_hint": "emotion_hero",
+      "risk_level": "medium",
+      "strategy_policy": [
+        "action_triggered_expression",
+        "avoid_generic_presenter_smile"
+      ],
+      "stop": false,
+      "fail_closed_reason": null,
+      "professional_identity_hint": null
+    },
+    {
+      "output_index": 3,
+      "risk_family": [
+        "over_twisted_head",
+        "identity_angle_mismatch",
+        "back_structure_occlusion"
+      ],
+      "primary_goal_hint": "back_or_lookback_structure",
+      "risk_level": "high",
+      "strategy_policy": [
+        "coherent_secondary_turn",
+        "avoid_over_twisted_head",
+        "prefer_body_led_motion"
+      ],
+      "stop": false,
+      "fail_closed_reason": null,
+      "professional_identity_hint": {
+        "preferred_identity_view_kind": "profile",
+        "identity_strategy": "secondary_face",
+        "source": "professional_binding_resolver"
+      }
+    }
+  ],
+  "global_risks": [
+    "template_expression",
+    "pasted_face",
+    "over_twisted_head",
+    "identity_angle_mismatch",
+    "back_structure_occlusion"
+  ]
+}
+```
+
 This object must be concise, structured, public-safe, and free of local paths,
 output file names, private job IDs, handoff IDs, provider payloads, and prompt
 fragments.
 
 ### 4.1 Closure note: typed field contract before implementation
 
-The example above is illustrative only. Before any runtime implementation, the
-contract must be represented as a closed typed schema, not as free-form
-strategy text. This closure note narrows the implementation target without
-changing runtime behavior.
+The superseded example above is historical/non-runtime only. Runtime
+implementation must be represented as the closed typed schema, not as
+free-form strategy text. This closure note narrows the implementation target
+without changing runtime behavior.
 
 Required top-level fields:
 

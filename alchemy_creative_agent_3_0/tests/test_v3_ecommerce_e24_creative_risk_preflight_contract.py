@@ -393,6 +393,24 @@ def test_professional_contributor_never_ranks_or_fills_missing_resolver_hints() 
         )
 
 
+@pytest.mark.parametrize("invalid_count", [True, "1", 1.0, 0])
+def test_professional_contributor_rejects_invalid_requested_image_count(
+    invalid_count: object,
+) -> None:
+    with pytest.raises(ValueError, match="requested_image_count_invalid"):
+        build_professional_ecommerce_identity_preflight(
+            requested_image_count=invalid_count,  # type: ignore[arg-type]
+            professional_identity_hints_by_output={
+                1: {
+                    "preferred_identity_view_kind": "front",
+                    "identity_strategy": "front_primary",
+                    "source": "professional_binding_resolver",
+                }
+            },
+            approved_identity_view_kinds={"front"},
+        )
+
+
 def test_professional_contributor_rejects_non_integer_hint_output_keys() -> None:
     hint = {
         "preferred_identity_view_kind": "front",

@@ -266,6 +266,8 @@ def build_professional_ecommerce_identity_preflight(
     substitutes from an approved view set.
     """
 
+    if not isinstance(requested_image_count, int) or isinstance(requested_image_count, bool):
+        raise ValueError("requested_image_count_invalid")
     if requested_image_count < 1:
         raise ValueError("requested_image_count_invalid")
     expected_indexes = set(range(1, requested_image_count + 1))
