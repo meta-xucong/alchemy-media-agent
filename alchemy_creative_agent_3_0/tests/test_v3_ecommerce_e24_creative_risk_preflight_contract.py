@@ -318,21 +318,41 @@ def test_professional_identity_hint_requires_approved_binding_and_view_kind() ->
     )
 
 
-def test_professional_contributor_builds_hint_only_from_approved_view_kinds() -> None:
+def test_professional_contributor_projects_only_explicit_resolver_hints() -> None:
     preflight = build_professional_ecommerce_identity_preflight(
         requested_image_count=2,
+        professional_identity_hints_by_output={
+            1: {
+                "preferred_identity_view_kind": "front",
+                "identity_strategy": "front_primary",
+                "source": "professional_binding_resolver",
+            },
+            2: {
+                "preferred_identity_view_kind": "profile",
+                "identity_strategy": "secondary_face",
+                "source": "professional_binding_resolver",
+            },
+        },
         approved_identity_view_kinds={"front", "profile"},
     )
 
     assert preflight.mode == "professional"
     assert [item.output_index for item in preflight.risk_items_by_output] == [1, 2]
-    for item in preflight.risk_items_by_output:
-        assert item.professional_identity_hint is not None
-        assert item.professional_identity_hint.model_dump(mode="json") == {
+    assert [
+        item.professional_identity_hint.model_dump(mode="json")
+        for item in preflight.risk_items_by_output
+    ] == [
+        {
+            "preferred_identity_view_kind": "front",
+            "identity_strategy": "front_primary",
+            "source": "professional_binding_resolver",
+        },
+        {
             "preferred_identity_view_kind": "profile",
             "identity_strategy": "secondary_face",
             "source": "professional_binding_resolver",
-        }
+        },
+    ]
 
     payload = preflight.model_dump(mode="json")
     validate_ecommerce_creative_risk_preflight_payload(
@@ -344,17 +364,32 @@ def test_professional_contributor_builds_hint_only_from_approved_view_kinds() ->
     )
     serialized = preflight.model_dump_json()
     assert "face_profile" not in serialized
+    assert "face_front" not in serialized
     assert "asset_id" not in serialized
     assert "output_id" not in serialized
     assert "path" not in serialized
     assert "provider_payload" not in serialized
 
 
-def test_professional_contributor_requires_at_least_one_approved_view_kind() -> None:
-    with pytest.raises(ValueError, match="missing_approved_identity_view"):
+def test_professional_contributor_never_ranks_or_fills_missing_resolver_hints() -> None:
+    with pytest.raises(ValueError, match="professional_identity_hint_missing"):
         build_professional_ecommerce_identity_preflight(
             requested_image_count=1,
-            approved_identity_view_kinds=set(),
+            professional_identity_hints_by_output={},
+            approved_identity_view_kinds={"front", "profile"},
+        )
+
+    with pytest.raises(ValueError, match="preferred_identity_view_not_approved"):
+        build_professional_ecommerce_identity_preflight(
+            requested_image_count=1,
+            professional_identity_hints_by_output={
+                1: {
+                    "preferred_identity_view_kind": "profile",
+                    "identity_strategy": "secondary_face",
+                    "source": "professional_binding_resolver",
+                }
+            },
+            approved_identity_view_kinds={"front"},
         )
 
 

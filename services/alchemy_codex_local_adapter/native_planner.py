@@ -366,10 +366,14 @@ class CodexNativeImageGenPlanner:
             binding = binding_resolution.binding
             server_owned_identity_references = tuple(binding_resolution.identity_references)
             binding_snapshot = binding_resolution.binding_snapshot
+            professional_identity_hints_by_output = (
+                binding_resolution.professional_identity_hints_by_output or {}
+            )
         else:
             binding = binding_resolution
             server_owned_identity_references = ()
             binding_snapshot = None
+            professional_identity_hints_by_output = {}
         if not isinstance(binding, ProfessionalModeBinding):
             return self._blocked(
                 "codex_native_imagegen_professional_binding_unavailable",
@@ -433,16 +437,6 @@ class CodexNativeImageGenPlanner:
             approved_view_kinds = professional_identity_view_kinds_from_selectors(
                 list(binding.identity_view_ids)
             )
-            try:
-                creative_risk_preflight = build_professional_ecommerce_identity_preflight(
-                    requested_image_count=request.requested_image_count,
-                    approved_identity_view_kinds=approved_view_kinds,
-                )
-            except ValueError:
-                return self._blocked(
-                    "codex_native_imagegen_professional_identity_hint_unavailable",
-                    "Professional E-Commerce planning requires an approved identity view kind before creative risk preflight can be frozen.",
-                )
             professional_metadata = {
                 "professional_identity_reference_strategy": "visual_asset_library_product_model_v1",
                 "professional_product_model_planning": True,
@@ -452,9 +446,21 @@ class CodexNativeImageGenPlanner:
             ecommerce_context["provider_reference_budget"] = self._brain_safe_provider_reference_budget(
                 provider_budget
             )
-            ecommerce_context["creative_risk_preflight"] = creative_risk_preflight.model_dump(
-                mode="json"
-            )
+            if professional_identity_hints_by_output:
+                try:
+                    creative_risk_preflight = build_professional_ecommerce_identity_preflight(
+                        requested_image_count=request.requested_image_count,
+                        professional_identity_hints_by_output=professional_identity_hints_by_output,
+                        approved_identity_view_kinds=approved_view_kinds,
+                    )
+                except ValueError:
+                    return self._blocked(
+                        "codex_native_imagegen_professional_identity_hint_unavailable",
+                        "Professional E-Commerce planning requires resolver-owned identity hints to match approved binding views.",
+                    )
+                ecommerce_context["creative_risk_preflight"] = creative_risk_preflight.model_dump(
+                    mode="json"
+                )
             metadata["ecommerce_creative_context"] = ecommerce_context
         else:
             anchor_preparation_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(

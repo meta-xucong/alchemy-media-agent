@@ -444,7 +444,7 @@ def test_ecommerce_adapter_preserves_creative_risk_preflight_for_both_brain_stag
     assert "creative_risk_preflight" not in build_remote_payload(photography_request)
 
 
-def test_ecommerce_adapter_adds_professional_identity_hint_only_from_resolved_binding() -> None:
+def test_ecommerce_adapter_validates_but_does_not_invent_professional_identity_hint() -> None:
     from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
 
     adapter = V3LLMBrainAdapter()
@@ -462,7 +462,11 @@ def test_ecommerce_adapter_adds_professional_identity_hint_only_from_resolved_bi
                 "strategy_policy": ["coherent_secondary_turn", "avoid_over_twisted_head"],
                 "stop": False,
                 "fail_closed_reason": None,
-                "professional_identity_hint": None,
+                "professional_identity_hint": {
+                    "preferred_identity_view_kind": "front",
+                    "identity_strategy": "front_primary",
+                    "source": "professional_binding_resolver",
+                },
             }
         ],
         "global_risks": ["identity_angle_mismatch"],
@@ -505,8 +509,8 @@ def test_ecommerce_adapter_adds_professional_identity_hint_only_from_resolved_bi
         preflight = request.metadata["ecommerce_creative_context"]["creative_risk_preflight"]
         hint = preflight["risk_items_by_output"][0]["professional_identity_hint"]
         assert hint == {
-            "preferred_identity_view_kind": "profile",
-            "identity_strategy": "secondary_face",
+            "preferred_identity_view_kind": "front",
+            "identity_strategy": "front_primary",
             "source": "professional_binding_resolver",
         }
         payload = json.loads(build_remote_payload(request))
@@ -520,6 +524,60 @@ def test_ecommerce_adapter_adds_professional_identity_hint_only_from_resolved_bi
         assert "person_1" not in serialized_payload
         assert "job_professional" not in serialized_payload
         assert "pack_v1" not in serialized_payload
+
+
+def test_ecommerce_adapter_preserves_missing_professional_identity_hint_without_ranking() -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    adapter = V3LLMBrainAdapter()
+    professional_preflight = {
+        "contract_version": "ecommerce_creative_risk_preflight_v1",
+        "owner": "ecommerce_specialized_preflight",
+        "applies_to": "ecommerce",
+        "mode": "professional",
+        "risk_items_by_output": [
+            {
+                "output_index": 1,
+                "risk_family": ["identity_angle_mismatch"],
+                "primary_goal_hint": "walking_or_lookback",
+                "risk_level": "medium",
+                "strategy_policy": ["coherent_secondary_turn"],
+                "stop": False,
+                "fail_closed_reason": None,
+                "professional_identity_hint": None,
+            }
+        ],
+        "global_risks": ["identity_angle_mismatch"],
+    }
+    request = adapter.build_request(
+        user_input="Create a professional ecommerce product-on-model image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={
+            "requested_image_count": 1,
+            "professional_mode": "professional",
+            "professional_mode_binding_record": {
+                "job_id": "job_professional",
+                "project_id": "project_professional",
+                "people_asset_id": "person_1",
+                "face_module_id": "face_v1",
+                "pack_version_id": "pack_v1",
+                "identity_view_ids": ["face_front", "face_profile"],
+            },
+            "ecommerce_creative_context": {
+                "creative_risk_preflight": professional_preflight,
+            },
+        },
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    preflight = request.metadata["ecommerce_creative_context"]["creative_risk_preflight"]
+    assert preflight["risk_items_by_output"][0]["professional_identity_hint"] is None
+    serialized_payload = build_remote_payload(request)
+    assert "preferred_identity_view_kind" not in serialized_payload
+    assert "face_profile" not in serialized_payload
+    assert "face_front" not in serialized_payload
 
 
 def test_standard_ecommerce_adapter_does_not_inject_professional_identity_hint() -> None:

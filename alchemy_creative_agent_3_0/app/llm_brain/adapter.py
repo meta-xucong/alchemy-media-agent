@@ -41,7 +41,6 @@ from .providers import (
 from .stage_trace import record_stage_event
 from ..scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
-    professional_identity_hint_from_view_kinds,
     professional_identity_view_kinds_from_selectors,
     validate_ecommerce_creative_risk_preflight_payload,
 )
@@ -985,22 +984,18 @@ def _ecommerce_creative_risk_preflight(
         return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
     if preflight.mode != "professional":
         return preflight.model_dump(mode="json")
-    approved_view_kinds = _approved_professional_identity_view_kinds(metadata)
-    if not approved_view_kinds:
-        return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
+    has_professional_hint = any(
+        item.professional_identity_hint is not None
+        for item in preflight.risk_items_by_output
+    )
+    if not has_professional_hint:
+        return preflight.model_dump(mode="json")
     try:
-        default_hint = professional_identity_hint_from_view_kinds(approved_view_kinds)
-        enriched_items = []
-        for item in preflight.risk_items_by_output:
-            if item.professional_identity_hint is not None:
-                enriched_items.append(item)
-                continue
-            enriched_items.append(
-                item.model_copy(update={"professional_identity_hint": default_hint})
-            )
-        enriched = preflight.model_copy(update={"risk_items_by_output": enriched_items})
+        approved_view_kinds = _approved_professional_identity_view_kinds(metadata)
+        if not approved_view_kinds:
+            raise ValueError("professional_binding_views_required")
         validate_ecommerce_creative_risk_preflight_payload(
-            enriched.model_dump(mode="json"),
+            preflight.model_dump(mode="json"),
             scenario_id="ecommerce",
             mode="professional",
             requested_image_count=requested_image_count,
@@ -1008,7 +1003,7 @@ def _ecommerce_creative_risk_preflight(
         )
     except ValueError:
         return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
-    return enriched.model_dump(mode="json")
+    return preflight.model_dump(mode="json")
 
 
 def _approved_professional_identity_view_kinds(metadata: dict[str, Any]) -> set[str]:

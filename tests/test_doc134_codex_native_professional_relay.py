@@ -640,22 +640,9 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     )
     assert capturing.payloads[0]["metadata"]["professional_product_model_planning"] is True
     creative_context = capturing.payloads[0]["metadata"]["ecommerce_creative_context"]
-    preflight = creative_context["creative_risk_preflight"]
-    assert preflight["mode"] == "professional"
-    assert len(preflight["risk_items_by_output"]) == request.requested_image_count
-    professional_hint = preflight["risk_items_by_output"][0]["professional_identity_hint"]
-    assert professional_hint == {
-        "preferred_identity_view_kind": "front",
-        "identity_strategy": "front_primary",
-        "source": "professional_binding_resolver",
-    }
-    serialized_preflight = json.dumps(preflight, ensure_ascii=False)
-    assert root_source_id not in serialized_preflight
-    assert output_id not in serialized_preflight
-    assert "face_front" not in serialized_preflight
-    assert "original.png" not in serialized_preflight
+    assert "creative_risk_preflight" not in creative_context
     plan_brain_context = brain.requests[0]["metadata"]["ecommerce_creative_context"]
-    assert plan_brain_context["creative_risk_preflight"] == preflight
+    assert "creative_risk_preflight" not in plan_brain_context
     assert materialization_overrides == [{}]
     assert len(materialization_overrides_by_asset_id) == 1
     per_asset_overrides = materialization_overrides_by_asset_id[0] or {}
@@ -715,6 +702,78 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         or "product_identity_truth" in list(item.get("truth_layers") or [])
         for item in product_materialized_refs
     )
+
+
+def test_professional_ecommerce_identity_hint_requires_resolver_explicit_view_choice(
+    tmp_path: Path,
+) -> None:
+    root_source_id = "v3_asset_root_explicit_hint"
+    output_id = "v3_output_front_explicit_hint"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product-front.png", color=(94, 166, 226))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one controlled product-on-model catalogue image for the supplied garment.",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    product_id = request.reference_inputs[0].asset_id
+    base_resolver = visual_asset_library_professional_binding_resolver(library_root)
+
+    def explicit_hint_resolver(**kwargs):
+        resolved = base_resolver(**kwargs)
+        assert isinstance(resolved, ProfessionalBindingResolution)
+        return ProfessionalBindingResolution(
+            binding=resolved.binding,
+            identity_references=resolved.identity_references,
+            binding_snapshot=resolved.binding_snapshot,
+            professional_identity_hints_by_output={
+                1: {
+                    "preferred_identity_view_kind": "front",
+                    "identity_strategy": "front_primary",
+                    "source": "professional_binding_resolver",
+                }
+            },
+        )
+
+    brain = EcommerceRemoteBrainTestProvider()
+    capturing = _CapturingRuntime(
+        ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing,
+        professional_binding_resolver=explicit_hint_resolver,
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    creative_context = capturing.payloads[0]["metadata"]["ecommerce_creative_context"]
+    preflight = creative_context["creative_risk_preflight"]
+    hint = preflight["risk_items_by_output"][0]["professional_identity_hint"]
+    assert hint == {
+        "preferred_identity_view_kind": "front",
+        "identity_strategy": "front_primary",
+        "source": "professional_binding_resolver",
+    }
+    serialized_preflight = json.dumps(preflight, ensure_ascii=False)
+    assert root_source_id not in serialized_preflight
+    assert output_id not in serialized_preflight
+    assert product_id not in serialized_preflight
+    assert "face_front" not in serialized_preflight
+    assert brain.requests[0]["metadata"]["ecommerce_creative_context"][
+        "creative_risk_preflight"
+    ] == preflight
 
 
 def test_professional_ecommerce_full_product_pool_selection_fails_before_capacity(

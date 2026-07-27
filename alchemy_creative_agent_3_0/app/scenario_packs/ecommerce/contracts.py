@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
 
@@ -107,9 +107,9 @@ _PROFESSIONAL_VIEW_KIND_BY_SELECTOR = {
 class EcommerceProfessionalIdentityRiskHint(V3BaseModel):
     """Professional-only identity strategy hint for E-Commerce preflight.
 
-    It intentionally carries only resolved view kinds and strategy enums. Raw
-    asset identifiers, paths, hashes, provider payloads, and prompt fragments
-    are not part of this schema.
+    It intentionally carries only resolver-selected view kinds and strategy
+    enums. Raw asset identifiers, paths, hashes, provider payloads, and prompt
+    fragments are not part of this schema.
     """
 
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
@@ -252,50 +252,46 @@ def professional_identity_view_kinds_from_selectors(
     return kinds
 
 
-def professional_identity_hint_from_view_kinds(
-    approved_identity_view_kinds: set[str],
-) -> EcommerceProfessionalIdentityRiskHint:
-    """Choose a closed Professional identity strategy from approved view kinds only."""
-
-    approved = {str(item).strip() for item in approved_identity_view_kinds if str(item).strip()}
-    if "profile" in approved:
-        return EcommerceProfessionalIdentityRiskHint(
-            preferred_identity_view_kind="profile",
-            identity_strategy="secondary_face",
-        )
-    if "front_three_quarter" in approved:
-        return EcommerceProfessionalIdentityRiskHint(
-            preferred_identity_view_kind="front_three_quarter",
-            identity_strategy="secondary_face",
-        )
-    if "front" in approved:
-        return EcommerceProfessionalIdentityRiskHint(
-            preferred_identity_view_kind="front",
-            identity_strategy="front_primary",
-        )
-    if "back" in approved:
-        return EcommerceProfessionalIdentityRiskHint(
-            preferred_identity_view_kind="back",
-            identity_strategy="identity_not_primary",
-        )
-    raise ValueError("missing_approved_identity_view")
-
-
 def build_professional_ecommerce_identity_preflight(
     *,
     requested_image_count: int,
+    professional_identity_hints_by_output: Mapping[int, dict[str, Any] | EcommerceProfessionalIdentityRiskHint],
     approved_identity_view_kinds: set[str],
 ) -> EcommerceCreativeRiskPreflight:
     """Build the Phase 4 Professional-only identity coherence preflight.
 
-    The contributor emits only closed risk enums and a view-kind/strategy hint
-    derived from already-approved binding views. It does not read People Asset
-    storage, choose product truth, change exact N, or author prompt fragments.
+    The contributor emits only closed risk enums and explicit view-kind/strategy
+    hints already chosen by the Professional binding resolver. It validates
+    those hints against approved binding views, but it never ranks, chooses, or
+    substitutes from an approved view set.
     """
 
     if requested_image_count < 1:
         raise ValueError("requested_image_count_invalid")
-    hint = professional_identity_hint_from_view_kinds(approved_identity_view_kinds)
+    expected_indexes = set(range(1, requested_image_count + 1))
+    actual_indexes: set[int] = set()
+    hints_by_output: dict[int, EcommerceProfessionalIdentityRiskHint] = {}
+    for raw_index, raw_hint in professional_identity_hints_by_output.items():
+        try:
+            output_index = int(raw_index)
+        except (TypeError, ValueError):
+            raise ValueError("professional_identity_hint_output_index_invalid") from None
+        if output_index in actual_indexes:
+            raise ValueError("professional_identity_hint_output_index_duplicate")
+        actual_indexes.add(output_index)
+        if output_index < 1 or output_index > requested_image_count:
+            raise ValueError("professional_identity_hint_output_index_out_of_range")
+        hint = (
+            raw_hint
+            if isinstance(raw_hint, EcommerceProfessionalIdentityRiskHint)
+            else EcommerceProfessionalIdentityRiskHint.model_validate(raw_hint)
+        )
+        preferred_view = str(hint.preferred_identity_view_kind)
+        if preferred_view != "none" and preferred_view not in approved_identity_view_kinds:
+            raise ValueError("preferred_identity_view_not_approved")
+        hints_by_output[output_index] = hint
+    if actual_indexes != expected_indexes:
+        raise ValueError("professional_identity_hint_missing")
     return EcommerceCreativeRiskPreflight(
         mode="professional",
         global_risks=[
@@ -319,7 +315,7 @@ def build_professional_ecommerce_identity_preflight(
                     "prefer_body_led_motion",
                     "separate_composition_reference_from_identity",
                 ],
-                professional_identity_hint=hint,
+                professional_identity_hint=hints_by_output[index],
             )
             for index in range(1, requested_image_count + 1)
         ],

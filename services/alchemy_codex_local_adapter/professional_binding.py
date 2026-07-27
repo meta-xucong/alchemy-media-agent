@@ -32,6 +32,7 @@ class ProfessionalBindingResolution:
     binding: ProfessionalModeBinding
     identity_references: tuple[NativeReferenceInput, ...] = ()
     binding_snapshot: FrozenVisualAssetBindingSet | None = None
+    professional_identity_hints_by_output: dict[int, dict[str, str]] | None = None
 
 
 _FACE_SLOT_SELECTOR_BY_KEY = {

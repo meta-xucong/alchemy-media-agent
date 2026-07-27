@@ -115,10 +115,12 @@ Professional Mode already owns:
 - approved identity view selectors such as front and profile;
 - server-owned reference admission and binding snapshots.
 
-For Professional requests, risk preflight may say that a look-back or side
-view should prefer an approved profile identity view over a frontal identity
-proof. It must not read raw output paths, forge bindings, replace the
-Professional resolver, or downgrade to Standard Mode.
+For Professional requests, risk preflight may project only a per-output
+identity hint that the Professional resolver has already explicitly selected.
+It may validate that the hinted view kind is approved, but it must not choose,
+rank, or substitute views from the approved set. It must not read raw output
+paths, forge bindings, replace the Professional resolver, or downgrade to
+Standard Mode.
 
 ### 2.6 Human Realism and expression authenticity
 
@@ -155,8 +157,9 @@ It does not yet consistently say:
 
 ```text
 This output is at high risk of pasted-face artefacts if the face is too
-frontal. Prefer a profile identity view, reduce head turn, and treat identity
-as a side/back hint rather than a frontal proof.
+frontal. If the Professional resolver has already supplied an explicit
+secondary-view hint, preserve that hint; otherwise keep the risk context
+without inventing an identity view choice.
 ```
 
 The proposed preflight fills that gap.
@@ -340,8 +343,9 @@ may contain only:
 It must not contain raw asset IDs, paths, output IDs, handoff IDs, prompt text,
 hashes, or provider payload fragments. It also must not select reference images.
 The Professional resolver remains the only owner of identity view admission and
-server-owned binding evidence. The preflight may describe the strategy implied
-by already-resolved view kinds; it may not create, rank, or substitute views.
+server-owned binding evidence. The preflight may describe only the strategy
+explicitly supplied by that resolver for the output; it may not create, rank,
+or substitute views from availability alone.
 
 Head-turn and face/body coherence guidance must use finite strategy enums such
 as `coherent_secondary_turn` and `avoid_over_twisted_head`. It must not be
@@ -493,10 +497,10 @@ scene must not be inherited accidentally.
 ### 8.2 Identity angle mismatch
 
 A side, profile, back, or look-back output should not be forced to prove
-identity through a frontal face. If Professional Mode provides side/profile
-views, those should be preferred for side/profile identity geometry. If no
-profile identity exists, the Brain should reduce face size and turn angle
-rather than invent a frontal proof on a back-facing body.
+identity through a frontal face. If the Professional resolver explicitly
+supplies a side/profile identity hint for that output, the Brain may use that
+hint as context. If no such resolver hint exists, the Brain should reduce face
+size and turn angle rather than invent a frontal proof on a back-facing body.
 
 ### 8.3 Pasted-face and over-twisted-head risk
 
@@ -620,7 +624,7 @@ Intended behavior:
    state and must not receive `professional_identity_hint`.
 2. Professional E-Commerce may receive `professional_identity_hint` only after
    the host has already resolved an approved server-owned binding and admitted
-   the requested view selectors.
+   an explicit resolver-owned per-output view hint.
 3. The hint may contain only approved view kinds (`front`,
    `front_three_quarter`, `profile`, `back`, `none`), a closed identity
    strategy enum, and `source=professional_binding_resolver`.
@@ -628,16 +632,18 @@ Intended behavior:
    capacity, changes exact N, rewrites prompts, or provides a local creative
    fallback. Remote Brain still owns shot plan and canonical prompts.
 5. Missing binding, malformed binding, or an existing hint that asks for an
-   unapproved view must fail closed before Remote Brain. It must not silently
-   omit the hint and continue as if no Professional preflight existed.
+   unapproved view must fail closed before Remote Brain. If the resolver has
+   not explicitly selected a per-output hint, the contributor must omit
+   `professional_identity_hint` rather than ranking or filling it locally.
 
 Call graph:
 
 ```text
 Professional host/native planner
   -> server-owned Professional binding resolver
-  -> approved identity view selectors are normalized to closed view kinds only
-  -> E-Commerce preflight contributor adds professional_identity_hint
+  -> explicit per-output identity hints are projected only when resolver-owned
+  -> approved identity view selectors are used only for validation
+  -> E-Commerce preflight contributor preserves explicit professional_identity_hint
   -> V3LLMBrainAdapter E-Commerce allowlist validates/sanitizes the object
   -> ScenarioRuntime pre-Brain planning_gate may fail closed
   -> Remote Brain receives only typed risk context, never raw IDs/paths/hashes
@@ -646,8 +652,8 @@ Professional host/native planner
 Authority split:
 
 - The binding resolver owns project/people asset/view admission.
-- The Phase 4 contributor owns only the closed hint projection from already
-  admitted view kinds.
+- The Phase 4 contributor owns only closed projection of explicit resolver
+  hints; it never ranks an approved view-kind set.
 - E-Commerce product truth selection remains owned by `image_set_plan`.
 - Shared Human Realism/post-review remains a later phase and may consume risk
   context only through its own review authority.
@@ -656,7 +662,8 @@ Tests must prove:
 
 - no People Asset lookup in Standard Mode;
 - no Professional risk fields when Professional Mode is not selected;
-- face.profile hints appear only when that view is available and approved;
+- a profile/front/other view hint is preserved only when explicitly resolver
+  supplied and approved; approved view sets alone do not create hints;
 - missing binding fails closed exactly as today.
 
 ### Phase 5 — Acceptance and rollout
