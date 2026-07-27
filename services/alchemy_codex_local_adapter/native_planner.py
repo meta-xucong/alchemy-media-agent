@@ -81,11 +81,11 @@ def _float_env(name: str, default: float) -> float:
 
 _LOCAL_MCP_PLANNING_TIMEOUT_SECONDS = _float_env(
     "CODEX_NATIVE_IMAGEGEN_PLANNING_TIMEOUT_SECONDS",
-    360.0,
+    540.0,
 )
 _LOCAL_MCP_BRAIN_TRANSPORT_TIMEOUT_SECONDS = _float_env(
     "CODEX_NATIVE_IMAGEGEN_BRAIN_TRANSPORT_TIMEOUT_SECONDS",
-    min(150.0, max(1.0, (_LOCAL_MCP_PLANNING_TIMEOUT_SECONDS - 60.0) / 2.0)),
+    min(210.0, max(1.0, (_LOCAL_MCP_PLANNING_TIMEOUT_SECONDS - 120.0) / 2.0)),
 )
 
 
@@ -205,7 +205,7 @@ class CodexNativeImageGenPlanner:
         self._brain_transport_timeout_seconds = (
             _LOCAL_MCP_BRAIN_TRANSPORT_TIMEOUT_SECONDS
             if brain_transport_timeout_seconds is None
-            else max(0.1, min(150.0, float(brain_transport_timeout_seconds)))
+            else max(0.1, min(210.0, float(brain_transport_timeout_seconds)))
         )
 
     @staticmethod

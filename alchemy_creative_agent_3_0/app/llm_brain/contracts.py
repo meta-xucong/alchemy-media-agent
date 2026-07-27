@@ -330,7 +330,7 @@ class BrainRunRequest(V3BaseModel):
     reasoning_depth: str = "balanced"
     # Transport-only guardrail. Payload builders deliberately do not include
     # this field, so it cannot become creative evidence or renderer context.
-    transport_timeout_seconds: float | None = Field(default=None, ge=1.0, le=150.0)
+    transport_timeout_seconds: float | None = Field(default=None, ge=1.0, le=210.0)
     metadata: dict[str, Any] = Field(default_factory=dict)
     capability_catalog: dict[str, Any] = Field(default_factory=dict)
     pre_activation_capabilities: dict[str, Any] = Field(default_factory=dict)

@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **planning-only gate passed; controlled real-image gate paused for Professional identity/product binding and Provider reference-capacity repair.**
+Status: **live Professional identity/product binding passed; controlled real-image gate paused for recovered N=6 Brain planning budget repair.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -8,11 +8,10 @@ Non-scope: shared Visual Capability, General Template behavior, Provider/MCP ima
 
 Implementation note: this document started as the theory-first correction
 model. It is now also the implementation closure record for the focused
-transport-diagnostics, finite-budget, and IPC result-return milestones. The
-original blocked facts remain historical evidence; the current active gate is
-the Professional identity/product binding plus Provider reference-capacity
-repair in Section 13 after the post-`8cd903c` planning-only proof in Section
-1A.
+transport-diagnostics, finite-budget, IPC result-return, Professional
+identity/product binding, and product-truth selection milestones. The original
+blocked facts remain historical evidence; the current active gate is the
+fresh live N=6 Professional E-Commerce planning read-timeout in Section 13A.
 
 ## 1. Current blocked fact pattern
 
@@ -51,7 +50,7 @@ controlled product-image generation:
 | --- | --- | --- |
 | `dffc02b` | Doc259 correction model and old-document authority markers | Documented the two-stage Brain timeout/root-cause model and marked conflicting old timeout/fallback wording. |
 | `99d3fa9` | Brain transport diagnostics in provider, adapter, ScenarioRuntime, Local MCP projection, and focused tests | Implemented safe stage/transport timeout observability without changing Brain creative authority, exact N, prompt semantics, route, Provider rendering, Core, receipt, slot, or activation. |
-| `cb4c787` | finite Brain budget repair | Aligned the measured N=1 two-stage plan/finalizer latency with a finite 150s per-call cap, 320s shared logical budget, and 360s native outer deadline. |
+| `cb4c787` | finite Brain budget repair | Historical N=1 budget repair: aligned the measured N=1 two-stage plan/finalizer latency with a finite 150s per-call cap, 320s shared logical budget, and 360s native outer deadline. This wording is superseded for the current live N=6 gate by Section 13A. |
 | `8cd903c` | native planner IPC result return | Fixed the multiprocessing Queue feeder/join deadlock and proved N=1 planning-only through the real Local MCP entry point with mutation delta 0. |
 
 ### Solved local program defects
@@ -278,7 +277,10 @@ mutation_delta=0
 The measured two-stage diagnostic total is about `124074ms`
 (`71216ms + 52858ms`) for this N=1 request, and both stages returned complete
 JSON under the bounded 150s diagnostic cap. This supports a minimal finite
-budget repair, but only if all timeout authorities are changed together:
+budget repair for the historical N=1 gate, but this exact `150/320/360`
+authority is now **superseded for live Professional N=6 planning** by the
+Section 13A `210/520/540` repair. The superseded N=1 repair required all
+timeout authorities to change together:
 
 1. Raise the per-call Brain transport cap from 120s to 150s.
 2. Set the shared logical Brain execution budget default to 320s. This remains
@@ -856,13 +858,19 @@ live runtime must show both of these server-owned facts:
    `sha256=afe6ac2e7b116e0b1802cf44d63790dc51fe32a686796204476db70b0991b35d`,
    `status=ready`, `role=face_reference`, and non-empty consent reference.
 
-Current live-store audit indicates both live preconditions are still missing:
+Historical live-store audit indicated both live preconditions were missing:
 the existing `project_bindings` frozen job bindings are empty, and the current
 `.media_storage/v3_uploads/v3_asset_054b1c4728614187` directory is absent.
-Therefore the new resolver is expected to fail closed in the live repository
-until a separate, append-only reconciliation step restores the verified root to
-the current media store and the formal binding workflow joins the selected
-people asset to the consuming product project.
+This statement is **superseded for the current run** by
+`.controlled-validation/live-bind-20260727T075231Z/reports/live-binding-readiness-report.json`
+and
+`.controlled-validation/live-bind-20260727T075231Z/reports/resolver-root-path-proof.json`:
+the verified root upload is now present in current `.media_storage`, the
+consumer project `project_6c885b14a3` was created through
+`V3ProjectModeService`, the active Character Card asset is bound through
+`PersistentProjectVisualAssetBindingService`, and the Professional resolver
+returns current `.media_storage/v3_uploads/.../original.png` rather than
+following historical `asset.json.file_path` evidence.
 
 This gate must not be bypassed by:
 
@@ -911,6 +919,86 @@ Focused regression must prove:
   the Provider;
 - missing root, missing winner, missing binding, missing identity winner, or
   missing product truth fails closed with no business mutation.
+
+## 13A. Live N=6 plan-stage follow-up timeout correction
+
+After live binding readiness passed, the reviewer authorized one fresh
+Professional Native N=6 frozen-planning run using:
+
+- consumer project `project_6c885b14a3`;
+- active people asset
+  `visual_asset_0000_professional_card_rebuild_fresh_20260726`;
+- active version `version_professional_card_rebuild_fresh_20260726`;
+- four user-provided product-truth images as the product pool; and
+- no ImageGen, MCP materialization, job, candidate, output, receipt, slot, or
+  activation mutation.
+
+Evidence:
+
+- `.controlled-validation/live-n6-20260727T081000Z/reports/pre-call-checkpoint.json`
+- `.controlled-validation/live-n6-20260727T081000Z/reports/brain-stage-trace.jsonl`
+- `.controlled-validation/live-n6-20260727T081000Z/reports/fresh-professional-n6-planning-report.json`
+
+Observed result:
+
+- status `blocked`;
+- elapsed `263264ms`;
+- mutation delta zero for job, candidate, handoff, output, formal receipt,
+  slot, and activation;
+- no ImageGen/materialization invocation;
+- product truth selection, selected/unselected product leakage checks,
+  final-reference cap, root identity, and active front winner identity all
+  passed;
+- exact N and two-stage completion did not pass because the remote Brain plan
+  stage failed before producing the complete frozen plan.
+- Any `fallback_used=true` flag in this blocked result is outcome bookkeeping
+  for a fail-closed planning path. It is not a local creative fallback, not a
+  prompt repair, and not authorization to materialize images.
+
+Stage evidence narrows the responsible layer:
+
+- The first plan call returned in about `112015ms`.
+- The adapter validated schema but recorded
+  `remote_contract_rejected_count=1`, then made a second Remote Brain call
+  within the same plan stage. This is recorded as observed trace behavior, not
+  as a newly introduced recovery capability.
+- The second plan-stage stream dispatched at about `113172ms`, response started at
+  about `115515ms`, and first content was observed around `235702ms`.
+- The second plan-stage call then hit the `150s` per-call read cap before
+  complete JSON was observed; the failure was fail-closed and did not mutate
+  business state.
+
+This is not a binding, product-pool, Provider capacity, runner, queue, slot, or
+ImageGen problem. It is a finite remote Brain transport-budget mismatch for a
+valid N=6 planning shape where the observed plan stage may require an
+additional Brain-owned follow-up call after a contract rejection. This section
+does not add local recovery behavior or deterministic creative fallback.
+
+Current authoritative repair:
+
+1. Keep Doc133 exact N, Doc158/175 two-stage Brain ownership, E17 complete
+   output-intent requirements, and the Professional product-model reference
+   contract unchanged.
+2. Do not delete context, shrink product/identity constraints, rewrite prompt
+   semantics, split N=6 into six independent N=1 Brain plans, switch route or
+   model, or add retry stacking.
+3. Increase the bounded per-call Brain transport cap from `150s` to `210s`.
+   The number is finite and evidence-based: the failed N=6 follow-up call had
+   first content at roughly `122s` after dispatch but needed more than the old
+   150s read window to complete JSON.
+4. Increase the shared logical Brain preparation budget from `320s` to `520s`
+   so the initial plan call, one observed Brain-owned plan-stage follow-up call
+   after contract rejection, and one final `provider_prompt_finalize` call can
+   complete without turning the budget into an infinite wait.
+5. Increase the native MCP outer planning deadline from `360s` to `540s`,
+   keeping a hard process deadline and process termination semantics. The
+   invariant remains finite: the outer deadline must exceed
+   `2 * per_call + 120s` and must not be used to hide queue/join or late
+   mutation defects.
+
+If a future live N=6 planning-only probe still exceeds this finite budget, the
+correct behavior is another fail-closed planning block with stage evidence,
+not further timeout expansion or real image generation.
 
 ## 14. Old-document conflict index
 

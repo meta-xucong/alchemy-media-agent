@@ -152,16 +152,17 @@ class V3LLMBrainProvider:
         self.provider = _env("V3_LLM_BRAIN_PROVIDER") or _preferred_provider()
         self.provider = self.provider.strip().lower()
         self.model = _env("V3_LLM_BRAIN_MODEL") or _default_model(self.provider)
-        self.timeout = max(1.0, min(150.0, _float_env("V3_LLM_BRAIN_TIMEOUT_SECONDS", 150.0)))
+        self.timeout = max(1.0, min(210.0, _float_env("V3_LLM_BRAIN_TIMEOUT_SECONDS", 210.0)))
         # A V3 preparation has more than one legitimate Brain decision: a
         # semantic plan and the final signed renderer direction.  Bound the
         # *logical* preparation as one unit so a later valid sign-off does not
         # inherit a stale per-call deadline or leave a caller waiting without a
-        # terminal reason.  This is deliberately transport-only and never
-        # changes creative ownership or permits a local prompt fallback.
+        # terminal reason.  This budget change is transport-only; it does not
+        # add recovery behavior, change creative ownership, or permit a local
+        # prompt fallback.
         self.execution_budget_seconds = _float_env(
             "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS",
-            max(320.0, (self.timeout * 2.0) + 20.0),
+            max(520.0, (self.timeout * 2.0) + 100.0),
         )
         # A compact V3 plan can still need substantial output allowance when a
         # reasoning-capable remote model accounts for its private deliberation
@@ -504,7 +505,7 @@ def _request_timeout_cap_seconds(request: BrainRunRequest) -> float | None:
         value = float(raw)
     except (TypeError, ValueError):
         return None
-    return max(1.0, min(150.0, value))
+    return max(1.0, min(210.0, value))
 
 
 def _call_with_timeout(

@@ -1053,7 +1053,7 @@ def _brain_transport_timeout_seconds(metadata: dict[str, Any]) -> float | None:
         value = float(raw)
     except (TypeError, ValueError):
         return None
-    return max(1.0, min(150.0, value))
+    return max(1.0, min(210.0, value))
 
 
 def _bounded_count(value: Any) -> int:

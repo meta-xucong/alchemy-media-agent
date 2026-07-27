@@ -68,9 +68,9 @@ def test_codex_native_planner_defaults_cover_two_stage_brain_preparation() -> No
 
     assert result.returncode == 0, result.stderr
     defaults = json.loads(result.stdout)
-    assert defaults["brain"] == 150.0
-    assert defaults["planning"] == 360.0
-    assert defaults["planning"] >= (2 * defaults["brain"]) + 60.0
+    assert defaults["brain"] == 210.0
+    assert defaults["planning"] == 540.0
+    assert defaults["planning"] >= (2 * defaults["brain"]) + 120.0
 
 
 def test_brain_transport_schema_and_provider_defaults_share_finite_budget(monkeypatch) -> None:
@@ -78,13 +78,23 @@ def test_brain_transport_schema_and_provider_defaults_share_finite_budget(monkey
     monkeypatch.delenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", raising=False)
     provider = V3LLMBrainProvider()
 
-    assert provider.timeout == 150.0
-    assert provider.execution_budget_seconds == 320.0
-    request = BrainRunRequest(user_input="Plan one image.", transport_timeout_seconds=150.0)
-    assert request.transport_timeout_seconds == 150.0
-    assert _brain_transport_timeout_seconds({"_brain_transport_timeout_seconds": 999.0}) == 150.0
+    assert provider.timeout == 210.0
+    assert provider.execution_budget_seconds == 520.0
+    assert provider.execution_budget_seconds < 600.0
+    monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "999")
+    provider_high_override = V3LLMBrainProvider()
+    assert provider_high_override.timeout == 210.0
+    assert provider_high_override.execution_budget_seconds == 520.0
+    request = BrainRunRequest(user_input="Plan one image.", transport_timeout_seconds=210.0)
+    assert request.transport_timeout_seconds == 210.0
+    assert _brain_transport_timeout_seconds({"_brain_transport_timeout_seconds": 999.0}) == 210.0
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: None,
+        brain_transport_timeout_seconds=999.0,
+    )
+    assert planner._brain_transport_timeout_seconds == 210.0  # noqa: SLF001 - native clamp invariant
     with pytest.raises(ValueError):
-        BrainRunRequest(user_input="Plan one image.", transport_timeout_seconds=150.1)
+        BrainRunRequest(user_input="Plan one image.", transport_timeout_seconds=210.1)
 
 
 class _TwoStageProbeRuntime:
