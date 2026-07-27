@@ -224,6 +224,123 @@ This object must be concise, structured, public-safe, and free of local paths,
 output file names, private job IDs, handoff IDs, provider payloads, and prompt
 fragments.
 
+### 4.1 Closure note: typed field contract before implementation
+
+The example above is illustrative only. Before any runtime implementation, the
+contract must be represented as a closed typed schema, not as free-form
+strategy text. This closure note narrows the implementation target without
+changing runtime behavior.
+
+Required top-level fields:
+
+| Field | Type | Allowed values / constraint | Owner |
+| --- | --- | --- | --- |
+| `contract_version` | enum | `ecommerce_creative_risk_preflight_v1` | E-Commerce specialized module |
+| `owner` | enum | `ecommerce_specialized_preflight` | E-Commerce specialized module |
+| `applies_to` | enum | `ecommerce` | E-Commerce specialized module |
+| `mode` | enum | `standard`, `professional` | caller mode, validated by runtime |
+| `risk_items_by_output` | array | one item per planned output when output-level risks exist | E-Commerce preflight |
+| `global_risks` | array of enum | only closed risk-family values | E-Commerce preflight |
+
+Required per-output fields:
+
+| Field | Type | Allowed values / constraint |
+| --- | --- | --- |
+| `output_index` | integer | 1-based index within requested output count |
+| `risk_family` | array of enum | see allowed `risk_family` values below |
+| `primary_goal_hint` | enum | `emotion_hero`, `playful_interaction`, `walking_or_lookback`, `back_or_structure`, `product_detail`, `balanced_lifestyle_product`, `safe_static_product_proof` |
+| `risk_level` | enum | `low`, `medium`, `high` |
+| `strategy_policy` | array of enum | see allowed strategy values below |
+| `stop` | boolean | true only when the risk cannot be represented safely |
+| `fail_closed_reason` | enum or null | required when `stop=true`; null otherwise |
+| `professional_identity_hint` | object or null | present only in Professional Mode and only after an approved binding/view set exists |
+
+Allowed `risk_family` values:
+
+- `composition_reference_identity_contamination`
+- `unselected_reference_role_leak`
+- `identity_angle_mismatch`
+- `pasted_face`
+- `over_twisted_head`
+- `template_expression`
+- `dynamic_action_identity_clarity_conflict`
+- `product_visibility_tradeoff`
+- `product_detail_context_loss`
+- `back_structure_occlusion`
+- `head_body_scale_mismatch`
+- `stiff_catalogue_card_direction`
+- `ai_polish_or_plasticity`
+
+Allowed `strategy_policy` values:
+
+- `action_triggered_expression`
+- `avoid_static_presenter_grin`
+- `coherent_secondary_turn`
+- `avoid_over_twisted_head`
+- `prefer_body_led_motion`
+- `keep_face_secondary_when_back_or_profile`
+- `preserve_product_truth_readability`
+- `separate_composition_reference_from_identity`
+- `preserve_environment_integration`
+- `use_detail_role_for_close_product_evidence`
+- `fail_closed_if_reference_roles_conflict`
+
+The `professional_identity_hint` object is a Professional-only contributor. It
+may contain only:
+
+```json
+{
+  "preferred_identity_view_kind": "front|front_three_quarter|profile|back|none",
+  "identity_strategy": "front_primary|profile_primary|secondary_face|identity_not_primary",
+  "source": "professional_binding_resolver"
+}
+```
+
+It must not contain raw asset IDs, paths, output IDs, handoff IDs, prompt text,
+hashes, or provider payload fragments. It also must not select reference images.
+The Professional resolver remains the only owner of identity view admission and
+server-owned binding evidence. The preflight may describe the strategy implied
+by already-resolved view kinds; it may not create, rank, or substitute views.
+
+Head-turn and face/body coherence guidance must use finite strategy enums such
+as `coherent_secondary_turn` and `avoid_over_twisted_head`. It must not be
+written as a provider prompt fragment and must not hard-code numeric head angles
+or pose degrees. The Remote Brain remains responsible for converting the typed
+risk context into a natural shot direction and final canonical prompt.
+
+### 4.2 Acceptance matrix
+
+| Scenario | Expected preflight behavior |
+| --- | --- |
+| General Template | No `creative_risk_preflight` field and no E-Commerce risk-role fields. |
+| Standard E-Commerce | May receive commerce situation, reference-role, expression/action, and product-composition risk context. Must not receive People Asset, identity view availability, or Professional identity-angle hints. |
+| Professional E-Commerce with approved binding/views | May receive `professional_identity_hint` using only approved view kinds and strategy enums. No raw IDs, paths, hashes, or view selection. |
+| Professional E-Commerce without approved binding/views | Must omit `professional_identity_hint`; if the requested risk cannot be represented safely, set `stop=true` with a closed `fail_closed_reason`. |
+| Product truth selection | Unchanged. `selected_product_truth_asset_ids`, product pool, source hashes, provider cap, and omission lineage remain owned by the existing Remote Brain `image_set_plan` / native materialization contract. |
+| Output count / exact N | Unchanged. Preflight cannot change requested output count or silently split a set. |
+| Remote Brain prompt authority | Unchanged. Preflight supplies typed risk context only; Remote Brain still authors shot plan and canonical prompts. |
+| Fallback / leakage | No local creative fallback, no prompt patching, no internal IDs/paths/provider fields in Brain-visible or provider-visible text. |
+
+### 4.3 Post-review boundary
+
+Post-generation pixel review remains a shared Human Realism / Review
+responsibility. E-Commerce preflight may provide scenario risk context such as
+"this output is a look-back structure shot with high pasted-face risk", but it
+must not move pixel gates, identity metrics, head/body scoring, expression
+authenticity scoring, hand/foot checks, or retry authority into the E-Commerce
+specialized module. Any later review implementation must call the existing
+shared review/foundation path and preserve its ownership.
+
+### 4.4 Evidence boundary from Doc259 Section 13K
+
+Doc259 Section 13K records the current `n6-dynschema` state: six
+conversation-only host artifacts, six host receipts, preliminary visual pass,
+and zero business mutation. That evidence is valid learning input for E24, but
+it is not runtime authority. It did not create FormalSlotReceipt records,
+project outputs, slots, activations, public projection, or a production delivery
+contract. E24 must not treat those artifacts as proof that this preflight
+contract is already implemented.
+
 ## 5. Boundary: What The Preflight May And May Not Do
 
 ### 5.1 May do
