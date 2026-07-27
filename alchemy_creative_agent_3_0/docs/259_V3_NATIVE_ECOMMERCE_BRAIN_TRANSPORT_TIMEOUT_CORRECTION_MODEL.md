@@ -111,22 +111,55 @@ Current interpretation:
 - No response start, complete response, or JSON parse was observed before the
   120s per-call cap.
 
-Current active blocker:
+Follow-up diagnostic:
+
+After the `99d3fa9` blocked probe, a no-image, no-job, remote-Brain-only
+diagnostic reused the same N=1 plan-stage request shape and the same configured
+provider/model/path family, but used Chat Completions streaming to observe
+transport progress. It did not call Product API, MCP materialization, Provider
+image rendering, slot, receipt, or activation.
+
+Result:
 
 ```text
-external Brain plan-stage response unavailable/too slow for the 120s transport cap
+provider=deepseek
+model=deepseek-v4-pro-260425
+path=/v1/chat/completions
+stage=plan
+system_chars=20759
+payload_chars=10075
+max_tokens=8000
+stream=true
+http_status=200
+first_event_ms=3670
+first_content_ms=42939
+done_ms=80819
+content_chars=9843
+json_parse_ok=true
+mutation=none_remote_brain_only
 ```
 
-This is **not** currently a local program defect, not a finalizer failure, not
-an exact-count mismatch, not Product API/Provider image generation, and not a
-slot/receipt issue. Real image generation remains prohibited until a future
-reviewer/user gate authorizes another planning-only probe and that probe
-returns schema-valid two-stage Brain output with mutation delta 0.
+Revised current active blocker:
+
+```text
+DeepSeek/OpenAI-compatible non-streaming Chat Completions integration waits for
+the complete plan response opaquely and times out, while the same full plan
+request can complete as a streamed JSON response inside the 120s cap.
+```
+
+This is now classified as a local Brain transport integration defect for the
+DeepSeek/OpenAI-compatible chat path, not an external model outage. It is still
+not a finalizer failure, exact-count mismatch, Product API/Provider image
+generation issue, or slot/receipt issue. Real image generation remains
+prohibited until the streaming collector is implemented, tested, committed, and
+a future reviewer/user gate authorizes another planning-only probe that returns
+schema-valid two-stage Brain output with mutation delta 0.
 
 Additional evidence:
 
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-99d3fa9-corrected-summary.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-99d3fa9-startup-failure.json`
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/brain-streaming-diagnostic-n1-plan-20260727.json`
 
 ## 2. Current authority rules
 
@@ -250,6 +283,15 @@ Only after Phase A/B evidence exists:
 | D. Payload/schema compaction | May reduce latency | Can delete required authority/context if done blindly | Only after proof of redundant sections |
 | E. Split six outputs into serial one-image tasks | Easier short calls | Breaks Doc133 exact-count/set-level contract unless redesigned | Rejected for current task |
 | F. Route/model fallback | Could bypass current provider latency | Changes authority/capability surface | Out of scope; separate capability task only |
+
+Post-diagnostic decision: Option B is now the selected minimal repair for the
+DeepSeek/OpenAI-compatible Chat Completions path. The repair is transport-only:
+collect streamed content until `[DONE]`, then parse and validate the same
+complete JSON object that the non-streaming path expected. Incomplete streams,
+missing content, malformed JSON, schema mismatch, provider HTTP errors, and
+timeouts still fail closed. The change must not alter Brain prompts, requested
+N, max token budget, route/model selection, Product API, Provider rendering,
+Formal Core, receipt/slot/activation, or E-Commerce deliverable contracts.
 
 ## 8. Focused tests required before any real probe
 
