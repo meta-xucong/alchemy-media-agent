@@ -123,7 +123,12 @@ def test_creative_risk_preflight_rejects_unknown_enum_values(
 
 def test_global_risks_are_risk_family_subset_and_unique() -> None:
     EcommerceCreativeRiskPreflight.model_validate(
-        _preflight(global_risks=["template_expression", "pasted_face"])
+        _preflight(
+            risk_items_by_output=[
+                _risk_item(risk_family=["template_expression", "pasted_face"]),
+            ],
+            global_risks=["template_expression", "pasted_face"],
+        )
     )
 
     with pytest.raises(ValidationError):
@@ -136,9 +141,34 @@ def test_global_risks_are_risk_family_subset_and_unique() -> None:
             _preflight(global_risks=["unknown_global_risk"])
         )
 
+    with pytest.raises(ValidationError):
+        EcommerceCreativeRiskPreflight.model_validate(
+            _preflight(
+                risk_items_by_output=[
+                    _risk_item(risk_family=["template_expression"]),
+                ],
+                global_risks=["pasted_face"],
+            )
+        )
+
+    with pytest.raises(ValueError, match="global_risks_must_be_subset"):
+        validate_ecommerce_creative_risk_preflight_payload(
+            _preflight(
+                risk_items_by_output=[
+                    _risk_item(risk_family=["template_expression"]),
+                ],
+                global_risks=["pasted_face"],
+            ),
+            scenario_id="ecommerce",
+            mode="standard",
+            requested_image_count=1,
+        )
+
 
 def test_risk_items_cardinality_and_output_index_contract() -> None:
-    EcommerceCreativeRiskPreflight.model_validate(_preflight(risk_items_by_output=[]))
+    EcommerceCreativeRiskPreflight.model_validate(
+        _preflight(risk_items_by_output=[], global_risks=[])
+    )
     validate_ecommerce_creative_risk_preflight_payload(
         _preflight(risk_items_by_output=[_risk_item(1), _risk_item(2)]),
         scenario_id="ecommerce",
@@ -349,6 +379,11 @@ def test_standard_rejects_professional_identity_hints_and_raw_fields() -> None:
             scenario_id="ecommerce",
             mode="standard",
             requested_image_count=1,
+        )
+
+    with pytest.raises(ValidationError):
+        EcommerceCreativeRiskPreflight.model_validate(
+            _preflight(risk_items_by_output=[_risk_item(professional_identity_hint=hint)])
         )
 
     raw_hint = {
@@ -597,6 +632,12 @@ def test_stop_true_preflight_blocks_before_remote_brain_or_business_mutation() -
             risk_items_by_output=[
                 _risk_item(risk_family=["unknown_risk_family"]),
             ]
+        ),
+        _preflight(
+            risk_items_by_output=[
+                _risk_item(risk_family=["template_expression"]),
+            ],
+            global_risks=["pasted_face"],
         ),
         _preflight(raw_path="D:/private/should_not_cross.png"),
         "not-a-dict-preflight",

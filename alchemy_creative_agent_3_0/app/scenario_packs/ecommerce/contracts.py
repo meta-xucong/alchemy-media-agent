@@ -197,6 +197,13 @@ class EcommerceCreativeRiskPreflight(V3BaseModel):
             for item in self.risk_items_by_output:
                 if item.professional_identity_hint is not None:
                     raise ValueError("professional_identity_hint_not_allowed_for_standard")
+        item_risks = {
+            risk
+            for item in self.risk_items_by_output
+            for risk in item.risk_family
+        }
+        if not set(self.global_risks).issubset(item_risks):
+            raise ValueError("global_risks_must_be_subset_of_output_risk_family")
         return self
 
     def planning_gate(self, *, requested_image_count: int) -> dict[str, Any]:

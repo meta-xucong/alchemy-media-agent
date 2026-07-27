@@ -195,6 +195,10 @@ def _safe_ecommerce_human_realism_review_context(value: Any) -> dict[str, Any]:
             return {}
         seen_indexes.add(output_index)
         projected_items.append(item)
+    if mode == "standard" and any(
+        "professional_identity_hint" in item for item in projected_items
+    ):
+        return {}
 
     global_risks = _safe_enum_list(
         value.get("global_risks"),

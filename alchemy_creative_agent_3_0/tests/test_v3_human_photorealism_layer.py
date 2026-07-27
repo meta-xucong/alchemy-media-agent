@@ -398,3 +398,20 @@ def test_ecommerce_review_context_rejects_unknown_or_invalid_closed_enum_values(
 
         assert "ecommerce_human_realism_review_context" not in guidance.metadata
         assert "ecommerce_human_realism_review_context" not in contribution.review_contract
+
+
+def test_standard_ecommerce_review_context_rejects_professional_identity_hint() -> None:
+    context = {
+        **_ecommerce_review_context(),
+        "mode": "standard",
+    }
+    guidance = _build(
+        "Standard ecommerce photo of a real person wearing a product.",
+        subject_type="product",
+        metadata={"ecommerce_human_realism_review_context": context},
+    )
+
+    contribution = _human_realism_plugin_contribution(guidance)
+
+    assert "ecommerce_human_realism_review_context" not in guidance.metadata
+    assert "ecommerce_human_realism_review_context" not in contribution.review_contract
