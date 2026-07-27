@@ -748,8 +748,9 @@ def test_professional_ecommerce_full_product_pool_selection_fails_before_capacit
     assert result["code"] == "codex_native_imagegen_product_truth_selection_invalid"
 
 
-def test_professional_ecommerce_two_selected_products_exceed_materialized_provider_capacity(
+def test_professional_ecommerce_two_selected_products_exceed_preflight_provider_capacity(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root_source_id = "v3_asset_root"
     output_id = "v3_output_front"
@@ -778,6 +779,18 @@ def test_professional_ecommerce_two_selected_products_exceed_materialized_provid
         )
     )
     product_ids = [item.asset_id for item in request.reference_inputs]
+    materializer_calls = 0
+
+    def fail_if_materialized(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal materializer_calls
+        materializer_calls += 1
+        raise AssertionError("over-budget detail selection must fail before Provider materialization")
+
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_canonical_materializations",
+        staticmethod(fail_if_materialized),
+    )
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: _CapturingRuntime(
             ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
@@ -793,6 +806,7 @@ def test_professional_ecommerce_two_selected_products_exceed_materialized_provid
 
     assert result["status"] == "blocked"
     assert result["code"] == "codex_native_imagegen_reference_input_capacity_exceeded"
+    assert materializer_calls == 0
 
 
 def test_professional_ecommerce_two_selected_products_pass_when_materialized_capacity_allows(
@@ -876,6 +890,22 @@ def test_professional_ecommerce_two_selected_products_pass_when_materialized_cap
         "_canonical_materializations",
         staticmethod(capacity_allowing_materializations),
     )
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_professional_product_model_provider_budget",
+        staticmethod(
+            lambda server_owned_references: {
+                "contract_version": "professional_ecommerce_provider_reference_budget_v1",
+                "max_provider_reference_images": 5,
+                "identity_source_asset_ids": [item.asset_id for item in server_owned_references],
+                "identity_derivative_reference_count": 3,
+                "product_truth_derivative_reference_count_per_source": 1,
+                "max_product_truth_source_refs_per_output": 2,
+                "owner": "codex_native_professional_planner",
+                "basis": "provider_materialized_reference_derivative_count",
+            }
+        ),
+    )
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: _CapturingRuntime(
             ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
@@ -896,6 +926,80 @@ def test_professional_ecommerce_two_selected_products_pass_when_materialized_cap
     assert contract["selected_product_truth_asset_ids"] == product_ids
     assert contract["admitted_product_truth_asset_ids"] == product_ids
     assert contract["admitted_reference_count"] == 4
+
+
+@pytest.mark.parametrize("budget_value", [None, 0, 3, "not-an-int"])
+def test_professional_ecommerce_requires_provider_reference_budget_before_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    budget_value: Any,
+) -> None:
+    root_source_id = "v3_asset_root"
+    output_id = "v3_output_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one product-on-model catalogue image.",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    materializer_calls = 0
+
+    def invalid_budget(server_owned_references):  # noqa: ANN001
+        return {
+            "contract_version": "professional_ecommerce_provider_reference_budget_v1",
+            "max_provider_reference_images": 5,
+            "identity_source_asset_ids": [item.asset_id for item in server_owned_references],
+            "identity_derivative_reference_count": 4,
+            "product_truth_derivative_reference_count_per_source": 1,
+            "max_product_truth_source_refs_per_output": budget_value,
+            "owner": "codex_native_professional_planner",
+            "basis": "provider_materialized_reference_derivative_count",
+        }
+
+    def fail_if_materialized(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal materializer_calls
+        materializer_calls += 1
+        raise AssertionError("invalid provider budget must fail before Provider materialization")
+
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_professional_product_model_provider_budget",
+        staticmethod(invalid_budget),
+    )
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_canonical_materializations",
+        staticmethod(fail_if_materialized),
+    )
+    capturing_runtime = _CapturingRuntime(
+        ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing_runtime,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_planning_blocked"
+    assert materializer_calls == 0
+    assert capturing_runtime.last_result is not None
+    assert "ecommerce_product_truth_selection_capacity_contract_missing" in " ".join(
+        capturing_runtime.last_result.warnings
+    )
 
 
 @pytest.mark.parametrize(
@@ -1029,7 +1133,8 @@ def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
     assert evidence_schema["product_truth_selection_role"] == (
         "one of lifestyle_primary_product_view|playful_environment_interaction_view|"
         "walking_or_lookback_view|back_or_structure_view|product_detail_or_print_view; "
-        "only product_detail_or_print_view may select two product_truth asset IDs"
+        "only product_detail_or_print_view may select two product_truth asset IDs when "
+        "ecommerce_creative_context.provider_reference_budget.max_product_truth_source_refs_per_output >= 2"
     )
     assert evidence_schema["selected_product_truth_asset_ids"] == [
         "one or two uploaded product_truth asset_id strings from the frozen product truth pool"
@@ -1042,6 +1147,8 @@ def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
     assert "selected_product_truth_asset_ids must be a list" in instructions
     assert "Select one product truth for ordinary lifestyle" in normalized_instructions
     assert "Select a second product truth only when product_truth_selection_role is" in normalized_instructions
+    assert "max_product_truth_source_refs_per_output as a hard renderer-admission budget" in normalized_instructions
+    assert "When that budget is 1, a detail or print output must still select only" in normalized_instructions
     assert "fail-closed rather than silently trimming or replacing product truth" in normalized_instructions
     assert "apparel_on_model_evidence_profile requests more than one output" not in instructions
 
@@ -1103,6 +1210,41 @@ def test_professional_ecommerce_remote_payload_combines_apparel_and_product_sele
     assert "apparel_on_model_evidence_profile requests more than one output" in instructions
     assert "product_truth_selection_role must be exactly one of" in instructions
     assert "selected_product_truth_asset_ids must be a list" in instructions
+
+
+def test_professional_ecommerce_remote_payload_preserves_provider_reference_budget() -> None:
+    request = BrainRunRequest(
+        user_input="Create a professional product-on-model detail set.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        requested_image_count=6,
+        metadata={
+            "professional_product_truth_required": True,
+            "professional_product_model_planning": True,
+            "ecommerce_creative_context": {
+                "provider_reference_budget": {
+                    "contract_version": "professional_ecommerce_provider_reference_budget_v1",
+                    "max_provider_reference_images": 5,
+                    "identity_derivative_reference_count": 4,
+                    "product_truth_derivative_reference_count_per_source": 1,
+                    "max_product_truth_source_refs_per_output": 1,
+                    "owner": "codex_native_professional_planner",
+                    "basis": "provider_materialized_reference_derivative_count",
+                }
+            },
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    budget = payload["ecommerce_creative_context"]["provider_reference_budget"]
+    assert budget["max_provider_reference_images"] == 5
+    assert budget["identity_derivative_reference_count"] == 4
+    assert budget["max_product_truth_source_refs_per_output"] == 1
+    assert "max_product_truth_source_refs_per_output as a hard renderer-admission budget" in (
+        " ".join(payload["ecommerce_context_instructions"].split())
+    )
 
 
 @pytest.mark.parametrize("stage", ["plan", "provider_prompt_finalize"])

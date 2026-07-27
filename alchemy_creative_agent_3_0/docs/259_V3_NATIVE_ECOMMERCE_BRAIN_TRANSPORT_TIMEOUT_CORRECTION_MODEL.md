@@ -1556,6 +1556,94 @@ Next gate:
   selection, the planner must remain blocked. Do not coerce, trim, retry,
   split into N=1, or proceed to ImageGen.
 
+## 13J. Superseding capacity model: renderer derivatives, not raw source IDs
+
+Evidence:
+
+- `.controlled-validation/n6-role-20260727T114653Z/reports/fresh-professional-n6-planning-report.json`
+- Reviewer comparison against the earlier successful `n6-one-two` planning
+  report.
+
+The `n6-role` run still stopped before host ImageGen with:
+
+```text
+status=blocked
+code=codex_native_imagegen_reference_input_capacity_exceeded
+mutation_delta.jobs/candidates/handoffs/outputs/formal_receipts/slots/activations=0
+```
+
+This supersedes the raw-source-count theory in Section 13I.  The earlier
+guess that the Remote Brain probably selected the full four-image product
+pool is no longer the current correction model.  Since
+`BrainOutputEvidenceContract.selected_product_truth_asset_ids` now has a
+typed `max_length=2`, the active failure is the second capacity layer:
+
+```text
+root portrait identity source
+  -> portrait_identity_crop + portrait_identity_geometry_crop
+active front Character Card winner
+  -> portrait_identity_crop + portrait_identity_geometry_crop
+selected product truth source
+  -> product_truth_crop
+```
+
+The successful `n6-one-two` evidence shows each planned output admitted:
+
+```text
+2 root identity derivatives
++ 2 front-winner identity derivatives
++ 1 product_truth derivative
+= 5 final renderer references
+```
+
+Therefore the current Professional E-Commerce product selector budget must be
+computed in final renderer derivative references, not raw source IDs.  Under
+the active identity binding (`root + active front winner`), identity evidence
+already occupies four provider inputs.  With
+`max_provider_reference_images=5`, the current route has exactly one
+product-truth source slot per output.
+
+Current authority:
+
+1. Keep `max_provider_reference_images=5`.
+2. Keep both server-owned identity sources: immutable root portrait and active
+   Character Card front winner.  Do not remove identity evidence to make room
+   for a second product truth.
+3. Preserve the general E-Commerce contract that a detail output may select a
+   second product truth only when a renderer-capacity preflight proves the
+   final materialized references still fit.
+4. For the current `root + front winner` product-model route, the frozen
+   provider reference budget is:
+
+```text
+identity_derivative_reference_count=4
+product_truth_derivative_reference_count_per_source=1
+max_product_truth_source_refs_per_output=1
+```
+
+5. The Remote Brain must receive this budget as Professional E-Commerce
+   context before selecting product truth.  A `product_detail_or_print_view`
+   role may remain a detail role, but in this route it must still select only
+   the single most relevant product truth image.
+6. Missing or invalid provider-reference budget is a hard contract failure for
+   Professional product-model planning.  It must not default to 2 or wait for
+   the final materializer to fail.
+
+Rejected alternatives:
+
+- Do not raise the provider reference cap to 6 without separate capability
+  negotiation.
+- Do not silently trim a two-product detail selection down to one.
+- Do not remove root or front-winner identity references.
+- Do not encode this as a kidswear/shared Visual Capability rule.
+
+Next gate:
+
+- Focused tests must prove budget propagation, missing/invalid budget
+  fail-closed behavior, detail-2 preflight blocking in the current route, and
+  one-product selection success with no unselected pool leakage.
+- No new planner-only run or ImageGen call is authorized by this section.
+
 ## 14. Old-document conflict index
 
 This correction model does not delete historical documents. The following

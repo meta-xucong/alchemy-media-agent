@@ -3652,6 +3652,9 @@ class ScenarioRuntime:
                 deliverable_metadata["product_truth_selection_role"] = product_truth_selection_role
                 deliverable_metadata["selected_product_truth_asset_ids"] = list(selected_product_truth)
                 deliverable_metadata["admitted_product_truth_asset_ids"] = list(selected_product_truth)
+                deliverable_metadata["max_product_truth_source_refs_per_output"] = int(
+                    product_truth_selection["max_product_truth_source_refs_per_output"]
+                )
                 deliverable_metadata["product_truth_selection_source"] = (
                     "remote_brain_image_set_plan.evidence_dimensions_by_output"
                 )
@@ -3732,6 +3735,17 @@ class ScenarioRuntime:
         ]
         if not product_truth_ids:
             raise CapabilityActivationError("ecommerce_product_truth_selection_pool_missing")
+        ecommerce_context = metadata.get("ecommerce_creative_context")
+        ecommerce_context = ecommerce_context if isinstance(ecommerce_context, dict) else {}
+        provider_budget = ecommerce_context.get("provider_reference_budget")
+        provider_budget = provider_budget if isinstance(provider_budget, dict) else {}
+        raw_max_product_refs = provider_budget.get("max_product_truth_source_refs_per_output")
+        try:
+            max_product_truth_refs = int(raw_max_product_refs)
+        except (TypeError, ValueError):
+            raise CapabilityActivationError("ecommerce_product_truth_selection_capacity_contract_missing") from None
+        if max_product_truth_refs < 1 or max_product_truth_refs > 2:
+            raise CapabilityActivationError("ecommerce_product_truth_selection_capacity_contract_missing")
         raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
         if len(raw_entries) != expected_count:
             raise CapabilityActivationError("ecommerce_product_truth_selection_missing_or_incomplete")
@@ -3757,9 +3771,12 @@ class ScenarioRuntime:
                 raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
             if len(selected) == 2 and role != ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE:
                 raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+            if len(selected) > max_product_truth_refs:
+                raise CapabilityActivationError("ecommerce_product_truth_selection_capacity_exceeded")
             resolved[index] = {
                 "product_truth_selection_role": role,
                 "selected_product_truth_asset_ids": selected,
+                "max_product_truth_source_refs_per_output": max_product_truth_refs,
             }
         if sorted(resolved) != list(range(1, expected_count + 1)):
             raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")

@@ -927,6 +927,7 @@ def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | Non
         "platform_constraints",
         "product_set_style",
         "role_specific_creative_intent",
+        "provider_reference_budget",
         "category_evidence_questions",
         "seller_inputs",
         "approved_literal_copy",

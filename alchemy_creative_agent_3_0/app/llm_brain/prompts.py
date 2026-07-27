@@ -121,12 +121,16 @@ product_truth asset_id strings from the
 frozen product truth pool for that output; do not choose identity asset IDs,
 filenames, paths, or natural-language aliases. Select one product truth for
 ordinary lifestyle, walking/look-back, playful interaction, front, or back/structure
-outputs. Select a second product truth only when product_truth_selection_role is
-product_detail_or_print_view and that detail-oriented output needs both a
-whole-garment and close-detail truth source; if the selected identity and product
-references cannot fit the renderer admission cap, the run must stop fail-closed
-rather than silently trimming or replacing product truth. Never select the full
-product truth pool for one output."""
+outputs. If ecommerce_creative_context.provider_reference_budget is present,
+treat max_product_truth_source_refs_per_output as a hard renderer-admission
+budget. Select a second product truth only when product_truth_selection_role is
+product_detail_or_print_view, the detail-oriented output needs both a
+whole-garment and close-detail truth source, and the declared budget is at
+least 2. When that budget is 1, a detail or print output must still select only
+the single most relevant product_truth asset. If the selected identity and
+product references cannot fit the renderer admission cap, the run must stop
+fail-closed rather than silently trimming or replacing product truth. Never
+select the full product truth pool for one output."""
 PHOTOGRAPHY_CONTEXT_INSTRUCTIONS = """Treat photography_creative_context as a frozen
 non-creative delivery contract. The role IDs only bind output lineage and
 cardinality. Invent the complete photographic composition, scene, camera,
@@ -272,7 +276,8 @@ def _image_set_evidence_dimensions_schema(
         schema["product_truth_selection_role"] = (
             "one of lifestyle_primary_product_view|playful_environment_interaction_view|"
             "walking_or_lookback_view|back_or_structure_view|product_detail_or_print_view; "
-            "only product_detail_or_print_view may select two product_truth asset IDs"
+            "only product_detail_or_print_view may select two product_truth asset IDs when "
+            "ecommerce_creative_context.provider_reference_budget.max_product_truth_source_refs_per_output >= 2"
         )
         schema["selected_product_truth_asset_ids"] = [
             "one or two uploaded product_truth asset_id strings from the frozen product truth pool"

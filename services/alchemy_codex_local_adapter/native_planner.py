@@ -430,6 +430,11 @@ class CodexNativeImageGenPlanner:
                 "professional_product_model_planning": True,
                 "professional_product_truth_required": True,
             }
+            ecommerce_context = dict(metadata.get("ecommerce_creative_context") or {})
+            ecommerce_context["provider_reference_budget"] = (
+                self._professional_product_model_provider_budget(server_owned_identity_references)
+            )
+            metadata["ecommerce_creative_context"] = ecommerce_context
         else:
             anchor_preparation_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
                 view_role=request.professional_reference_stage or "standard_front"
@@ -506,6 +511,29 @@ class CodexNativeImageGenPlanner:
         payload = json.dumps(binding.to_brain_evidence(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _professional_product_model_provider_budget(
+        server_owned_references: tuple[NativeReferenceInput, ...],
+    ) -> dict[str, Any]:
+        # The shared Provider materializer expands each Professional identity
+        # source into feature-detail and head-geometry provider derivatives.
+        # E-Commerce product selection must budget against that final renderer
+        # admission shape, not just raw source IDs.  Product truth inputs are
+        # suppressed to focused product crops, so they currently consume one
+        # provider input each.
+        identity_derivative_count = len(server_owned_references) * 2
+        max_refs = ProductionImageGenerationProvider.max_provider_reference_images
+        return {
+            "contract_version": "professional_ecommerce_provider_reference_budget_v1",
+            "max_provider_reference_images": max_refs,
+            "identity_source_asset_ids": [item.asset_id for item in server_owned_references],
+            "identity_derivative_reference_count": identity_derivative_count,
+            "product_truth_derivative_reference_count_per_source": 1,
+            "max_product_truth_source_refs_per_output": max(0, max_refs - identity_derivative_count),
+            "owner": "codex_native_professional_planner",
+            "basis": "provider_materialized_reference_derivative_count",
+        }
+
     def _professional_product_truth_selection_by_asset(
         self,
         *,
@@ -527,6 +555,8 @@ class CodexNativeImageGenPlanner:
         identity_asset_ids = [item.asset_id for item in server_owned_references]
         product_truth_hashes = {item.asset_id: item.source_sha256 for item in product_truth_pool}
         generation_plans = {item.asset_id: item for item in planning_result.generation_plans}
+        provider_budget = self._professional_product_model_provider_budget(server_owned_references)
+        max_product_truth_refs = int(provider_budget["max_product_truth_source_refs_per_output"])
         selection_by_asset_id: dict[str, dict[str, Any]] = {}
         for index, asset in enumerate(planning_result.series_plan.assets, start=1):
             deliverable = deliverables[index - 1] if index <= len(deliverables) else {}
@@ -596,12 +626,11 @@ class CodexNativeImageGenPlanner:
                     "code": "codex_native_imagegen_product_truth_selection_invalid",
                     "message": "Professional E-Commerce planning may select two product truth references only for a detail or print output role.",
                 }
-            selected_reference_count = len(identity_asset_ids) + len(selected)
-            if selected_reference_count > ProductionImageGenerationProvider.max_provider_reference_images:
+            if len(selected) > max_product_truth_refs:
                 return {
                     "blocked": True,
                     "code": "codex_native_imagegen_reference_input_capacity_exceeded",
-                    "message": "V3 cannot admit every required Professional identity and selected product truth reference within the configured image-input capacity.",
+                    "message": "V3 cannot admit the selected Professional identity and product truth references within the configured renderer input capacity.",
                 }
             omitted = [
                 {
@@ -641,6 +670,7 @@ class CodexNativeImageGenPlanner:
                 "selected_product_truth_asset_ids": list(selected),
                 "omitted_product_truth": omitted,
                 "identity_source_asset_ids": list(identity_asset_ids),
+                "provider_reference_budget": dict(provider_budget),
                 "final_reference_source_sha256": final_hashes,
                 "selection_policy": "remote_brain_structured_frozen_metadata_only",
             }
@@ -654,6 +684,7 @@ class CodexNativeImageGenPlanner:
                     "selected_product_truth_asset_ids": list(selected),
                     "admitted_product_truth_asset_ids": list(selected),
                     "product_truth_pool_asset_ids": list(product_truth_ids),
+                    "provider_reference_budget": dict(provider_budget),
                     "omitted_product_truth": omitted,
                 },
             }
