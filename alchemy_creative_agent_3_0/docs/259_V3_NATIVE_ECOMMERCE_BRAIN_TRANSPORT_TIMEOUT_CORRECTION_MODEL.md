@@ -1066,6 +1066,60 @@ Current gate:
 - Real-image generation: still prohibited. A passing unit test or improved
   trace is not a six-image product delivery.
 
+## 13C. Post-`d93e307` live N=6 trace result: rejected section is `image_set_plan`
+
+Evidence:
+
+- `.controlled-validation/n6-trace-20260727T085000Z/reports/fresh-professional-n6-planning-report.json`
+- `.controlled-validation/n6-trace-20260727T085000Z/reports/brain-stage-trace.jsonl`
+- `.controlled-validation/n6-trace-20260727T085000Z/reports/planning-only-rejection-summary.json`
+
+Startup note:
+
+- The first wrapper attempt in this evidence root was invalid and is recorded
+  as `planner_invoked=false`: the outer launcher split the workspace path and
+  Python attempted to open `D:\AI\Alchemy`.
+- The corrected PowerShell native invocation passed the Python executable and
+  runner script as separate arguments, entered the runner, and returned exit
+  code 0. This second invocation is the only valid planning-only evidence in
+  this root.
+
+Observed facts from the valid planning-only run:
+
+- The real Professional native planner was invoked with the live consuming
+  project, active Character Card identity binding, and the four user product
+  truth images.
+- No ImageGen, MCP materialization, job, candidate, output, formal receipt,
+  slot, or activation mutation occurred.
+- The planning result remained blocked:
+  `codex_native_imagegen_remote_creative_brain_image_set_plan_invalid`.
+- Safe trace now records the exact first rejected section:
+  `remote_contract_rejected_sections=["image_set_plan"]`.
+- The deterministic `Doc259` focused regression proved the compact plan stage
+  does not require finalizer-only `canonical_provider_prompts`; missing
+  canonical prompts are accepted in the plan stage and remain strictly required
+  only in `provider_prompt_finalize`.
+
+Root-cause update:
+
+- `canonical_provider_prompts` absence is not the live N=6 blocker.
+- The current owning layer is the Remote Brain compact `image_set_plan`
+  contract. The observed rejection means the returned first-stage plan failed
+  exact-count/schema validation before a valid frozen N=6 plan could be built.
+- The next fix must inspect and test the exact `image_set_plan` shape expected
+  by `_matches_image_set_cardinality` and the E-Commerce compact schema. If the
+  Remote Brain response is missing the required dict, `image_count`, or exactly
+  six whole-image `shot_plan` entries, the correction belongs in the plan
+  prompt/schema contract or adapter validation diagnostics, not in timeout,
+  product-pool selection, identity binding, Provider capacity, or ImageGen.
+
+Current gate:
+
+- Planning-only remains blocked.
+- Before any retry, write deterministic regression for the `image_set_plan`
+  mismatch class and implement the smallest owning-layer correction.
+- Real-image generation remains prohibited.
+
 ## 14. Old-document conflict index
 
 This correction model does not delete historical documents. The following
