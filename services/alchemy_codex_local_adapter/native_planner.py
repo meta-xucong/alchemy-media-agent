@@ -1094,6 +1094,143 @@ class CodexNativeImageGenPlanner:
         return receipt
 
     @staticmethod
+    def planning_only_acceptance_summary(
+        report: dict[str, Any],
+        *,
+        expected_image_count: int | None = None,
+        required_identity_source_asset_ids: list[str] | tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Evaluate a native planning-only report without creating artifacts.
+
+        Controlled validation reports wrap the native planner result under
+        ``planner_result``.  The authoritative Brain receipt lives inside that
+        nested planner result, not at the report top level.  This helper keeps
+        the acceptance contract in one safe, value-light place so evidence
+        runners do not accidentally mark a successful two-stage plan/finalizer
+        path as failed.
+        """
+
+        if not isinstance(report, dict):
+            report = {}
+        planner_result = report.get("planner_result")
+        planner_result = planner_result if isinstance(planner_result, dict) else report
+        receipt = planner_result.get("planning_receipt")
+        receipt = receipt if isinstance(receipt, dict) else {}
+        raw_stages = receipt.get("stages")
+        stages = [
+            str(item)
+            for item in raw_stages
+            if str(item or "").strip()
+        ] if isinstance(raw_stages, list) else []
+        remote_brain_call_count = max(0, int(receipt.get("remote_brain_call_count") or 0))
+        outputs = planner_result.get("outputs")
+        outputs = outputs if isinstance(outputs, list) else []
+        expected_count = expected_image_count
+        if expected_count is None:
+            raw_expected = (
+                planner_result.get("requested_output_count")
+                or (report.get("request") or {}).get("requested_image_count")
+            )
+            try:
+                expected_count = int(raw_expected)
+            except (TypeError, ValueError):
+                expected_count = 0
+        mutation_delta = report.get("mutation_delta")
+        mutation_delta = mutation_delta if isinstance(mutation_delta, dict) else {}
+        required_identity = {
+            str(item).strip()
+            for item in required_identity_source_asset_ids
+            if str(item).strip()
+        }
+        selected_ok = True
+        refs_ok = True
+        no_leak_ok = True
+        identity_ok = True if not required_identity else bool(outputs)
+        pool_hash_parity_ok = True
+        first_pool_ids: list[str] | None = None
+        first_pool_hashes: dict[str, Any] | None = None
+        for output in outputs:
+            if not isinstance(output, dict):
+                selected_ok = False
+                refs_ok = False
+                continue
+            contract = output.get("reference_input_contract")
+            contract = contract if isinstance(contract, dict) else {}
+            selected = [
+                str(item).strip()
+                for item in (contract.get("selected_product_truth_asset_ids") or [])
+                if str(item).strip()
+            ]
+            pool = [
+                str(item).strip()
+                for item in (contract.get("product_truth_pool_asset_ids") or [])
+                if str(item).strip()
+            ]
+            admitted_product = {
+                str(item).strip()
+                for item in (contract.get("admitted_product_truth_asset_ids") or [])
+                if str(item).strip()
+            }
+            admitted_sources = {
+                str(item).strip()
+                for item in (contract.get("admitted_reference_source_asset_ids") or [])
+                if str(item).strip()
+            }
+            identity_sources = {
+                str(item).strip()
+                for item in (contract.get("professional_identity_source_asset_ids") or [])
+                if str(item).strip()
+            }
+            if not selected or len(selected) != len(set(selected)) or not set(selected).issubset(set(pool)):
+                selected_ok = False
+            if not set(selected).issubset(admitted_product):
+                refs_ok = False
+            try:
+                admitted_reference_count = int(contract.get("admitted_reference_count") or 0)
+            except (TypeError, ValueError):
+                admitted_reference_count = 0
+            reference_path_count = len(output.get("reference_image_paths") or [])
+            if (
+                admitted_reference_count > ProductionImageGenerationProvider.max_provider_reference_images
+                or reference_path_count > ProductionImageGenerationProvider.max_provider_reference_images
+            ):
+                refs_ok = False
+            if (set(pool) - set(selected)).intersection(admitted_sources):
+                no_leak_ok = False
+            if required_identity and not required_identity.issubset(identity_sources):
+                identity_ok = False
+            pool_hashes = contract.get("product_truth_pool_source_sha256")
+            pool_hashes = pool_hashes if isinstance(pool_hashes, dict) else {}
+            if first_pool_ids is None:
+                first_pool_ids = list(pool)
+                first_pool_hashes = dict(pool_hashes)
+            elif list(pool) != first_pool_ids or dict(pool_hashes) != (first_pool_hashes or {}):
+                pool_hash_parity_ok = False
+        return {
+            "remote_brain_two_stage": (
+                remote_brain_call_count >= 2
+                and "plan" in stages
+                and "provider_prompt_finalize" in stages
+            ),
+            "exact_n": (
+                planner_result.get("status") == "planned_for_codex_native_imagegen"
+                and expected_count > 0
+                and int(planner_result.get("requested_output_count") or 0) == expected_count
+                and len(outputs) == expected_count
+            ),
+            "selected_product_truth_from_pool_each_output": bool(outputs) and selected_ok,
+            "final_refs_lte_provider_cap_each_output": bool(outputs) and refs_ok,
+            "required_identity_source_present_each_output": identity_ok,
+            "no_unselected_product_truth_leak": bool(outputs) and no_leak_ok,
+            "pool_hash_parity_stable": bool(outputs) and pool_hash_parity_ok,
+            "mutation_delta_zero": not any(
+                int(value or 0) != 0
+                for value in mutation_delta.values()
+                if isinstance(value, (int, float))
+            ) if mutation_delta else False,
+        }
+
+    @staticmethod
     def _canonical_prompt_signing_provenance(
         llm_brain: dict[str, Any],
         *,

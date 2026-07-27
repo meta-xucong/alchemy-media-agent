@@ -1213,6 +1213,73 @@ def test_professional_ecommerce_native_planner_does_not_leak_unselected_product_
     assert product_ids[1] not in contract["reference_image_paths"] if "reference_image_paths" in contract else True
 
 
+def test_professional_ecommerce_planning_only_acceptance_reads_nested_receipt() -> None:
+    product_ids = ["product_a", "product_b"]
+    report = {
+        "planning_receipt": {"remote_brain_call_count": 0, "stages": []},
+        "planner_result": {
+            "status": "planned_for_codex_native_imagegen",
+            "requested_output_count": 2,
+            "planning_receipt": {
+                "remote_brain_call_count": 2,
+                "stages": ["plan", "provider_prompt_finalize"],
+            },
+            "outputs": [
+                {
+                    "reference_image_paths": ["root", "root_detail", "winner", "winner_detail", "product_a"],
+                    "reference_input_contract": {
+                        "selected_product_truth_asset_ids": ["product_a"],
+                        "product_truth_pool_asset_ids": product_ids,
+                        "product_truth_pool_source_sha256": {"product_a": "sha-a", "product_b": "sha-b"},
+                        "admitted_product_truth_asset_ids": ["product_a"],
+                        "admitted_reference_source_asset_ids": ["root", "winner", "product_a"],
+                        "professional_identity_source_asset_ids": ["root", "winner"],
+                        "admitted_reference_count": 5,
+                    },
+                },
+                {
+                    "reference_image_paths": ["root", "root_detail", "winner", "winner_detail", "product_b"],
+                    "reference_input_contract": {
+                        "selected_product_truth_asset_ids": ["product_b"],
+                        "product_truth_pool_asset_ids": product_ids,
+                        "product_truth_pool_source_sha256": {"product_a": "sha-a", "product_b": "sha-b"},
+                        "admitted_product_truth_asset_ids": ["product_b"],
+                        "admitted_reference_source_asset_ids": ["root", "winner", "product_b"],
+                        "professional_identity_source_asset_ids": ["root", "winner"],
+                        "admitted_reference_count": 5,
+                    },
+                },
+            ],
+        },
+        "mutation_delta": {
+            "jobs": 0,
+            "candidates": 0,
+            "handoffs": 0,
+            "outputs": 0,
+            "formal_receipts": 0,
+            "slots": 0,
+            "activations": 0,
+        },
+    }
+
+    summary = CodexNativeImageGenPlanner.planning_only_acceptance_summary(
+        report,
+        expected_image_count=2,
+        required_identity_source_asset_ids=["root", "winner"],
+    )
+
+    assert summary == {
+        "remote_brain_two_stage": True,
+        "exact_n": True,
+        "selected_product_truth_from_pool_each_output": True,
+        "final_refs_lte_provider_cap_each_output": True,
+        "required_identity_source_present_each_output": True,
+        "no_unselected_product_truth_leak": True,
+        "pool_hash_parity_stable": True,
+        "mutation_delta_zero": True,
+    }
+
+
 def test_professional_ecommerce_plan_fails_closed_when_binding_parts_are_missing(
     tmp_path: Path,
 ) -> None:
