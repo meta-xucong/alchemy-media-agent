@@ -979,7 +979,9 @@ class ScenarioRuntime:
             return
         if brain_result.audit.get("ecommerce_creative_risk_preflight_stop") is True:
             raise self._remote_creative_brain_block(
-                "ecommerce_creative_risk_preflight_blocked",
+                "ecommerce_creative_risk_preflight_invalid"
+                if brain_result.audit.get("ecommerce_creative_risk_preflight_invalid") is True
+                else "ecommerce_creative_risk_preflight_blocked",
                 brain_result,
             )
         if not brain_result.llm_used or brain_result.fallback_used:
@@ -5570,6 +5572,18 @@ class ScenarioRuntime:
         raw_preflight = context.get("creative_risk_preflight")
         if not isinstance(raw_preflight, dict):
             return None
+        if raw_preflight.get("status") == "invalid":
+            result = build_remote_required_result(
+                brain_request,
+                "ecommerce_creative_risk_preflight_invalid",
+            )
+            result.audit = {
+                **dict(result.audit or {}),
+                "ecommerce_creative_risk_preflight_stop": True,
+                "ecommerce_creative_risk_preflight_invalid": True,
+                "creative_fallback_executed": False,
+            }
+            return result
         try:
             preflight = EcommerceCreativeRiskPreflight.model_validate(raw_preflight)
         except ValueError:

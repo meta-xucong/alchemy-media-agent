@@ -378,3 +378,54 @@ def test_stop_true_preflight_blocks_before_remote_brain_or_business_mutation() -
     assert outcome["reason_code"] == "ecommerce_creative_risk_preflight_blocked"
     assert outcome["llm_used"] is False
     assert any("ecommerce_creative_risk_preflight_blocked" in item for item in result.warnings)
+
+
+@pytest.mark.parametrize(
+    "malformed_preflight",
+    (
+        _preflight(
+            risk_items_by_output=[
+                _risk_item(risk_family=["unknown_risk_family"]),
+            ]
+        ),
+        _preflight(raw_path="D:/private/should_not_cross.png"),
+        "not-a-dict-preflight",
+    ),
+)
+def test_malformed_preflight_blocks_before_remote_brain_without_leaking_payload(
+    malformed_preflight: object,
+) -> None:
+    provider = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one ecommerce image.",
+            "scenario_selection": {
+                "scenario_id": "ecommerce",
+                "parameters": {"requested_image_count": 1},
+            },
+            "metadata": {
+                "requested_image_count": 1,
+                "ecommerce_creative_context": {
+                    "context_id": "ctx_e24_invalid_gate",
+                    "source_version": "ecommerce_creative_context_v2",
+                    "product_truth": {"hard_facts": ["blue swimsuit"]},
+                    "creative_risk_preflight": malformed_preflight,
+                },
+            },
+            "product_profile": {"product_category": "kidswear swimsuit"},
+        }
+    )
+
+    assert result.status == ScenarioRuntimeStatus.BLOCKED
+    assert result.generation_result is None
+    assert provider.requests == []
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["reason_code"] == "ecommerce_creative_risk_preflight_invalid"
+    assert outcome["llm_used"] is False
+    assert any("ecommerce_creative_risk_preflight_invalid" in item for item in result.warnings)
+    serialized_result = result.model_dump_json()
+    assert "unknown_risk_family" not in serialized_result
+    assert "D:/private/should_not_cross.png" not in serialized_result
+    assert "not-a-dict-preflight" not in serialized_result

@@ -44,6 +44,12 @@ from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapa
 
 
 GENERAL_SCENARIO_ID = "general_creative"
+_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT = {
+    "contract_version": "ecommerce_creative_risk_preflight_v1",
+    "owner": "ecommerce_specialized_preflight",
+    "applies_to": "ecommerce",
+    "status": "invalid",
+}
 GENERAL_TEMPLATE_ID = "general_template"
 
 
@@ -945,14 +951,16 @@ def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | Non
 
 
 def _ecommerce_creative_risk_preflight(raw: Any) -> dict[str, Any] | None:
-    """Return a typed, public-safe E-Commerce creative risk preflight."""
+    """Return typed E-Commerce preflight or a sanitized invalid sentinel."""
 
-    if not isinstance(raw, dict):
+    if raw is None:
         return None
+    if not isinstance(raw, dict):
+        return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
     try:
         return EcommerceCreativeRiskPreflight.model_validate(raw).model_dump(mode="json")
     except ValueError:
-        return None
+        return dict(_INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT)
 
 
 def _photography_creative_context(metadata: dict[str, Any], scenario_id: str | None) -> dict[str, Any]:
