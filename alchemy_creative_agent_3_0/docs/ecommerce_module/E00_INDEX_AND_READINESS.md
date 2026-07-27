@@ -3,7 +3,7 @@
 Status: Doc127 Phase 4 acceptance preparation; one historical controlled Gate C
 case is recorded, while current-release Gate C re-certification and Gate D
 remain pending
-Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E20
+Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E24
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -28,8 +28,9 @@ commerce-specific deliverables.
 7. E18 LLM-native pre-acceptance closure and evidence record.
 8. E19 real Provider Gate C/D acceptance record.
 9. E20 Doc127 Phase 4 execution pack.
-10. This E-Commerce module family.
-11. Implementation notes and examples.
+10. E24 Creative Risk Preflight Contract, once reviewer-approved.
+11. This E-Commerce module family.
+12. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -94,6 +95,13 @@ E20 supplies the non-sensitive operator manifest and checklist for that work.
 An old desktop example remains ineligible unless the material owner provides
 an explicit rights record for the current evaluation.
 
+E24 is a documentation-only design proposal for an E-Commerce creative risk
+preflight contract. It records the boundary between already-implemented product
+truth, product truth pool selection, Remote Brain output planning, Professional
+Mode identity binding, and shared Human Realism. It must not be treated as
+runtime behavior until reviewer-approved implementation and isolation tests
+land.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -112,3 +120,6 @@ Before implementation starts, the team must have accepted:
     run only when the documented external prerequisites exist.
 12. E20's manifest and browser checklist, followed by the restricted evidence
     package and human decision required by Doc127 Phase 4.
+13. E24 creative risk preflight design, after reviewer acceptance, for any
+    future implementation that teaches E-Commerce to pass structured
+    pre-generation risk context to the Remote Brain.
