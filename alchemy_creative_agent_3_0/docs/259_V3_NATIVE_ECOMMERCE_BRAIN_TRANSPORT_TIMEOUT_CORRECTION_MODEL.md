@@ -162,6 +162,45 @@ elapsed_ms=301507
 mutation_delta=0
 ```
 
+After `c83c1d3`, a reviewer-authorized N=1 planning-only rerun with
+`V3_BRAIN_STAGE_TRACE_FILE` set gave a more precise boundary. One invalid
+runner instance was discarded append-only after a supervisor observed a script
+materialization inconsistency; the replacement `rerun1` runner was hash-recorded
+before launch and is the only accepted trace for this milestone.
+
+Accepted `rerun1` result:
+
+```text
+status=blocked
+code=codex_native_imagegen_remote_creative_brain_required_for_template
+remote_brain_stage=plan
+timeout_phase=read_timeout
+timeout_seconds=120.0
+elapsed_ms=120010
+response_started=true
+first_content_observed=true
+complete_response_observed=false
+json_parse_started=false
+json_parse_completed=false
+execution_budget.state=within_budget
+execution_budget.remaining_ms≈139673
+mutation_delta=0
+```
+
+Stage trace also showed that the request reached:
+
+```text
+native_planner_child -> ScenarioRuntime.plan_job -> capability_preparation
+-> brain_adapter.semantic_plan_provider_call -> brain_provider.stream_response_started
+-> repeated stream_first_content_observed
+```
+
+The trace did **not** reach plan `complete_response_observed`, JSON parse,
+post-plan capability boundaries, or `provider_prompt_finalize`. Therefore the
+current proven blocker at this milestone was the semantic plan stream read cap:
+the remote model began returning content, but the complete JSON plan was not
+received inside the 120s per-call transport cap.
+
 The earlier full plan-stage streaming diagnostic remains decisive evidence:
 the same real provider/model, full plan payload, `system_chars=20759`,
 `payload_chars=10075`, `max_tokens=8000`, and `stream=true` completed in
@@ -169,8 +208,50 @@ the same real provider/model, full plan payload, `system_chars=20759`,
 `done_ms=80819`, and `json_parse_ok=true`.
 
 Therefore the current `301507ms` MCP timeout must not be generalized as
-"external Brain plan is unavailable." The active investigation shifts to the
-post-plan boundary:
+"external Brain plan is unavailable." The `c83c1d3` trace narrows the active
+question further: distinguish whether the 120s read cap is too narrow for this
+complete plan response versus whether the model/route is unstable even with a
+small bounded extension.
+
+The reviewer-authorized direct plan-payload diagnostic has now completed. It
+used the same real provider/model/route and the same captured N=1 product
+constraints, with no business MCP entry point and mutation budget 0. The only
+diagnostic change was a bounded 150s read cap:
+
+```text
+report=direct-brain-plan-payload-diagnostic-150s-20260727.json
+stage=plan
+timeout_seconds=150.0
+elapsed_ms=105050
+system_chars=20759
+payload_chars=10075
+max_tokens=8000
+content_chars=9250
+status=completed
+json_parse_ok=true
+transport_trace.complete_response_observed=true
+transport_trace.json_parse_completed=true
+mutation_delta=0
+```
+
+This proves that, for the same full plan payload, the 120s read cap can be too
+narrow under the current upstream latency, while a small bounded diagnostic
+extension to 150s can complete the JSON response. This is still not a
+production timeout change: `provider_prompt_finalize` must be measured with an
+equivalent mutation=0 diagnostic before any finite two-stage budget contract is
+implemented.
+
+If the finalizer diagnostic also completes inside the bounded window, a future
+code change may align Doc175's per-call cap with evidence while preserving the
+finite two-stage budget and keeping outer native deadlines above the sum of
+the two Brain calls plus local orchestration margin. If finalizer remains
+unstable, the system must stop and classify the remaining blocker at the
+measured stage rather than deleting context, splitting N, falling back, or
+generating images.
+
+The post-plan boundary is now partially reopened by the successful plan
+diagnostic. The remaining unproven boundary is the finalizer and local
+post-plan path:
 
 - whether `provider_prompt_finalize` is slow, repeated, or followed by an
   unapproved recovery/resign loop;
@@ -187,6 +268,9 @@ Additional evidence:
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-99d3fa9-corrected-summary.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-99d3fa9-startup-failure.json`
 - `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/brain-streaming-diagnostic-n1-plan-20260727.json`
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-c83c1d3-stage-trace-invalid-runner.json`
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/mcp-planning-only-probe-n1-after-c83c1d3-stage-trace-rerun1-summary.json`
+- `.controlled-validation/kidswear-beach-product-set-mcp-20260726T172035Z/reports/direct-brain-plan-payload-diagnostic-150s-20260727.json`
 
 ## 2. Current authority rules
 
