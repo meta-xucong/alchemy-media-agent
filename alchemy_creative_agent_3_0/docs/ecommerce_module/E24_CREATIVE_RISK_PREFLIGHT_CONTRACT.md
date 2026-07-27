@@ -285,6 +285,10 @@ Standard E-Commerce can use:
 - expression/action risks;
 - product visibility versus emotion/scene tradeoff risks.
 
+These hints are limited to commerce situation and product-composition tradeoff
+context. Standard E-Commerce must not receive Professional identity-angle
+strategy, People Asset-derived hints, or identity view availability.
+
 It must not receive:
 
 - People Asset binding data;
@@ -315,8 +319,11 @@ risks, but it must not import E-Commerce product-on-model rules.
 
 ## 8. Learned Risk Families From The Controlled Run
 
-The following are generic enough to become E-Commerce or shared-risk concepts;
-they are not beachwear-only recipes.
+The following are generic enough to become E-Commerce concepts. They become
+shared only through existing Human Realism boundaries or through separately
+proven foundation work; they are not beachwear-only recipes and must not be
+promoted into shared Visual Capability merely because this controlled run found
+them useful.
 
 ### 8.1 Reference-role contamination
 

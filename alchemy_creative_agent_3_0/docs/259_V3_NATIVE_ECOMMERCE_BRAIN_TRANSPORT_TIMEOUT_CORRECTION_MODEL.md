@@ -1,6 +1,6 @@
 # Doc259 — V3 Native E-Commerce Brain Transport Timeout Correction Model
 
-Status: **controlled real-image materialization stopped: the frozen N=6 plan passed planning-only gates but its host-rendered visual direction was rejected as too static/card-like; a fresh zero-write planning-only correction is required before any further ImageGen.**
+Status: **state-reconciled correction record: historical planning and host-rendering blockers remain append-only evidence; the current `n6-dynschema` conversation-only host set has six artifacts and six host receipts with preliminary visual pass and zero business mutation, but it is not a formal V3 project delivery, receipt, slot, or activation.**
 
 Scope: Codex Local MCP / native planner, ScenarioRuntime Remote Brain transport diagnostics, and E-Commerce exact-count planning for the kidswear beach product set task.
 
@@ -10,10 +10,18 @@ Implementation note: this document started as the theory-first correction
 model. It is now also the implementation closure record for the focused
 transport-diagnostics, finite-budget, IPC result-return, Professional
 identity/product binding, and product-truth selection milestones. The original
-blocked facts remain historical evidence; the current active gate is the
-fresh live N=6 Professional E-Commerce planning read-timeout in Section 13A.
+blocked facts remain historical evidence. Sections 1 through 13J record the
+blocked gates and corrections in chronological order. The current reconciled
+state is Section 13K; any older statement that describes the current gate as a
+live N=6 planning read-timeout, capacity block, or rejected old frozen plan is
+historical/superseded for this product-set state.
 
-## 1. Current blocked fact pattern
+## 1. Historical blocked fact pattern
+
+This section records the original blocked state that opened Doc259. It remains
+evidence for the timeout and planning-contract correction history, but it is no
+longer the current product-set gate after the later `n6-dynschema`
+conversation-only host materialization summarized in Section 13K.
 
 The user requested six Taobao/Xiaohongshu-style beach product photos using the existing child model and four blue skirted swimsuit product references. The task must use the V3 professional/native MCP planning path and preserve the E-Commerce exact-count contract.
 
@@ -1694,6 +1702,81 @@ Brain-facing `provider_reference_budget` is also narrowed to counts and
 contract fields only.  The local audit receipt may retain identity source IDs,
 but the Remote Brain context does not need and must not receive those internal
 asset IDs merely to perform budget-aware selection.
+
+## 13K. Current state reconciliation: `n6-dynschema` conversation-only host set
+
+Evidence:
+
+- `.controlled-validation/n6-dynschema-20260727T123259Z/reports/fresh-professional-n6-planning-report.json`
+- `.controlled-validation/n6-dynschema-20260727T123259Z/reports/corrected-acceptance-summary.json`
+- `.controlled-validation/n6-dynschema-20260727T123259Z/reports/host-materialization-summary.json`
+- `.controlled-validation/n6-dynschema-20260727T123259Z/reports/final-readonly-delivery-quality-report.json`
+- `.controlled-validation/n6-dynschema-20260727T123259Z/reports/final-readonly-delivery-quality-report.md`
+
+This section supersedes any earlier Doc259 wording that still describes the
+current state as:
+
+- fresh live N=6 planning read-timeout;
+- image-set schema rejection;
+- product-truth selection capacity block;
+- old frozen catalogue-card visual direction rejection requiring a fresh
+  zero-write plan before any host artifact exists.
+
+Those records remain historically accurate for their own evidence roots, but
+they are not the current product-set state.
+
+Current reconciled state:
+
+```text
+evidence_root=.controlled-validation/n6-dynschema-20260727T123259Z
+scope=conversation-only host artifacts
+host_artifacts=6
+host_receipts=6
+reference_paths_per_artifact=5
+all_preliminary_pass=true
+business_mutation_delta_zero=true
+```
+
+The host materialization summary records stable business counts before and
+after the controlled host artifacts:
+
+```text
+jobs=109
+candidates=0
+handoffs=0
+outputs=21996
+formal_receipts=0
+slots=0
+activations=0
+mutation_delta.jobs/candidates/handoffs/outputs/formal_receipts/slots/activations=0
+```
+
+Interpretation:
+
+1. The `n6-dynschema` run produced a fresh conversation-only six-image host
+   artifact set, with six host receipts and no Product API / V3 project
+   business mutation.
+2. The set is valid as append-only visual evidence and quality-learning input
+   for future E-Commerce planning work.
+3. The set is not a formal V3 delivery. Host receipts are not FormalSlotReceipt
+   records, project outputs, slots, activations, public projection, or business
+   catalog entries.
+4. Later image-level user feedback and replacement attempts under the same
+   evidence root remain conversation-only visual iteration evidence. They must
+   not be used to claim official delivery unless a separate, authorized V3
+   persistence path writes formal records.
+5. E24's Creative Risk Preflight design should treat the `n6-dynschema`
+   artifacts as lessons from controlled visual iteration, not as runtime
+   authority by themselves.
+
+Current gate after this reconciliation:
+
+- Documentation may use the `n6-dynschema` evidence to design a future
+  E-Commerce creative risk preflight contract.
+- Runtime implementation remains unstarted for E24 until reviewer approval,
+  focused isolation tests, and a separate implementation authorization.
+- No further real ImageGen, business storage, receipt, slot, activation, or UI
+  projection is authorized by this state update.
 
 ## 14. Old-document conflict index
 
