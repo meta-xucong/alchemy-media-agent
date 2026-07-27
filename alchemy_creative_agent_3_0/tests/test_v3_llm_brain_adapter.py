@@ -356,6 +356,94 @@ def test_ecommerce_adapter_preserves_role_specific_lifestyle_context_for_both_br
     assert "ecommerce_creative_context" not in photography_request.metadata
 
 
+def test_ecommerce_adapter_preserves_creative_risk_preflight_for_both_brain_stages() -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    adapter = V3LLMBrainAdapter()
+    preflight = {
+        "contract_version": "ecommerce_creative_risk_preflight_v1",
+        "owner": "ecommerce_specialized_preflight",
+        "applies_to": "ecommerce",
+        "mode": "standard",
+        "risk_items_by_output": [
+            {
+                "output_index": 1,
+                "risk_family": ["template_expression", "pasted_face"],
+                "primary_goal_hint": "emotion_hero",
+                "risk_level": "medium",
+                "strategy_policy": ["action_triggered_expression", "avoid_static_presenter_grin"],
+                "stop": False,
+                "fail_closed_reason": None,
+                "professional_identity_hint": None,
+            }
+        ],
+        "global_risks": ["template_expression"],
+    }
+    metadata = {
+        "requested_image_count": 2,
+        "ecommerce_creative_context": {
+            "product_truth": {"hard_facts": ["blue swimsuit"]},
+            "creative_risk_preflight": preflight,
+            "asset_id": "internal_asset_id_must_not_leak",
+            "path": "D:/private/source.png",
+            "provider_payload": {"secret": True},
+        },
+    }
+
+    plan_request = adapter.build_request(
+        user_input="Create a two image ecommerce set.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata=metadata,
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+    finalizer_request = adapter.build_request(
+        user_input="Create a two image ecommerce set.",
+        stage="provider_prompt_finalize",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata=metadata,
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    for request in (plan_request, finalizer_request):
+        context = request.metadata["ecommerce_creative_context"]
+        assert context["creative_risk_preflight"] == preflight
+        assert "asset_id" not in context
+        assert "path" not in context
+        assert "provider_payload" not in context
+        payload = json.loads(build_remote_payload(request))
+        assert payload["ecommerce_creative_context"]["creative_risk_preflight"] == preflight
+        assert "template_expression" not in payload["remote_response_contract"]
+        assert "pasted_face" not in payload["remote_response_contract"]
+        serialized_payload = json.dumps(payload, ensure_ascii=False)
+        assert "internal_asset_id_must_not_leak" not in serialized_payload
+        assert "D:/private/source.png" not in serialized_payload
+        assert "secret" not in serialized_payload
+
+    general_request = adapter.build_request(
+        user_input="Create a general product-inspired poster.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        metadata=metadata,
+    )
+    photography_request = adapter.build_request(
+        user_input="Create a product photography session.",
+        stage="provider_prompt_finalize",
+        scenario_id="photography",
+        template_id="photographer_template",
+        metadata=metadata,
+        template_capability_policy=photography_capability_policy(),
+    )
+
+    assert "ecommerce_creative_context" not in general_request.metadata
+    assert "ecommerce_creative_context" not in photography_request.metadata
+    assert "creative_risk_preflight" not in build_remote_payload(general_request)
+    assert "creative_risk_preflight" not in build_remote_payload(photography_request)
+
+
 def test_nonhuman_multiframe_project_context_does_not_invent_person_or_product_evidence(monkeypatch) -> None:
     """A generic Project Mode transport record is not semantic subject truth."""
 

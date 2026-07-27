@@ -9,6 +9,9 @@ from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
     validate_ecommerce_creative_risk_preflight_payload,
 )
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 
 
 def _risk_item(index: int = 1, **overrides: object) -> dict[str, object]:
@@ -334,3 +337,44 @@ def test_preflight_contract_does_not_mutate_core_ecommerce_authorities() -> None
         "preflight_may_change_output_count": False,
         "preflight_may_author_provider_prompt": False,
     }
+
+
+def test_stop_true_preflight_blocks_before_remote_brain_or_business_mutation() -> None:
+    provider = EcommerceRemoteBrainTestProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+    stop_preflight = _preflight(
+        risk_items_by_output=[
+            _risk_item(
+                stop=True,
+                fail_closed_reason="provider_reference_capacity_unrepresentable",
+            )
+        ]
+    )
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create a two image ecommerce set.",
+            "scenario_selection": {
+                "scenario_id": "ecommerce",
+                "parameters": {"requested_image_count": 2},
+            },
+            "metadata": {
+                "requested_image_count": 2,
+                "ecommerce_creative_context": {
+                    "context_id": "ctx_e24_stop_gate",
+                    "source_version": "ecommerce_creative_context_v2",
+                    "product_truth": {"hard_facts": ["blue swimsuit"]},
+                    "creative_risk_preflight": stop_preflight,
+                },
+            },
+            "product_profile": {"product_category": "kidswear swimsuit"},
+        }
+    )
+
+    assert result.status == ScenarioRuntimeStatus.BLOCKED
+    assert result.generation_result is None
+    assert provider.requests == []
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["reason_code"] == "ecommerce_creative_risk_preflight_blocked"
+    assert outcome["llm_used"] is False
+    assert any("ecommerce_creative_risk_preflight_blocked" in item for item in result.warnings)

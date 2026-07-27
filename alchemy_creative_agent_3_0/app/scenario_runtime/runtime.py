@@ -11,6 +11,7 @@ from ..creative_core.pipeline import run_creative_planning, run_generation_loop
 from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
+from ..llm_brain.fallback import build_remote_required_result
 from ..llm_brain.stage_trace import record_stage_event
 from ..llm_brain.providers import (
     BrainDevelopmentalPresenceDecisionMissing,
@@ -23,6 +24,7 @@ from ..llm_brain.providers import (
     BrainTransportTimeoutError,
 )
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
+from ..scenario_packs.ecommerce import EcommerceCreativeRiskPreflight
 from ..shared_capabilities import (
     VISUAL_CAPABILITY_CLUSTER_ID,
     VISUAL_CLUSTER_CHILD_MODULE_IDS,
@@ -975,6 +977,11 @@ class ScenarioRuntime:
             return
         if self._uses_character_card_slot_delta_recovery(brain_result):
             return
+        if brain_result.audit.get("ecommerce_creative_risk_preflight_stop") is True:
+            raise self._remote_creative_brain_block(
+                "ecommerce_creative_risk_preflight_blocked",
+                brain_result,
+            )
         if not brain_result.llm_used or brain_result.fallback_used:
             raise self._remote_creative_brain_block(
                 "remote_brain_unauthorized"
@@ -5544,7 +5551,55 @@ class ScenarioRuntime:
             pre_activation_capabilities=pre_activation_capabilities,
             template_capability_policy=template_capability_policy,
         )
+        blocked_by_preflight = self._ecommerce_creative_risk_preflight_result(brain_request)
+        if blocked_by_preflight is not None:
+            return blocked_by_preflight
         return self.llm_brain_adapter.run(brain_request)
+
+    @staticmethod
+    def _ecommerce_creative_risk_preflight_result(
+        brain_request: BrainRunRequest,
+    ) -> BrainRunResult | None:
+        """Fail closed before remote Brain when E-Commerce preflight says stop."""
+
+        if str(brain_request.scenario_id or "").strip().lower() != "ecommerce":
+            return None
+        context = brain_request.metadata.get("ecommerce_creative_context")
+        if not isinstance(context, dict):
+            return None
+        raw_preflight = context.get("creative_risk_preflight")
+        if not isinstance(raw_preflight, dict):
+            return None
+        try:
+            preflight = EcommerceCreativeRiskPreflight.model_validate(raw_preflight)
+        except ValueError:
+            result = build_remote_required_result(
+                brain_request,
+                "ecommerce_creative_risk_preflight_invalid",
+            )
+            result.audit = {
+                **dict(result.audit or {}),
+                "ecommerce_creative_risk_preflight_stop": True,
+                "ecommerce_creative_risk_preflight_invalid": True,
+                "creative_fallback_executed": False,
+            }
+            return result
+        gate = preflight.planning_gate(
+            requested_image_count=brain_request.requested_image_count
+        )
+        if gate.get("status") != "blocked":
+            return None
+        result = build_remote_required_result(
+            brain_request,
+            "ecommerce_creative_risk_preflight_blocked",
+        )
+        result.audit = {
+            **dict(result.audit or {}),
+            "ecommerce_creative_risk_preflight_stop": True,
+            "ecommerce_creative_risk_preflight_gate": gate,
+            "creative_fallback_executed": False,
+        }
+        return result
 
     def _frozen_remote_creative_brain_for_execution(
         self,

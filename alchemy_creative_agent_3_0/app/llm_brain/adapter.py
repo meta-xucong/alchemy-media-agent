@@ -39,6 +39,7 @@ from .providers import (
     pop_transport_receipt,
 )
 from .stage_trace import record_stage_event
+from ..scenario_packs.ecommerce import EcommerceCreativeRiskPreflight
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapabilityPolicy, general_capability_policy
 
 
@@ -936,7 +937,22 @@ def _ecommerce_creative_context(metadata: dict[str, Any], scenario_id: str | Non
         "warnings",
         "metadata",
     }
-    return {key: raw[key] for key in allowed if key in raw}
+    context = {key: raw[key] for key in allowed if key in raw}
+    preflight = _ecommerce_creative_risk_preflight(raw.get("creative_risk_preflight"))
+    if preflight is not None:
+        context["creative_risk_preflight"] = preflight
+    return context
+
+
+def _ecommerce_creative_risk_preflight(raw: Any) -> dict[str, Any] | None:
+    """Return a typed, public-safe E-Commerce creative risk preflight."""
+
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return EcommerceCreativeRiskPreflight.model_validate(raw).model_dump(mode="json")
+    except ValueError:
+        return None
 
 
 def _photography_creative_context(metadata: dict[str, Any], scenario_id: str | None) -> dict[str, Any]:
