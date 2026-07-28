@@ -109,22 +109,25 @@ Applicability and receipt are separate gates:
 | Brain per-output receipt | Remote Brain returns `not_required`, `visible_body_required`, or `full_body_required` for each Professional output in scope. | Missing, null, unknown, duplicate, or contradictory receipt fails closed. |
 | Native materialization | Planner/provider projection proves required body reference is present in final materialized refs. | Missing body, wrong role, wrong view, or cap overflow fails closed. |
 
-## 3. Per-output closed requirement receipt
+## 3. Per-output closed requirement and body-view receipt
 
-The minimal contract is one field on the existing per-output
+The minimal contract adds two closed fields to the existing per-output
 `BrainOutputEvidenceContract` shape for applicable Professional outputs:
 
 ```text
 professional_body_proportion_requirement:
   not_required | visible_body_required | full_body_required
+
+professional_body_view_kind:
+  front_full | side_full | rear_full | null
 ```
 
 Rules:
 
 1. It is meaningful only in Professional mode.
 2. Standard and non-Professional requests must not receive or act on it.
-3. The shared response model may omit the field only for historical responses
-   and non-applicable outputs. Runtime must treat absence as invalid, not
+3. The shared response model may omit these fields only for historical
+   responses and non-applicable outputs. Runtime must treat absence as invalid, not
    ready, once the module-owned applicability gate has classified the output
    as Professional visible/full human body.
 4. Missing, null, or present-but-invalid values fail closed for applicable
@@ -139,7 +142,17 @@ Rules:
    in scope. Upper-body framing is not automatically exempt: if torso,
    neck/shoulder transition, arm/torso relation, or obvious body scale is
    visible, it is `visible_body_required`, not `not_required`.
-7. The field is evidence/receipt, not renderer prompt prose and not a local
+7. `professional_body_view_kind` is required for every
+   `visible_body_required` or `full_body_required` output and must be one of
+   `front_full`, `side_full`, or `rear_full`. It must match the module-owned
+   body view intent. Missing, null, unknown, or intent-mismatched values fail
+   closed before Host.
+8. When `professional_body_proportion_requirement` is `not_required`,
+   `professional_body_view_kind` must be absent or null. A `not_required`
+   receipt that carries `front_full`, `side_full`, or `rear_full` is
+   contradictory and fails closed; the planner/provider must not attach body
+   evidence merely because a view value is present.
+9. These fields are evidence/receipts, not renderer prompt prose and not a local
    creative decision.
 
 Module owners constrain the meaning before Remote Brain:
@@ -188,9 +201,13 @@ language tokens. When an exact required body view is unavailable, the output
 fails closed or remains body-proportion uncertified before Host. It must not
 substitute a face view, generated winner, raw path, or another body view.
 
-The selected body view must be recorded in the per-output reference contract as
-a closed `body_view_kind`, and the final Provider input plan must expose the
-same closed value without private asset/output identifiers.
+The selected body view must be recorded in the Remote Brain per-output
+evidence contract as `professional_body_view_kind`, then copied into the
+per-output reference contract as closed `body_view_kind`. The final Provider
+input plan and actual materialized reference assets must expose the same
+closed value without private asset/output identifiers. If the Brain receipt,
+native reference contract, Provider input plan, or materialized assets disagree
+on the body view, Host is blocked before materialization.
 
 ## 4. Body-only reference channel and policy
 
@@ -388,12 +405,18 @@ No historical asset is rewritten. Historical evidence that passed identity
 does not retroactively become body-proportion certified.
 
 For shared Brain-model compatibility, historical and non-applicable responses
-may have no `professional_body_proportion_requirement` field. That absence is
-not allowed to pass an applicable Professional visible/full-body output. When
-the module-owned applicability gate has classified an output as Professional
-visible/full human body, missing, null, or invalid values fail closed before
+may have no `professional_body_proportion_requirement` or
+`professional_body_view_kind` fields. That absence is not allowed to pass an
+applicable Professional visible/full-body output. When the module-owned
+applicability gate has classified an output as Professional visible/full human
+body, missing, null, invalid, or intent-mismatched values fail closed before
 Host. General/Standard non-Professional responses require no migration and
-must not act on the field.
+must not act on the fields.
+
+For `not_required` outputs, `professional_body_view_kind` remains absent or
+null. Historical or future payloads that combine `not_required` with
+`front_full`, `side_full`, or `rear_full` are contradictory receipts and must
+not be migrated into body admission.
 
 ## 9. Old-document superseded/narrowed index
 
@@ -422,7 +445,7 @@ planning or Host call:
 | --- | --- |
 | Resolver | Active body slots are read; missing/inactive/bad hash/bad receipt blocks or marks uncertified. |
 | No modeling mutation | Character Card generation, slots, review, activation, and storage are untouched. |
-| Brain receipt | `professional_body_proportion_requirement` accepts only `not_required`, `visible_body_required`, `full_body_required`; invalid/missing/null receipts fail closed for module-applicable visible/full-body outputs. |
+| Brain receipt | `professional_body_proportion_requirement` accepts only `not_required`, `visible_body_required`, `full_body_required`; `professional_body_view_kind` accepts only `front_full`, `side_full`, `rear_full`, or null; required outputs must carry a matching non-null view; `not_required` outputs must carry absent/null view; invalid/missing/null/intent-mismatched or contradictory receipts fail closed for module-applicable visible/full-body outputs. |
 | E-Commerce | visible/full product-on-person requires body; detail/print/face-only does not; product truth selection/cap/no-leakage unchanged. |
 | Photography | portrait/environmental visible/full human body requires body; still-life/landscape/animal/no-person does not; no product-truth leakage. |
 | General | only Professional visible/full human body consumes body; product/object/scene/nonhuman does not. |
