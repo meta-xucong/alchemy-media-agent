@@ -27,6 +27,10 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
+from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import (
+    ScenarioRuntimeResult,
+    ScenarioRuntimeStatus,
+)
 from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, Platform
 
 
@@ -72,6 +76,101 @@ def _service(name: str = "default") -> tuple[V3ProductApiService, BrandProfileSe
     brand_service = BrandProfileService(BrandProfileStore(_test_store_root(name)))
     balance = TrackingBalanceAdapter()
     return V3ProductApiService(brand_profile_service=brand_service, balance_adapter=balance), brand_service, balance
+
+
+def _remote_finalizer_timeout_outcome() -> dict[str, object]:
+    return {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+        "outcome_class": "remote_prompt_signoff_unavailable",
+        "llm_used": True,
+        "fallback_used": False,
+        "remote_provider_available": True,
+        "remote_error_class": "timeout",
+        "remote_brain_stage": "provider_prompt_finalize",
+        "remote_brain_transport_failure": {
+            "schema_version": "v3_brain_transport_failure_v1",
+            "stage": "provider_prompt_finalize",
+            "transport_error_class": "timeout",
+            "timeout_phase": "read_timeout",
+            "timeout_seconds": 210.0,
+            "elapsed_ms": 210013,
+            "response_started": True,
+            "first_content_observed": False,
+            "complete_response_observed": False,
+            "json_parse_started": False,
+            "json_parse_completed": False,
+            "raw_response": "secret raw response must not leak",
+            "provider_url": "https://provider.invalid/private",
+        },
+        "remote_brain_execution_budget": {
+            "logical_budget_seconds": 520.0,
+            "remaining_ms": 230683,
+            "state": "within_budget",
+            "prompt_path": "D:/unsafe/prompt.txt",
+        },
+        "raw_prompt": "private prompt must not leak",
+        "asset_id": "asset_internal_must_not_leak",
+        "provider_payload": {"secret": True},
+    }
+
+
+def _malformed_remote_outcome() -> dict[str, object]:
+    return {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "unknown_unreviewed_reason",
+        "remote_brain_stage": "D:/unsafe/stage.txt",
+        "raw_response": "secret malformed raw response must not leak",
+        "raw_prompt": "secret malformed prompt must not leak",
+        "provider_url": "https://provider.invalid/malformed",
+        "asset_id": "asset_malformed_internal",
+        "output_id": "output_malformed_internal",
+        "provider_payload": {"secret": True},
+    }
+
+
+class _RemoteFinalizerTimeoutRuntime:
+    def __init__(
+        self,
+        base_runtime: object,
+        *,
+        block_stage: str,
+        outcome: dict[str, object] | None = None,
+    ) -> None:
+        self.base_runtime = base_runtime
+        self.scenario_registry = base_runtime.scenario_registry
+        self.block_stage = block_stage
+        self.outcome = outcome or _remote_finalizer_timeout_outcome()
+
+    def plan_job(self, payload):  # noqa: ANN001, ANN201
+        selection = payload.get("scenario_selection", {}) if isinstance(payload, dict) else {}
+        resolution = self.scenario_registry.resolve(selection)
+        if self.block_stage == "plan":
+            return ScenarioRuntimeResult(
+                status=ScenarioRuntimeStatus.BLOCKED,
+                scenario_resolution=resolution,
+                warnings=[
+                    "capability_activation_failed: "
+                    "remote_creative_brain_prompt_signoff_unavailable"
+                ],
+                metadata={"remote_creative_brain_outcome": self.outcome},
+            )
+        return self.base_runtime.plan_job(payload)
+
+    def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+        selection = payload.get("scenario_selection", {}) if isinstance(payload, dict) else {}
+        resolution = self.scenario_registry.resolve(selection)
+        return ScenarioRuntimeResult(
+            status=ScenarioRuntimeStatus.BLOCKED,
+            scenario_resolution=resolution,
+            warnings=[
+                "capability_activation_failed: "
+                "remote_creative_brain_prompt_signoff_unavailable"
+            ],
+            metadata={"remote_creative_brain_outcome": self.outcome},
+        )
 
 
 def test_v3_product_api_creates_and_retrieves_creative_job_status() -> None:
@@ -398,9 +497,148 @@ def test_no_pixel_provider_failure_has_safe_reference_execution_projection() -> 
     assert "internal-binding-must-not-leak" not in public_payload
     assert "upstream private explanation" not in public_payload
     assert "image_edit_invalid_request_unattributed" in public_payload
+    assert "generation_lifecycle_failure" not in status.metadata
     assert service._public_metadata_projection(  # noqa: SLF001
         {"reference_input_execution": {"delivery_binding_id": "internal-binding-must-not-leak"}}
     ) == {}
+
+
+def test_remote_finalizer_timeout_block_has_closed_lifecycle_failure_on_create_and_generate() -> None:
+    create_service, _, _ = _service("remote_finalizer_timeout_create")
+    create_service.scenario_runtime = _RemoteFinalizerTimeoutRuntime(
+        create_service.scenario_runtime,
+        block_stage="plan",
+    )
+
+    planning_blocked = create_service.create_job({"user_input": "Create one neutral Character Card body view."})
+
+    generate_service, _, _ = _service("remote_finalizer_timeout_generate")
+    generated_candidate = generate_service.create_job({"user_input": "Create one neutral Character Card body view."})
+    generate_service.scenario_runtime = _RemoteFinalizerTimeoutRuntime(
+        generate_service.scenario_runtime,
+        block_stage="generate",
+    )
+    generation_blocked = generate_service.generate_job(
+        generated_candidate.job_id,
+        {"quality_mode": "strict"},
+    )
+
+    assert planning_blocked.status == ProductJobStatusValue.BLOCKED
+    assert generation_blocked.status == ProductJobStatusValue.BLOCKED
+    assert (
+        planning_blocked.metadata["generation_lifecycle_failure"]
+        == generation_blocked.metadata["generation_lifecycle_failure"]
+    )
+    failure = planning_blocked.metadata["generation_lifecycle_failure"]
+    assert failure == {
+        "schema_version": "v3_generation_lifecycle_failure_v1",
+        "status": "blocked",
+        "owner": "v3_product_api_runtime",
+        "failure_family": "remote_creative_brain",
+        "failure_code": "remote_creative_brain_prompt_signoff_unavailable",
+        "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+        "provider_request_started": False,
+        "remote_creative_brain_outcome": {
+            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "state": "blocked",
+            "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+            "outcome_class": "remote_prompt_signoff_unavailable",
+            "remote_error_class": "timeout",
+            "remote_brain_stage": "provider_prompt_finalize",
+            "remote_brain_transport_failure": {
+                "schema_version": "v3_brain_transport_failure_v1",
+                "stage": "provider_prompt_finalize",
+                "transport_error_class": "timeout",
+                "timeout_phase": "read_timeout",
+                "timeout_seconds": 210.0,
+                "elapsed_ms": 210013,
+                "response_started": True,
+                "first_content_observed": False,
+                "complete_response_observed": False,
+                "json_parse_started": False,
+                "json_parse_completed": False,
+            },
+            "remote_brain_execution_budget": {
+                "logical_budget_seconds": 520.0,
+                "remaining_ms": 230683,
+                "state": "within_budget",
+            },
+            "llm_used": True,
+            "fallback_used": False,
+            "remote_provider_available": True,
+        },
+    }
+    for status in (planning_blocked, generation_blocked):
+        payload = status.model_dump_json()
+        assert status.metadata["remote_creative_brain_outcome"] == failure[
+            "remote_creative_brain_outcome"
+        ]
+        assert "provider_failure_retry" not in status.metadata
+        assert "raw response" not in payload
+        assert "private prompt" not in payload
+        assert "provider.invalid" not in payload
+        assert "D:/unsafe" not in payload
+        assert "asset_internal_must_not_leak" not in payload
+    for service, status in (
+        (create_service, planning_blocked),
+        (generate_service, generation_blocked),
+    ):
+        record = service.job_store.get(status.job_id)
+        assert record is not None
+        durable_payload = record.request.model_dump_json()
+        assert record.request.metadata["remote_creative_brain_outcome"] == failure[
+            "remote_creative_brain_outcome"
+        ]
+        assert record.request.metadata["generation_lifecycle_failure"] == failure
+        assert "raw response" not in durable_payload
+        assert "private prompt" not in durable_payload
+        assert "provider.invalid" not in durable_payload
+        assert "D:/unsafe" not in durable_payload
+        assert "asset_internal_must_not_leak" not in durable_payload
+
+
+def test_malformed_remote_outcome_is_not_persisted_when_runtime_blocks_without_result() -> None:
+    create_service, _, _ = _service("malformed_remote_outcome_create")
+    create_service.scenario_runtime = _RemoteFinalizerTimeoutRuntime(
+        create_service.scenario_runtime,
+        block_stage="plan",
+        outcome=_malformed_remote_outcome(),
+    )
+
+    planning_blocked = create_service.create_job({"user_input": "Create one neutral Character Card body view."})
+
+    generate_service, _, _ = _service("malformed_remote_outcome_generate")
+    generated_candidate = generate_service.create_job({"user_input": "Create one neutral Character Card body view."})
+    generate_service.scenario_runtime = _RemoteFinalizerTimeoutRuntime(
+        generate_service.scenario_runtime,
+        block_stage="generate",
+        outcome=_malformed_remote_outcome(),
+    )
+    generation_blocked = generate_service.generate_job(
+        generated_candidate.job_id,
+        {"quality_mode": "strict"},
+    )
+
+    for service, status in (
+        (create_service, planning_blocked),
+        (generate_service, generation_blocked),
+    ):
+        assert status.status == ProductJobStatusValue.BLOCKED
+        assert "remote_creative_brain_outcome" not in status.metadata
+        assert "generation_lifecycle_failure" not in status.metadata
+        public_payload = status.model_dump_json()
+        record = service.job_store.get(status.job_id)
+        assert record is not None
+        durable_payload = record.request.model_dump_json()
+        for payload in (public_payload, durable_payload):
+            assert "unknown_unreviewed_reason" not in payload
+            assert "secret malformed raw response" not in payload
+            assert "secret malformed prompt" not in payload
+            assert "provider.invalid" not in payload
+            assert "D:/unsafe" not in payload
+            assert "asset_malformed_internal" not in payload
+            assert "output_malformed_internal" not in payload
+            assert "provider_payload" not in payload
 
 
 def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_job() -> None:

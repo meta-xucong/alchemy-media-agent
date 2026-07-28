@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -108,6 +109,56 @@ QUALITY_MODE_TO_MOCK_PROFILE = {
     "standard": "balanced",
     "explore": "needs_refinement",
     "strict": "balanced",
+}
+
+_REMOTE_BRAIN_LIFECYCLE_REASON_CODES = {
+    "remote_brain_unavailable",
+    "remote_brain_unauthorized",
+    "remote_creative_brain_prompt_signoff_unavailable",
+}
+
+_REMOTE_BRAIN_LIFECYCLE_OUTCOME_CLASSES = {
+    "remote_brain_unavailable",
+    "remote_brain_unauthorized",
+    "remote_prompt_signoff_unavailable",
+}
+
+_REMOTE_BRAIN_LIFECYCLE_ERROR_CLASSES = {
+    "timeout",
+    "budget_exceeded",
+    "provider_error",
+    "unavailable",
+    "upstream_transport_error",
+    "serialization_failure",
+    "contract_validation",
+    "unknown",
+}
+
+_REMOTE_BRAIN_LIFECYCLE_STAGES = {
+    "plan",
+    "semantic_plan",
+    "provider_prompt_finalize",
+    "generate",
+    "unknown",
+}
+
+_REMOTE_BRAIN_TRANSPORT_ERROR_CLASSES = {
+    "timeout",
+    "protocol_error",
+    "connection_error",
+    "read_error",
+    "http_status_error",
+    "upstream_transport_error",
+    "provider_error",
+    "unknown",
+}
+
+_REMOTE_BRAIN_TIMEOUT_PHASES = {
+    "connect_timeout",
+    "read_timeout",
+    "write_timeout",
+    "pool_timeout",
+    "unknown",
 }
 
 # A deterministic, local-only pixel fixture for the mock runtime.  It gives
@@ -1077,6 +1128,16 @@ class V3ProductApiService:
         }
         if activation_metadata:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
+        if planning_result is None:
+            generation_lifecycle_failure = self._generation_lifecycle_failure_from_runtime_result(runtime_result)
+            create_request.metadata = self._without_raw_remote_brain_outcome(create_request.metadata)
+            if generation_lifecycle_failure:
+                safe_remote_outcome = generation_lifecycle_failure["remote_creative_brain_outcome"]
+                create_request.metadata = {
+                    **dict(create_request.metadata or {}),
+                    "generation_lifecycle_failure": generation_lifecycle_failure,
+                    "remote_creative_brain_outcome": safe_remote_outcome,
+                }
         self._bind_capability_plan_provenance(create_request, job_id)
         self._bind_frozen_remote_creative_brain(create_request, runtime_result)
         self._bind_internal_copy_render_plan(create_request)
@@ -1850,6 +1911,17 @@ class V3ProductApiService:
             record.status = ProductJobStatusValue.BLOCKED
             record.scenario_resolution = generation_runtime_result.scenario_resolution
             record.capability_run = generation_runtime_result.capability_run
+            generation_lifecycle_failure = self._generation_lifecycle_failure_from_runtime_result(
+                generation_runtime_result
+            )
+            record.request.metadata = self._without_raw_remote_brain_outcome(record.request.metadata)
+            if generation_lifecycle_failure:
+                safe_remote_outcome = generation_lifecycle_failure["remote_creative_brain_outcome"]
+                record.request.metadata = {
+                    **dict(record.request.metadata),
+                    "generation_lifecycle_failure": generation_lifecycle_failure,
+                    "remote_creative_brain_outcome": safe_remote_outcome,
+                }
             record.warnings.extend(generation_runtime_result.warnings)
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
@@ -6727,6 +6799,150 @@ class V3ProductApiService:
                         friendly.append(message)
                 status_metadata["capability_summary"] = friendly
         return status_metadata
+
+    @classmethod
+    def _generation_lifecycle_failure_from_runtime_result(cls, runtime_result: Any) -> dict[str, Any] | None:
+        """Project a no-pixel runtime block into a public-safe lifecycle fact.
+
+        This is the Product API owning-layer projection for jobs that stop
+        before a PlanningResult/GenerationResult exists.  It is not a Provider
+        image failure, does not invent ``provider_failure_retry``, and keeps
+        raw Brain/provider response data out of durable public status.
+        """
+
+        metadata = dict(getattr(runtime_result, "metadata", {}) or {})
+        remote_outcome = metadata.get("remote_creative_brain_outcome")
+        if not isinstance(remote_outcome, dict):
+            return None
+        safe_remote_outcome = cls._public_remote_brain_lifecycle_outcome(remote_outcome)
+        if not safe_remote_outcome:
+            return None
+        reason_code = str(safe_remote_outcome.get("reason_code") or "").strip()
+        if not reason_code:
+            return None
+        return {
+            "schema_version": "v3_generation_lifecycle_failure_v1",
+            "status": "blocked",
+            "owner": "v3_product_api_runtime",
+            "failure_family": "remote_creative_brain",
+            "failure_code": reason_code,
+            "reason_code": reason_code,
+            "provider_request_started": False,
+            "remote_creative_brain_outcome": safe_remote_outcome,
+        }
+
+    @staticmethod
+    def _without_raw_remote_brain_outcome(metadata: dict[str, Any] | None) -> dict[str, Any]:
+        cleaned = dict(metadata or {})
+        cleaned.pop("remote_creative_brain_outcome", None)
+        return cleaned
+
+    @classmethod
+    def _public_remote_brain_lifecycle_outcome(cls, outcome: dict[str, Any]) -> dict[str, Any]:
+        reason_code = cls._closed_string(
+            outcome.get("reason_code"),
+            allowed=_REMOTE_BRAIN_LIFECYCLE_REASON_CODES,
+        )
+        if not reason_code:
+            return {}
+        projected: dict[str, Any] = {
+            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "state": "blocked",
+            "reason_code": reason_code,
+        }
+        outcome_class = cls._closed_string(
+            outcome.get("outcome_class"),
+            allowed=_REMOTE_BRAIN_LIFECYCLE_OUTCOME_CLASSES,
+        )
+        if outcome_class:
+            projected["outcome_class"] = outcome_class
+        remote_error_class = cls._closed_string(
+            outcome.get("remote_error_class"),
+            allowed=_REMOTE_BRAIN_LIFECYCLE_ERROR_CLASSES,
+        )
+        if remote_error_class:
+            projected["remote_error_class"] = remote_error_class
+        remote_stage = cls._closed_string(
+            outcome.get("remote_brain_stage"),
+            allowed=_REMOTE_BRAIN_LIFECYCLE_STAGES,
+        )
+        if remote_stage:
+            projected["remote_brain_stage"] = remote_stage
+        transport = cls._public_remote_brain_transport_failure(
+            outcome.get("remote_brain_transport_failure")
+        )
+        if transport:
+            projected["remote_brain_transport_failure"] = transport
+        budget = cls._public_remote_brain_execution_budget(
+            outcome.get("remote_brain_execution_budget") or outcome.get("execution_budget")
+        )
+        if budget:
+            projected["remote_brain_execution_budget"] = budget
+        for key in ("llm_used", "fallback_used", "remote_provider_available"):
+            if isinstance(outcome.get(key), bool):
+                projected[key] = outcome[key]
+        return projected
+
+    @classmethod
+    def _public_remote_brain_transport_failure(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        projected: dict[str, Any] = {
+            "schema_version": "v3_brain_transport_failure_v1",
+        }
+        stage = cls._closed_string(value.get("stage"), allowed=_REMOTE_BRAIN_LIFECYCLE_STAGES)
+        if stage:
+            projected["stage"] = stage
+        transport_error_class = cls._closed_string(
+            value.get("transport_error_class"),
+            allowed=_REMOTE_BRAIN_TRANSPORT_ERROR_CLASSES,
+        )
+        if transport_error_class:
+            projected["transport_error_class"] = transport_error_class
+        timeout_phase = cls._closed_string(value.get("timeout_phase"), allowed=_REMOTE_BRAIN_TIMEOUT_PHASES)
+        if timeout_phase:
+            projected["timeout_phase"] = timeout_phase
+        for key in ("timeout_seconds", "elapsed_ms"):
+            number = cls._safe_public_number(value.get(key))
+            if number is not None:
+                projected[key] = number
+        for key in (
+            "response_started",
+            "first_content_observed",
+            "complete_response_observed",
+            "json_parse_started",
+            "json_parse_completed",
+        ):
+            if isinstance(value.get(key), bool):
+                projected[key] = value[key]
+        return projected if len(projected) > 1 else {}
+
+    @classmethod
+    def _public_remote_brain_execution_budget(cls, value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        projected: dict[str, Any] = {}
+        for key in ("logical_budget_seconds", "remaining_ms"):
+            number = cls._safe_public_number(value.get(key))
+            if number is not None:
+                projected[key] = number
+        state = cls._closed_string(value.get("state"), allowed={"within_budget", "exhausted", "unknown"})
+        if state:
+            projected["state"] = state
+        return projected
+
+    @staticmethod
+    def _closed_string(value: Any, *, allowed: set[str]) -> str:
+        text = str(value or "").strip()
+        return text if text in allowed else ""
+
+    @staticmethod
+    def _safe_public_number(value: Any) -> int | float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if not math.isfinite(float(value)):
+            return None
+        return value
 
     @staticmethod
     def _public_provider_failure_retry(summary: dict[str, Any]) -> dict[str, Any]:

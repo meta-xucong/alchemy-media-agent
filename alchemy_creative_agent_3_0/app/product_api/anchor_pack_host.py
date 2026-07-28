@@ -68,6 +68,12 @@ from ..visual_assets.contracts import (
 from .contracts import ProductJobStatusValue
 from .service import V3ProductApiService
 
+_ANCHOR_REMOTE_FAILURE_CODES = {
+    "remote_brain_unavailable",
+    "remote_brain_unauthorized",
+    "remote_creative_brain_prompt_signoff_unavailable",
+}
+
 
 class ProductApiAnchorPackPreparationHost:
     """Concrete host that keeps all creative and pixel work in shared V3."""
@@ -536,12 +542,9 @@ class ProductApiAnchorPackPreparationHost:
                 status_value = ProductJobStatusValue.PLANNED
         if status_value != ProductJobStatusValue.PLANNED:
             record = self.product_service.get_job_record(status.job_id)
-            request_metadata = dict(record.request.metadata) if record is not None else {}
-            remote_outcome = request_metadata.get("remote_creative_brain_outcome")
-            if isinstance(remote_outcome, dict):
-                reason_code = str(remote_outcome.get("reason_code") or "").strip()
-                if reason_code in {"remote_brain_unavailable", "remote_brain_unauthorized"}:
-                    raise AnchorCandidateUnavailable(reason_code)
+            failure_code = self._candidate_failure_code_from_blocked_status(status, record)
+            if failure_code:
+                raise AnchorCandidateUnavailable(failure_code)
             raise AnchorCandidateUnavailable("professional_anchor_candidate_planning_blocked")
         self._stage_plan_source_job_ids.setdefault(stage_key, status_job_id)
         # The stage owns one shared bounded repair. A Provider failure with no
@@ -611,6 +614,9 @@ class ProductApiAnchorPackPreparationHost:
                     else "mcp_materialization_failed",
                     mcp_handoff_id=handoff_id,
                 )
+            failure_code = self._candidate_failure_code_from_blocked_status(generation)
+            if failure_code:
+                raise AnchorCandidateUnavailable(failure_code)
             raise AnchorCandidateUnavailable("professional_anchor_candidate_generation_failed")
         candidate, review = self._candidate_and_review(status_job_id, request)
         self._review_by_candidate_id[candidate.candidate_id] = review
@@ -1551,12 +1557,9 @@ class ProductApiAnchorPackPreparationHost:
                     self.product_service.job_store.save(status_record)
         if status_value != ProductJobStatusValue.PLANNED:
             record = self.product_service.get_job_record(status_job_id)
-            request_metadata = dict(record.request.metadata) if record is not None else {}
-            remote_outcome = request_metadata.get("remote_creative_brain_outcome")
-            if isinstance(remote_outcome, dict):
-                reason_code = str(remote_outcome.get("reason_code") or "").strip()
-                if reason_code in {"remote_brain_unavailable", "remote_brain_unauthorized"}:
-                    raise AnchorCandidateUnavailable(reason_code)
+            failure_code = self._candidate_failure_code_from_blocked_status(status, record)
+            if failure_code:
+                raise AnchorCandidateUnavailable(failure_code)
             raise AnchorCandidateUnavailable("character_card_candidate_planning_blocked")
         generation = self.product_service.generate_job(
             status_job_id,
@@ -1621,10 +1624,53 @@ class ProductApiAnchorPackPreparationHost:
                         else "mcp_materialization_failed"
                     )
                 raise AnchorCandidateUnavailable(failure_code, mcp_handoff_id=handoff_id)
+            failure_code = self._candidate_failure_code_from_blocked_status(generation)
+            if failure_code:
+                raise AnchorCandidateUnavailable(failure_code)
             raise AnchorCandidateUnavailable("character_card_candidate_generation_failed")
         candidate, review = self._character_card_candidate_and_review(status_job_id, request)
         self._character_card_reviews[candidate.candidate_id] = review
         return candidate
+
+    @staticmethod
+    def _candidate_failure_code_from_blocked_status(status: Any, record: Any | None = None) -> str:
+        """Return a closed public failure code for a blocked candidate job.
+
+        Product API owns the durable failure projection.  The Anchor host only
+        maps that already-safe code into Character Card/anchor candidate
+        availability; it must not inspect raw provider responses, prompts,
+        paths, URLs, or internal asset IDs.
+        """
+
+        metadata_sources: list[dict[str, Any]] = []
+        status_metadata = getattr(status, "metadata", None)
+        if isinstance(status_metadata, dict):
+            metadata_sources.append(status_metadata)
+        record_request = getattr(record, "request", None)
+        record_metadata = getattr(record_request, "metadata", None)
+        if isinstance(record_metadata, dict):
+            metadata_sources.append(record_metadata)
+        for metadata in metadata_sources:
+            lifecycle_failure = metadata.get("generation_lifecycle_failure")
+            if isinstance(lifecycle_failure, dict):
+                code = str(
+                    lifecycle_failure.get("failure_code")
+                    or lifecycle_failure.get("reason_code")
+                    or ""
+                ).strip()
+                if code in _ANCHOR_REMOTE_FAILURE_CODES:
+                    return code
+                remote_outcome = lifecycle_failure.get("remote_creative_brain_outcome")
+                if isinstance(remote_outcome, dict):
+                    code = str(remote_outcome.get("reason_code") or "").strip()
+                    if code in _ANCHOR_REMOTE_FAILURE_CODES:
+                        return code
+            remote_outcome = metadata.get("remote_creative_brain_outcome")
+            if isinstance(remote_outcome, dict):
+                code = str(remote_outcome.get("reason_code") or "").strip()
+                if code in _ANCHOR_REMOTE_FAILURE_CODES:
+                    return code
+        return ""
 
     @staticmethod
     def _character_card_prior_review_repair_metadata(

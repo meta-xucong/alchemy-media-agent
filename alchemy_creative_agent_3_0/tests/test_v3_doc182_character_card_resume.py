@@ -321,6 +321,127 @@ def test_doc191_character_card_stage_surfaces_remote_brain_unavailable() -> None
     assert exc_info.value.failure_code == "remote_brain_unavailable"
 
 
+def test_doc191_character_card_generation_surfaces_remote_finalizer_lifecycle_failure() -> None:
+    class _BlockedGenerationService:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.generated_calls: list[tuple[str, dict]] = []
+
+        def create_professional_character_card_stage_job(self, *_args, **_kwargs):
+            return ProductJobStatus(
+                job_id="job_doc191_finalizer_blocked",
+                status=ProductJobStatusValue.PLANNED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+            )
+
+        def generate_job(self, job_id, request):  # noqa: ANN001, ANN201
+            self.generated_calls.append((job_id, request))
+            return ProductJobStatus(
+                job_id=job_id,
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+                metadata={
+                    "generation_lifecycle_failure": {
+                        "schema_version": "v3_generation_lifecycle_failure_v1",
+                        "status": "blocked",
+                        "owner": "v3_product_api_runtime",
+                        "failure_family": "remote_creative_brain",
+                        "failure_code": "remote_creative_brain_prompt_signoff_unavailable",
+                        "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+                        "provider_request_started": False,
+                        "remote_creative_brain_outcome": {
+                            "schema_version": "v3_remote_creative_brain_outcome_v1",
+                            "state": "blocked",
+                            "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+                            "remote_error_class": "timeout",
+                            "remote_brain_stage": "provider_prompt_finalize",
+                        },
+                    }
+                },
+            )
+
+        def get_job_record(self, _job_id):  # noqa: ANN001, ANN201
+            return SimpleNamespace(generation_result=None, request=SimpleNamespace(metadata={}))
+
+    service = _BlockedGenerationService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc191_finalizer",
+        people_asset_id="people_doc191_finalizer",
+        card_version_id="card_doc191_finalizer",
+        module="body_silhouette",
+        slot_key="body.rear_full",
+        candidate_index=2,
+        reference_output_ids=["front_winner", "side_winner", "rear_prior"],
+        source_class="brain_inferred",
+        user_intent="scene neutral body silhouette rear view",
+        generation_channel="provider",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        host.generate(request)
+
+    assert exc_info.value.failure_code == "remote_creative_brain_prompt_signoff_unavailable"
+    assert service.generated_calls[0][1]["metadata"]["disable_visual_auto_retry"] is True
+    assert "provider_failure_retry" not in service.generated_calls[0][1]["metadata"]
+
+
+def test_doc191_character_card_planning_surfaces_remote_finalizer_lifecycle_failure() -> None:
+    class _BlockedPlanningService:
+        visual_asset_catalog = None
+
+        def create_professional_character_card_stage_job(self, *_args, **_kwargs):
+            return ProductJobStatus(
+                job_id="job_doc191_finalizer_planning_blocked",
+                status=ProductJobStatusValue.BLOCKED,
+                api_namespace="/api/v3/creative-agent",
+                ui_entry_route="/",
+                metadata={
+                    "generation_lifecycle_failure": {
+                        "schema_version": "v3_generation_lifecycle_failure_v1",
+                        "status": "blocked",
+                        "owner": "v3_product_api_runtime",
+                        "failure_family": "remote_creative_brain",
+                        "failure_code": "remote_creative_brain_prompt_signoff_unavailable",
+                        "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+                        "provider_request_started": False,
+                        "remote_creative_brain_outcome": {
+                            "schema_version": "v3_remote_creative_brain_outcome_v1",
+                            "state": "blocked",
+                            "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+                            "remote_error_class": "timeout",
+                            "remote_brain_stage": "provider_prompt_finalize",
+                        },
+                    }
+                },
+            )
+
+        def get_job_record(self, _job_id):  # noqa: ANN001, ANN201
+            return None
+
+    host = ProductApiAnchorPackPreparationHost(_BlockedPlanningService())  # type: ignore[arg-type]
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc191_finalizer_plan",
+        people_asset_id="people_doc191_finalizer_plan",
+        card_version_id="card_doc191_finalizer_plan",
+        module="body_silhouette",
+        slot_key="body.rear_full",
+        candidate_index=2,
+        reference_output_ids=["front_winner", "side_winner", "rear_prior"],
+        source_class="brain_inferred",
+        user_intent="scene neutral body silhouette rear view",
+        generation_channel="provider",
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        host.generate(request)
+
+    assert exc_info.value.failure_code == "remote_creative_brain_prompt_signoff_unavailable"
+
+
 def test_doc191_character_card_mcp_stage_resumes_existing_handoff_job() -> None:
     class _OutputStore:
         def list_by_job(self, job_id):  # noqa: ANN001, ANN201
