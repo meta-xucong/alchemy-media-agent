@@ -74,7 +74,11 @@ or contradictory Remote Brain receipts fail closed before host materialization.
 
 1. `CodexNativeImageGenPlanner` detects only explicit Professional E-Commerce
    poolside seated/standing exact-N=2 coverage and attaches the typed contract
-   to `ecommerce_creative_context`.
+   to `ecommerce_creative_context`. Obvious negative or exclusive wording such
+   as `no standing`, `do not create a standing image`, `avoid standing`,
+   `exclude standing`, `seated only`, or `standing only` must not produce this
+   hard contract. This bridge is intentionally conservative until a higher
+   server-owned structured deliverable-intent owner exists.
 2. `V3LLMBrainAdapter` allowlists and validates the typed contract. Present but
    invalid payloads become a sanitized invalid sentinel and are blocked before
    Remote Brain.
@@ -99,6 +103,35 @@ The contract preserves:
 - no business job/candidate/output/formal receipt/slot/activation writes from
   planning-only validation.
 
+## 3A. Shared Brain response schema compatibility
+
+`BrainOutputEvidenceContract` is a shared Remote Brain response model. E25 adds
+optional fields to that model:
+
+- `professional_ecommerce_pose_role`
+- `standing_pose_requirements`
+
+Compatibility impact:
+
+- The fields are optional and require no migration for historical General,
+  Photography, Standard, or non-pose E-Commerce responses.
+- The compact return schema emits these fields only when
+  `ecommerce_creative_context.professional_ecommerce_pose_contract` is present
+  and validated.
+- General and Photography payloads must not receive the E25 fields or
+  poolside role vocabulary.
+- A present-but-invalid pose contract is converted by the adapter into a
+  sanitized invalid sentinel and blocked by Runtime before Remote Brain; raw
+  invalid values are not forwarded.
+- Missing, unknown, duplicate, or contradictory pose receipts from Remote Brain
+  are rejected by the Professional E-Commerce runtime path before host
+  materialization.
+
+This compatibility note narrows the shared schema change to a dormant optional
+projection. It does not authorize any shared pose rule, General Template
+behavior, Provider behavior, MCP behavior, storage mutation, receipt creation,
+slot write, or activation.
+
 ## 4. Isolation
 
 This document does not authorize:
@@ -118,6 +151,8 @@ accepted delivery and must not be used to claim standing coverage.
 Focused deterministic tests must cover:
 
 - valid Professional E-Commerce poolside exact-N=2 contract projection;
+- negative-intent, missing-role, and non-poolside isolation so the contract is
+  not created from token coincidence;
 - missing pose receipt fail-closed before materialization;
 - wrong `standing_poolside` requirements fail-closed before materialization;
 - wrong output role fail-closed before materialization;

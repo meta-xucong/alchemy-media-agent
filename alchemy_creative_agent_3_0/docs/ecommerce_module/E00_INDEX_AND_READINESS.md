@@ -105,7 +105,11 @@ and shared Human Realism. Later phases still require their own reviewer gates.
 E25 records the Professional E-Commerce pose acceptance correction for explicit
 deliverable coverage such as a two-image seated/standing poolside set. It is a
 Professional E-Commerce deliverable contract only; it must not become a shared
-Human Realism, General Template, Provider, or E24 risk-preflight rule.
+Human Realism, General Template, Provider, or E24 risk-preflight rule. Its
+shared Brain response fields are optional compatibility fields that emit only
+when the validated Professional E-Commerce pose contract is present; historical
+General, Photography, Standard, and non-pose E-Commerce responses require no
+migration.
 
 ## Definition of preparation complete
 

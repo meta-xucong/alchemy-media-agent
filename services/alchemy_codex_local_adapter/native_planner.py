@@ -588,7 +588,10 @@ class CodexNativeImageGenPlanner:
     ) -> dict[str, Any] | None:
         if request.template_id != "ecommerce_template" or request.requested_image_count != 2:
             return None
-        tokens = set(re.findall(r"[a-z]+", request.user_input.lower()))
+        user_input = " ".join(request.user_input.lower().replace("’", "'").split())
+        if CodexNativeImageGenPlanner._has_negated_poolside_pose_coverage(user_input):
+            return None
+        tokens = set(re.findall(r"[a-z]+", user_input))
         has_pool_context = bool(tokens.intersection({"pool", "poolside"}))
         has_seated = bool(tokens.intersection({"sit", "sits", "sitting", "seated"}))
         has_standing = bool(tokens.intersection({"stand", "stands", "standing"}))
@@ -597,6 +600,24 @@ class CodexNativeImageGenPlanner:
         return build_professional_ecommerce_poolside_pose_contract(
             requested_image_count=request.requested_image_count
         ).model_dump(mode="json")
+
+    @staticmethod
+    def _has_negated_poolside_pose_coverage(user_input: str) -> bool:
+        """Reject obvious negative pose coverage before creating a hard contract."""
+
+        standing = r"(?:stand|stands|standing)"
+        seated = r"(?:sit|sits|sitting|seated)"
+        negator = r"(?:do\s+not|don't|dont|no|not|never|avoid|exclude|without)"
+        separator = r"[\w\s'’,-]{0,80}"
+        patterns = (
+            rf"\b{negator}\b{separator}\b{standing}\b",
+            rf"\b{standing}\b{separator}\b(?:not|never|excluded|forbidden|prohibited|disallowed)\b",
+            rf"\b{seated}\b{separator}\bonly\b",
+            rf"\bonly\b{separator}\b{seated}\b",
+            rf"\b{standing}\b{separator}\bonly\b",
+            rf"\bonly\b{separator}\b{standing}\b",
+        )
+        return any(re.search(pattern, user_input) for pattern in patterns)
 
     def _professional_product_truth_selection_by_asset(
         self,

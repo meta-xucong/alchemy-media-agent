@@ -896,6 +896,64 @@ def test_professional_ecommerce_poolside_pose_contract_is_frozen_and_projected(
     ]
 
 
+@pytest.mark.parametrize(
+    "user_input",
+    [
+        "Poolside set, do not create a standing image; seated only.",
+        "Poolside set with no standing image, seated only.",
+        "Poolside set; avoid standing image and keep seated product proof.",
+        "Poolside set; exclude standing view and show seated product proof.",
+        "Poolside seated portrait only.",
+        "Poolside standing image only.",
+        "Studio set with one seated image and one standing image.",
+    ],
+)
+def test_professional_ecommerce_pose_contract_requires_positive_poolside_coverage(
+    tmp_path: Path,
+    user_input: str,
+) -> None:
+    product = _write_png(tmp_path / "product.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            requested_image_count=2,
+            user_input=user_input,
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+        )
+    )
+
+    assert CodexNativeImageGenPlanner._professional_ecommerce_pose_contract_for_request(request) is None
+
+
+def test_professional_ecommerce_pose_contract_accepts_explicit_positive_poolside_coverage(
+    tmp_path: Path,
+) -> None:
+    product = _write_png(tmp_path / "product.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            requested_image_count=2,
+            user_input=(
+                "Professional poolside product set with exactly one seated image "
+                "and one standing image."
+            ),
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+        )
+    )
+
+    contract = CodexNativeImageGenPlanner._professional_ecommerce_pose_contract_for_request(request)
+
+    assert contract is not None
+    assert [item["pose_role"] for item in contract["required_pose_by_output"]] == [
+        "seated_poolside",
+        "standing_poolside",
+    ]
+
+
 @pytest.mark.parametrize("pose_fault", ["missing", "wrong_standing", "wrong_role"])
 def test_professional_ecommerce_pose_contract_fault_blocks_before_materialization(
     tmp_path: Path,
