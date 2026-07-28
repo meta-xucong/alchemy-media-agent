@@ -22,6 +22,17 @@ tests are complete.
 > ownership, safe admission, Brain-first, and evidence-parity rules continue to
 > govern those modules.
 
+> **Professional body-proportion runtime narrowing (document-only proposal):**
+> Face Identity channel ownership remains current for face-only and
+> upper-body/detail Professional outputs. It is not sufficient to certify a
+> visible-body or full-body Professional output's body scale,
+> neck/shoulder transition, torso/limb proportion, or developmental-stage
+> coherence. Those runtime outputs must consume an active Character Card Body
+> Silhouette through a body-only reference channel, or fail closed / remain
+> body-proportion uncertified before Host. This narrowing does not change
+> Character Card Body Silhouette generation, slot review, activation, or asset
+> storage.
+
 The purpose is to make Professional Mode largely invisible during normal use:
 the user explicitly chooses Professional Mode and a visual asset, while the
 backend automatically decides which parts of every other reference are
@@ -138,6 +149,12 @@ Contract rules:
 The current People Asset binding is adapted into one claim. Future Product,
 Brand, Landscape, Body, or other modules add claims through the same adapter;
 they do not modify the Face Identity module or create a second runtime.
+
+Historical/narrowed note: references in this document to future `Body` modules
+are about channel-ownership extensibility. For the current Professional
+runtime projection, the approved source is the existing active Character Card
+Body Silhouette. It must be projected as body-only evidence, not as a
+`face_reference` or portrait-identity derivative.
 
 ## 4. Professional Asset Binding Set
 

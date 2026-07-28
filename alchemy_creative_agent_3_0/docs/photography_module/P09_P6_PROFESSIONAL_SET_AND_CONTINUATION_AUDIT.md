@@ -37,6 +37,15 @@ framing, camera relation, decisive moment, depth/focus and motion. All roles
 retain one immutable photographer-profile checksum, color/finish anchor and
 reference-truth contract.
 
+> **Narrowed by Professional body-proportion runtime projection design:** The
+> Photography role contract remains Photography-owned. For Professional
+> Photography outputs that are portrait/environmental human visible-body or
+> full-body roles, face/reference truth alone is not enough to certify body
+> proportion. Those outputs must use an active Character Card Body Silhouette
+> through a body-only runtime reference, or block/remain body-proportion
+> uncertified before Host. Still-life, landscape, animal, no-person, and
+> face/detail-only Photography outputs must not read Character Card body.
+
 `PhotographyProfessionalSetPlan` records:
 
 - the Photography-owned role order and shot IDs;

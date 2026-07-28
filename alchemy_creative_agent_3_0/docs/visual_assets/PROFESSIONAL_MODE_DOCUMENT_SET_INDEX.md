@@ -5,6 +5,7 @@
 ```text
 DOC173_LIBRARY_FIRST_RECONSTRUCTION_AUTHORITATIVE
 DOC178_CHARACTER_CARD_MODULE_EXTENSION_AUTHORITATIVE
+PROFESSIONAL_BODY_PROPORTION_RUNTIME_PROJECTION_DOCUMENTED_PENDING_REVIEW
 DOC182_CHARACTER_CARD_RESUMABLE_FAILURE_RECOVERY_AUTHORITATIVE
 LEGACY_PROJECT_SCOPED_COMPATIBILITY_RETAINED_READ_ONLY
 FRONTEND_RECONSTRUCTION_REQUIRED
@@ -146,6 +147,19 @@ backend-first implementation and test gates before frontend work
 It is the backend authority for keeping Professional Mode invisible during
 normal use while preventing non-selected references from overriding an active
 Visual Asset's owned channels.
+
+### Body-Proportion Runtime Projection Design
+
+`PROFESSIONAL_MODE_BODY_PROPORTION_RUNTIME_PROJECTION_DESIGN.md`
+
+Documents the proposed runtime-only projection for existing active Character
+Card Body Silhouette evidence into Professional visible/full-body image
+outputs. It does not change Doc178 Body Silhouette generation, slots, review,
+activation, or asset storage. It narrows historical Face-Identity-only
+Professional runtime wording: root portrait plus selected face winner remains
+valid for face-only and upper-body/detail outputs, but visible/full-body
+Professional outputs require a body-only reference admission gate or must be
+blocked/marked uncertified before Host.
 
 ### M5 Real-Pixel Acceptance Record
 

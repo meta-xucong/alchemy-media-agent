@@ -291,6 +291,16 @@ root provenance and consent remain auditable without raw paths or secrets
 body/hair/styling modules are absent and cannot activate from legacy metadata
 ```
 
+> **Narrowed by Professional body-proportion runtime projection design:** The
+> root/front/three-quarter/profile evidence chain certifies Face Identity
+> module readiness and face/view continuity. It does not certify visible-body
+> or full-body proportions in downstream Professional outputs. If a future
+> Professional runtime output declares `visible_body_required` or
+> `full_body_required`, it must materialize an active Character Card Body
+> Silhouette as a body-only reference or fail closed before Host. This does not
+> alter Character Card Body Silhouette generation, slots, review, activation,
+> or storage.
+
 ### Shared Runtime Compatibility
 
 ```text

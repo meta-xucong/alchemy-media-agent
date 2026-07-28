@@ -792,6 +792,17 @@ shared materializer may expand one source into multiple renderer inputs. The
 current identity strategy expands the immutable root and active winner into
 two identity derivatives each. Therefore:
 
+> **Historical/narrowed by Professional body-proportion runtime projection
+> design:** The following capacity model describes the pre-body-projection
+> Professional E-Commerce product-model seam. It remains valid evidence for
+> product-truth pool selection and face/product admission, but it must not be
+> used to claim visible/full-body body-proportion certification. A future
+> visible/full-body product-on-person output must also admit an active
+> Character Card Body Silhouette as body-only evidence, and the
+> five-reference cap must be recalculated after final materialized derivatives.
+> If root, selected face, selected product truth, and body-only evidence cannot
+> all fit, Host must be blocked before materialization.
+
 ```text
 root source + winner source + one selected product source
 => 2 root derivatives + 2 winner derivatives + 1 product_truth_crop

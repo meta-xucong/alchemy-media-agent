@@ -52,6 +52,14 @@ vertical-specific rule tables.
 6. General and E-Commerce may never inherit Photography role taxonomy,
    profile binding, controls, prompt fragments, quality thresholds, or retry
    semantics. Photography may never inherit their suite or marketplace roles.
+7. **Professional body-proportion narrowing:** For Professional Photography
+   outputs, Remote Brain remains the creative authority and Photography
+   remains the role owner. However, any output whose per-output receipt
+   declares a visible/full human body requirement must admit an active
+   Character Card Body Silhouette as a body-only reference before Host. This
+   does not apply to still-life, landscape, animal, no-person, or face/detail
+   outputs, and it must not import E-Commerce product truth or body rules into
+   Photography.
 
 ## Non-Goals
 

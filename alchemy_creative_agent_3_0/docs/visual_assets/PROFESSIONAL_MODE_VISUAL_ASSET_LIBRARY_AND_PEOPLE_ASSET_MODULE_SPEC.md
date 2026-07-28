@@ -229,6 +229,14 @@ accessories, lighting, scene, camera, composition, or whole-image style. Those
 channels remain prompt-owned or governed by another explicitly selected
 reference/module under the existing V3 contracts.
 
+> **Narrowed runtime note:** This Face Identity boundary remains current. It
+> also means that a Professional visible-body or full-body output cannot claim
+> body-proportion/developmental-stage continuity from root portrait plus face
+> winners alone. When an active Character Card Body Silhouette exists, a
+> separate body-only runtime projection is required for those outputs. This
+> note does not change Body Silhouette preparation, slot review, activation, or
+> asset storage.
+
 Pixel-quality review, Human Realism semantic sign-off, retry planning, Provider
 prompt creation, and final-result selection remain owned by the shared V3
 runtime. “Face review” in this document means pack/view readiness and identity
@@ -408,6 +416,13 @@ current prompt
 other uploaded images
   may contribute only the explicitly assigned non-identity channels
 ```
+
+Superseded/narrowed for visible/full-body runtime delivery: the first-release
+Face Identity reference contract above remains valid for face-only and
+upper-body/detail outputs. It is insufficient for Professional outputs whose
+per-output receipt declares visible/full human body evidence. Those outputs
+must use an active Character Card Body Silhouette as a body-only reference, or
+block/remain body-proportion uncertified before Host.
 
 The explicit Professional Mode choice and selected `people_asset_id`/
 `pack_version_id` are sanitized user controls and evidence bindings. They must

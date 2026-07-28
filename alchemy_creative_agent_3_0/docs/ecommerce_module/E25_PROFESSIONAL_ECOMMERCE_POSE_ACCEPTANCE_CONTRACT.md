@@ -6,6 +6,16 @@ this document.
 
 Scope: Professional E-Commerce product-on-person deliverables only.
 
+> **Narrowed by Professional body-proportion runtime projection design:** This
+> document governs pose/presentation receipts for Professional E-Commerce
+> poolside product-on-person outputs. It does not certify body scale,
+> neck/shoulder continuity, torso/limb proportions, or developmental-stage
+> body coherence. Visible/full-body Professional E-Commerce outputs must also
+> satisfy the shared Professional body-only reference projection gate once that
+> gate is implemented; root portrait + selected face winner + selected
+> product truth is a face/product/presentation chain, not body-proportion
+> certification.
+
 ## 1. Correction model
 
 The final integrated poolside acceptance run produced one acceptable seated
