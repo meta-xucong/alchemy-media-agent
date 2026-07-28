@@ -30,6 +30,13 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_pr
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BODY_SLOT_KEYS,
+    BODY_FORMAL_SLOT_NO_EXTERNAL_ELIGIBILITY_CODE,
+    BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE,
+    BODY_FORMAL_SLOT_SOURCE_STANDARD_MISSING_CODE,
+    BODY_FORMAL_SLOT_CANDIDATE_CONTRACT_MISMATCH_CODE,
+    BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE,
+    BODY_FORMAL_SLOT_SHARED_REVIEW_RECEIPT_MISSING_CODE,
+    BodyFormalSlotFailureDetails,
     CharacterCardCandidateRequest,
     CharacterCardCandidateResult,
     CharacterCardPreparationService,
@@ -1229,6 +1236,206 @@ def test_doc245_body_formal_core_blocks_when_all_enhanced_profiles_fail() -> Non
     assert result.winner_output_ids == {}
     assert result.formal_slot_receipts == {}
     assert result.failures[-1].failure_code == "character_card_formal_slot_receipt_invalid"
+    assert result.failures[-1].failure_details is not None
+    assert result.failures[-1].failure_details.failure_code == BODY_FORMAL_SLOT_NO_EXTERNAL_ELIGIBILITY_CODE
+    assert result.failures[-1].failure_details.passed_shared_review_count == 3
+    assert result.failures[-1].failure_details.enhanced_eligible_count == 0
+    assert result.card.last_failure_code == "character_card_formal_slot_receipt_invalid"
+    assert result.card.last_failure_details == result.failures[-1].failure_details
+
+
+def test_doc245_body_formal_failure_projection_classifies_shared_review_rejection_without_ids() -> None:
+    service = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_BodyReviewer(failing_indexes={1, 2, 3}),
+    )
+
+    result = service.refresh_body_silhouette(
+        _active_body_card(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert result.status == "blocked"
+    assert result.failures[-1].failure_code == "character_card_formal_slot_receipt_invalid"
+    details = result.failures[-1].failure_details
+    assert details is not None
+    assert details.failure_code == BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE
+    assert details.slot_key == "body.front_full"
+    assert details.candidate_count == 3
+    assert details.candidate_indexes == [1, 2, 3]
+    assert details.passed_shared_review_count == 0
+    assert details.enhanced_eligible_count == 0
+    assert all(
+        "shared_review_not_pass" in summary.issue_categories
+        for summary in details.candidate_summaries
+    )
+    assert details.failure_code != BODY_FORMAL_SLOT_SOURCE_STANDARD_MISSING_CODE
+    serialized = str(details)
+    assert "candidate_body" not in serialized
+    assert "output_body" not in serialized
+    assert "face_front_output" not in serialized
+    assert "http://" not in serialized
+    assert "https://" not in serialized
+    assert "D:\\" not in serialized
+    assert "raw" not in serialized.lower()
+    assert result.card.last_failure_code == "character_card_formal_slot_receipt_invalid"
+    assert result.card.last_failure_details == details
+
+
+def test_doc245_body_formal_failure_projection_classifies_source_standard_missing_separately() -> None:
+    class _MissingSourceStandardReviewer(_BodyReviewer):
+        def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
+            return _review(candidate.candidate_index, include_source_standard=False)
+
+    service = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_MissingSourceStandardReviewer(),
+    )
+
+    result = service.refresh_body_silhouette(
+        _active_body_card(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert result.status == "blocked"
+    assert result.failure_codes[0] == "body.front_full_no_reviewed_winner"
+    assert "character_card_formal_slot_receipt_invalid" in result.failure_codes
+    details = result.failures[-1].failure_details
+    assert details is not None
+    assert details.failure_code == BODY_FORMAL_SLOT_SOURCE_STANDARD_MISSING_CODE
+    assert details.passed_shared_review_count == 3
+    assert details.enhanced_eligible_count == 0
+    assert details.source_standard_evidence_missing_count == 3
+    assert details.shared_review_receipt_missing_count == 0
+    assert details.candidate_contract_mismatch_count == 0
+    assert details.failure_code != BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE
+
+
+def test_doc245_body_formal_failure_details_reject_raw_unknown_or_wrong_typed_readback() -> None:
+    valid = {
+        "contract": "body_formal_slot_failure_projection_v1",
+        "failure_code": BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE,
+        "module": "body_silhouette",
+        "slot_key": "body.rear_full",
+        "candidate_count": 3,
+        "candidate_indexes": [1, 2, 3],
+        "passed_shared_review_count": 0,
+        "enhanced_eligible_count": 0,
+        "shared_review_receipt_missing_count": 0,
+        "source_standard_evidence_missing_count": 0,
+        "source_standard_blocking_issue_count": 0,
+        "candidate_contract_mismatch_count": 0,
+        "candidate_summaries": [
+            {
+                "candidate_index": index,
+                "shared_review_status": "fail",
+                "shared_review_passed": False,
+                "enhanced_proof_eligible": False,
+                "issue_categories": ["shared_review_not_pass"],
+            }
+            for index in (1, 2, 3)
+        ],
+    }
+
+    assert BodyFormalSlotFailureDetails.model_validate(valid).failure_code == (
+        BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE
+    )
+
+    unsafe_payloads = [
+        {"raw_prompt": "secret renderer prompt"},
+        {"provider_payload": {"secret": True}},
+        {"file_path": "D:\\unsafe\\body.png"},
+        {"source_url": "https://example.invalid/private"},
+        {"asset_id": "asset_private"},
+    ]
+    for extra in unsafe_payloads:
+        with pytest.raises(ValueError):
+            BodyFormalSlotFailureDetails.model_validate({**valid, **extra})
+
+    wrong_type = dict(valid)
+    wrong_type["candidate_count"] = "3"
+    with pytest.raises(ValueError):
+        BodyFormalSlotFailureDetails.model_validate(wrong_type)
+
+    wrong_category = dict(valid)
+    wrong_category["candidate_summaries"] = [
+        {
+            **valid["candidate_summaries"][0],
+            "issue_categories": ["raw_provider_payload"],
+        },
+        *valid["candidate_summaries"][1:],
+    ]
+    with pytest.raises(ValueError):
+        BodyFormalSlotFailureDetails.model_validate(wrong_category)
+
+    with pytest.raises(ValueError):
+        CharacterCardState.model_validate(
+            {
+                "card_version_id": "card_injected",
+                "last_failure_details": {**valid, "raw_response": "unsafe"},
+            }
+        )
+
+
+def test_doc245_body_formal_failure_projection_classifies_missing_shared_review_receipt() -> None:
+    class _MissingSharedReceiptReviewer(_BodyReviewer):
+        def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
+            return _review(candidate.candidate_index).model_copy(update={"shared_review_receipts": []})
+
+    service = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_MissingSharedReceiptReviewer(),
+    )
+
+    result = service.refresh_body_silhouette(
+        _active_body_card(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert result.status == "blocked"
+    assert result.failures[-1].failure_code == "character_card_formal_slot_receipt_invalid"
+    details = result.failures[-1].failure_details
+    assert details is not None
+    assert details.failure_code == BODY_FORMAL_SLOT_SHARED_REVIEW_RECEIPT_MISSING_CODE
+    assert details.shared_review_receipt_missing_count == 3
+    assert details.failure_code != BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE
+
+
+def test_doc245_body_formal_failure_projection_classifies_candidate_contract_mismatch() -> None:
+    attempts = [_body_attempt(index, slot_key="body.rear_full") for index in (1, 2, 3)]
+    attempts[1] = attempts[1].model_copy(
+        update={
+            "request": attempts[1].request.model_copy(
+                update={"reference_output_ids": ["face_front_output", "face_profile_output", "wrong_rear_output"]}
+            )
+        }
+    )
+
+    details = CharacterCardPreparationService._formal_body_slot_failure_projection(  # noqa: SLF001
+        slot_key="body.rear_full",
+        attempts=attempts,  # type: ignore[arg-type]
+    )
+
+    assert details.failure_code == BODY_FORMAL_SLOT_CANDIDATE_CONTRACT_MISMATCH_CODE
+    assert details.candidate_contract_mismatch_count == 1
+    assert details.failure_code != BODY_FORMAL_SLOT_SHARED_REVIEW_RECEIPT_MISSING_CODE
+
+
+def test_doc245_body_formal_failure_projection_classifies_reviewed_count_invalid() -> None:
+    details = CharacterCardPreparationService._formal_body_slot_failure_projection(  # noqa: SLF001
+        slot_key="body.rear_full",
+        attempts=[_body_attempt(1, slot_key="body.rear_full")],  # type: ignore[arg-type]
+    )
+
+    assert details.failure_code == BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE
+    assert details.candidate_count == 1
+    assert details.candidate_indexes == [1]
 
 
 def test_doc245_body_three_slot_acceptance_blocks_cross_view_parity_mismatch() -> None:

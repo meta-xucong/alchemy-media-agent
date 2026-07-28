@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Callable, Literal, Protocol
 from uuid import uuid4
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from ..shared_capabilities.visual_cluster.expression_review import laugh_expression_receipt_allows_slot
@@ -72,6 +72,32 @@ BODY_ENHANCED_PROFILE_EVIDENCE_CODE = "body_silhouette_profile_eligible"
 BODY_ENHANCED_PROFILE_ISSUE_CODE = "body_silhouette_profile_rejected"
 BODY_SOURCE_STANDARD_EVIDENCE_CODE = "body_silhouette_source_standard_verified"
 BODY_SOURCE_STANDARD_MISSING_ISSUE_CODE = "body_silhouette_source_standard_evidence_missing"
+BODY_FORMAL_SLOT_FAILURE_GENERIC_CODE = "body_formal_slot_receipt_invalid"
+BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE = "body_formal_slot_no_passing_shared_review_candidate"
+BODY_FORMAL_SLOT_NO_EXTERNAL_ELIGIBILITY_CODE = "body_formal_slot_no_external_eligibility_passing_candidate"
+BODY_FORMAL_SLOT_SOURCE_STANDARD_MISSING_CODE = "body_formal_slot_source_standard_evidence_missing"
+BODY_FORMAL_SLOT_SOURCE_STANDARD_BLOCKED_CODE = "body_formal_slot_source_standard_blocking_issue"
+BODY_FORMAL_SLOT_SHARED_REVIEW_RECEIPT_MISSING_CODE = "body_formal_slot_shared_review_receipt_missing"
+BODY_FORMAL_SLOT_CANDIDATE_CONTRACT_MISMATCH_CODE = "body_formal_slot_candidate_contract_mismatch"
+BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE = "body_formal_slot_reviewed_candidate_count_invalid"
+BodyFormalSlotFailureCode = Literal[
+    "body_formal_slot_receipt_invalid",
+    "body_formal_slot_no_passing_shared_review_candidate",
+    "body_formal_slot_no_external_eligibility_passing_candidate",
+    "body_formal_slot_source_standard_evidence_missing",
+    "body_formal_slot_source_standard_blocking_issue",
+    "body_formal_slot_shared_review_receipt_missing",
+    "body_formal_slot_candidate_contract_mismatch",
+    "body_formal_slot_reviewed_candidate_count_invalid",
+]
+BodyFormalSlotFailureCategory = Literal[
+    "shared_review_not_pass",
+    "source_standard_evidence_missing",
+    "source_standard_blocking_issue",
+    "candidate_contract_mismatch",
+    "enhanced_proof_unavailable",
+]
+BodyFormalSlotSharedReviewStatus = Literal["pass", "fail", "borderline", "missing"]
 EXPRESSION_LABELS = {
     "expression.neutral": "中性",
     "expression.laugh": "开心笑",
@@ -442,6 +468,7 @@ class CharacterCardState(_CharacterCardModel):
     last_failed_module: CharacterCardModule | None = None
     last_failed_slot_key: CharacterCardSlotKey | None = None
     last_failure_code: str | None = None
+    last_failure_details: BodyFormalSlotFailureDetails | None = None
     last_failure_attempt_count: int = Field(default=0, ge=0, le=3)
     resume_available: bool = False
     # Sanitized proof from the shared runtime when a stage pauses after one or
@@ -662,6 +689,7 @@ class CharacterCardState(_CharacterCardModel):
                 "last_failed_module": None,
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
+                "last_failure_details": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
                 "last_review_repair_context": None,
@@ -842,6 +870,72 @@ class SlotAcceptanceCore:
         return (0,)
 
 
+class BodyFormalSlotCandidateFailureSummary(_CharacterCardModel):
+    """Closed public-safe per-candidate Body formal failure summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_index: StrictInt = Field(ge=1, le=3)
+    shared_review_status: BodyFormalSlotSharedReviewStatus
+    shared_review_passed: bool
+    enhanced_proof_eligible: bool
+    issue_categories: list[BodyFormalSlotFailureCategory] = Field(default_factory=list)
+
+    @field_validator("issue_categories")
+    @classmethod
+    def unique_categories(cls, value: list[BodyFormalSlotFailureCategory]) -> list[BodyFormalSlotFailureCategory]:
+        if len(value) != len(set(value)):
+            raise ValueError("Body formal failure categories must be unique")
+        return value
+
+
+class BodyFormalSlotFailureDetails(_CharacterCardModel):
+    """Closed public-safe diagnostic for Body formal receipt rejection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract: Literal["body_formal_slot_failure_projection_v1"] = "body_formal_slot_failure_projection_v1"
+    failure_code: BodyFormalSlotFailureCode
+    module: Literal["body_silhouette"] = "body_silhouette"
+    slot_key: Literal["body.front_full", "body.side_full", "body.rear_full"]
+    candidate_count: StrictInt = Field(ge=0, le=3)
+    candidate_indexes: list[StrictInt] = Field(default_factory=list)
+    passed_shared_review_count: StrictInt = Field(ge=0, le=3)
+    enhanced_eligible_count: StrictInt = Field(ge=0, le=3)
+    shared_review_receipt_missing_count: StrictInt = Field(ge=0, le=3)
+    source_standard_evidence_missing_count: StrictInt = Field(ge=0, le=3)
+    source_standard_blocking_issue_count: StrictInt = Field(ge=0, le=3)
+    candidate_contract_mismatch_count: StrictInt = Field(ge=0, le=3)
+    candidate_summaries: list[BodyFormalSlotCandidateFailureSummary] = Field(default_factory=list)
+
+    @field_validator("candidate_indexes")
+    @classmethod
+    def validate_candidate_indexes(cls, value: list[StrictInt]) -> list[StrictInt]:
+        if any(index not in {1, 2, 3} for index in value):
+            raise ValueError("Body formal failure candidate indexes must be closed to 1..3")
+        if len(value) != len(set(value)):
+            raise ValueError("Body formal failure candidate indexes must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> "BodyFormalSlotFailureDetails":
+        if self.candidate_count != len(self.candidate_indexes):
+            raise ValueError("Body formal failure candidate_count must equal candidate_indexes")
+        if self.candidate_count != len(self.candidate_summaries):
+            raise ValueError("Body formal failure candidate_count must equal candidate_summaries")
+        for count in (
+            self.passed_shared_review_count,
+            self.enhanced_eligible_count,
+            self.shared_review_receipt_missing_count,
+            self.source_standard_evidence_missing_count,
+            self.source_standard_blocking_issue_count,
+            self.candidate_contract_mismatch_count,
+        ):
+            if count > self.candidate_count:
+                raise ValueError("Body formal failure counts must not exceed candidate_count")
+        return self
+
+
 class CharacterCardFailureEvent(_CharacterCardModel):
     """Safe per-candidate failure evidence retained for manual continuation."""
 
@@ -852,6 +946,7 @@ class CharacterCardFailureEvent(_CharacterCardModel):
     failure_code: str
     mcp_handoff_id: str | None = None
     review_repair_context: dict[str, Any] | None = None
+    failure_details: BodyFormalSlotFailureDetails | None = None
 
 
 class CharacterCardStageResult(_CharacterCardModel):
@@ -1449,6 +1544,7 @@ class CharacterCardPreparationService:
                 "last_failed_module": None,
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
+                "last_failure_details": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
                 "last_review_repair_context": None,
@@ -1541,6 +1637,7 @@ class CharacterCardPreparationService:
                         "last_failed_module": "expression_set",
                         "last_failed_slot_key": slot_key,
                         "last_failure_code": failure_code,
+                        "last_failure_details": None,
                         "last_failure_attempt_count": self._failure_attempt_count(slot_failures),
                         "resume_available": True,
                         "append_only_revision": card.append_only_revision + 1,
@@ -1583,6 +1680,7 @@ class CharacterCardPreparationService:
                 "last_failed_module": None,
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
+                "last_failure_details": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
                 "last_review_repair_context": None,
@@ -1660,6 +1758,7 @@ class CharacterCardPreparationService:
             failures.extend(slot_failures)
             if winner is None:
                 failure_code = slot_failures[-1].failure_code if slot_failures else f"{slot_key}_review_failed"
+                failure_details = self._latest_failure_details(slot_failures)
                 return CharacterCardStageResult(
                     status="blocked",
                     card=self._blocked_card(
@@ -1667,6 +1766,7 @@ class CharacterCardPreparationService:
                         module="body_silhouette",
                         slot_key=slot_key,
                         failure_code=failure_code,
+                        failure_details=failure_details,
                         failure_attempt_count=self._failure_attempt_count(slot_failures),
                         slots=slots,
                         status_field="body_silhouette_status",
@@ -1725,6 +1825,7 @@ class CharacterCardPreparationService:
                 "last_failed_module": None,
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
+                "last_failure_details": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
                 "last_review_repair_context": None,
@@ -1797,6 +1898,7 @@ class CharacterCardPreparationService:
             failures.extend(slot_failures)
             if winner is None:
                 failure_code = slot_failures[-1].failure_code if slot_failures else f"{slot_key}_review_failed"
+                failure_details = self._latest_failure_details(slot_failures)
                 blocked = card.model_copy(
                     update={
                         "body_silhouette_refresh_status": "blocked",
@@ -1804,6 +1906,7 @@ class CharacterCardPreparationService:
                         "last_failed_module": "body_silhouette",
                         "last_failed_slot_key": slot_key,
                         "last_failure_code": failure_code,
+                        "last_failure_details": failure_details,
                         "last_failure_attempt_count": self._failure_attempt_count(slot_failures),
                         "resume_available": False,
                         "append_only_revision": card.append_only_revision + 1,
@@ -1846,6 +1949,7 @@ class CharacterCardPreparationService:
                     "last_failed_module": "body_silhouette",
                     "last_failed_slot_key": "body.front_full",
                     "last_failure_code": parity_failure_code,
+                    "last_failure_details": None,
                     "last_failure_attempt_count": self.CANDIDATE_COUNT,
                     "resume_available": False,
                     "append_only_revision": card.append_only_revision + 1,
@@ -1868,6 +1972,7 @@ class CharacterCardPreparationService:
                 "last_failed_module": None,
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
+                "last_failure_details": None,
                 "last_failure_attempt_count": 0,
                 "last_shared_runtime_failure": None,
                 "last_review_repair_context": None,
@@ -2055,6 +2160,14 @@ class CharacterCardPreparationService:
                         attempts=slot_attempts,
                     )
             except ValueError:
+                failure_details = (
+                    self._formal_body_slot_failure_projection(
+                        slot_key=slot_key,
+                        attempts=slot_attempts,
+                    )
+                    if module == "body_silhouette"
+                    else None
+                )
                 slot_failures.append(
                     CharacterCardFailureEvent(
                         module=module,
@@ -2062,6 +2175,7 @@ class CharacterCardPreparationService:
                         candidate_index=min(self.CANDIDATE_COUNT, max(1, len(slot_attempts) or 1)),
                         attempt_round=attempt_round,
                         failure_code="character_card_formal_slot_receipt_invalid",
+                        failure_details=failure_details,
                     )
                 )
                 return None, slot_attempts, slot_failures, None
@@ -2166,6 +2280,13 @@ class CharacterCardPreparationService:
         return min(3, max(1, max(int(item.candidate_index or 1) for item in failures)))
 
     @staticmethod
+    def _latest_failure_details(failures: list[CharacterCardFailureEvent]) -> BodyFormalSlotFailureDetails | None:
+        for failure in reversed(failures):
+            if failure.failure_details is not None:
+                return BodyFormalSlotFailureDetails.model_validate(failure.failure_details)
+        return None
+
+    @staticmethod
     def _resumable_mcp_handoff_id(
         card: CharacterCardState,
         *,
@@ -2194,6 +2315,7 @@ class CharacterCardPreparationService:
         module: CharacterCardModule,
         slot_key: str,
         failure_code: str,
+        failure_details: BodyFormalSlotFailureDetails | None = None,
         failure_attempt_count: int,
         slots: dict[str, CharacterCardSlot],
         status_field: Literal["expression_set_status", "body_silhouette_status"],
@@ -2205,6 +2327,7 @@ class CharacterCardPreparationService:
                 "last_failed_module": module,
                 "last_failed_slot_key": slot_key,
                 "last_failure_code": failure_code,
+                "last_failure_details": failure_details,
                 "last_failure_attempt_count": min(3, max(1, failure_attempt_count)),
                 "resume_available": True,
                 "append_only_revision": card.append_only_revision + 1,
@@ -2414,6 +2537,124 @@ class CharacterCardPreparationService:
         return (
             BODY_ENHANCED_PROFILE_EVIDENCE_CODE in evidence_codes
             and BODY_ENHANCED_PROFILE_ISSUE_CODE not in issue_codes
+        )
+
+    @classmethod
+    def _formal_body_slot_failure_projection(
+        cls,
+        *,
+        slot_key: str,
+        attempts: list[CharacterCardCandidateAttempt],
+    ) -> BodyFormalSlotFailureDetails:
+        """Closed, public-safe reason for a failed Body formal-slot receipt.
+
+        The projection deliberately exposes counts, slot and candidate indexes
+        only.  It never copies exception text, prompts, paths, URLs, output IDs,
+        provider payloads, or candidate IDs.
+        """
+
+        reviewed_count = len(attempts)
+        passed_shared_review_count = 0
+        enhanced_eligible_count = 0
+        shared_review_receipt_missing_count = 0
+        source_standard_missing_count = 0
+        source_standard_blocking_count = 0
+        candidate_contract_mismatch_count = 0
+        candidate_summaries: list[dict[str, Any]] = []
+        fatal_issue_codes = {
+            "body_candidate_module_mismatch",
+            "body_candidate_slot_mismatch",
+            "body_candidate_index_mismatch",
+            "body_face_reference_scope_mismatch",
+            "body_candidate_reference_scope_mismatch",
+            "body_source_class_missing",
+            "body_observed_consent_missing",
+        }
+        source_standard_blocking_codes = set(BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES)
+        for attempt in attempts:
+            candidate_index = int(getattr(attempt.request, "candidate_index", 1) or 1)
+            shared_review_passed = False
+            shared_review_status = "missing"
+            shared_review_issue_codes: set[str] = set()
+            try:
+                shared_review = cls._formal_shared_review_summary(attempt.review)
+                shared_review_status = shared_review.status
+                shared_review_passed = shared_review.passed
+                shared_review_issue_codes = set(shared_review.issue_codes)
+            except ValueError:
+                shared_review_receipt_missing_count += 1
+            if shared_review_passed:
+                passed_shared_review_count += 1
+
+            try:
+                proof = cls._formal_body_enhanced_proof(slot_key=slot_key, attempt=attempt)
+            except ValueError:
+                proof = None
+                candidate_contract_mismatch_count += 1
+            enhanced_eligible = bool(proof is not None and proof.eligible)
+            if enhanced_eligible:
+                enhanced_eligible_count += 1
+            proof_issue_codes = set(proof.issue_codes if proof is not None else [])
+            if BODY_SOURCE_STANDARD_MISSING_ISSUE_CODE in proof_issue_codes:
+                source_standard_missing_count += 1
+            if source_standard_blocking_codes.intersection(proof_issue_codes.union(shared_review_issue_codes)):
+                source_standard_blocking_count += 1
+            if fatal_issue_codes.intersection(proof_issue_codes):
+                candidate_contract_mismatch_count += 1
+            safe_issue_categories: list[str] = []
+            if not shared_review_passed:
+                safe_issue_categories.append("shared_review_not_pass")
+            if BODY_SOURCE_STANDARD_MISSING_ISSUE_CODE in proof_issue_codes:
+                safe_issue_categories.append("source_standard_evidence_missing")
+            if source_standard_blocking_codes.intersection(proof_issue_codes.union(shared_review_issue_codes)):
+                safe_issue_categories.append("source_standard_blocking_issue")
+            if fatal_issue_codes.intersection(proof_issue_codes):
+                safe_issue_categories.append("candidate_contract_mismatch")
+            if proof is None:
+                safe_issue_categories.append("enhanced_proof_unavailable")
+            candidate_summaries.append(
+                BodyFormalSlotCandidateFailureSummary(
+                    candidate_index=min(3, max(1, candidate_index)),
+                    shared_review_status=shared_review_status,  # type: ignore[arg-type]
+                    shared_review_passed=shared_review_passed,
+                    enhanced_proof_eligible=enhanced_eligible,
+                    issue_categories=list(dict.fromkeys(safe_issue_categories)),  # type: ignore[arg-type]
+                )
+            )
+
+        if reviewed_count != cls.CANDIDATE_COUNT:
+            failure_code = BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE
+        elif candidate_contract_mismatch_count:
+            failure_code = BODY_FORMAL_SLOT_CANDIDATE_CONTRACT_MISMATCH_CODE
+        elif shared_review_receipt_missing_count:
+            failure_code = BODY_FORMAL_SLOT_SHARED_REVIEW_RECEIPT_MISSING_CODE
+        elif passed_shared_review_count == 0:
+            failure_code = BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE
+        elif enhanced_eligible_count == 0 and source_standard_missing_count:
+            failure_code = BODY_FORMAL_SLOT_SOURCE_STANDARD_MISSING_CODE
+        elif enhanced_eligible_count == 0 and source_standard_blocking_count:
+            failure_code = BODY_FORMAL_SLOT_SOURCE_STANDARD_BLOCKED_CODE
+        elif enhanced_eligible_count == 0:
+            failure_code = BODY_FORMAL_SLOT_NO_EXTERNAL_ELIGIBILITY_CODE
+        else:
+            failure_code = BODY_FORMAL_SLOT_FAILURE_GENERIC_CODE
+        return BodyFormalSlotFailureDetails(
+            contract="body_formal_slot_failure_projection_v1",
+            failure_code=failure_code,  # type: ignore[arg-type]
+            module="body_silhouette",
+            slot_key=slot_key,  # type: ignore[arg-type]
+            candidate_count=reviewed_count,
+            candidate_indexes=[
+                min(3, max(1, int(getattr(attempt.request, "candidate_index", 1) or 1)))
+                for attempt in attempts
+            ],
+            passed_shared_review_count=passed_shared_review_count,
+            enhanced_eligible_count=enhanced_eligible_count,
+            shared_review_receipt_missing_count=shared_review_receipt_missing_count,
+            source_standard_evidence_missing_count=source_standard_missing_count,
+            source_standard_blocking_issue_count=source_standard_blocking_count,
+            candidate_contract_mismatch_count=candidate_contract_mismatch_count,
+            candidate_summaries=candidate_summaries,
         )
 
     @staticmethod
@@ -2835,6 +3076,7 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
                 "last_failed_module": "face_identity",
                 "last_failed_slot_key": missing_slot,
                 "last_failure_code": "character_card_face_prepare_paused",
+                "last_failure_details": None,
                 "last_failure_attempt_count": 3,
                 "resume_available": True,
             }
@@ -2845,6 +3087,7 @@ def apply_face_identity_pack_to_card(card: CharacterCardState, pack: Any) -> Cha
                 "last_failed_module": None,
                 "last_failed_slot_key": None,
                 "last_failure_code": None,
+                "last_failure_details": None,
                 "last_failure_attempt_count": 0,
                 "resume_available": False,
             }
