@@ -5,7 +5,7 @@
 ```text
 DOC173_LIBRARY_FIRST_RECONSTRUCTION_AUTHORITATIVE
 DOC178_CHARACTER_CARD_MODULE_EXTENSION_AUTHORITATIVE
-PROFESSIONAL_BODY_PROPORTION_RUNTIME_PROJECTION_DOCUMENTED_PENDING_REVIEW
+PROFESSIONAL_BODY_PROPORTION_RUNTIME_PROJECTION_DOCUMENTED_APPROVED_IMPLEMENTATION_PENDING
 DOC182_CHARACTER_CARD_RESUMABLE_FAILURE_RECOVERY_AUTHORITATIVE
 LEGACY_PROJECT_SCOPED_COMPATIBILITY_RETAINED_READ_ONLY
 FRONTEND_RECONSTRUCTION_REQUIRED
@@ -16,6 +16,12 @@ NO_PRODUCTION_ASSET_CLAIM
 This is the index for the independent Professional Mode document set. The set
 is intentionally unnumbered and lives under `docs/visual_assets/`. It does not
 rename, edit, supersede, or reinterpret the existing numbered V3 documents.
+
+The Body Proportion Runtime Projection design document has passed its
+document-only review gate. Runtime implementation, deterministic tests,
+planning-only materialization audit, and per-module controlled visual review
+remain pending; the current runtime must not be described as having completed
+Professional full/visible-body Body Silhouette projection.
 
 The forward product model is **Visual Asset Library first**: users build and
 explicitly activate reusable assets in a dedicated library, then optionally
