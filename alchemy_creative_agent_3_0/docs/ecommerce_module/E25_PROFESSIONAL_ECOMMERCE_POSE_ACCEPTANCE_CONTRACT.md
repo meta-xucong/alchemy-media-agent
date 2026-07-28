@@ -27,6 +27,30 @@ Therefore the minimal correction is a closed pose receipt attached to the
 Professional E-Commerce plan and verified before host materialization. This is
 not a prompt patch and not a Provider/global safety rule.
 
+### 1A. Follow-up correction for standing presentation ambiguity
+
+The fresh integrated run reached Host with a valid standing receipt, but the
+Brain-authored standing direction chose a rear-facing look-back composition and
+did not make full-body standing presentation explicit. The Host then returned
+an opaque output moderation block. The public Host signal does not prove that
+this composition caused the block, so this is an ambiguity-reduction repair,
+not a claim about hidden policy internals.
+
+The owning correction remains this Professional E-Commerce deliverable
+contract. The standing role now carries a second closed receipt list for
+camera/presentation semantics:
+
+- `front_or_three_quarter_presentation`;
+- `ordinary_full_body_commercial_framing`;
+- `eye_level_or_standard_camera_height`;
+- `no_rear_facing_lookback`.
+
+These values constrain the requested deliverable's presentation only. They are
+not a safety keyword filter, not renderer prose, and not a shared Human
+Realism, General, Provider, or Host rule. Remote Brain still authors the final
+natural-language direction; Runtime validates the returned receipt before any
+new Host call.
+
 ## 2. Current typed contract
 
 When a Professional E-Commerce request explicitly requires a two-image
@@ -35,7 +59,7 @@ planner may add:
 
 ```json
 {
-  "contract_version": "professional_ecommerce_pose_contract_v1",
+  "contract_version": "professional_ecommerce_pose_contract_v2",
   "owner": "professional_ecommerce_deliverable_pose_acceptance",
   "source": "explicit_user_pose_coverage_request",
   "required_pose_by_output": [
@@ -52,6 +76,12 @@ planner may add:
         "interaction_may_use_one_hand_but_body_remains_standing",
         "no_crouched_low_support",
         "no_kneeling"
+      ],
+      "standing_presentation_requirements": [
+        "front_or_three_quarter_presentation",
+        "ordinary_full_body_commercial_framing",
+        "eye_level_or_standard_camera_height",
+        "no_rear_facing_lookback"
       ]
     }
   ]
@@ -66,9 +96,18 @@ Closed values:
   `both_feet_weight_bearing`, `no_kneeling`,
   `no_crouched_low_support`, and
   `interaction_may_use_one_hand_but_body_remains_standing`.
+- `standing_presentation_requirements`: empty for `seated_poolside`; for
+  `standing_poolside`, exactly all of
+  `front_or_three_quarter_presentation`,
+  `ordinary_full_body_commercial_framing`,
+  `eye_level_or_standard_camera_height`, and
+  `no_rear_facing_lookback`.
 
 Unknown values, duplicate output indexes, missing exact-N coverage, and missing
 or contradictory Remote Brain receipts fail closed before host materialization.
+The prior `professional_ecommerce_pose_contract_v1` shape is historical and
+superseded; it remains readable only in append-only evidence and is not valid
+for this standing-presentation gate.
 
 ## 3. Call graph and boundaries
 
@@ -85,8 +124,9 @@ or contradictory Remote Brain receipts fail closed before host materialization.
 3. `prompts.py` includes the existing compact Remote Brain schema plus the
    closed pose receipt fields when the contract is present.
 4. `ScenarioRuntime` validates that the Remote Brain image set plan returns the
-   exact pose role and standing requirements for each output and freezes that
-   receipt into deliverable metadata.
+   exact pose role, standing requirements, and standing presentation
+   requirements for each output and freezes that receipt into deliverable
+   metadata.
 5. `CodexNativeImageGenPlanner` reads the frozen deliverable metadata and
    projects the pose receipt into each output's `reference_input_contract`.
 6. The host renderer may be called only after this receipt is present and
@@ -110,11 +150,15 @@ optional fields to that model:
 
 - `professional_ecommerce_pose_role`
 - `standing_pose_requirements`
+- `standing_presentation_requirements`
 
 Compatibility impact:
 
 - The fields are optional and require no migration for historical General,
   Photography, Standard, or non-pose E-Commerce responses.
+- The added presentation field is part of
+  `professional_ecommerce_pose_contract_v2`; v1 evidence is historical and is
+  not accepted for a new exact-N=2 standing gate.
 - The compact return schema emits these fields only when
   `ecommerce_creative_context.professional_ecommerce_pose_contract` is present
   and validated.
@@ -155,6 +199,8 @@ Focused deterministic tests must cover:
   not created from token coincidence;
 - missing pose receipt fail-closed before materialization;
 - wrong `standing_poolside` requirements fail-closed before materialization;
+- missing, duplicated, or wrong `standing_presentation_requirements` fail-closed
+  before materialization;
 - wrong output role fail-closed before materialization;
 - real payload schema includes closed pose fields only when the typed contract
   is present;

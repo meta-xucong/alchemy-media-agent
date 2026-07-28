@@ -57,7 +57,7 @@ _INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT = {
     "status": "invalid",
 }
 _INVALID_PROFESSIONAL_ECOMMERCE_POSE_CONTRACT = {
-    "contract_version": "professional_ecommerce_pose_contract_v1",
+    "contract_version": "professional_ecommerce_pose_contract_v2",
     "owner": "professional_ecommerce_deliverable_pose_acceptance",
     "status": "invalid",
 }
@@ -2949,6 +2949,8 @@ def _safe_validation_path(loc: Any, *, section: str) -> str:
         "image_set_plan.evidence_dimensions_by_output.item.professional_ecommerce_pose_role",
         "image_set_plan.evidence_dimensions_by_output.item.standing_pose_requirements",
         "image_set_plan.evidence_dimensions_by_output.item.standing_pose_requirements.item",
+        "image_set_plan.evidence_dimensions_by_output.item.standing_presentation_requirements",
+        "image_set_plan.evidence_dimensions_by_output.item.standing_presentation_requirements.item",
         "image_set_plan.composition_rules",
         "image_set_plan.quality_bar",
         "image_set_plan.size",

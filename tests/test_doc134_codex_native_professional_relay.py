@@ -154,12 +154,21 @@ class _ProfessionalEcommercePoseFaultProvider(EcommerceRemoteBrainTestProvider):
                 if isinstance(entry, dict):
                     entry.pop("professional_ecommerce_pose_role", None)
                     entry.pop("standing_pose_requirements", None)
+                    entry.pop("standing_presentation_requirements", None)
         elif self.pose_fault == "wrong_standing":
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
                 if entry.get("professional_ecommerce_pose_role") == "standing_poolside":
                     entry["standing_pose_requirements"] = ["both_feet_weight_bearing"]
+        elif self.pose_fault == "wrong_presentation":
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("professional_ecommerce_pose_role") == "standing_poolside":
+                    entry["standing_presentation_requirements"] = [
+                        "ordinary_full_body_commercial_framing"
+                    ]
         elif self.pose_fault == "wrong_role":
             entries[0]["professional_ecommerce_pose_role"] = "standing_poolside"
             entries[0]["standing_pose_requirements"] = [
@@ -167,6 +176,12 @@ class _ProfessionalEcommercePoseFaultProvider(EcommerceRemoteBrainTestProvider):
                 "no_kneeling",
                 "no_crouched_low_support",
                 "interaction_may_use_one_hand_but_body_remains_standing",
+            ]
+            entries[0]["standing_presentation_requirements"] = [
+                "front_or_three_quarter_presentation",
+                "ordinary_full_body_commercial_framing",
+                "eye_level_or_standard_camera_height",
+                "no_rear_facing_lookback",
             ]
         return payload
 
@@ -868,7 +883,7 @@ def test_professional_ecommerce_poolside_pose_contract_is_frozen_and_projected(
     assert result["requested_output_count"] == 2
     plan_context = brain.requests[0]["metadata"]["ecommerce_creative_context"]
     pose_contract = plan_context["professional_ecommerce_pose_contract"]
-    assert pose_contract["contract_version"] == "professional_ecommerce_pose_contract_v1"
+    assert pose_contract["contract_version"] == "professional_ecommerce_pose_contract_v2"
     assert [item["pose_role"] for item in pose_contract["required_pose_by_output"]] == [
         "seated_poolside",
         "standing_poolside",
@@ -884,6 +899,16 @@ def test_professional_ecommerce_poolside_pose_contract_is_frozen_and_projected(
         "no_kneeling",
         "no_crouched_low_support",
         "interaction_may_use_one_hand_but_body_remains_standing",
+    }
+    assert set(
+        output_contracts[1]["professional_ecommerce_pose_acceptance"][
+            "standing_presentation_requirements"
+        ]
+    ) == {
+        "front_or_three_quarter_presentation",
+        "ordinary_full_body_commercial_framing",
+        "eye_level_or_standard_camera_height",
+        "no_rear_facing_lookback",
     }
     deliverables = [
         request
@@ -954,7 +979,9 @@ def test_professional_ecommerce_pose_contract_accepts_explicit_positive_poolside
     ]
 
 
-@pytest.mark.parametrize("pose_fault", ["missing", "wrong_standing", "wrong_role"])
+@pytest.mark.parametrize(
+    "pose_fault", ["missing", "wrong_standing", "wrong_presentation", "wrong_role"]
+)
 def test_professional_ecommerce_pose_contract_fault_blocks_before_materialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1722,7 +1749,7 @@ def test_professional_ecommerce_remote_payload_requires_pose_contract_when_prese
             "professional_product_model_planning": True,
             "ecommerce_creative_context": {
                 "professional_ecommerce_pose_contract": {
-                    "contract_version": "professional_ecommerce_pose_contract_v1",
+                    "contract_version": "professional_ecommerce_pose_contract_v2",
                     "owner": "professional_ecommerce_deliverable_pose_acceptance",
                     "source": "explicit_user_pose_coverage_request",
                     "required_pose_by_output": [
@@ -1730,6 +1757,7 @@ def test_professional_ecommerce_remote_payload_requires_pose_contract_when_prese
                             "output_index": 1,
                             "pose_role": "seated_poolside",
                             "standing_requirements": [],
+                            "standing_presentation_requirements": [],
                         },
                         {
                             "output_index": 2,
@@ -1739,6 +1767,12 @@ def test_professional_ecommerce_remote_payload_requires_pose_contract_when_prese
                                 "no_kneeling",
                                 "no_crouched_low_support",
                                 "interaction_may_use_one_hand_but_body_remains_standing",
+                            ],
+                            "standing_presentation_requirements": [
+                                "front_or_three_quarter_presentation",
+                                "ordinary_full_body_commercial_framing",
+                                "eye_level_or_standard_camera_height",
+                                "no_rear_facing_lookback",
                             ],
                         },
                     ],
@@ -1759,11 +1793,18 @@ def test_professional_ecommerce_remote_payload_requires_pose_contract_when_prese
         "no_crouched_low_support|interaction_may_use_one_hand_but_body_remains_standing; "
         "empty list for seated_poolside"
     ]
+    assert evidence_schema["standing_presentation_requirements"] == [
+        "for standing_poolside exactly: front_or_three_quarter_presentation|"
+        "ordinary_full_body_commercial_framing|eye_level_or_standard_camera_height|"
+        "no_rear_facing_lookback; empty list for seated_poolside"
+    ]
     instructions = " ".join(payload["professional_ecommerce_pose_contract_instructions"].split())
     assert "Return the matching professional_ecommerce_pose_role for every output_index" in instructions
     assert "standing_pose_requirements must contain exactly these closed requirements" in instructions
     assert "not a provider prompt patch" in instructions
     assert "low-support, kneeling, crouching, or half-sitting" in instructions
+    assert "front_or_three_quarter_presentation" in instructions
+    assert "no_rear_facing_lookback" in instructions
 
 
 def test_professional_ecommerce_pose_contract_does_not_leak_to_general_payload() -> None:
@@ -1777,7 +1818,7 @@ def test_professional_ecommerce_pose_contract_does_not_leak_to_general_payload()
             "requested_image_count": 2,
             "ecommerce_creative_context": {
                 "professional_ecommerce_pose_contract": {
-                    "contract_version": "professional_ecommerce_pose_contract_v1",
+                    "contract_version": "professional_ecommerce_pose_contract_v2",
                     "owner": "professional_ecommerce_deliverable_pose_acceptance",
                     "source": "explicit_user_pose_coverage_request",
                     "required_pose_by_output": [
@@ -1795,6 +1836,7 @@ def test_professional_ecommerce_pose_contract_does_not_leak_to_general_payload()
     serialized = json.dumps(payload, ensure_ascii=False)
     assert "professional_ecommerce_pose_role" not in serialized
     assert "standing_pose_requirements" not in serialized
+    assert "standing_presentation_requirements" not in serialized
     assert "seated_poolside" not in serialized
     assert "standing_poolside" not in serialized
 
@@ -1819,7 +1861,7 @@ def test_professional_ecommerce_invalid_pose_contract_blocks_before_brain() -> N
 
     context = brain_request.metadata["ecommerce_creative_context"]
     assert context["professional_ecommerce_pose_contract"] == {
-        "contract_version": "professional_ecommerce_pose_contract_v1",
+        "contract_version": "professional_ecommerce_pose_contract_v2",
         "owner": "professional_ecommerce_deliverable_pose_acceptance",
         "status": "invalid",
     }

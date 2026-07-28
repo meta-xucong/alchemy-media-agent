@@ -3818,6 +3818,12 @@ class ScenarioRuntime:
             "no_crouched_low_support",
             "interaction_may_use_one_hand_but_body_remains_standing",
         }
+        required_standing_presentation = {
+            "front_or_three_quarter_presentation",
+            "ordinary_full_body_commercial_framing",
+            "eye_level_or_standard_camera_height",
+            "no_rear_facing_lookback",
+        }
         for entry in raw_entries:
             index = int(entry.output_index)
             expected = required_by_index.get(index)
@@ -3831,14 +3837,31 @@ class ScenarioRuntime:
                 for item in getattr(entry, "standing_pose_requirements", [])
                 if str(item).strip()
             ]
+            standing_presentation_requirements = [
+                str(item).strip()
+                for item in getattr(entry, "standing_presentation_requirements", [])
+                if str(item).strip()
+            ]
             if pose_role == "standing_poolside":
-                if set(standing_requirements) != required_standing:
+                if (
+                    len(standing_requirements) != len(set(standing_requirements))
+                    or set(standing_requirements) != required_standing
+                ):
+                    raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
+                if (
+                    len(standing_presentation_requirements)
+                    != len(set(standing_presentation_requirements))
+                    or set(standing_presentation_requirements) != required_standing_presentation
+                ):
                     raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
             elif standing_requirements:
+                raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
+            elif standing_presentation_requirements:
                 raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
             resolved[index] = {
                 "pose_role": pose_role,
                 "standing_requirements": list(standing_requirements),
+                "standing_presentation_requirements": list(standing_presentation_requirements),
                 "contract_version": expected_contract.contract_version,
                 "owner": expected_contract.owner,
                 "source": "remote_brain_image_set_plan.evidence_dimensions_by_output",

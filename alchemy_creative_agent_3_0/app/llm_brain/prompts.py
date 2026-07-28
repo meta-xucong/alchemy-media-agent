@@ -142,6 +142,12 @@ both_feet_weight_bearing, no_kneeling, no_crouched_low_support,
 interaction_may_use_one_hand_but_body_remains_standing. This is a structural
 acceptance receipt, not a provider prompt patch or prompt fragment: low-support,
 kneeling, crouching, or half-sitting results do not satisfy standing_poolside.
+For standing_poolside, standing_presentation_requirements must contain exactly
+these closed requirements: front_or_three_quarter_presentation,
+ordinary_full_body_commercial_framing, eye_level_or_standard_camera_height,
+no_rear_facing_lookback. These are deliverable camera/presentation constraints,
+not a safety keyword filter; do not emit a rear-facing look-back or low-angle
+composition for this role.
 The final natural-language prompt
 is still authored in provider_prompt_finalize, but it must satisfy the frozen
 pose role."""
@@ -343,6 +349,11 @@ def _image_set_evidence_dimensions_schema(
             "for standing_poolside exactly: both_feet_weight_bearing|no_kneeling|"
             "no_crouched_low_support|interaction_may_use_one_hand_but_body_remains_standing; "
             "empty list for seated_poolside"
+        ]
+        schema["standing_presentation_requirements"] = [
+            "for standing_poolside exactly: front_or_three_quarter_presentation|"
+            "ordinary_full_body_commercial_framing|eye_level_or_standard_camera_height|"
+            "no_rear_facing_lookback; empty list for seated_poolside"
         ]
     return [schema]
 

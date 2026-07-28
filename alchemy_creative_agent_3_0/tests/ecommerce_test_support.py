@@ -596,6 +596,9 @@ def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
             entry["standing_pose_requirements"] = list(
                 pose_contract.get("standing_requirements") or []
             )
+            entry["standing_presentation_requirements"] = list(
+                pose_contract.get("standing_presentation_requirements") or []
+            )
         entries.append(entry)
     return entries
 

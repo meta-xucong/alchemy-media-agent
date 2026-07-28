@@ -94,7 +94,17 @@ ProfessionalEcommerceStandingRequirement = Literal[
     "interaction_may_use_one_hand_but_body_remains_standing",
 ]
 
+ProfessionalEcommerceStandingPresentationRequirement = Literal[
+    "front_or_three_quarter_presentation",
+    "ordinary_full_body_commercial_framing",
+    "eye_level_or_standard_camera_height",
+    "no_rear_facing_lookback",
+]
+
 _REQUIRED_STANDING_REQUIREMENTS = set(get_args(ProfessionalEcommerceStandingRequirement))
+_REQUIRED_STANDING_PRESENTATION_REQUIREMENTS = set(
+    get_args(ProfessionalEcommerceStandingPresentationRequirement)
+)
 
 ECOMMERCE_CREATIVE_RISK_ALLOWED_VALUES: dict[str, tuple[str, ...]] = {
     "contract_version": ("ecommerce_creative_risk_preflight_v1",),
@@ -486,6 +496,9 @@ class ProfessionalEcommercePoseContractItem(V3BaseModel):
     output_index: StrictInt = Field(ge=1)
     pose_role: ProfessionalEcommercePoseRole
     standing_requirements: list[ProfessionalEcommerceStandingRequirement] = Field(default_factory=list)
+    standing_presentation_requirements: list[ProfessionalEcommerceStandingPresentationRequirement] = Field(
+        default_factory=list
+    )
 
     @field_validator("standing_requirements")
     @classmethod
@@ -494,13 +507,24 @@ class ProfessionalEcommercePoseContractItem(V3BaseModel):
             raise ValueError("duplicate_standing_requirement")
         return value
 
+    @field_validator("standing_presentation_requirements")
+    @classmethod
+    def _dedupe_standing_presentation_requirements(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("duplicate_standing_presentation_requirement")
+        return value
+
     @model_validator(mode="after")
     def _validate_pose_requirements(self) -> "ProfessionalEcommercePoseContractItem":
         if self.pose_role == "standing_poolside":
             if set(self.standing_requirements) != _REQUIRED_STANDING_REQUIREMENTS:
                 raise ValueError("standing_requirements_incomplete")
+            if set(self.standing_presentation_requirements) != _REQUIRED_STANDING_PRESENTATION_REQUIREMENTS:
+                raise ValueError("standing_presentation_requirements_incomplete")
         elif self.standing_requirements:
             raise ValueError("standing_requirements_only_for_standing_pose")
+        elif self.standing_presentation_requirements:
+            raise ValueError("standing_presentation_requirements_only_for_standing_pose")
         return self
 
 
@@ -515,8 +539,8 @@ class ProfessionalEcommercePoseContract(V3BaseModel):
 
     model_config = ConfigDict(validate_assignment=True, extra="forbid")
 
-    contract_version: Literal["professional_ecommerce_pose_contract_v1"] = (
-        "professional_ecommerce_pose_contract_v1"
+    contract_version: Literal["professional_ecommerce_pose_contract_v2"] = (
+        "professional_ecommerce_pose_contract_v2"
     )
     owner: Literal["professional_ecommerce_deliverable_pose_acceptance"] = (
         "professional_ecommerce_deliverable_pose_acceptance"
@@ -552,6 +576,7 @@ def build_professional_ecommerce_poolside_pose_contract(
                 output_index=2,
                 pose_role="standing_poolside",
                 standing_requirements=sorted(_REQUIRED_STANDING_REQUIREMENTS),
+                standing_presentation_requirements=sorted(_REQUIRED_STANDING_PRESENTATION_REQUIREMENTS),
             ),
         ]
     )

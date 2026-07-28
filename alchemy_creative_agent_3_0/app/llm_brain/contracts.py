@@ -9,6 +9,7 @@ from pydantic import Field, field_validator
 from ..schemas.models import V3BaseModel
 from ..scenario_packs.ecommerce.contracts import (
     ProfessionalEcommercePoseRole,
+    ProfessionalEcommerceStandingPresentationRequirement,
     ProfessionalEcommerceStandingRequirement,
 )
 from ..shared_capabilities.activation import (
@@ -47,6 +48,9 @@ class BrainOutputEvidenceContract(V3BaseModel):
     selected_product_truth_asset_ids: list[str] = Field(default_factory=list, max_length=2)
     professional_ecommerce_pose_role: ProfessionalEcommercePoseRole | None = None
     standing_pose_requirements: list[ProfessionalEcommerceStandingRequirement] = Field(default_factory=list)
+    standing_presentation_requirements: list[ProfessionalEcommerceStandingPresentationRequirement] = Field(
+        default_factory=list
+    )
 
 
 class BrainImageSetPlan(V3BaseModel):
