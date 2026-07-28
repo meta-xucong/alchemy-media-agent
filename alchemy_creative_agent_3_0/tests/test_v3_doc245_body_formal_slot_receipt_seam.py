@@ -1305,8 +1305,10 @@ def test_doc245_body_formal_failure_projection_classifies_shared_review_rejectio
     result = service.refresh_body_silhouette(
         _active_body_card(),
         face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-        source_class="user_described",
-        user_intent="user described body silhouette profile",
+        source_class="observed",
+        body_evidence_ids=["body_source_asset"],
+        consent_provenance_id="consent_123",
+        user_intent="observed body silhouette profile",
     )
 
     assert result.status == "blocked"
@@ -1349,8 +1351,10 @@ def test_doc245_body_formal_failure_projection_classifies_source_standard_missin
     result = service.refresh_body_silhouette(
         _active_body_card(),
         face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-        source_class="user_described",
-        user_intent="user described body silhouette profile",
+        source_class="observed",
+        body_evidence_ids=["body_source_asset"],
+        consent_provenance_id="consent_123",
+        user_intent="observed body silhouette profile",
     )
 
     assert result.status == "blocked"
@@ -1446,8 +1450,10 @@ def test_doc245_body_formal_failure_projection_classifies_missing_shared_review_
     result = service.refresh_body_silhouette(
         _active_body_card(),
         face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-        source_class="user_described",
-        user_intent="user described body silhouette profile",
+        source_class="observed",
+        body_evidence_ids=["body_source_asset"],
+        consent_provenance_id="consent_123",
+        user_intent="observed body silhouette profile",
     )
 
     assert result.status == "blocked"
@@ -1565,8 +1571,10 @@ def test_doc245_active_body_refresh_adds_pending_review_without_replacing_active
     result = service.refresh_body_silhouette(
         active_card,
         face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-        source_class="user_described",
-        user_intent="user described body silhouette profile",
+        source_class="observed",
+        body_evidence_ids=["body_source_asset"],
+        consent_provenance_id="consent_123",
+        user_intent="observed body silhouette profile",
     )
 
     assert [request.slot_key for request in generator.requests] == [
@@ -1657,8 +1665,10 @@ def test_doc245_body_refresh_rejects_existing_pending_refresh_without_overwrite(
     first = service.refresh_body_silhouette(
         active_card,
         face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-        source_class="user_described",
-        user_intent="user described body silhouette profile",
+        source_class="observed",
+        body_evidence_ids=["body_source_asset"],
+        consent_provenance_id="consent_123",
+        user_intent="observed body silhouette profile",
     )
     pending_version = first.card.body_silhouette_refresh_version_id
     pending_winners = {
@@ -1671,8 +1681,10 @@ def test_doc245_body_refresh_rejects_existing_pending_refresh_without_overwrite(
         service.refresh_body_silhouette(
             first.card,
             face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-            source_class="user_described",
-            user_intent="user described body silhouette profile",
+            source_class="observed",
+            body_evidence_ids=["body_source_asset"],
+            consent_provenance_id="consent_123",
+            user_intent="observed body silhouette profile",
         )
 
     assert len(generator.requests) == request_count
@@ -1694,6 +1706,14 @@ def test_doc245_strict_body_refresh_requires_body_owned_source_not_face_only_bra
             face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
             source_class="brain_inferred",
             user_intent="neutral body silhouette profile",
+        )
+
+    with pytest.raises(ValueError, match="body_silhouette_refresh_body_source_unavailable"):
+        service.refresh_body_silhouette(
+            active_card,
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+            source_class="user_described",
+            user_intent="user described body silhouette profile",
         )
 
     assert generator.requests == []
@@ -1759,7 +1779,7 @@ def test_doc245_body_stage_metadata_rejects_non_body_owned_channel_injection() -
         )
 
 
-def test_doc245_user_described_body_facts_are_closed_provenance_not_prompt_payload() -> None:
+def test_doc245_user_described_body_facts_cannot_certify_strict_refresh_or_enter_prompt_payload() -> None:
     raw_body_facts = (
         "raw_prompt: make the body taller; file_path=D:/unsafe/body.png; "
         "url=https://example.invalid/private; provider_payload={'secret': true}; asset_id=v3_asset_private"
@@ -1773,16 +1793,17 @@ def test_doc245_user_described_body_facts_are_closed_provenance_not_prompt_paylo
         preparation_intent="scene-neutral Body Silhouette source refresh",
     )
 
-    result = host.refresh_body_silhouette(
-        asset=asset,
-        card=active_card,
-        request=BodySilhouettePublicRequest(
-            source_class="user_described",
-            body_facts=raw_body_facts,
-        ),
-    )
+    with pytest.raises(ValueError, match="body_silhouette_refresh_body_source_unavailable"):
+        host.refresh_body_silhouette(
+            asset=asset,
+            card=active_card,
+            request=BodySilhouettePublicRequest(
+                source_class="user_described",
+                body_facts=raw_body_facts,
+            ),
+        )
 
-    assert result.status == "review"
+    assert generator.requests == []
     serialized_requests = str([request.model_dump(mode="json") for request in generator.requests])
     assert raw_body_facts not in serialized_requests
     for forbidden in (
@@ -1793,8 +1814,22 @@ def test_doc245_user_described_body_facts_are_closed_provenance_not_prompt_paylo
         "v3_asset_private",
     ):
         assert forbidden not in serialized_requests
+
+
+def test_doc245_user_described_body_prepare_remains_non_certifying_legacy_provenance() -> None:
+    generator = _BodyGenerator()
+    service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+
+    result = service.prepare_body_silhouette(
+        _card_ready_for_body(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="user_described",
+        user_intent="server-owned non-certifying body provenance direction",
+    )
+
+    assert result.status == "review"
     for request in generator.requests:
-        assert request.user_intent == "scene-neutral Body Silhouette source refresh"
+        assert request.user_intent == "server-owned non-certifying body provenance direction"
         assert request.body_source_admission is not None
         assert request.body_source_admission.source_class == "user_described"
         assert request.body_source_admission.body_evidence_ids == []
@@ -1960,8 +1995,10 @@ def test_doc245_body_refresh_fail_closed_without_cross_view_positive_evidence() 
     result = service.refresh_body_silhouette(
         active_card,
         face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-        source_class="user_described",
-        user_intent="user described body silhouette profile",
+        source_class="observed",
+        body_evidence_ids=["body_source_asset"],
+        consent_provenance_id="consent_123",
+        user_intent="observed body silhouette profile",
     )
 
     assert result.status == "blocked"
@@ -1977,8 +2014,10 @@ def test_doc245_body_refresh_fail_closed_without_cross_view_positive_evidence() 
     ).refresh_body_silhouette(
         result.card,
         face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-        source_class="user_described",
-        user_intent="user described body silhouette profile",
+        source_class="observed",
+        body_evidence_ids=["body_source_asset"],
+        consent_provenance_id="consent_123",
+        user_intent="observed body silhouette profile",
     )
 
     assert recovered.status == "review"
@@ -2021,6 +2060,16 @@ def test_doc245_visual_asset_library_body_refresh_uses_explicit_lifecycle_entry(
     body_service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
     lifecycle = VisualAssetLibraryLifecycleService(
         catalog,
+        root_source_resolver=lambda source_id: SimpleNamespace(
+            status="ready",
+            role="body_proportion_reference",
+            metadata={
+                "consent_reference": "consent_123",
+                "reference_truth_layer": "body_proportion_truth",
+            },
+        )
+        if source_id == "body_source_asset"
+        else None,
         character_card_stage_host=_BodyStageHost(body_service),
     )
 
@@ -2028,8 +2077,8 @@ def test_doc245_visual_asset_library_body_refresh_uses_explicit_lifecycle_entry(
         owner_scope="owner",
         visual_asset_id=created.visual_asset_id,
         body_request=BodySilhouettePublicRequest(
-            source_class="user_described",
-            body_facts="user described body silhouette proportions",
+            source_class="observed",
+            body_reference_asset_id="body_source_asset",
         ),
     )
 
@@ -2053,8 +2102,8 @@ def test_doc245_visual_asset_library_body_refresh_uses_explicit_lifecycle_entry(
             owner_scope="owner",
             visual_asset_id=created.visual_asset_id,
             body_request=BodySilhouettePublicRequest(
-                source_class="user_described",
-                body_facts="user described body silhouette proportions",
+                source_class="observed",
+                body_reference_asset_id="body_source_asset",
             ),
         )
     blocked_reloaded = lifecycle.get(owner_scope="owner", visual_asset_id=created.visual_asset_id)
@@ -2065,6 +2114,87 @@ def test_doc245_visual_asset_library_body_refresh_uses_explicit_lifecycle_entry(
         for slot_key, slot in blocked_reloaded.character_card.body_silhouette_refresh_slots.items()
     } == pending_winners
     assert blocked_reloaded.character_card.body_slots == active_card.body_slots
+
+
+def test_doc245_strict_body_refresh_requires_observed_body_proportion_truth_before_host() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    created = catalog.create(
+        owner_scope="owner",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Model",
+            root_source_asset_id="root_source",
+            consent_reference="consent",
+            preparation_intent="scene-neutral body silhouette source refresh",
+        ),
+    )
+    active_card = _active_body_card()
+    catalog.save(
+        created.model_copy(
+            update={
+                "lifecycle_status": "active",
+                "active_version_id": "version_1",
+                "versions": [
+                    {
+                        "version_id": "version_1",
+                        "visual_asset_id": created.visual_asset_id,
+                        "lifecycle_status": "active",
+                        "approved_evidence_ids": ["face_front_output"],
+                        "activation_confirmed": True,
+                        "immutable_source_provenance": created.root_source_provenance,
+                    }
+                ],
+                "character_card": active_card,
+            }
+        )
+    )
+    generator = _BodyGenerator()
+    body_service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+
+    invalid_sources = {
+        "legacy_full_body_asset": SimpleNamespace(
+            status="ready",
+            role="full_body_reference",
+            metadata={
+                "consent_reference": "consent_123",
+                "reference_truth_layer": "body_proportion_truth",
+            },
+        ),
+        "missing_truth_layer_asset": SimpleNamespace(
+            status="ready",
+            role="body_proportion_reference",
+            metadata={"consent_reference": "consent_123"},
+        ),
+    }
+    lifecycle = VisualAssetLibraryLifecycleService(
+        catalog,
+        root_source_resolver=lambda source_id: invalid_sources.get(source_id),
+        character_card_stage_host=_BodyStageHost(body_service),
+    )
+
+    with pytest.raises(ValueError, match="character_card_body_reference_role_invalid"):
+        lifecycle.refresh_character_card_body_silhouette(
+            owner_scope="owner",
+            visual_asset_id=created.visual_asset_id,
+            body_request=BodySilhouettePublicRequest(
+                source_class="observed",
+                body_reference_asset_id="legacy_full_body_asset",
+            ),
+        )
+    with pytest.raises(ValueError, match="character_card_body_reference_truth_layer_invalid"):
+        lifecycle.refresh_character_card_body_silhouette(
+            owner_scope="owner",
+            visual_asset_id=created.visual_asset_id,
+            body_request=BodySilhouettePublicRequest(
+                source_class="observed",
+                body_reference_asset_id="missing_truth_layer_asset",
+            ),
+        )
+
+    assert generator.requests == []
+    reloaded = lifecycle.get(owner_scope="owner", visual_asset_id=created.visual_asset_id)
+    assert reloaded.character_card.body_slots == active_card.body_slots
+    assert reloaded.character_card.body_silhouette_refresh_slots == {}
+    assert reloaded.character_card.body_silhouette_refresh_status == "empty"
 
 
 def test_doc245_visual_asset_library_body_refresh_requires_explicit_shared_host() -> None:

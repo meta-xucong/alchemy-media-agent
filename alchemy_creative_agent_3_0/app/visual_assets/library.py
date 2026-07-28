@@ -1112,7 +1112,7 @@ class VisualAssetLibraryLifecycleService:
         ):
             raise ValueError("character_card_body_refresh_pending")
         if body_request.source_class == "observed":
-            self._require_authorized_body_reference(body_request)
+            self._require_authorized_body_reference(body_request, strict_body_truth=True)
         method = getattr(self.character_card_stage_host, "refresh_body_silhouette", None)
         if not callable(method):
             raise CharacterCardRuntimeUnavailable("character_card_body_refresh_unavailable")
@@ -1397,7 +1397,12 @@ class VisualAssetLibraryLifecycleService:
             stage="expression_set",
         )
 
-    def _require_authorized_body_reference(self, request: BodySilhouettePublicRequest) -> Any:
+    def _require_authorized_body_reference(
+        self,
+        request: BodySilhouettePublicRequest,
+        *,
+        strict_body_truth: bool = False,
+    ) -> Any:
         """Resolve an observed body source without accepting paths or claims."""
 
         if self.root_source_resolver is None:
@@ -1407,9 +1412,14 @@ class VisualAssetLibraryLifecycleService:
         role = str(getattr(getattr(source, "role", None), "value", getattr(source, "role", "")) or "").strip().lower()
         if source is None or status != "ready":
             raise ValueError("character_card_body_reference_not_ready")
-        if role not in {"full_body_reference", "body_reference", "body_full_reference"}:
+        accepted_roles = {"full_body_reference", "body_reference", "body_full_reference"}
+        if strict_body_truth:
+            accepted_roles = {"body_proportion_reference"}
+        if role not in accepted_roles:
             raise ValueError("character_card_body_reference_role_invalid")
         metadata = getattr(source, "metadata", {}) or {}
+        if strict_body_truth and str(metadata.get("reference_truth_layer") or "").strip() != "body_proportion_truth":
+            raise ValueError("character_card_body_reference_truth_layer_invalid")
         consent = metadata.get("consent_reference") or metadata.get("rights_reference")
         if not str(consent or "").strip():
             raise ValueError("character_card_body_reference_consent_required")

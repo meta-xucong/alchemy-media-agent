@@ -1418,7 +1418,7 @@ class BodyPreparationRequest(_CharacterCardModel):
                 raise ValueError("observed Body Silhouette requires an authorized full-body reference")
             if not str(self.consent_provenance_id or "").strip():
                 raise ValueError("observed Body Silhouette requires consent provenance")
-        if self.strict_body_source_repair and self.source_class == "brain_inferred":
+        if self.strict_body_source_repair and self.source_class != "observed":
             raise ValueError("body_silhouette_refresh_body_source_unavailable")
         return self
 
