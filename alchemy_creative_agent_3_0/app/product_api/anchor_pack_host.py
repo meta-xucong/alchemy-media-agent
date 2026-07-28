@@ -1224,7 +1224,7 @@ class ProductApiAnchorPackPreparationHost:
             if request.source_class == "observed" and request.body_reference_asset_id
             else []
         )
-        user_intent = str(request.body_facts or getattr(asset, "preparation_intent", "") or "").strip()
+        user_intent = self._character_card_body_stage_intent(asset)
         if not user_intent:
             raise ValueError("character_card_body_intent_missing")
         preparation = CharacterCardPreparationService(generator=self, reviewer=self)
@@ -1262,7 +1262,7 @@ class ProductApiAnchorPackPreparationHost:
             if request.source_class == "observed" and request.body_reference_asset_id
             else []
         )
-        user_intent = str(request.body_facts or getattr(asset, "preparation_intent", "") or "").strip()
+        user_intent = self._character_card_body_stage_intent(asset)
         if not user_intent:
             raise ValueError("character_card_body_intent_missing")
         preparation = CharacterCardPreparationService(generator=self, reviewer=self)
@@ -1278,6 +1278,13 @@ class ProductApiAnchorPackPreparationHost:
             generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
+
+    @staticmethod
+    def _character_card_body_stage_intent(asset: Any) -> str:
+        """Return scene-neutral Body stage intent without copying raw body facts."""
+
+        intent = str(getattr(asset, "preparation_intent", "") or "").strip()
+        return intent or "scene-neutral Body Silhouette source-standard preparation"
 
     def _attach_character_card_receipt(
         self,
@@ -1507,6 +1514,11 @@ class ProductApiAnchorPackPreparationHost:
                 slot_key=request.slot_key,
                 reference_output_ids=request.reference_output_ids,
                 source_class=request.source_class,
+                body_source_admission=(
+                    request.body_source_admission.model_dump(mode="json")
+                    if request.body_source_admission is not None
+                    else None
+                ),
                 generation_channel=request.generation_channel,
                 mcp_operation_id=operation_id,
                 attempt_round=request.attempt_round,

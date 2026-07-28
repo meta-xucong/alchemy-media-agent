@@ -937,6 +937,7 @@ class V3ProductApiService:
         professional_character_card_slot: str | None = None,
         professional_character_card_reference_output_ids: list[str] | None = None,
         professional_character_card_source_class: str | None = None,
+        professional_character_card_body_source_admission: dict[str, Any] | None = None,
         professional_character_card_attempt_round: int = 1,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
@@ -1026,6 +1027,15 @@ class V3ProductApiService:
             ]
             if not reference_ids or len(reference_ids) != len(set(reference_ids)):
                 raise ValueError("professional_character_card_reference_chain_invalid")
+            if professional_character_card_stage == "body_silhouette":
+                if professional_character_card_source_class in {"observed", "user_described"} and (
+                    professional_character_card_body_source_admission is None
+                ):
+                    raise ValueError("professional_character_card_body_source_admission_required")
+                if professional_character_card_source_class == "brain_inferred" and (
+                    professional_character_card_body_source_admission is not None
+                ):
+                    raise ValueError("professional_character_card_body_source_admission_forbidden")
             planning_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
                 stage=professional_character_card_stage,
                 slot_key=str(professional_character_card_slot),
@@ -1045,16 +1055,34 @@ class V3ProductApiService:
                     1, int(professional_character_card_attempt_round)
                 ),
                 "professional_character_card_reference_output_ids": reference_ids,
+                **(
+                    {
+                        "professional_character_card_body_source_admission": self._safe_professional_character_card_body_source_admission(
+                            professional_character_card_body_source_admission,
+                            source_class=professional_character_card_source_class,
+                            face_reference_output_ids=reference_ids,
+                        )
+                    }
+                    if professional_character_card_body_source_admission is not None
+                    else {}
+                ),
                 "professional_planning_metadata": planning_metadata,
                 "professional_identity_reference_strategy": "character_card_shared_identity_v1",
                 "professional_reference_stage": f"character_card_{professional_character_card_stage}",
-                "professional_anchor_reference_assets": self._professional_character_card_reference_assets(
-                    self._professional_character_card_provider_reference_output_ids(
-                        stage=professional_character_card_stage,
-                        slot_key=str(professional_character_card_slot),
-                        reference_output_ids=reference_ids,
-                    )
-                ),
+                "professional_anchor_reference_assets": [
+                    *self._professional_character_card_reference_assets(
+                        self._professional_character_card_provider_reference_output_ids(
+                            stage=professional_character_card_stage,
+                            slot_key=str(professional_character_card_slot),
+                            reference_output_ids=reference_ids,
+                        )
+                    ),
+                    *self._professional_character_card_body_reference_assets(
+                        professional_character_card_body_source_admission,
+                        source_class=professional_character_card_source_class,
+                        face_reference_output_ids=reference_ids,
+                    ),
+                ],
                 "generation_channel": generation_channel,
                 "mcp_operation_id": mcp_operation_id,
                 # Character Card stages own their 3-candidate slot lifecycle
@@ -1262,6 +1290,7 @@ class V3ProductApiService:
         slot_key: str,
         reference_output_ids: list[str],
         source_class: str | None = None,
+        body_source_admission: dict[str, Any] | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
         attempt_round: int = 1,
@@ -1276,6 +1305,7 @@ class V3ProductApiService:
             professional_character_card_slot=slot_key,
             professional_character_card_reference_output_ids=list(reference_output_ids),
             professional_character_card_source_class=source_class,
+            professional_character_card_body_source_admission=body_source_admission,
             professional_character_card_attempt_round=attempt_round,
             generation_channel=generation_channel,
             mcp_operation_id=mcp_operation_id,
@@ -1431,6 +1461,129 @@ class V3ProductApiService:
                         "provider_input_required": True,
                         "canonical_output_binding": True,
                         "professional_character_card_lineage_evidence": True,
+                    },
+                }
+            )
+        return references
+
+    @staticmethod
+    def _safe_professional_character_card_body_source_admission(
+        raw: dict[str, Any] | None,
+        *,
+        source_class: str | None,
+        face_reference_output_ids: list[str],
+    ) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            raise ValueError("professional_character_card_body_source_admission_invalid")
+        expected_keys = {
+            "contract_version",
+            "source_class",
+            "body_evidence_ids",
+            "body_reference_role",
+            "body_reference_truth_layer",
+            "face_reference_output_ids",
+            "body_owned_channels",
+        }
+        if set(raw) != expected_keys:
+            raise ValueError("professional_character_card_body_source_admission_invalid")
+        if raw.get("contract_version") != "professional_body_source_admission_v1":
+            raise ValueError("professional_character_card_body_source_admission_invalid")
+        if raw.get("source_class") != source_class or source_class not in {"observed", "user_described"}:
+            raise ValueError("professional_character_card_body_source_admission_source_mismatch")
+        face_refs = [str(item or "").strip() for item in raw.get("face_reference_output_ids") or [] if str(item or "").strip()]
+        if face_refs != face_reference_output_ids:
+            raise ValueError("professional_character_card_body_source_admission_face_chain_mismatch")
+        body_ids = [str(item or "").strip() for item in raw.get("body_evidence_ids") or [] if str(item or "").strip()]
+        if len(body_ids) != len(set(body_ids)):
+            raise ValueError("professional_character_card_body_source_admission_body_ids_invalid")
+        for item in [*body_ids, *face_refs]:
+            if "/" in item or "\\" in item or ":" in item:
+                raise ValueError("professional_character_card_body_source_admission_id_path_forbidden")
+        allowed_channels = {
+            "body_proportion",
+            "body_scale",
+            "neck_shoulder_transition",
+            "torso_limb_proportion",
+            "developmental_stage_coherence",
+            "stance_ground_contact",
+            "cross_view_body_parity",
+        }
+        channels = [str(item or "").strip() for item in raw.get("body_owned_channels") or [] if str(item or "").strip()]
+        if set(channels) != allowed_channels or len(channels) != len(set(channels)):
+            raise ValueError("professional_character_card_body_source_admission_channels_invalid")
+        if source_class == "observed":
+            if not body_ids:
+                raise ValueError("professional_character_card_body_source_admission_body_ref_missing")
+            if raw.get("body_reference_role") != "body_proportion_reference":
+                raise ValueError("professional_character_card_body_source_admission_role_invalid")
+            if raw.get("body_reference_truth_layer") != "body_proportion_truth":
+                raise ValueError("professional_character_card_body_source_admission_truth_layer_invalid")
+        else:
+            if body_ids or raw.get("body_reference_role") is not None or raw.get("body_reference_truth_layer") is not None:
+                raise ValueError("professional_character_card_body_source_admission_user_described_ref_invalid")
+        return {
+            "contract_version": "professional_body_source_admission_v1",
+            "source_class": source_class,
+            "body_evidence_ids": body_ids,
+            "body_reference_role": "body_proportion_reference" if source_class == "observed" else None,
+            "body_reference_truth_layer": "body_proportion_truth" if source_class == "observed" else None,
+            "face_reference_output_ids": face_refs,
+            "body_owned_channels": sorted(allowed_channels),
+        }
+
+    def _professional_character_card_body_reference_assets(
+        self,
+        body_source_admission: dict[str, Any] | None,
+        *,
+        source_class: str | None,
+        face_reference_output_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """Resolve observed Body-owner sources as body-only references.
+
+        User-described body source remains provenance only; it must not invent a
+        provider image.  Face winners stay in the Face Identity channel.
+        """
+
+        if body_source_admission is None:
+            return []
+        admission = self._safe_professional_character_card_body_source_admission(
+            body_source_admission,
+            source_class=source_class,
+            face_reference_output_ids=face_reference_output_ids,
+        )
+        if source_class != "observed":
+            return []
+        references: list[dict[str, Any]] = []
+        for asset_id in admission["body_evidence_ids"]:
+            upload = self.asset_store.get_upload(asset_id)
+            path = Path(upload.file_path) if upload is not None and getattr(upload, "file_path", None) else None
+            status = str(getattr(getattr(upload, "status", None), "value", getattr(upload, "status", None)) or "")
+            role = str(getattr(upload, "role", "") or "").strip().lower()
+            if upload is None or status != "ready" or path is None or not path.is_file():
+                raise ValueError("professional_character_card_body_reference_not_ready")
+            if role not in {"body_proportion_reference", "full_body_reference", "body_reference", "body_full_reference"}:
+                raise ValueError("professional_character_card_body_reference_role_invalid")
+            references.append(
+                {
+                    "asset_id": asset_id,
+                    "role": "body_proportion_reference",
+                    "source_type": "uploaded_asset",
+                    "use_policy": "body_proportion_only",
+                    "strength": "hard",
+                    "provider_input_required": True,
+                    "file_path": str(path),
+                    "uri": getattr(upload, "content_url", None),
+                    "filename": getattr(upload, "filename", None),
+                    "mime_type": getattr(upload, "mime_type", None),
+                    "metadata": {
+                        "source_type": "uploaded_asset",
+                        "use_policy": "body_proportion_only",
+                        "strength": "hard",
+                        "provider_input_required": True,
+                        "canonical_body_source_binding": True,
+                        "reference_truth_layer": "body_proportion_truth",
+                        "body_reference_policy": "body_scale_neck_shoulder_torso_limb_developmental_stage_only",
+                        "source_integrity_id": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
                     },
                 }
             )
@@ -8834,6 +8987,7 @@ class V3ProductApiService:
             "professional_character_card_slot",
             "professional_character_card_source_class",
             "professional_character_card_reference_output_ids",
+            "professional_character_card_body_source_admission",
             "generation_channel",
             "mcp_operation_id",
             "frozen_visual_asset_binding_set",

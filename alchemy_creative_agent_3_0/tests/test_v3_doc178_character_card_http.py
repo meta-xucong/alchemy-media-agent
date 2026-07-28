@@ -243,6 +243,7 @@ class _SharedStageHost:
 
     @classmethod
     def _attempt(cls, *, slot_key: str, output_id: str, module: str = "body_silhouette") -> CharacterCardCandidateAttempt:
+        reference_output_ids = ["front", "profile", "rear"] if module == "body_silhouette" else ["front_winner"]
         request = CharacterCardCandidateRequest(
             project_id="project_doc178",
             people_asset_id="people_doc178",
@@ -250,12 +251,31 @@ class _SharedStageHost:
             module=module,  # type: ignore[arg-type]
             slot_key=slot_key,  # type: ignore[arg-type]
             candidate_index=1,
-            reference_output_ids=["front", "profile", "rear"]
-            if module == "body_silhouette"
-            else ["front_winner"],
+            reference_output_ids=reference_output_ids,
             user_intent="shared-runtime-owned test intent",
             source_class="observed" if module == "body_silhouette" else None,
             consent_provenance_id="body-consent" if module == "body_silhouette" else None,
+            body_source_admission=(
+                {
+                    "contract_version": "professional_body_source_admission_v1",
+                    "source_class": "observed",
+                    "body_evidence_ids": ["body_upload"],
+                    "body_reference_role": "body_proportion_reference",
+                    "body_reference_truth_layer": "body_proportion_truth",
+                    "face_reference_output_ids": reference_output_ids,
+                    "body_owned_channels": [
+                        "body_proportion",
+                        "body_scale",
+                        "neck_shoulder_transition",
+                        "torso_limb_proportion",
+                        "developmental_stage_coherence",
+                        "stance_ground_contact",
+                        "cross_view_body_parity",
+                    ],
+                }
+                if module == "body_silhouette"
+                else None
+            ),
         )
         candidate = CharacterCardCandidateResult(
             candidate_id=f"candidate_{slot_key}",

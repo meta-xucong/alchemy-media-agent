@@ -190,6 +190,16 @@ CharacterCardModuleStatus = Literal[
 BodySourceClass = Literal["observed", "user_described", "brain_inferred"]
 ExpressionKey = Literal["laugh", "smile", "anger", "sad"]
 BodySlotKey = Literal["body.front_full", "body.side_full", "body.rear_full"]
+BODY_SOURCE_ADMISSION_CONTRACT_VERSION = "professional_body_source_admission_v1"
+BODY_SOURCE_ADMISSION_ALLOWED_CHANNELS = (
+    "body_proportion",
+    "body_scale",
+    "neck_shoulder_transition",
+    "torso_limb_proportion",
+    "developmental_stage_coherence",
+    "stance_ground_contact",
+    "cross_view_body_parity",
+)
 
 
 class _CharacterCardModel(V3BaseModel):
@@ -244,6 +254,63 @@ class BodySilhouettePublicRequest(_CharacterCardModel):
                 raise ValueError("user_described Body Silhouette requires natural-language facts")
         elif self.body_reference_asset_id is not None or self.body_facts is not None:
             raise ValueError("brain_inferred Body Silhouette accepts no observed body facts")
+        return self
+
+
+class BodySourceAdmission(_CharacterCardModel):
+    """Server-owned source admission for strict Body Silhouette repair.
+
+    It separates Body-owner evidence/provenance from Face Identity references.
+    The payload is public-safe: it contains no prompt prose, local paths,
+    provider response, biometric vectors, or raw user-described body facts.
+    """
+
+    contract_version: Literal["professional_body_source_admission_v1"] = BODY_SOURCE_ADMISSION_CONTRACT_VERSION
+    source_class: Literal["observed", "user_described"]
+    body_evidence_ids: list[str] = Field(default_factory=list)
+    body_reference_role: Literal["body_proportion_reference"] | None = None
+    body_reference_truth_layer: Literal["body_proportion_truth"] | None = None
+    face_reference_output_ids: list[str] = Field(default_factory=list)
+    body_owned_channels: list[str] = Field(default_factory=lambda: list(BODY_SOURCE_ADMISSION_ALLOWED_CHANNELS))
+
+    @field_validator("body_evidence_ids", "face_reference_output_ids")
+    @classmethod
+    def clean_source_ids(cls, value: list[str]) -> list[str]:
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("body source admission IDs must be unique")
+        for item in cleaned:
+            if "/" in item or "\\" in item or ":" in item:
+                raise ValueError("body source admission IDs must not contain paths")
+        return cleaned
+
+    @field_validator("body_owned_channels")
+    @classmethod
+    def body_owned_channels_are_closed(cls, value: list[str]) -> list[str]:
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        allowed = set(BODY_SOURCE_ADMISSION_ALLOWED_CHANNELS)
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("body_stage_channel_duplicate")
+        if set(cleaned) != allowed:
+            raise ValueError("body_stage_channel_not_owned")
+        return cleaned
+
+    @model_validator(mode="after")
+    def enforce_source_channel_contract(self) -> "BodySourceAdmission":
+        if len(self.face_reference_output_ids) != 3:
+            raise ValueError("body_source_admission_face_chain_invalid")
+        if self.source_class == "observed":
+            if not self.body_evidence_ids:
+                raise ValueError("body_source_admission_observed_evidence_missing")
+            if self.body_reference_role != "body_proportion_reference":
+                raise ValueError("body_source_admission_role_invalid")
+            if self.body_reference_truth_layer != "body_proportion_truth":
+                raise ValueError("body_source_admission_truth_layer_invalid")
+        else:
+            if self.body_evidence_ids:
+                raise ValueError("user_described_body_source_admission_has_reference")
+            if self.body_reference_role is not None or self.body_reference_truth_layer is not None:
+                raise ValueError("user_described_body_source_admission_has_reference_role")
         return self
 
 
@@ -753,6 +820,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     user_intent: str
     source_class: BodySourceClass | None = None
     consent_provenance_id: str | None = None
+    body_source_admission: BodySourceAdmission | None = None
     generation_channel: Literal["provider", "mcp"] = "provider"
     mcp_handoff_id: str | None = None
     prior_review_repair: dict[str, Any] | None = None
@@ -784,6 +852,8 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("Expression Set requests must use only face.front winner")
             if self.source_class is not None:
                 raise ValueError("Expression Set does not accept a body source class")
+            if self.body_source_admission is not None:
+                raise ValueError("Expression Set does not accept body source admission")
         else:
             if not self.slot_key.startswith("body."):
                 raise ValueError("Body Silhouette request has an invalid slot")
@@ -793,6 +863,15 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("Body Silhouette request requires a source class")
             if self.source_class == "observed" and not str(self.consent_provenance_id or "").strip():
                 raise ValueError("observed Body Silhouette request requires consent provenance")
+            if self.source_class == "brain_inferred" and self.body_source_admission is not None:
+                raise ValueError("brain_inferred Body Silhouette cannot carry body source admission")
+            if self.source_class in {"observed", "user_described"}:
+                if self.body_source_admission is None:
+                    raise ValueError("Body Silhouette strict source admission is required")
+                if self.body_source_admission.source_class != self.source_class:
+                    raise ValueError("Body Silhouette source admission class mismatch")
+                if self.body_source_admission.face_reference_output_ids != self.reference_output_ids:
+                    raise ValueError("Body Silhouette source admission face chain mismatch")
         return self
 
 
@@ -1320,6 +1399,7 @@ class BodyPreparationRequest(_CharacterCardModel):
     consent_provenance_id: str | None = None
     candidate_count: Literal[3] = 3
     wardrobe_lock: Literal[False] = False
+    strict_body_source_repair: bool = False
 
     @field_validator("face_reference_output_ids", "body_evidence_ids")
     @classmethod
@@ -1338,6 +1418,8 @@ class BodyPreparationRequest(_CharacterCardModel):
                 raise ValueError("observed Body Silhouette requires an authorized full-body reference")
             if not str(self.consent_provenance_id or "").strip():
                 raise ValueError("observed Body Silhouette requires consent provenance")
+        if self.strict_body_source_repair and self.source_class == "brain_inferred":
+            raise ValueError("body_silhouette_refresh_body_source_unavailable")
         return self
 
     @property
@@ -1347,6 +1429,17 @@ class BodyPreparationRequest(_CharacterCardModel):
     @property
     def observed_truth(self) -> bool:
         return self.source_class == "observed"
+
+    def source_admission(self) -> BodySourceAdmission | None:
+        if self.source_class == "brain_inferred":
+            return None
+        return BodySourceAdmission(
+            source_class=self.source_class,  # type: ignore[arg-type]
+            body_evidence_ids=list(self.body_evidence_ids),
+            body_reference_role="body_proportion_reference" if self.source_class == "observed" else None,
+            body_reference_truth_layer="body_proportion_truth" if self.source_class == "observed" else None,
+            face_reference_output_ids=list(self.face_reference_output_ids),
+        )
 
 
 class CharacterCardCandidateGenerator(Protocol):
@@ -1750,6 +1843,7 @@ class CharacterCardPreparationService:
                 reference_output_ids=request.reference_output_ids,
                 user_intent=user_intent,
                 source_class=source_class,
+                body_source_admission=request.source_admission(),
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 attempts=attempts,
@@ -1874,7 +1968,9 @@ class CharacterCardPreparationService:
             face_reference_output_ids=face_reference_output_ids,
             body_evidence_ids=list(body_evidence_ids or []),
             consent_provenance_id=consent_provenance_id,
+            strict_body_source_repair=True,
         )
+        body_source_admission = request.source_admission()
         attempts: list[CharacterCardCandidateAttempt] = []
         winners: dict[str, str] = {}
         formal_slot_receipts: dict[str, FormalSlotReceipt] = {}
@@ -1890,6 +1986,7 @@ class CharacterCardPreparationService:
                 reference_output_ids=request.reference_output_ids,
                 user_intent=user_intent,
                 source_class=source_class,
+                body_source_admission=body_source_admission,
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 attempts=attempts,
@@ -2000,6 +2097,7 @@ class CharacterCardPreparationService:
         reference_output_ids: list[str],
         user_intent: str,
         source_class: BodySourceClass | None,
+        body_source_admission: BodySourceAdmission | None = None,
         consent_provenance_id: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         review_only_resume: bool = False,
@@ -2058,6 +2156,7 @@ class CharacterCardPreparationService:
                 reference_output_ids=list(reference_output_ids),
                 user_intent=user_intent,
                 source_class=source_class,
+                body_source_admission=body_source_admission,
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 mcp_handoff_id=self._resumable_mcp_handoff_id(
