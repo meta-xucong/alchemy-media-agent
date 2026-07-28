@@ -2698,6 +2698,38 @@ class ScenarioRuntime:
         return [dict(contract)]
 
     @staticmethod
+    def _provider_admission_decision_from_semantic_contracts(
+        semantic_contracts: list[dict[str, Any]],
+        *,
+        frozen_binding: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Require Brain provider-admission only from shared safety evidence.
+
+        The runtime does not infer age, apparel, marketplace, or scene safety
+        from prompt words here.  It only projects an existing validated Human
+        Realism semantic contract into the already-owned Doc185 admission
+        receipt requirement.
+        """
+
+        requires_admission = any(
+            isinstance(contract, dict)
+            and contract.get("capability_id") == "human_realism"
+            and contract.get("ordinary_age_appropriate_context") is True
+            for contract in semantic_contracts
+        )
+        if not requires_admission:
+            return {}
+        return {
+            "required": True,
+            "contract_version": "v3_provider_admission_decision_v1",
+            "provider_admission_status": "admitted",
+            "prompt_language_mode": "concise_positive_renderer_direction",
+            "safety_sensitive_prompt_normalized": "applied",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": dict(frozen_binding),
+        }
+
+    @staticmethod
     def _canonical_prompt_context(
         request: ScenarioRuntimeRequest,
         plan: CapabilityActivationPlan,
@@ -2810,6 +2842,12 @@ class ScenarioRuntime:
         )
         if reference_ownership:
             context["reference_channel_ownership_decision"] = reference_ownership
+        provider_admission_decision = ScenarioRuntime._provider_admission_decision_from_semantic_contracts(
+            semantic_contracts,
+            frozen_binding=dict(context.get("frozen_binding") or {}),
+        )
+        if provider_admission_decision:
+            context["provider_admission_decision"] = provider_admission_decision
         if age_resolution:
             context["human_realism_age_resolution"] = age_resolution
             if age_resolution.get("age_fidelity") == "follow_explicit_prompt":

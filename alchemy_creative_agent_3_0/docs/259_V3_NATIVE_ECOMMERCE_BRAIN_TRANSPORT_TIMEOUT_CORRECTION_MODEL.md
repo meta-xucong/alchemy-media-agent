@@ -1778,6 +1778,56 @@ Current gate after this reconciliation:
 - No further real ImageGen, business storage, receipt, slot, activation, or UI
   projection is authorized by this state update.
 
+## 13L. Poolside N=2 host safety blocker and provider-admission projection gap
+
+Evidence:
+
+- `.controlled-validation/n2-poolside-20260727T210712Z`
+- Host output 1 returned output safety `moderation_blocked`, category `other`,
+  with no artifact.
+- Output 2 was not started.  The run did not create a business delivery,
+  formal receipt, slot, activation, or public projection.
+
+Theory correction:
+
+1. The frozen plan reached host materialization, but the Professional
+   E-Commerce product-on-person path did not require the existing
+   `v3_provider_admission_decision_v1` canonical-provider receipt.
+2. `ScenarioRuntime._canonical_prompt_context()` already injects this receipt
+   for Character Card / Professional anchor preparation paths.  It did not
+   project the same existing receipt requirement when the shared Human Realism
+   semantic contract had `ordinary_age_appropriate_context=True`.
+3. `generation_router/providers.py` local safety prompt fragments are not an
+   authority for this path, because canonical Brain-authored prompts bypass
+   local fragment composition.
+4. The owning repair is therefore shared Runtime/Brain finalizer projection:
+   when validated Human Realism semantic evidence marks an ordinary
+   age-appropriate person context, the Runtime must ask the Remote Brain to
+   return the existing provider-admission receipt for every output.  Missing
+   or malformed receipt remains fail-closed before host/MCP materialization.
+
+Non-goals / rejected fixes:
+
+- Do not add a child, swimwear, poolside, or E-Commerce-specific safety prompt
+  recipe.
+- Do not change the user prompt, product-truth selection, provider reference
+  cap, exact-N contract, model route, Provider/MCP behavior, storage, receipt,
+  slot, activation, or UI.
+- Do not retry the blocked host output or start output 2 until a separate
+  reviewer gate approves a new controlled acceptance run.
+
+Acceptance for the minimal repair:
+
+- Deterministic tests must prove Professional E-Commerce product-on-person with
+  shared `ordinary_age_appropriate_context=True` requires and records a signed
+  provider-admission receipt.
+- If the Remote Brain finalizer omits that receipt, planning must fail closed
+  before native host materialization.
+- Ordinary non-sensitive human paths and no-person product flat-lay paths must
+  not be unconditionally expanded.
+- Native planning provenance / planning-only acceptance must expose
+  provider-admission `required` and `signed` status.
+
 ## 14. Old-document conflict index
 
 This correction model does not delete historical documents. The following

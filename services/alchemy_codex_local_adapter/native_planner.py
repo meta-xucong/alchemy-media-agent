@@ -1283,6 +1283,14 @@ class CodexNativeImageGenPlanner:
         planner_result = planner_result if isinstance(planner_result, dict) else report
         receipt = planner_result.get("planning_receipt")
         receipt = receipt if isinstance(receipt, dict) else {}
+        provenance = planner_result.get("provenance")
+        provenance = provenance if isinstance(provenance, dict) else {}
+        canonical_prompt_signing = provenance.get("canonical_prompt_signing")
+        canonical_prompt_signing = (
+            canonical_prompt_signing
+            if isinstance(canonical_prompt_signing, dict)
+            else {}
+        )
         raw_stages = receipt.get("stages")
         stages = [
             str(item)
@@ -1390,6 +1398,12 @@ class CodexNativeImageGenPlanner:
             "required_identity_source_present_each_output": identity_ok,
             "no_unselected_product_truth_leak": bool(outputs) and no_leak_ok,
             "pool_hash_parity_stable": bool(outputs) and pool_hash_parity_ok,
+            "provider_admission_decision_required": bool(
+                canonical_prompt_signing.get("provider_admission_decision_required")
+            ),
+            "provider_admission_decision_signed": bool(
+                canonical_prompt_signing.get("provider_admission_decision_signed")
+            ),
             "mutation_delta_zero": not any(
                 int(value or 0) != 0
                 for value in mutation_delta.values()
@@ -1426,6 +1440,8 @@ class CodexNativeImageGenPlanner:
         human_active = isinstance(active_capability_ids, list) and "human_realism" in active_capability_ids
         human_resigned = bool(audit.get("human_realism_natural_presence_resigned"))
         human_decision_signed = bool(audit.get("human_realism_natural_presence_decision_signed"))
+        provider_admission_required = bool(audit.get("provider_admission_decision_required"))
+        provider_admission_signed = bool(audit.get("provider_admission_decision_signed"))
         raw_decisions = audit.get("human_realism_natural_presence_decisions")
         decision_statuses = [
             str(item.get("status"))
@@ -1464,6 +1480,8 @@ class CodexNativeImageGenPlanner:
             "stages": stages,
             "human_realism_natural_presence_resigned": human_resigned,
             "human_realism_natural_presence_decision_statuses": decision_statuses,
+            "provider_admission_decision_required": provider_admission_required,
+            "provider_admission_decision_signed": provider_admission_signed,
         }
 
     def _plan_job_with_deadline(self, runtime: ScenarioRuntime | None, request: dict[str, Any]) -> Any:

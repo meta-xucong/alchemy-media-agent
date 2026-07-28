@@ -132,6 +132,16 @@ class _ProductTruthSelectionFaultProvider(EcommerceRemoteBrainTestProvider):
         return payload
 
 
+class _ProviderAdmissionOmittingProvider(EcommerceRemoteBrainTestProvider):
+    def run(self, request):
+        payload = super().run(request)
+        if request.stage == "provider_prompt_finalize":
+            for prompt in payload.get("canonical_provider_prompts") or []:
+                if isinstance(prompt, dict):
+                    prompt.pop("provider_admission_decision", None)
+        return payload
+
+
 def _write_png(path: Path, *, color: tuple[int, int, int] = (129, 91, 77)) -> Path:
     from PIL import Image
 
@@ -146,6 +156,32 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _human_realism_semantic_contract(*, ordinary_age_appropriate_context: bool) -> dict[str, Any]:
+    return {
+        "contract_version": "v3_human_realism_semantic_v8",
+        "capability_id": "human_realism",
+        "rendering_goal": "photographic_real_person",
+        "quality_axes": ["human_expression_context"],
+        "identity_age_fidelity": "explicit_or_reference_backed",
+        "developmental_age_coherence_requirement": "whole_person_requested_stage",
+        "developmental_presence_requirement": "integrated_stage_coherent_face_attention_and_affect",
+        "physical_coherence": "required",
+        "reference_boundary": "resolved_channels_only",
+        "ordinary_age_appropriate_context": ordinary_age_appropriate_context,
+        "natural_presence_priority": "individual_human_presence",
+        "aesthetic_boundary": "preserve_user_style_without_generic_beauty_substitution",
+        "expression_ownership_requirement": "situation_owned_unless_explicit_user_direction",
+        "expression_resolution_requirement": "individual_situation_not_stock_geometry",
+        "personhood_requirement": "individual_noninterchangeable_presence",
+        "complexion_rendering_requirement": (
+            "preserve_reference_or_user_owned_complexion_with_scene_balanced_color"
+        ),
+        "photographic_material_requirement": "camera_observed_human_materiality",
+        "creative_direction_owner": "remote_v3_llm_brain",
+        "provider_prompt_owner": "remote_v3_llm_brain",
+    }
 
 
 def _product_truth_selection_mutator(
@@ -190,6 +226,52 @@ def _resolver(catalog: InMemoryVisualAssetCatalog):
         )
 
     return resolve
+
+
+def test_provider_admission_requirement_comes_only_from_shared_age_sensitive_semantics() -> None:
+    frozen_binding = {
+        "envelope_id": "env_1",
+        "ledger_id": "ledger_1",
+        "execution_fingerprint": "fingerprint_1",
+    }
+
+    assert (
+        ScenarioRuntime._provider_admission_decision_from_semantic_contracts(
+            [],
+            frozen_binding=frozen_binding,
+        )
+        == {}
+    )
+    assert (
+        ScenarioRuntime._provider_admission_decision_from_semantic_contracts(
+            [
+                _human_realism_semantic_contract(
+                    ordinary_age_appropriate_context=False,
+                )
+            ],
+            frozen_binding=frozen_binding,
+        )
+        == {}
+    )
+
+    decision = ScenarioRuntime._provider_admission_decision_from_semantic_contracts(
+        [
+            _human_realism_semantic_contract(
+                ordinary_age_appropriate_context=True,
+            )
+        ],
+        frozen_binding=frozen_binding,
+    )
+
+    assert decision == {
+        "required": True,
+        "contract_version": "v3_provider_admission_decision_v1",
+        "provider_admission_status": "admitted",
+        "prompt_language_mode": "concise_positive_renderer_direction",
+        "safety_sensitive_prompt_normalized": "applied",
+        "owner": "remote_v3_llm_brain",
+        "frozen_binding": frozen_binding,
+    }
 
 
 def _arguments(reference: Path, **overrides: Any) -> dict[str, Any]:
@@ -679,6 +761,7 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     bindings = finalizer["metadata"]["canonical_prompt_context"]["reference_bindings"]
     assert [item["role"] for item in bindings] == ["face_reference", "face_reference", "product_reference", "product_reference"]
     assert all("codex_native_reference_channel" not in item for item in bindings)
+    assert "provider_admission_decision" not in finalizer["metadata"]["canonical_prompt_context"]
     deliverable_context = finalizer["metadata"]["canonical_prompt_context"]["deliverables"][0]
     assert deliverable_context["metadata"]["product_truth_selection_role"] == "lifestyle_primary_product_view"
     assert deliverable_context["metadata"]["selected_product_truth_asset_ids"] == [product_ids[0]]
@@ -702,6 +785,149 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         or "product_identity_truth" in list(item.get("truth_layers") or [])
         for item in product_materialized_refs
     )
+
+
+def test_professional_ecommerce_age_sensitive_product_model_requires_provider_admission_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_source_id = "v3_asset_age_sensitive_root"
+    output_id = "v3_output_age_sensitive_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product-front.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one controlled age-appropriate product-on-model image for the supplied garment.",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    monkeypatch.setattr(
+        ScenarioRuntime,
+        "_active_semantic_capability_contracts",
+        staticmethod(
+            lambda _plan, _ledger: [
+                _human_realism_semantic_contract(
+                    ordinary_age_appropriate_context=True,
+                )
+            ]
+        ),
+    )
+    brain = EcommerceRemoteBrainTestProvider(
+        developmental_age_intent="current_request_assigns_stage"
+    )
+    capturing = _CapturingRuntime(
+        ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    finalizer = [request for request in brain.requests if request["stage"] == "provider_prompt_finalize"][-1]
+    context = finalizer["metadata"]["canonical_prompt_context"]
+    assert context["provider_admission_decision"] == {
+        "required": True,
+        "contract_version": "v3_provider_admission_decision_v1",
+        "provider_admission_status": "admitted",
+        "prompt_language_mode": "concise_positive_renderer_direction",
+        "safety_sensitive_prompt_normalized": "applied",
+        "owner": "remote_v3_llm_brain",
+        "frozen_binding": context["frozen_binding"],
+    }
+    signing = result["provenance"]["canonical_prompt_signing"]
+    assert signing["provider_admission_decision_required"] is True
+    assert signing["provider_admission_decision_signed"] is True
+    summary = CodexNativeImageGenPlanner.planning_only_acceptance_summary(
+        {
+            "planner_result": result,
+            "mutation_delta": {"jobs": 0, "outputs": 0, "receipts": 0, "slots": 0},
+        },
+        expected_image_count=1,
+        required_identity_source_asset_ids=[root_source_id, output_id],
+    )
+    assert summary["provider_admission_decision_required"] is True
+    assert summary["provider_admission_decision_signed"] is True
+
+
+def test_professional_ecommerce_missing_provider_admission_receipt_blocks_before_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_source_id = "v3_asset_missing_admission_root"
+    output_id = "v3_output_missing_admission_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product-front.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            user_input="Create one controlled age-appropriate product-on-model image for the supplied garment.",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    monkeypatch.setattr(
+        ScenarioRuntime,
+        "_active_semantic_capability_contracts",
+        staticmethod(
+            lambda _plan, _ledger: [
+                _human_realism_semantic_contract(
+                    ordinary_age_appropriate_context=True,
+                )
+            ]
+        ),
+    )
+    materializer_calls = 0
+
+    def fail_if_materialized(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal materializer_calls
+        materializer_calls += 1
+        raise AssertionError("missing provider admission must block before host materialization")
+
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_canonical_materializations",
+        staticmethod(fail_if_materialized),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: _CapturingRuntime(
+            ScenarioRuntime(
+                llm_brain_adapter=V3LLMBrainAdapter(
+                    provider=_ProviderAdmissionOmittingProvider(
+                        developmental_age_intent="current_request_assigns_stage"
+                    )
+                )
+            )
+        ),
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_remote_creative_brain_prompt_signoff_unavailable"
+    assert materializer_calls == 0
+    assert "outputs" not in result
 
 
 def test_professional_ecommerce_identity_hint_requires_resolver_explicit_view_choice(
@@ -1801,6 +2027,8 @@ def test_professional_ecommerce_planning_only_acceptance_reads_nested_receipt() 
         "required_identity_source_present_each_output": True,
         "no_unselected_product_truth_leak": True,
         "pool_hash_parity_stable": True,
+        "provider_admission_decision_required": False,
+        "provider_admission_decision_signed": False,
         "mutation_delta_zero": True,
     }
 
