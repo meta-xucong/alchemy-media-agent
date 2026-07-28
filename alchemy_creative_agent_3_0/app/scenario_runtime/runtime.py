@@ -1517,9 +1517,11 @@ class ScenarioRuntime:
             return brain_result
         quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
         quality_contract = quality_contract if isinstance(quality_contract, dict) else {}
-        wardrobe_contract = quality_contract.get("body_silhouette_wardrobe_contract")
+        if "body_silhouette_wardrobe_contract" in quality_contract:
+            return brain_result
+        source_standard_contract = quality_contract.get("body_silhouette_source_standard_contract")
         hair_contract = quality_contract.get("body_silhouette_hair_continuity_contract")
-        if not isinstance(wardrobe_contract, dict) or wardrobe_contract.get("scope") != "body_silhouette_only":
+        if not isinstance(source_standard_contract, dict) or source_standard_contract.get("scope") != "body_silhouette_only":
             return brain_result
         if not isinstance(hair_contract, dict) or hair_contract.get("scope") != "body_silhouette_only":
             return brain_result
@@ -1596,7 +1598,7 @@ class ScenarioRuntime:
             ],
             allowed_changes=[
                 "body_view_pose_and_full_body_framing_only",
-                "body_wardrobe_contract_application",
+                "scene_neutral_body_source_visibility",
                 "natural_body_view_hair_movement",
             ],
             visual_intent_tags=[
@@ -1715,14 +1717,14 @@ class ScenarioRuntime:
                         "size": requested_size,
                         "shot_plan": [prompt],
                         "composition_rules": [
-                            "full body visible from head to bare feet",
+                            "full body visible from head to feet",
                             "plain white studio background",
                             "single complete image frame",
                         ],
                         "quality_bar": [
                             "commercial clean image",
                             "same-person likeness from approved Face references",
-                            "Body wardrobe and hair-continuity contracts must remain reviewable",
+                            "Body source-standard and hair-continuity contracts must remain reviewable",
                         ],
                     }
                 ),
@@ -1733,11 +1735,11 @@ class ScenarioRuntime:
                         "layout_notes": ["vertical 2:3 full-body model-card frame"],
                         "hard_constraints": [
                             "Use the approved Face Identity references for identity and hair continuity only.",
-                            "Keep a full-body white-studio model-card frame with head, hands, legs, and bare feet visible.",
-                            "Use the Body wardrobe contract: simple white short-sleeve top, plain solid shorts, bare feet.",
+                            "Keep a full-body white-studio model-card frame with head, neck, shoulders, torso, hands, legs, and feet visible.",
+                            "Use simple non-styling body-source presentation only so body chain, proportions, stance, and ground contact remain reviewable.",
                         ],
                         "negative_prompt_addons": [
-                            "avoid long pants, socks, shoes, skirts, or dresses",
+                            "avoid fashion styling, costume styling, scene-specific wardrobe, or downstream product wardrobe inheritance",
                             "avoid changing hairstyle category, hair-length tier, bangs or parting pattern",
                         ],
                         "consistency_strategy": "reference_led_character_card_body_slot_delta_recovery",
@@ -2136,14 +2138,15 @@ class ScenarioRuntime:
             "body.rear_full": "rear-view",
         }.get(slot_key, "full-body")
         return (
-            f"A full-body {view} professional model-card photograph of the same child from the approved "
+            f"A full-body {view} professional model-card photograph of the same person from the approved "
             "Face Identity references, standing naturally on a clean white studio background. "
             "Use a photographer's standard full-body model-card distance: the entire figure is visible "
-            "from the top of the head to the soles of the bare feet, with hands, legs, shoulders, neck, "
+            "from the top of the head to the feet, with hands, legs, shoulders, neck, "
             "and head contained inside the frame. "
-            "Apply the Body wardrobe contract consistently: simple white short-sleeve top, plain solid "
-            "shorts, and bare feet. "
-            "Preserve identity, age coherence, natural child body proportions, and the hairstyle from the "
+            "Use simple non-styling body-source presentation only, with no fixed clothing recipe, so "
+            "body chain, stage-aware proportion, neck-shoulder continuity, torso-limb plausibility, "
+            "stance, and ground contact remain reviewable. "
+            "Preserve identity, age coherence, natural body proportions, and the hairstyle from the "
             "current Face references: same hairstyle category, same hair-length tier, same bangs or "
             "parting pattern, and same overall hair outline, allowing natural movement from body pose, "
             "view angle, and studio light. "

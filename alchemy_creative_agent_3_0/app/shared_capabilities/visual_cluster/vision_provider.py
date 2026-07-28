@@ -966,7 +966,6 @@ def _professional_identity_quality_contract(
     body_silhouette_issue_codes = [
         "body_silhouette_framing_drift",
         "body_silhouette_full_body_framing_missing",
-        "body_silhouette_wardrobe_contract_drift",
         "body_silhouette_hair_continuity_drift",
         *body_source_standard_issue_codes,
         *body_cross_view_issue_codes,
@@ -1142,7 +1141,6 @@ def _professional_identity_quality_contract(
                 "framing_delta_dimensions": list(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS),
                 "source_standard_dimensions": list(body_source_standard_dimensions),
                 "source_standard_contract": source_standard_contract,
-                "wardrobe_contract": contract.get("body_silhouette_wardrobe_contract"),
                 "hair_continuity_contract": contract.get("body_silhouette_hair_continuity_contract"),
             }
             if applies and body_silhouette_review_applies

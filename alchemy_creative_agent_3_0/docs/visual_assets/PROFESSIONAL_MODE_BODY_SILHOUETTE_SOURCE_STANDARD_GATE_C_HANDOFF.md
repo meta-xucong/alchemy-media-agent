@@ -203,6 +203,16 @@ The corrected authority model is:
    six-year-old, swimwear, poolside, kidswear, E-Commerce, commercial-grade, or
    fixed-ratio recipe.
 
+6. The earlier `professional_body_silhouette_wardrobe_v1` runtime contract is
+   superseded for new Body Silhouette source-standard candidates.  New Body
+   stage metadata, bounded recovery prompts, and shared review projection must
+   not require or emit fixed white top, shorts, barefoot, skirt/dress
+   prohibition, or any other wardrobe recipe.  Body source visibility may be
+   requested only in scene-neutral terms needed to review body chain,
+   stage-aware proportion, head-neck-shoulder continuity, torso/limb/joint
+   plausibility, stance, ground contact, and cross-view parity.  This does not
+   rewrite or invalidate historical active Body receipts.
+
 The controlled modeling refresh gate is still separate: no modeling
 regeneration, slot activation, Host/MCP/ImageGen, business record, or
 downstream runtime behavior is authorized by this handoff or by the append-only

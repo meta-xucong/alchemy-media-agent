@@ -343,16 +343,6 @@ class ProfessionalModeRuntimeBridge:
             quality_contract["body_silhouette_source_standard_contract"] = (
                 body_silhouette_source_standard_contract()
             )
-            quality_contract["body_silhouette_wardrobe_contract"] = {
-                "contract_version": "professional_body_silhouette_wardrobe_v1",
-                "applies": True,
-                "required_continuity": "same_body_outfit_across_front_side_rear",
-                "top": "simple_white_short_sleeve_top",
-                "bottom": "plain_solid_shorts",
-                "feet": "barefoot",
-                "forbidden": ["long_pants", "socks", "shoes", "skirt_or_dress"],
-                "scope": "body_silhouette_only",
-            }
             quality_contract["body_silhouette_hair_continuity_contract"] = {
                 "contract_version": "professional_body_silhouette_hair_continuity_v1",
                 "applies": True,

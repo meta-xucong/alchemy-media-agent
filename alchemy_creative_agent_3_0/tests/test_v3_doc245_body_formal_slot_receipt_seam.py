@@ -61,12 +61,32 @@ from alchemy_creative_agent_3_0.app.visual_assets.library import (
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 
 
+BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS = (
+    "same child",
+    "natural child",
+    "six-year",
+    "6-year",
+    "swimwear",
+    "poolside",
+    "kidswear",
+    "e-commerce",
+    "ecommerce",
+    "simple white short-sleeve top",
+    "plain solid shorts",
+    "bare feet",
+    "barefoot",
+    "skirt_or_dress",
+    "body wardrobe contract",
+    "body_wardrobe_contract_application",
+)
+
+
 def _body_slot_delta_runtime_request(slot_key: str = "body.front_full") -> ScenarioRuntimeRequest:
     return ScenarioRuntimeRequest(
         user_input=(
-            f"Body slot target: {slot_key}. Render the same child as a full-body professional "
-            "model-card body reference on a clean white studio background. Use a simple white "
-            "short-sleeve top, plain solid shorts, and bare feet."
+            f"Body slot target: {slot_key}. Render the same person as a full-body professional "
+            "model-card body reference on a clean white studio background. Keep body chain, "
+            "stage-aware proportion, stance, and ground contact reviewable without a fixed wardrobe recipe."
         ),
         scenario_selection={"scenario_id": "general_creative"},
         metadata={
@@ -215,31 +235,25 @@ def test_doc245_body_review_contract_exposes_framing_dimensions_to_shared_vision
     assert set(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS).issubset(set(contract["score_dimensions"]))
 
 
-def test_doc245_body_review_contract_carries_body_only_wardrobe_contract() -> None:
+def test_doc245_body_review_contract_is_scene_neutral_without_fixed_wardrobe_contract() -> None:
     stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="body_silhouette",
         slot_key="body.front_full",
     )
 
     quality_contract = stage_metadata["professional_face_identity_quality_contract"]
-    wardrobe_contract = quality_contract["body_silhouette_wardrobe_contract"]
 
-    assert wardrobe_contract["scope"] == "body_silhouette_only"
-    assert wardrobe_contract["top"] == "simple_white_short_sleeve_top"
-    assert wardrobe_contract["bottom"] == "plain_solid_shorts"
-    assert wardrobe_contract["feet"] == "barefoot"
-    assert set(wardrobe_contract["forbidden"]) == {
-        "long_pants",
-        "socks",
-        "shoes",
-        "skirt_or_dress",
-    }
+    serialized_quality = str(quality_contract).lower()
+    assert "body_silhouette_wardrobe_contract" not in quality_contract
+    for forbidden in BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS:
+        assert forbidden not in serialized_quality
 
     review_contract = active_review_contract(_body_review_metadata_for_vision("body.front_full"))
     body_review = review_contract["professional_identity_quality"]["body_silhouette_review"]
 
-    assert body_review["wardrobe_contract"] == wardrobe_contract
-    assert "body_silhouette_wardrobe_contract_drift" in body_review["issue_codes"]
+    assert "wardrobe_contract" not in body_review
+    assert "body_silhouette_wardrobe_contract_drift" not in body_review["issue_codes"]
+    assert body_review["source_standard_contract"]["scope"] == "body_silhouette_only"
 
 
 def test_doc245_body_review_contract_carries_reference_driven_hair_continuity_without_fixed_style() -> None:
@@ -381,11 +395,25 @@ def test_doc245_body_brain_timeout_uses_bounded_body_slot_delta_recovery() -> No
     assert recovered.canonical_provider_prompts
     canonical = recovered.canonical_provider_prompts[0]
     assert "full-body front-view professional model-card photograph" in canonical.prompt
-    assert "simple white short-sleeve top" in canonical.prompt
-    assert "plain solid shorts" in canonical.prompt
-    assert "bare feet" in canonical.prompt
+    assert "body chain" in canonical.prompt
+    assert "stage-aware proportion" in canonical.prompt
     assert "same hairstyle category" in canonical.prompt
     assert "same hair-length tier" in canonical.prompt
+    serialized_recovery = " ".join(
+        [
+            canonical.prompt,
+            *recovered.image_set_plan.composition_rules,
+            *recovered.image_set_plan.quality_bar,
+            recovered.prompt_guidance.optimized_direction,
+            *recovered.prompt_guidance.visual_direction_addons,
+            *recovered.prompt_guidance.hard_constraints,
+            *recovered.prompt_guidance.negative_prompt_addons,
+            *recovered.visual_task_profile.allowed_changes,
+            *recovered.visual_task_profile.visual_intent_tags,
+        ]
+    ).lower()
+    for forbidden in BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS:
+        assert forbidden not in serialized_recovery
     assert canonical.reference_led_slot_delta_decision is not None
     assert canonical.reference_led_slot_delta_decision.slot_delta_type == "body_pose"
     assert canonical.provider_admission_decision is not None
@@ -396,7 +424,7 @@ def test_doc245_body_brain_timeout_uses_bounded_body_slot_delta_recovery() -> No
     assert recovered.visual_task_profile is not None
     assert recovered.visual_task_profile.allowed_changes == [
         "body_view_pose_and_full_body_framing_only",
-        "body_wardrobe_contract_application",
+        "scene_neutral_body_source_visibility",
         "natural_body_view_hair_movement",
     ]
 
@@ -441,6 +469,35 @@ def test_doc245_body_slot_delta_recovery_rejects_body_slot_contract_mismatch() -
     assert "character_card_slot_delta_recovery_prompts_received" not in recovered.audit
 
 
+def test_doc245_body_slot_delta_recovery_rejects_superseded_wardrobe_contract() -> None:
+    runtime = ScenarioRuntime()
+    request = _body_slot_delta_runtime_request("body.front_full")
+    metadata = dict(request.metadata or {})
+    planning_metadata = dict(metadata["professional_planning_metadata"])
+    quality_contract = dict(planning_metadata["professional_face_identity_quality_contract"])
+    quality_contract["body_silhouette_wardrobe_contract"] = {
+        "contract_version": "professional_body_silhouette_wardrobe_v1",
+        "applies": True,
+        "top": "simple_white_short_sleeve_top",
+        "bottom": "plain_solid_shorts",
+        "feet": "barefoot",
+        "forbidden": ["skirt_or_dress"],
+        "scope": "body_silhouette_only",
+    }
+    planning_metadata["professional_face_identity_quality_contract"] = quality_contract
+    metadata["professional_planning_metadata"] = planning_metadata
+    bad_request = request.model_copy(update={"metadata": metadata})
+    brain_result = _remote_required_body_brain_result("body.front_full")
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        bad_request,
+        brain_result,
+    )
+
+    assert not recovered.canonical_provider_prompts
+    assert "character_card_slot_delta_recovery_prompts_received" not in recovered.audit
+
+
 def test_doc245_body_rear_review_uses_rear_continuity_instead_of_visible_face() -> None:
     metadata = _body_review_metadata_for_vision("body.rear_full")
     contract = active_review_contract(metadata)
@@ -463,7 +520,7 @@ def test_doc245_body_source_standard_prompt_projection_is_scene_neutral() -> Non
     assert "professional_body_silhouette_source_standard_v1" in prompt
     for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS:
         assert dimension in prompt
-    for forbidden in ("six", "6-year", "swimwear", "poolside", "kidswear", "e-commerce"):
+    for forbidden in BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS:
         assert forbidden not in prompt.lower()
 
 
