@@ -159,6 +159,97 @@ def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
     }
 
 
+def _safe_remote_brain_serialization_failure(value: Any) -> dict[str, Any]:
+    """Whitelist remote Brain JSON/truncation diagnostics for blocked status metadata."""
+
+    if not isinstance(value, dict):
+        return {}
+    schema_version = value.get("schema_version")
+    stage = value.get("stage")
+    transport_error_class = value.get("transport_error_class")
+    error_family = value.get("error_family")
+    json_failure_kind = value.get("json_failure_kind")
+    attempts = value.get("attempts")
+    if schema_version == "v3_brain_serialization_failure_v1":
+        if transport_error_class != "invalid_json_response" or error_family != "json_decode":
+            return {}
+        if json_failure_kind not in {
+            "empty_json",
+            "malformed_json",
+            "missing_complete_marker",
+            "non_object_json",
+            "unknown",
+        }:
+            return {}
+    elif schema_version == "v3_brain_truncated_response_v1":
+        if transport_error_class != "truncated_response" or error_family != "output_truncated":
+            return {}
+        if json_failure_kind != "output_truncated":
+            return {}
+    else:
+        return {}
+    if not isinstance(stage, str) or not stage.strip():
+        return {}
+    if not isinstance(attempts, int) or attempts not in {1, 2}:
+        return {}
+    return {
+        "schema_version": schema_version,
+        "stage": stage,
+        "transport_error_class": transport_error_class,
+        "error_family": error_family,
+        "json_failure_kind": json_failure_kind,
+        "attempts": attempts,
+        "json_serialization_recovery_attempted": bool(
+            value.get("json_serialization_recovery_attempted")
+        ),
+        "json_serialization_recovery_succeeded": bool(
+            value.get("json_serialization_recovery_succeeded")
+        ),
+        "json_parse_started": bool(value.get("json_parse_started")),
+        "json_parse_completed": bool(value.get("json_parse_completed")),
+    }
+
+
+def _safe_remote_brain_execution_budget(value: Any) -> dict[str, Any]:
+    """Whitelist aggregate logical budget facts for blocked status metadata."""
+
+    if not isinstance(value, dict):
+        return {}
+    total = value.get("logical_budget_seconds")
+    remaining_ms = value.get("remaining_ms")
+    state = value.get("state")
+    if not isinstance(total, (int, float)) or isinstance(total, bool) or float(total) < 0.0:
+        return {}
+    if not isinstance(remaining_ms, int) or isinstance(remaining_ms, bool) or remaining_ms < 0:
+        return {}
+    if state not in {"within_budget", "exhausted"}:
+        return {}
+    return {
+        "logical_budget_seconds": round(float(total), 3),
+        "remaining_ms": remaining_ms,
+        "state": state,
+    }
+
+
+_SAFE_REMOTE_BRAIN_STAGES = {
+    "activation",
+    "generate",
+    "plan",
+    "provider_prompt_developmental_presence_verify",
+    "provider_prompt_finalize",
+    "provider_prompt_human_naturalness_resign",
+    "provider_prompt_professional_capture_resign",
+    "remote_intent",
+}
+
+
+def _safe_remote_brain_stage(value: Any) -> str:
+    stage = str(value or "").strip()
+    if stage in _SAFE_REMOTE_BRAIN_STAGES:
+        return stage
+    return ""
+
+
 _SAFE_REMOTE_CONTRACT_REJECTED_SECTIONS = {
     "image_set_plan",
     "prompt_guidance",
@@ -2418,15 +2509,28 @@ class ScenarioRuntime:
                     return recovered_brain_result
                 # Do not expose an upstream body or turn it into local text.
                 # The activation boundary records the public-safe reason only.
-                blocked_brain_result = brain_result
+                finalizer_failure_audit = self.llm_brain_adapter.provider_failure_audit(
+                    failure,
+                    stage="provider_prompt_finalize",
+                )
+                blocked_brain_result = brain_result.model_copy(
+                    update={
+                        "audit": {
+                            **dict(brain_result.audit or {}),
+                            **finalizer_failure_audit,
+                        }
+                    }
+                )
                 if isinstance(failure, BrainExecutionBudgetExceeded):
                     blocked_brain_result = brain_result.model_copy(
                         update={
                             "audit": {
-                                **dict(brain_result.audit or {}),
+                                **dict(blocked_brain_result.audit or {}),
                                 "remote_provider_error_class": "execution_budget_exhausted",
                                 "remote_brain_execution_budget": (
                                     self.llm_brain_adapter.execution_budget_receipt() or {
+                                        "logical_budget_seconds": 0.0,
+                                        "remaining_ms": 0,
                                         "state": "exhausted"
                                     }
                                 ),
@@ -2437,8 +2541,7 @@ class ScenarioRuntime:
                     blocked_brain_result = brain_result.model_copy(
                         update={
                             "audit": {
-                                **dict(brain_result.audit or {}),
-                                "remote_provider_error": str(failure)[:260],
+                                **dict(blocked_brain_result.audit or {}),
                                 "remote_provider_error_class": "timeout",
                                 "remote_brain_stage": getattr(failure, "stage", "provider_prompt_finalize"),
                                 "remote_brain_transport_failure": failure.safe_metadata(),
@@ -3370,9 +3473,8 @@ class ScenarioRuntime:
                 else {}
             ),
             **(
-                {"remote_brain_stage": str(audit["remote_brain_stage"])}
-                if audit.get("remote_brain_stage")
-                and isinstance(audit.get("remote_brain_transport_failure"), dict)
+                {"remote_brain_stage": _safe_remote_brain_stage(audit["remote_brain_stage"])}
+                if _safe_remote_brain_stage(audit.get("remote_brain_stage"))
                 else {}
             ),
             **(
@@ -3383,6 +3485,28 @@ class ScenarioRuntime:
                 }
                 if isinstance(audit.get("remote_brain_transport_failure"), dict)
                 and _safe_remote_brain_transport_failure(audit["remote_brain_transport_failure"])
+                else {}
+            ),
+            **(
+                {
+                    "remote_brain_serialization_failure": _safe_remote_brain_serialization_failure(
+                        audit["remote_brain_serialization_failure"]
+                    )
+                }
+                if _safe_remote_brain_serialization_failure(
+                    audit.get("remote_brain_serialization_failure")
+                )
+                else {}
+            ),
+            **(
+                {
+                    "remote_brain_execution_budget": _safe_remote_brain_execution_budget(
+                        audit["remote_brain_execution_budget"]
+                    )
+                }
+                if _safe_remote_brain_execution_budget(
+                    audit.get("remote_brain_execution_budget")
+                )
                 else {}
             ),
             **(
@@ -3414,8 +3538,14 @@ class ScenarioRuntime:
                 else {}
             ),
             **(
-                {"execution_budget": dict(audit["remote_brain_execution_budget"])}
-                if isinstance(audit.get("remote_brain_execution_budget"), dict)
+                {
+                    "execution_budget": _safe_remote_brain_execution_budget(
+                        audit["remote_brain_execution_budget"]
+                    )
+                }
+                if _safe_remote_brain_execution_budget(
+                    audit.get("remote_brain_execution_budget")
+                )
                 else {}
             ),
             **{

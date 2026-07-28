@@ -23,6 +23,7 @@ _SAFE_EXTRA_KEYS = {
     "terminal_reason",
     "status",
     "error_class",
+    "transport_error_class",
     "timeout_phase",
     "timeout_seconds",
     "elapsed_ms",
@@ -35,6 +36,10 @@ _SAFE_EXTRA_KEYS = {
     "json_serialization_recovery_attempted",
     "json_serialization_recovery_succeeded",
     "error_family",
+    "json_failure_kind",
+    "logical_budget_seconds",
+    "remaining_ms",
+    "state",
     "remote_contract_rejected_count",
     "remote_contract_rejected_sections",
     "expected_image_count",
@@ -47,6 +52,7 @@ _SAFE_EXTRA_KEYS = {
     "semantic_recovery_attempted",
     "finalizer_call_count",
     "remote_brain_call_count",
+    "remote_http_status_code",
     "exitcode",
 }
 _SAFE_REJECTED_SECTION_VALUES = {
@@ -72,6 +78,7 @@ _SAFE_REASON_VALUES = {
     "execution_budget_exhausted",
     "truncated_response",
     "invalid_response",
+    "invalid_json_response",
     "content_policy",
     "canceled",
     "upstream_http_error",
@@ -152,8 +159,14 @@ def _safe_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
         safe_key = _safe_token(key)
         if safe_key not in _SAFE_EXTRA_KEYS:
             continue
-        if safe_key in {"terminal_reason", "error_class", "status"}:
+        if safe_key in {"terminal_reason", "error_class", "status", "transport_error_class"}:
             cleaned[safe_key] = _safe_reason(value)
+        elif safe_key == "logical_budget_seconds":
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                cleaned[safe_key] = round(float(value), 3)
+        elif safe_key == "remaining_ms":
+            if isinstance(value, int) and not isinstance(value, bool):
+                cleaned[safe_key] = value
         elif isinstance(value, bool):
             cleaned[safe_key] = value
         elif isinstance(value, int):

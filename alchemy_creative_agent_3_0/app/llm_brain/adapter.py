@@ -84,6 +84,38 @@ class V3LLMBrainAdapter:
         receipt = getattr(self.provider, "execution_budget_receipt", None)
         return receipt() if callable(receipt) else None
 
+    def provider_failure_audit(self, exc: Exception, *, stage: str) -> dict[str, Any]:
+        """Project one remote-provider exception into public-safe audit facts."""
+
+        transport_failure = _remote_brain_transport_failure(exc)
+        serialization_failure = _remote_brain_finalizer_serialization_failure(exc)
+        execution_budget = self.execution_budget_receipt()
+        http_status_code = _remote_provider_http_status_code(exc)
+        return {
+            "remote_provider_error_class": _remote_provider_error_class(exc),
+            "remote_brain_stage": _safe_remote_brain_stage(stage),
+            **(
+                {"remote_provider_http_status_code": http_status_code}
+                if http_status_code is not None
+                else {}
+            ),
+            **(
+                {"remote_brain_transport_failure": transport_failure}
+                if transport_failure
+                else {}
+            ),
+            **(
+                {"remote_brain_serialization_failure": serialization_failure}
+                if serialization_failure
+                else {}
+            ),
+            **(
+                {"remote_brain_execution_budget": execution_budget}
+                if execution_budget is not None
+                else {}
+            ),
+        }
+
     def run(self, request: BrainRunRequest) -> BrainRunResult:
         if not _enabled():
             return build_skipped_result(request, "V3 LLM Brain is disabled by configuration.")
@@ -322,8 +354,32 @@ class V3LLMBrainAdapter:
             )
             data = self.provider.run(request)
             record_stage_event("brain_adapter", "canonical_finalizer_provider_returned", stage=request.stage)
-        except (BrainProviderError, BrainProviderUnavailable):
-            record_stage_event("brain_adapter", "canonical_finalizer_provider_error", stage=request.stage)
+        except (BrainProviderError, BrainProviderUnavailable) as exc:
+            failure_audit = self.provider_failure_audit(exc, stage=request.stage)
+            execution_budget = failure_audit.get("remote_brain_execution_budget")
+            execution_budget = execution_budget if isinstance(execution_budget, dict) else {}
+            transport_failure = failure_audit.get("remote_brain_transport_failure")
+            transport_failure = transport_failure if isinstance(transport_failure, dict) else {}
+            serialization_failure = failure_audit.get("remote_brain_serialization_failure")
+            serialization_failure = serialization_failure if isinstance(serialization_failure, dict) else {}
+            record_stage_event(
+                "brain_adapter",
+                "canonical_finalizer_provider_error",
+                stage=request.stage,
+                terminal_reason=failure_audit.get("remote_provider_error_class"),
+                extra={
+                    **transport_failure,
+                    **serialization_failure,
+                    **(
+                        {"remote_http_status_code": failure_audit.get("remote_provider_http_status_code")}
+                        if isinstance(failure_audit.get("remote_provider_http_status_code"), int)
+                        else {}
+                    ),
+                    "logical_budget_seconds": execution_budget.get("logical_budget_seconds"),
+                    "remaining_ms": execution_budget.get("remaining_ms"),
+                    "state": execution_budget.get("state"),
+                },
+            )
             raise
         except Exception as exc:  # pragma: no cover - defensive provider boundary
             record_stage_event(
@@ -1301,6 +1357,25 @@ def _elapsed_ms(started: float) -> int:
     return max(0, int(round((time.perf_counter() - started) * 1000)))
 
 
+_SAFE_REMOTE_BRAIN_STAGES = {
+    "activation",
+    "generate",
+    "plan",
+    "provider_prompt_developmental_presence_verify",
+    "provider_prompt_finalize",
+    "provider_prompt_human_naturalness_resign",
+    "provider_prompt_professional_capture_resign",
+    "remote_intent",
+}
+
+
+def _safe_remote_brain_stage(stage: Any) -> str:
+    value = str(stage or "").strip()
+    if value in _SAFE_REMOTE_BRAIN_STAGES:
+        return value
+    return "unknown"
+
+
 def _with_elapsed_transport_receipt(
     receipt: dict[str, Any],
     *,
@@ -1326,6 +1401,8 @@ def _remote_provider_error_class(exc: Exception) -> str:
         return "execution_budget_exhausted"
     if any(isinstance(item, BrainOutputTruncated) for item in chain):
         return "truncated_response"
+    if any(isinstance(item, BrainInvalidJsonResponse) for item in chain):
+        return "invalid_response"
     if any(isinstance(item, JSONDecodeError) for item in chain):
         return "invalid_response"
     text = " ".join(str(item or "") for item in chain).lower()
@@ -1359,6 +1436,17 @@ def _remote_brain_serialization_failure(exc: Exception) -> dict[str, Any]:
     for item in _exception_chain(exc):
         if isinstance(item, BrainOutputTruncated):
             return {}
+        if isinstance(item, BrainInvalidJsonResponse):
+            return item.safe_metadata()
+    return {}
+
+
+def _remote_brain_finalizer_serialization_failure(exc: Exception) -> dict[str, Any]:
+    """Extract safe finalizer serialization diagnostics, including truncation."""
+
+    for item in _exception_chain(exc):
+        if isinstance(item, BrainOutputTruncated):
+            return item.safe_metadata()
         if isinstance(item, BrainInvalidJsonResponse):
             return item.safe_metadata()
     return {}
