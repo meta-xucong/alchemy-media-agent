@@ -53,6 +53,7 @@ _SAFE_EXTRA_KEYS = {
     "finalizer_call_count",
     "remote_brain_call_count",
     "remote_http_status_code",
+    "remote_provider_transport_kind",
     "exitcode",
 }
 _SAFE_REJECTED_SECTION_VALUES = {
@@ -82,6 +83,7 @@ _SAFE_REASON_VALUES = {
     "content_policy",
     "canceled",
     "upstream_http_error",
+    "upstream_transport_error",
     "planned_for_codex_native_imagegen",
     "planned",
     "blocked",
@@ -101,6 +103,16 @@ _SAFE_REASON_VALUES = {
     "0",
     "1",
     "-1",
+}
+_SAFE_TRANSPORT_KIND_VALUES = {
+    "connection_error",
+    "network_error",
+    "protocol_error",
+    "provider_api_error",
+    "read_error",
+    "timeout",
+    "transport_error",
+    "write_error",
 }
 
 
@@ -161,6 +173,10 @@ def _safe_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
             continue
         if safe_key in {"terminal_reason", "error_class", "status", "transport_error_class"}:
             cleaned[safe_key] = _safe_reason(value)
+        elif safe_key == "remote_provider_transport_kind":
+            token = _safe_token(value)
+            if token in _SAFE_TRANSPORT_KIND_VALUES:
+                cleaned[safe_key] = token
         elif safe_key == "logical_budget_seconds":
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 cleaned[safe_key] = round(float(value), 3)

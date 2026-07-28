@@ -91,12 +91,18 @@ class V3LLMBrainAdapter:
         serialization_failure = _remote_brain_finalizer_serialization_failure(exc)
         execution_budget = self.execution_budget_receipt()
         http_status_code = _remote_provider_http_status_code(exc)
+        transport_kind = _remote_provider_transport_kind(exc)
         return {
             "remote_provider_error_class": _remote_provider_error_class(exc),
             "remote_brain_stage": _safe_remote_brain_stage(stage),
             **(
                 {"remote_provider_http_status_code": http_status_code}
                 if http_status_code is not None
+                else {}
+            ),
+            **(
+                {"remote_provider_transport_kind": transport_kind}
+                if transport_kind
                 else {}
             ),
             **(
@@ -373,6 +379,11 @@ class V3LLMBrainAdapter:
                     **(
                         {"remote_http_status_code": failure_audit.get("remote_provider_http_status_code")}
                         if isinstance(failure_audit.get("remote_provider_http_status_code"), int)
+                        else {}
+                    ),
+                    **(
+                        {"remote_provider_transport_kind": failure_audit.get("remote_provider_transport_kind")}
+                        if failure_audit.get("remote_provider_transport_kind")
                         else {}
                     ),
                     "logical_budget_seconds": execution_budget.get("logical_budget_seconds"),
@@ -1405,6 +1416,9 @@ def _remote_provider_error_class(exc: Exception) -> str:
         return "invalid_response"
     if any(isinstance(item, JSONDecodeError) for item in chain):
         return "invalid_response"
+    transport_kind = _remote_provider_transport_kind(exc)
+    if transport_kind == "timeout":
+        return "timeout"
     text = " ".join(str(item or "") for item in chain).lower()
     if "content_policy" in text or "content policy" in text:
         return "content_policy"
@@ -1418,6 +1432,8 @@ def _remote_provider_error_class(exc: Exception) -> str:
         token in text for token in ("status code", "error code", "http")
     ):
         return "upstream_http_error"
+    if transport_kind:
+        return "upstream_transport_error"
     return "provider_error"
 
 
@@ -1456,6 +1472,12 @@ def _remote_provider_http_status_code(exc: Exception) -> int | None:
     """Extract only an HTTP status code; never persist the raw provider error."""
 
     for item in _exception_chain(exc):
+        for candidate in (
+            getattr(item, "status_code", None),
+            getattr(getattr(item, "response", None), "status_code", None),
+        ):
+            if isinstance(candidate, int) and not isinstance(candidate, bool) and 100 <= candidate <= 599:
+                return candidate
         match = re.search(r"(?:status|error)\s+code\s*[:=]?\s*(\d{3})", str(item or ""), flags=re.IGNORECASE)
         if not match:
             continue
@@ -1463,6 +1485,43 @@ def _remote_provider_http_status_code(exc: Exception) -> int | None:
         if 100 <= code <= 599:
             return code
     return None
+
+
+def _remote_provider_transport_kind(exc: Exception) -> str:
+    """Classify transport-layer exception causes without exposing provider details."""
+
+    if _remote_provider_http_status_code(exc) is not None:
+        return ""
+    for item in _exception_chain(exc):
+        if isinstance(item, (BrainTransportTimeoutError, BrainExecutionBudgetExceeded)):
+            continue
+        module = str(item.__class__.__module__ or "").lower()
+        name = str(item.__class__.__name__ or "").lower()
+        qualified = f"{module}.{name}"
+        if not (
+            module.startswith("httpx")
+            or module.startswith("httpcore")
+            or module.startswith("openai")
+            or "transport" in qualified
+            or "protocol" in qualified
+        ):
+            continue
+        if "timeout" in name:
+            return "timeout"
+        if "protocol" in name:
+            return "protocol_error"
+        if "connect" in name or "connection" in name:
+            return "connection_error"
+        if "read" in name:
+            return "read_error"
+        if "write" in name:
+            return "write_error"
+        if "network" in name:
+            return "network_error"
+        if "apierror" in name or name == "api_error":
+            return "provider_api_error"
+        return "transport_error"
+    return ""
 
 
 def _exception_chain(exc: BaseException) -> list[BaseException]:

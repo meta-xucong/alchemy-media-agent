@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
@@ -334,6 +335,67 @@ def test_doc175_provider_failure_audit_sanitizes_untrusted_stage() -> None:
     assert "provider_payload" not in serialized
 
 
+def test_doc175_provider_failure_audit_classifies_chained_http_status_safely() -> None:
+    class Provider:
+        provider = "fixture"
+        model = "fixture"
+
+        def execution_budget_receipt(self) -> dict[str, object]:
+            return {"logical_budget_seconds": 520.0, "remaining_ms": 272178, "state": "within_budget"}
+
+    request = httpx.Request("POST", "https://must-not-leak.example/v1/messages")
+    response = httpx.Response(429, request=request)
+    try:
+        raise httpx.HTTPStatusError(
+            "HTTP status text with D:/unsafe/provider_payload",
+            request=request,
+            response=response,
+        )
+    except httpx.HTTPStatusError as cause:
+        failure = BrainProviderError("remote brain provider failed")  # no status text on the wrapper
+        failure.__cause__ = cause
+
+    audit = V3LLMBrainAdapter(provider=Provider()).provider_failure_audit(  # type: ignore[arg-type]
+        failure,
+        stage="provider_prompt_finalize",
+    )
+
+    assert audit["remote_provider_error_class"] == "upstream_http_error"
+    assert audit["remote_provider_http_status_code"] == 429
+    assert audit["remote_brain_stage"] == "provider_prompt_finalize"
+    assert "remote_provider_transport_kind" not in audit
+    serialized = json.dumps(audit, sort_keys=True)
+    assert "D:/unsafe" not in serialized
+    assert "must-not-leak" not in serialized
+    assert "provider_payload" not in serialized
+
+
+def test_doc175_provider_failure_audit_classifies_chained_protocol_error_safely() -> None:
+    class Provider:
+        provider = "fixture"
+        model = "fixture"
+
+        def execution_budget_receipt(self) -> dict[str, object]:
+            return {"logical_budget_seconds": 520.0, "remaining_ms": 272178, "state": "within_budget"}
+
+    try:
+        raise httpx.RemoteProtocolError("D:/unsafe/provider_payload peer closed stream")
+    except httpx.RemoteProtocolError as cause:
+        failure = BrainProviderError("remote brain provider failed")  # generic wrapper only
+        failure.__cause__ = cause
+
+    audit = V3LLMBrainAdapter(provider=Provider()).provider_failure_audit(  # type: ignore[arg-type]
+        failure,
+        stage="provider_prompt_finalize",
+    )
+
+    assert audit["remote_provider_error_class"] == "upstream_transport_error"
+    assert audit["remote_provider_transport_kind"] == "protocol_error"
+    serialized = json.dumps(audit, sort_keys=True)
+    assert "D:/unsafe" not in serialized
+    assert "provider_payload" not in serialized
+
+
 def test_doc175_execution_budget_projection_rejects_bool_values() -> None:
     assert _safe_remote_brain_execution_budget(
         {"logical_budget_seconds": True, "remaining_ms": 0, "state": "within_budget"}
@@ -395,3 +457,68 @@ def test_doc175_finalizer_generic_provider_failure_reaches_blocked_outcome_safel
     assert "provider_payload" not in serialized
     assert "prompt secret" not in serialized
     assert "raw" not in serialized
+
+
+def test_doc175_finalizer_chained_transport_failure_reaches_trace_and_outcome_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    class FinalizerProtocolProviderFailure(EcommerceRemoteBrainTestProvider):
+        def execution_budget_receipt(self) -> dict[str, object]:
+            return {
+                "logical_budget_seconds": 520.0,
+                "remaining_ms": 272178,
+                "state": "within_budget",
+            }
+
+        def run(self, request):  # noqa: ANN001
+            if request.stage == "provider_prompt_finalize":
+                try:
+                    raise httpx.RemoteProtocolError("D:/unsafe/provider_payload peer closed stream")
+                except httpx.RemoteProtocolError as cause:
+                    raise BrainProviderError("remote brain provider failed") from cause
+            return super().run(request)
+
+    trace_file = tmp_path / "brain-stage-trace.jsonl"
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+    runtime = ScenarioRuntime(
+        llm_brain_adapter=V3LLMBrainAdapter(provider=FinalizerProtocolProviderFailure())
+    )
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one real-camera product image.",
+            "scenario_selection": {"scenario_id": "ecommerce"},
+            "metadata": {
+                "template_id": "ecommerce_template",
+                "requested_image_count": 1,
+                "require_real_images": True,
+            },
+        }
+    )
+
+    assert result.status.value == "blocked"
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["reason_code"] == "remote_creative_brain_prompt_signoff_unavailable"
+    assert outcome["remote_error_class"] == "upstream_transport_error"
+    assert outcome["remote_brain_stage"] == "provider_prompt_finalize"
+    assert outcome["remote_provider_transport_kind"] == "protocol_error"
+    assert outcome["execution_budget"] == {
+        "logical_budget_seconds": 520.0,
+        "remaining_ms": 272178,
+        "state": "within_budget",
+    }
+
+    events = [
+        json.loads(line)
+        for line in trace_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    error_events = [event for event in events if event.get("event") == "canonical_finalizer_provider_error"]
+    assert len(error_events) == 1
+    assert error_events[0]["terminal_reason"] == "upstream_transport_error"
+    assert error_events[0]["remote_provider_transport_kind"] == "protocol_error"
+
+    serialized = json.dumps({"outcome": outcome, "events": events}, sort_keys=True)
+    assert "D:/unsafe" not in serialized
+    assert "provider_payload" not in serialized

@@ -250,6 +250,22 @@ def _safe_remote_brain_stage(value: Any) -> str:
     return ""
 
 
+def _safe_remote_provider_transport_kind(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {
+        "connection_error",
+        "network_error",
+        "protocol_error",
+        "provider_api_error",
+        "read_error",
+        "timeout",
+        "transport_error",
+        "write_error",
+    }:
+        return token
+    return ""
+
+
 _SAFE_REMOTE_CONTRACT_REJECTED_SECTIONS = {
     "image_set_plan",
     "prompt_guidance",
@@ -3513,6 +3529,13 @@ class ScenarioRuntime:
                 {"remote_http_status_code": int(audit["remote_provider_http_status_code"])}
                 if isinstance(audit.get("remote_provider_http_status_code"), int)
                 and 100 <= int(audit["remote_provider_http_status_code"]) <= 599
+                else {}
+            ),
+            **(
+                {"remote_provider_transport_kind": _safe_remote_provider_transport_kind(
+                    audit["remote_provider_transport_kind"]
+                )}
+                if _safe_remote_provider_transport_kind(audit.get("remote_provider_transport_kind"))
                 else {}
             ),
             **(
