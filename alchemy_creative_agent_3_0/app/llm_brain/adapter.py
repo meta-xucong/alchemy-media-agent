@@ -118,6 +118,8 @@ class V3LLMBrainAdapter:
         started = time.perf_counter()
         semantic_recovery_attempted = False
         initial_rejected_sections: list[str] = []
+        initial_contract_validation_audit: dict[str, Any] = {}
+        final_contract_validation_audit: dict[str, Any] = {}
         try:
             record_stage_event(
                 "brain_adapter",
@@ -141,6 +143,7 @@ class V3LLMBrainAdapter:
             initial_rejected_sections = _remote_contract_rejected_sections(result)
             image_set_cardinality_audit = _remote_image_set_cardinality_audit(result)
             image_set_validation_audit = _remote_image_set_validation_audit(result)
+            initial_contract_validation_audit = _remote_contract_validation_audit(result)
             record_stage_event(
                 "brain_adapter",
                 "semantic_plan_schema_validated",
@@ -150,6 +153,7 @@ class V3LLMBrainAdapter:
                     "remote_contract_rejected_sections": initial_rejected_sections,
                     **image_set_cardinality_audit,
                     **image_set_validation_audit,
+                    **_remote_contract_validation_stage_fields(initial_contract_validation_audit),
                 },
             )
             recovery_transport_receipt: dict[str, Any] = {}
@@ -169,6 +173,7 @@ class V3LLMBrainAdapter:
                         "remote_contract_rejected_sections": initial_rejected_sections,
                         **image_set_cardinality_audit,
                         **image_set_validation_audit,
+                        **_remote_contract_validation_stage_fields(initial_contract_validation_audit),
                     },
                 )
                 recovery_request = _semantic_contract_recovery_request(
@@ -191,6 +196,7 @@ class V3LLMBrainAdapter:
                     recovery_data,
                     requires_complete_image_set=True,
                 )
+                final_contract_validation_audit = _remote_contract_validation_audit(result)
             result.llm_used = True
             result.fallback_used = False
             result.provider = self.provider.provider
@@ -213,6 +219,20 @@ class V3LLMBrainAdapter:
                         "remote_semantic_contract_recovery_call_count": 1,
                     }
                     if semantic_recovery_attempted
+                    else {}
+                ),
+                **(
+                    {
+                        "remote_semantic_contract_recovery_initial_validation_audit": initial_contract_validation_audit,
+                    }
+                    if semantic_recovery_attempted and initial_contract_validation_audit
+                    else {}
+                ),
+                **(
+                    {
+                        "remote_semantic_contract_recovery_final_validation_audit": final_contract_validation_audit,
+                    }
+                    if semantic_recovery_attempted and final_contract_validation_audit
                     else {}
                 ),
                 **(
@@ -677,6 +697,7 @@ class V3LLMBrainAdapter:
         rejected_sections: list[str] = []
         cardinality_audit: dict[str, Any] = {}
         image_set_validation_audit: dict[str, Any] = {}
+        contract_validation_sections: dict[str, dict[str, Any]] = {}
         for key in [
             "intent_summary",
             "project_memory_digest",
@@ -707,6 +728,7 @@ class V3LLMBrainAdapter:
                 # subject/evidence judgement; the fallback profile only binds
                 # non-creative job identifiers and compatibility defaults.
                 if not _has_complete_remote_visual_task_profile(remote_section):
+                    contract_validation_sections[key] = _visual_task_profile_shape_validation_audit(remote_section)
                     rejected_sections.append(key)
                     continue
             if key == "capability_activation_intent" and requires_complete_image_set:
@@ -745,11 +767,16 @@ class V3LLMBrainAdapter:
                         candidate,
                     )
                 else:
-                    payload, accepted = _merge_validated_section(payload, key, candidate)
-                    validation_audit = {}
+                    payload, accepted, validation_audit = _merge_validated_section_with_audit(
+                        payload,
+                        key,
+                        candidate,
+                    )
                 if not accepted:
                     if key == "image_set_plan" and validation_audit:
                         image_set_validation_audit = validation_audit
+                    if validation_audit:
+                        contract_validation_sections[key] = validation_audit
                     rejected_sections.append(key)
         # Rendering medium and its scope are semantic decisions. A local
         # keyword hit (for example a cartoon print on a real garment) may
@@ -829,6 +856,15 @@ class V3LLMBrainAdapter:
                     if "image_set_plan" in rejected_sections and image_set_validation_audit
                     else {}
                 ),
+                **(
+                    {
+                        "remote_contract_validation_audit": _remote_contract_validation_audit_payload(
+                            contract_validation_sections
+                        ),
+                    }
+                    if contract_validation_sections
+                    else {}
+                ),
             }
         return BrainRunResult.model_validate(payload)
 
@@ -886,6 +922,77 @@ def _remote_image_set_validation_audit(result: BrainRunResult) -> dict[str, Any]
         if isinstance(values, list):
             audit[key] = [str(item) for item in values if str(item).strip()][:8]
     return audit
+
+
+def _remote_contract_validation_audit(result: BrainRunResult) -> dict[str, Any]:
+    raw = result.audit.get("remote_contract_validation_audit") if isinstance(result.audit, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    if raw.get("schema_version") != "v3_remote_contract_validation_audit_v1":
+        return {}
+    sections = raw.get("sections")
+    if not isinstance(sections, dict):
+        return {}
+    safe_sections: dict[str, dict[str, Any]] = {}
+    for section, audit in sections.items():
+        section_key = str(section or "").strip()
+        if section_key not in {"image_set_plan", "visual_task_profile", "capability_activation_intent"}:
+            continue
+        if not isinstance(audit, dict):
+            continue
+        count = audit.get("validation_error_count")
+        paths = audit.get("validation_error_paths")
+        types = audit.get("validation_error_types")
+        safe_sections[section_key] = {
+            "validation_error_count": count if isinstance(count, int) else 0,
+            "validation_error_paths": [
+                _safe_validation_path(str(item).split("."), section=section_key)
+                for item in (paths if isinstance(paths, list) else [])
+                if str(item).strip()
+            ][:8],
+            "validation_error_types": [
+                _safe_validation_type(item)
+                for item in (types if isinstance(types, list) else [])
+                if str(item).strip()
+            ][:8],
+        }
+        safe_sections[section_key]["validation_error_paths"] = [
+            item for item in safe_sections[section_key]["validation_error_paths"] if item
+        ]
+    if not safe_sections:
+        return {}
+    return {
+        "schema_version": "v3_remote_contract_validation_audit_v1",
+        "sections": safe_sections,
+    }
+
+
+def _remote_contract_validation_stage_fields(audit: dict[str, Any]) -> dict[str, Any]:
+    sections = audit.get("sections") if isinstance(audit, dict) else None
+    if not isinstance(sections, dict):
+        return {}
+    paths: list[str] = []
+    types: list[str] = []
+    count = 0
+    for section_audit in sections.values():
+        if not isinstance(section_audit, dict):
+            continue
+        raw_count = section_audit.get("validation_error_count")
+        if isinstance(raw_count, int):
+            count += raw_count
+        raw_paths = section_audit.get("validation_error_paths")
+        if isinstance(raw_paths, list):
+            paths.extend(str(item) for item in raw_paths if str(item).strip())
+        raw_types = section_audit.get("validation_error_types")
+        if isinstance(raw_types, list):
+            types.extend(str(item) for item in raw_types if str(item).strip())
+    if not paths and not types:
+        return {}
+    return {
+        "validation_error_count": count,
+        "validation_error_paths": list(dict.fromkeys(paths))[:8],
+        "validation_error_types": list(dict.fromkeys(types))[:8],
+    }
 
 
 def _semantic_contract_recovery_request(
@@ -2471,6 +2578,139 @@ def _has_complete_remote_visual_task_profile(candidate: Any) -> bool:
     return all(isinstance(item, str) and item.strip() for item in [*tags, *unknowns])
 
 
+def _visual_task_profile_shape_validation_audit(candidate: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return _section_validation_audit("visual_task_profile", "visual_task_profile", "dict_type")
+    if not _has_remote_rendering_intent(candidate):
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.rendering_intent",
+            "missing",
+        )
+    required_profile_fields = (
+        "developmental_age_intent",
+        "reference_channel_ownership_intent",
+        "subject_entities",
+        "visual_intent_tags",
+        "unknown_requirements",
+        "confidence",
+        "evidence",
+    )
+    for field in required_profile_fields:
+        if field not in candidate:
+            return _section_validation_audit("visual_task_profile", f"visual_task_profile.{field}", "missing")
+    for field in ("subject_entities", "evidence", "visual_intent_tags", "unknown_requirements"):
+        if not isinstance(candidate.get(field), list):
+            return _section_validation_audit("visual_task_profile", f"visual_task_profile.{field}", "list_type")
+    confidence = candidate.get("confidence")
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool) or not 0.0 <= confidence <= 1.0:
+        return _section_validation_audit("visual_task_profile", "visual_task_profile.confidence", "float_type")
+    if candidate.get("developmental_age_intent") not in {
+        "current_request_assigns_stage",
+        "preserve_reference_stage",
+        "not_applicable",
+        "ambiguous",
+    }:
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.developmental_age_intent",
+            "literal_error",
+        )
+    reference_ownership = candidate.get("reference_channel_ownership_intent")
+    if not isinstance(reference_ownership, dict):
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.reference_channel_ownership_intent",
+            "dict_type",
+        )
+    required = (
+        "applicability",
+        "decision_owner",
+        "reference_owned_channels",
+        "current_request_owned_channels",
+        "evidence_ids",
+        "confidence",
+    )
+    for field in required:
+        if field not in reference_ownership:
+            return _section_validation_audit(
+                "visual_task_profile",
+                f"visual_task_profile.reference_channel_ownership_intent.{field}",
+                "missing",
+            )
+    if reference_ownership.get("decision_owner") != "remote_brain":
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.reference_channel_ownership_intent.decision_owner",
+            "literal_error",
+        )
+    if reference_ownership.get("applicability") not in {"applicable", "not_applicable", "ambiguous"}:
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.reference_channel_ownership_intent.applicability",
+            "literal_error",
+        )
+    for field in ("reference_owned_channels", "current_request_owned_channels", "evidence_ids"):
+        if not isinstance(reference_ownership.get(field), list):
+            return _section_validation_audit(
+                "visual_task_profile",
+                f"visual_task_profile.reference_channel_ownership_intent.{field}",
+                "list_type",
+            )
+    channels = [
+        *reference_ownership.get("reference_owned_channels", []),
+        *reference_ownership.get("current_request_owned_channels", []),
+    ]
+    if not all(isinstance(item, str) and item.strip() for item in channels):
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.reference_channel_ownership_intent.reference_owned_channels.item",
+            "string_type",
+        )
+    if any(channel not in REFERENCE_CHANNEL_IDS for channel in channels):
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.reference_channel_ownership_intent.reference_owned_channels.item",
+            "literal_error",
+        )
+    if set(reference_ownership.get("reference_owned_channels", [])) & set(
+        reference_ownership.get("current_request_owned_channels", [])
+    ):
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.reference_channel_ownership_intent.reference_owned_channels",
+            "value_error",
+        )
+    reference_confidence = reference_ownership.get("confidence")
+    if (
+        not isinstance(reference_confidence, (int, float))
+        or isinstance(reference_confidence, bool)
+        or not 0.0 <= reference_confidence <= 1.0
+    ):
+        return _section_validation_audit(
+            "visual_task_profile",
+            "visual_task_profile.reference_channel_ownership_intent.confidence",
+            "float_type",
+        )
+    for entity in candidate.get("subject_entities", []):
+        if not isinstance(entity, dict):
+            return _section_validation_audit(
+                "visual_task_profile",
+                "visual_task_profile.subject_entities.item",
+                "dict_type",
+            )
+        if not isinstance(entity.get("confidence"), (int, float)) or isinstance(entity.get("confidence"), bool):
+            return _section_validation_audit(
+                "visual_task_profile",
+                "visual_task_profile.subject_entities.item.confidence",
+                "float_type",
+            )
+    for item in [*candidate.get("visual_intent_tags", []), *candidate.get("unknown_requirements", [])]:
+        if not isinstance(item, str) or not item.strip():
+            return _section_validation_audit("visual_task_profile", "visual_task_profile.visual_intent_tags.item", "string_type")
+    return _section_validation_audit("visual_task_profile", "visual_task_profile", "value_error")
+
+
 def _merge_complete_remote_visual_task_profile(base: Any, remote: dict[str, Any]) -> dict[str, Any]:
     """Bind structural IDs locally while preserving every remote semantic choice.
 
@@ -2629,6 +2869,57 @@ def _safe_validation_error_audit(exc: ValidationError, *, section: str) -> dict[
     }
 
 
+def _section_validation_audit(section: str, path: str, error_type: str) -> dict[str, Any]:
+    safe_path = _safe_validation_path(path.split("."), section=section)
+    safe_type = _safe_validation_type(error_type)
+    return {
+        "validation_error_count": 1 if safe_path else 0,
+        "validation_error_paths": [safe_path] if safe_path else [],
+        "validation_error_types": [safe_type] if safe_path else [],
+    }
+
+
+def _remote_contract_validation_audit_payload(
+    sections: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    safe_sections: dict[str, dict[str, Any]] = {}
+    for section, audit in sections.items():
+        section_key = str(section or "").strip()
+        if section_key not in {"image_set_plan", "visual_task_profile", "capability_activation_intent"}:
+            continue
+        if not isinstance(audit, dict):
+            continue
+        paths = audit.get("validation_error_paths")
+        types = audit.get("validation_error_types")
+        safe_paths = (
+            [
+                _safe_validation_path(str(item).split("."), section=section_key)
+                for item in paths
+                if str(item).strip()
+            ][:8]
+            if isinstance(paths, list)
+            else []
+        )
+        safe_types = (
+            [_safe_validation_type(item) for item in types if str(item).strip()][:8]
+            if isinstance(types, list)
+            else []
+        )
+        safe_paths = [item for item in safe_paths if item]
+        if not safe_paths and not safe_types:
+            continue
+        count = audit.get("validation_error_count")
+        safe_sections[section_key] = {
+            "validation_error_count": count if isinstance(count, int) else len(safe_paths),
+            "validation_error_paths": list(dict.fromkeys(safe_paths))[:8],
+            "validation_error_types": list(dict.fromkeys(safe_types))[:8],
+        }
+    return {
+        "schema_version": "v3_remote_contract_validation_audit_v1",
+        "sections": safe_sections,
+    }
+
+
 def _safe_validation_path(loc: Any, *, section: str) -> str:
     if not isinstance(loc, (list, tuple)):
         return ""
@@ -2637,7 +2928,7 @@ def _safe_validation_path(loc: Any, *, section: str) -> str:
         return ""
     if parts[0] != section:
         parts = [section, *parts]
-    if parts[0] != "image_set_plan":
+    if parts[0] not in {"image_set_plan", "visual_task_profile", "capability_activation_intent"}:
         return ""
     safe_parts: list[str] = []
     for part in parts:
@@ -2662,10 +2953,50 @@ def _safe_validation_path(loc: Any, *, section: str) -> str:
         "image_set_plan.quality_bar",
         "image_set_plan.size",
         "image_set_plan.set_goal",
+        "visual_task_profile",
+        "visual_task_profile.rendering_intent",
+        "visual_task_profile.rendering_intent.rendering_mode",
+        "visual_task_profile.rendering_intent.stylization_scope",
+        "visual_task_profile.rendering_intent.decision_owner",
+        "visual_task_profile.developmental_age_intent",
+        "visual_task_profile.reference_channel_ownership_intent",
+        "visual_task_profile.reference_channel_ownership_intent.applicability",
+        "visual_task_profile.reference_channel_ownership_intent.decision_owner",
+        "visual_task_profile.reference_channel_ownership_intent.reference_owned_channels",
+        "visual_task_profile.reference_channel_ownership_intent.reference_owned_channels.item",
+        "visual_task_profile.reference_channel_ownership_intent.current_request_owned_channels",
+        "visual_task_profile.reference_channel_ownership_intent.current_request_owned_channels.item",
+        "visual_task_profile.reference_channel_ownership_intent.evidence_ids",
+        "visual_task_profile.reference_channel_ownership_intent.evidence_ids.item",
+        "visual_task_profile.reference_channel_ownership_intent.confidence",
+        "visual_task_profile.subject_entities",
+        "visual_task_profile.subject_entities.item",
+        "visual_task_profile.subject_entities.item.entity_id",
+        "visual_task_profile.subject_entities.item.entity_type",
+        "visual_task_profile.subject_entities.item.role",
+        "visual_task_profile.subject_entities.item.source_asset_ids",
+        "visual_task_profile.subject_entities.item.source_asset_ids.item",
+        "visual_task_profile.subject_entities.item.visible_in_target",
+        "visual_task_profile.subject_entities.item.preservation_level",
+        "visual_task_profile.subject_entities.item.confidence",
+        "visual_task_profile.subject_entities.item.attributes",
+        "visual_task_profile.visual_intent_tags",
+        "visual_task_profile.visual_intent_tags.item",
+        "visual_task_profile.unknown_requirements",
+        "visual_task_profile.unknown_requirements.item",
+        "visual_task_profile.confidence",
+        "visual_task_profile.evidence",
+        "visual_task_profile.evidence.item",
+        "visual_task_profile.evidence.item.evidence_id",
+        "visual_task_profile.evidence.item.evidence_type",
+        "visual_task_profile.evidence.item.source",
+        "visual_task_profile.evidence.item.confidence",
+        "visual_task_profile.evidence.item.metadata",
+        "capability_activation_intent",
     )
     if path in allowed_prefixes or any(path.startswith(prefix + ".") for prefix in allowed_prefixes):
         return path
-    return "image_set_plan"
+    return parts[0]
 
 
 def _safe_validation_type(value: Any) -> str:

@@ -970,6 +970,221 @@ def test_required_remote_truncated_response_is_not_reported_as_json_decode(monke
     assert "remote_image_set_validation_audit" not in result.audit
 
 
+def _complete_required_remote_response(request) -> dict[str, object]:  # noqa: ANN001
+    return {
+        "image_set_plan": {
+            "set_goal": "complete remote product-on-person plan",
+            "image_count": request.requested_image_count,
+            "size": request.requested_image_size,
+            "shot_plan": [f"remote shot {index}" for index in range(1, request.requested_image_count + 1)],
+            "evidence_dimensions_by_output": [
+                {
+                    "output_index": index,
+                    "evidence_dimensions": [],
+                }
+                for index in range(1, request.requested_image_count + 1)
+            ],
+        },
+        "visual_task_profile": {
+            "profile_id": "profile_remote_complete",
+            "project_id": request.project_id,
+            "job_id": request.job_id,
+            "template_id": request.template_id,
+            "scenario_id": request.scenario_id,
+            "subject_entities": [
+                {
+                    "entity_id": "subject_remote_1",
+                    "entity_type": "person",
+                    "role": "model",
+                    "source_asset_ids": [],
+                    "visible_in_target": True,
+                    "preservation_level": "balanced",
+                    "confidence": 0.91,
+                    "attributes": {},
+                }
+            ],
+            "visual_intent_tags": ["product_on_person"],
+            "unknown_requirements": [],
+            "confidence": 0.92,
+            "evidence": [
+                {
+                    "evidence_id": "evidence_remote_1",
+                    "evidence_type": "semantic_contract",
+                    "source": "remote_brain",
+                    "value": "complete",
+                    "confidence": 0.9,
+                    "metadata": {},
+                }
+            ],
+            "rendering_intent": {
+                "rendering_mode": "photoreal",
+                "stylization_scope": "none",
+                "decision_owner": "remote_brain",
+            },
+            "developmental_age_intent": "current_request_assigns_stage",
+            "reference_channel_ownership_intent": {
+                "applicability": "not_applicable",
+                "decision_owner": "remote_brain",
+                "reference_owned_channels": [],
+                "current_request_owned_channels": [],
+                "evidence_ids": [],
+                "confidence": 0.9,
+            },
+        },
+        "capability_activation_intent": {
+            "intent_id": "intent_remote_complete",
+            "task_profile_id": "profile_remote_complete",
+            "requested_capabilities": [],
+            "rejected_capabilities": [],
+            "unresolved_signals": [],
+            "confidence": 0.9,
+        },
+        "prompt_guidance": {"optimized_direction": "complete remote direction"},
+    }
+
+
+def test_required_remote_visual_task_profile_contract_passes_without_validation_audit(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    class CompleteVisualTaskProfileProvider:
+        provider = "openai"
+        model = "remote-visual-task-valid-test"
+
+        def __init__(self) -> None:
+            self.requests = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            self.requests += 1
+            return _complete_required_remote_response(request)
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    provider = CompleteVisualTaskProfileProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = adapter.build_request(
+        user_input="Create one real product image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={"requested_image_count": 1, "real_image_generation": True},
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    result = adapter.run(request)
+
+    assert provider.requests == 1
+    assert result.llm_used is True
+    assert result.fallback_used is False
+    assert result.audit["remote_visual_task_profile_received"] is True
+    assert "remote_contract_validation_audit" not in result.audit
+    assert result.audit["remote_semantic_contract_recovery_attempted"] is False
+
+
+@pytest.mark.parametrize(
+    ("mutator", "expected_path", "expected_type"),
+    [
+        (
+            lambda profile: profile.pop("developmental_age_intent"),
+            "visual_task_profile.developmental_age_intent",
+            "missing",
+        ),
+        (
+            lambda profile: profile["reference_channel_ownership_intent"].update(
+                {"reference_owned_channels": ["D:/unsafe/raw.png"]}
+            ),
+            "visual_task_profile.reference_channel_ownership_intent.reference_owned_channels.item",
+            "literal_error",
+        ),
+        (
+            lambda profile: profile.update({"subject_entities": "D:/unsafe/raw.png"}),
+            "visual_task_profile.subject_entities",
+            "list_type",
+        ),
+        (
+            lambda profile: profile.update({"confidence": "D:/unsafe/raw.png"}),
+            "visual_task_profile.confidence",
+            "float_type",
+        ),
+    ],
+)
+def test_required_remote_visual_task_profile_validation_audit_is_public_safe(
+    monkeypatch,
+    tmp_path,
+    mutator,
+    expected_path,
+    expected_type,
+) -> None:
+    from copy import deepcopy
+
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    class VisualTaskProfileRecoveryProvider:
+        provider = "openai"
+        model = "remote-visual-task-invalid-test"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            self.requests.append(request)
+            response = deepcopy(_complete_required_remote_response(request))
+            if len(self.requests) == 1:
+                mutator(response["visual_task_profile"])
+            return response
+
+    trace_file = tmp_path / "brain-stage-trace.jsonl"
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_BRAIN_STAGE_TRACE_FILE", str(trace_file))
+    provider = VisualTaskProfileRecoveryProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = adapter.build_request(
+        user_input="Create one real product image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={"requested_image_count": 1, "real_image_generation": True},
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    result = adapter.run(request)
+
+    assert len(provider.requests) == 2
+    recovery_marker = provider.requests[1].metadata["remote_semantic_contract_recovery"]
+    assert recovery_marker["same_frozen_request"] is True
+    assert recovery_marker["rejected_sections"] == ["visual_task_profile"]
+    assert result.llm_used is True
+    assert result.fallback_used is False
+    assert result.audit["remote_semantic_contract_recovery_attempted"] is True
+    assert result.audit["remote_semantic_contract_recovery_succeeded"] is True
+    assert result.audit["remote_semantic_contract_recovery_call_count"] == 1
+    audit = result.audit["remote_semantic_contract_recovery_initial_validation_audit"]
+    section_audit = audit["sections"]["visual_task_profile"]
+    assert section_audit["validation_error_paths"] == [expected_path]
+    assert expected_type in section_audit["validation_error_types"]
+    serialized = json.dumps(audit, ensure_ascii=False)
+    assert "D:/unsafe" not in serialized
+    assert "raw.png" not in serialized
+    assert "provider_payload" not in serialized
+    assert "prompt" not in serialized
+    assert "remote_brain_serialization_failure" not in result.audit
+    trace_events = [json.loads(line) for line in trace_file.read_text(encoding="utf-8").splitlines()]
+    schema_events = [
+        event for event in trace_events if event["event"] in {"semantic_plan_schema_validated", "semantic_recovery_provider_call"}
+    ]
+    assert schema_events
+    assert any(expected_path in event.get("validation_error_paths", []) for event in schema_events)
+    assert any(expected_type in event.get("validation_error_types", []) for event in schema_events)
+    serialized_trace = json.dumps(trace_events, ensure_ascii=False)
+    assert "D:/unsafe" not in serialized_trace
+    assert "raw.png" not in serialized_trace
+    assert "provider_payload" not in serialized_trace
+
+
 def test_remote_json_failure_safe_metadata_sanitizes_stage() -> None:
     unsafe_stage = "D:/unsafe/original.png?provider_payload=secret"
 
