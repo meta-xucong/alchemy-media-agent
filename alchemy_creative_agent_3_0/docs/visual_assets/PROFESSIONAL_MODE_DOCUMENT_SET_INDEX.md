@@ -199,6 +199,22 @@ formal delivery changes. It does not certify current or historical Body
 Silhouette assets and carries no implementation authority until reviewer opens
 a separate gate.
 
+### Body Silhouette Source Standard Contract
+
+`PROFESSIONAL_MODE_BODY_SILHOUETTE_SOURCE_STANDARD_CONTRACT.md`
+
+Gate A document-only contract for the universal Body Silhouette source
+standard. It defines review semantics for `body.front_full`, `body.side_full`,
+and `body.rear_full`: body-chain coherence, stage-aware proportion,
+head-neck-shoulder continuity, torso/limb/joint plausibility, stance and
+ground contact, and cross-view parity. It keeps `observed`,
+`user_described`, and `brain_inferred` as provenance rather than quality
+certification, preserves Face Identity ownership, and remains compatible with
+Doc178 and the downstream body-only projection design. It does not authorize
+Character Card generation changes, Body Silhouette slot/review/activation or
+storage changes, runtime fields, grades, planning, Host/MCP/ImageGen, or
+formal delivery writes.
+
 ### M5 Real-Pixel Acceptance Record
 
 `PROFESSIONAL_MODE_M5_REAL_PIXEL_ACCEPTANCE_BLOCKED_20260717.md`
