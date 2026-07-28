@@ -15,7 +15,11 @@ from uuid import uuid4
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
-from ..shared_capabilities.visual_cluster.expression_review import laugh_expression_receipt_allows_slot
+from ..shared_capabilities.visual_cluster.expression_review import (
+    BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+    laugh_expression_receipt_allows_slot,
+)
 from ..shared_capabilities.visual_cluster.review_repair import (
     shared_review_repair_context_from_decision,
 )
@@ -63,6 +67,8 @@ BODY_SLOT_KEYS = ("body.front_full", "body.side_full", "body.rear_full")
 BODY_SOURCE_CLASSES = ("observed", "user_described", "brain_inferred")
 BODY_ENHANCED_PROFILE_EVIDENCE_CODE = "body_silhouette_profile_eligible"
 BODY_ENHANCED_PROFILE_ISSUE_CODE = "body_silhouette_profile_rejected"
+BODY_SOURCE_STANDARD_EVIDENCE_CODE = "body_silhouette_source_standard_verified"
+BODY_SOURCE_STANDARD_MISSING_ISSUE_CODE = "body_silhouette_source_standard_evidence_missing"
 EXPRESSION_LABELS = {
     "expression.neutral": "中性",
     "expression.laugh": "开心笑",
@@ -2229,6 +2235,30 @@ class CharacterCardPreparationService:
             for item in (getattr(review, "issue_codes", []) or [])
             if str(item.get("code") if isinstance(item, dict) else item).strip()
         }
+        shared_review_summary: FormalSlotSharedReviewSummary | None = None
+        try:
+            shared_review_summary = CharacterCardPreparationService._formal_shared_review_summary(review)
+        except ValueError:
+            issue_codes.append("body_shared_review_receipt_missing")
+        shared_score_dimensions = (
+            set(shared_review_summary.score_dimensions) if shared_review_summary is not None else set()
+        )
+        shared_issue_codes = (
+            set(shared_review_summary.issue_codes) if shared_review_summary is not None else set()
+        )
+        missing_source_standard_dimensions = [
+            dimension
+            for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS
+            if dimension not in shared_score_dimensions
+        ]
+        if missing_source_standard_dimensions:
+            issue_codes.append(BODY_SOURCE_STANDARD_MISSING_ISSUE_CODE)
+        blocking_source_standard_issues = sorted(
+            review_issue_codes.union(shared_issue_codes).intersection(
+                BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES
+            )
+        )
+        issue_codes.extend(blocking_source_standard_issues)
         if BODY_ENHANCED_PROFILE_ISSUE_CODE in review_issue_codes:
             issue_codes.append(BODY_ENHANCED_PROFILE_ISSUE_CODE)
         if getattr(review, "status", None) != "pass":
@@ -2242,6 +2272,7 @@ class CharacterCardPreparationService:
                     "body_face_reference_scope_verified",
                     "body_candidate_contract_verified",
                     "body_shared_review_pass_verified",
+                    BODY_SOURCE_STANDARD_EVIDENCE_CODE,
                 ]
             )
             if source_class == "observed":
@@ -2250,7 +2281,23 @@ class CharacterCardPreparationService:
                 evidence_codes.append("body_consent_not_required")
         else:
             evidence_codes.append(BODY_ENHANCED_PROFILE_ISSUE_CODE)
+        source_standard_verified = not missing_source_standard_dimensions and not blocking_source_standard_issues
         issue_codes = list(dict.fromkeys(issue_codes))
+        dimensions: dict[str, float] = {
+            "profile_score": 1.0 if eligible else 0.0,
+            "face_reference_scope_score": 1.0
+            if len(reference_output_ids) == 3 and len(set(reference_output_ids)) == 3
+            else 0.0,
+            "source_standard_score": 1.0 if source_standard_verified else 0.0,
+        }
+        dimensions.update(
+            {
+                f"source_standard_{dimension}": 1.0
+                if dimension in shared_score_dimensions
+                else 0.0
+                for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS
+            }
+        )
         return FormalSlotCandidateEnhancedProofSummary(
             profile_id="body_silhouette_slot_profile_v1",
             requirement_id=f"{slot_key}.enhanced_profile",
@@ -2260,12 +2307,7 @@ class CharacterCardPreparationService:
             status="pass" if eligible else "fail",
             evidence_codes=evidence_codes,
             issue_codes=issue_codes,
-            dimensions={
-                "profile_score": 1.0 if eligible else 0.0,
-                "face_reference_scope_score": 1.0
-                if len(reference_output_ids) == 3 and len(set(reference_output_ids)) == 3
-                else 0.0,
-            },
+            dimensions=dimensions,
         )
 
     @classmethod

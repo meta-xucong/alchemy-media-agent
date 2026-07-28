@@ -119,6 +119,46 @@ BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS = (
     "limb_visibility_delta",
     "centerline_delta",
 )
+BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS = (
+    "body_chain_coherence",
+    "stage_aware_proportion",
+    "head_neck_shoulder_continuity",
+    "torso_limb_joint_plausibility",
+    "stance_ground_contact",
+    "cross_view_body_parity",
+)
+BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES = frozenset(
+    {
+        "head_body_scale_mismatch",
+        "pasted_head_body_boundary",
+        "doll_like_body_chain",
+        "mannequin_body_chain",
+        "body_chain_discontinuity",
+        "stage_incoherent_body_proportion",
+        "over_infantilized_body",
+        "accidental_adultification",
+        "generic_model_body_override",
+        "compressed_neck_shoulders",
+        "floating_head",
+        "neck_support_missing",
+        "shoulder_width_incoherent",
+        "head_neck_shoulder_discontinuity",
+        "torso_compression",
+        "limb_length_incoherence",
+        "joint_placement_error",
+        "rubbery_limb_structure",
+        "left_right_body_asymmetry",
+        "floating_body",
+        "implausible_ground_contact",
+        "collapsed_weight_bearing",
+        "cardboard_stance",
+        "stance_centerline_error",
+        "cross_view_body_parity_mismatch",
+        "front_side_body_depth_conflict",
+        "rear_body_build_conflict",
+        "view_specific_age_stage_drift",
+    }
+)
 EXPRESSION_SCORE_FLOOR_EPSILON = 0.005
 DOC256_EXPRESSION_CARD_FAMILY_DIMENSIONS = (
     "model_card_crop_closeness",
@@ -658,6 +698,8 @@ def _doc256_finite_dimensions(
 __all__ = [
     "AffectiveExpressionReviewReceipt",
     "BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS",
+    "BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES",
+    "BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS",
     "EXPRESSION_FRAMING_DELTA_MAX",
     "EXPRESSION_FRONT_CARD_FRAMING_EVIDENCE_CODES",
     "EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES",

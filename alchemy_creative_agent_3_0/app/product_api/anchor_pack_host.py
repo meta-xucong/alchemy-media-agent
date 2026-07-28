@@ -22,6 +22,7 @@ from ..shared_capabilities.visual_cluster.micro_real_human_fidelity import (
 )
 from ..shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     expression_front_card_framing_materialization_directive,
     laugh_expression_materialization_directive,
     project_expression_model_card_proofs,
@@ -2404,7 +2405,10 @@ class ProductApiAnchorPackPreparationHost:
             raw_status=raw_status,
             require_front_card_framing=request.module == "expression_set",
             framing_dimension_allowlist=(
-                BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS
+                (
+                    *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+                    *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+                )
                 if request.module == "body_silhouette"
                 else None
             ),

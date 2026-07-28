@@ -339,6 +339,26 @@ class ProfessionalModeRuntimeBridge:
             }
         else:
             quality_contract["body_silhouette_contract"] = "preserve_identity_scale_and_age_appropriate_body_proportion"
+            quality_contract["body_silhouette_source_standard_contract"] = {
+                "contract_version": "professional_body_silhouette_source_standard_v1",
+                "applies": True,
+                "scope": "body_silhouette_only",
+                "required_dimensions": [
+                    "body_chain_coherence",
+                    "stage_aware_proportion",
+                    "head_neck_shoulder_continuity",
+                    "torso_limb_joint_plausibility",
+                    "stance_ground_contact",
+                    "cross_view_body_parity",
+                ],
+                "source_class_policy": "provenance_only_no_quality_grade",
+                "forbidden_runtime_authority": [
+                    "commercial_certification",
+                    "body_silhouette_grade",
+                    "fixed_age_ratio",
+                    "scene_or_vertical_recipe",
+                ],
+            }
             quality_contract["body_silhouette_wardrobe_contract"] = {
                 "contract_version": "professional_body_silhouette_wardrobe_v1",
                 "applies": True,

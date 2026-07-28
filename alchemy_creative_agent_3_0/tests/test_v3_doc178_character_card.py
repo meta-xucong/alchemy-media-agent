@@ -11,6 +11,8 @@ import pytest
 from pydantic import ValidationError
 
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
+    BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     EXPRESSION_FRAMING_DELTA_MAX,
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
     project_generic_visual_review_receipt,
@@ -349,7 +351,7 @@ def _doc178_laugh_review_receipt() -> dict[str, object]:
     ).to_public_dict()
 
 
-def _doc178_generic_review_receipt() -> dict[str, object]:
+def _doc178_generic_review_receipt(*, body_silhouette: bool = False) -> dict[str, object]:
     score_card = {
         "identity_fidelity": 0.9,
         "visual_quality": 0.9,
@@ -358,12 +360,25 @@ def _doc178_generic_review_receipt() -> dict[str, object]:
     }
     for dimension in EXPRESSION_FRAMING_DELTA_MAX:
         score_card[dimension] = 0.01
+    if body_silhouette:
+        for dimension in BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS:
+            score_card[dimension] = 0.01
+        for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS:
+            score_card[dimension] = 0.91
     return project_generic_visual_review_receipt(
         score_card=score_card,
         issue_codes=[],
         verified=True,
         raw_status="pass",
-        require_front_card_framing=True,
+        require_front_card_framing=not body_silhouette,
+        framing_dimension_allowlist=(
+            (
+                *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+                *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+            )
+            if body_silhouette
+            else None
+        ),
     ).to_public_dict()
 
 
@@ -446,7 +461,7 @@ def _doc178_formal_slot_receipt(
 
 
 def _doc178_slot_success_receipt(slot_key: str, output_id: str) -> dict[str, object]:
-    review_receipts = [_doc178_generic_review_receipt()]
+    review_receipts = [_doc178_generic_review_receipt(body_silhouette=slot_key.startswith("body."))]
     if slot_key == "expression.laugh":
         review_receipts.append(_doc178_laugh_review_receipt())
     module = (
@@ -504,7 +519,11 @@ class _Doc178ExpressionBodyReviewer:
                 visual_quality_score=0.9,
                 evidence_codes=evidence_codes,
             ),
-            shared_review_receipts=[_doc178_generic_review_receipt()],
+            shared_review_receipts=[
+                _doc178_generic_review_receipt(
+                    body_silhouette=getattr(candidate, "module", "") == "body_silhouette"
+                )
+            ],
         )
 
 

@@ -14,6 +14,8 @@ from .absolute_portrait_realism import REQUIRED_REALISM_DIMENSIONS
 from .contracts import GeneratedOutputResolution
 from .expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+    BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     EXPRESSION_FRAMING_DELTA_MAX,
     EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES,
     LAUGH_EXPRESSION_SCORE_FLOORS,
@@ -659,6 +661,7 @@ def _professional_body_silhouette_review_context(
         "framing_baseline": body_review.get("framing_baseline"),
         "wardrobe_contract": body_review.get("wardrobe_contract"),
         "hair_continuity_contract": body_review.get("hair_continuity_contract"),
+        "source_standard_contract": body_review.get("source_standard_contract"),
         "framing_delta_dimensions": list(body_review.get("framing_delta_dimensions") or []),
         "score_dimensions": list(body_review.get("score_dimensions") or []),
         "issue_codes": list(body_review.get("issue_codes") or []),
@@ -929,12 +932,14 @@ def _professional_identity_quality_contract(
     ]
     body_silhouette_score_dimensions = [
         *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+        *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     ]
     body_silhouette_issue_codes = [
         "body_silhouette_framing_drift",
         "body_silhouette_full_body_framing_missing",
         "body_silhouette_wardrobe_contract_drift",
         "body_silhouette_hair_continuity_drift",
+        *sorted(BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES),
     ]
     absolute_portrait_realism_issue_codes = [
         "absolute_eye_gaze_alignment_failed",
@@ -1105,6 +1110,8 @@ def _professional_identity_quality_contract(
                 "issue_codes": list(dict.fromkeys(body_silhouette_issue_codes)),
                 "framing_baseline": "body.slot",
                 "framing_delta_dimensions": list(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS),
+                "source_standard_dimensions": list(BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS),
+                "source_standard_contract": contract.get("body_silhouette_source_standard_contract"),
                 "wardrobe_contract": contract.get("body_silhouette_wardrobe_contract"),
                 "hair_continuity_contract": contract.get("body_silhouette_hair_continuity_contract"),
             }
