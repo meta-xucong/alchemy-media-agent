@@ -92,6 +92,7 @@ class BrainInvalidJsonResponse(BrainProviderError):
         json_recovery_succeeded: bool = False,
         json_parse_started: bool = True,
         json_parse_completed: bool = False,
+        json_failure_kind: str = "unknown",
     ) -> None:
         super().__init__(message)
         self.stage = _safe_brain_stage(stage)
@@ -100,6 +101,7 @@ class BrainInvalidJsonResponse(BrainProviderError):
         self.json_recovery_succeeded = bool(json_recovery_succeeded)
         self.json_parse_started = bool(json_parse_started)
         self.json_parse_completed = bool(json_parse_completed)
+        self.json_failure_kind = _safe_json_failure_kind(json_failure_kind)
 
     def safe_metadata(self) -> dict[str, Any]:
         """Return public-safe serialization facts without model text or prompts."""
@@ -109,6 +111,7 @@ class BrainInvalidJsonResponse(BrainProviderError):
             "stage": self.stage,
             "transport_error_class": "invalid_json_response",
             "error_family": "json_decode",
+            "json_failure_kind": self.json_failure_kind,
             "attempts": self.attempts,
             "json_serialization_recovery_attempted": self.json_recovery_attempted,
             "json_serialization_recovery_succeeded": self.json_recovery_succeeded,
@@ -128,6 +131,7 @@ class BrainOutputTruncated(BrainInvalidJsonResponse):
             "stage": self.stage,
             "transport_error_class": "truncated_response",
             "error_family": "output_truncated",
+            "json_failure_kind": "output_truncated",
             "attempts": self.attempts,
             "json_serialization_recovery_attempted": self.json_recovery_attempted,
             "json_serialization_recovery_succeeded": self.json_recovery_succeeded,
@@ -151,6 +155,23 @@ _SAFE_BRAIN_STAGES = {
 def _safe_brain_stage(stage: Any) -> str:
     value = str(stage or "").strip()
     if value in _SAFE_BRAIN_STAGES:
+        return value
+    return "unknown"
+
+
+_SAFE_JSON_FAILURE_KINDS = {
+    "empty_json",
+    "malformed_json",
+    "missing_complete_marker",
+    "non_object_json",
+    "output_truncated",
+    "unknown",
+}
+
+
+def _safe_json_failure_kind(kind: Any) -> str:
+    value = str(kind or "").strip()
+    if value in _SAFE_JSON_FAILURE_KINDS:
         return value
     return "unknown"
 
@@ -322,8 +343,9 @@ class V3LLMBrainProvider:
                     attempts=2,
                     json_recovery_attempted=True,
                     json_recovery_succeeded=False,
-                    json_parse_started=True,
-                    json_parse_completed=False,
+                    json_parse_started=getattr(recovery_error, "json_parse_started", True),
+                    json_parse_completed=getattr(recovery_error, "json_parse_completed", False),
+                    json_failure_kind=getattr(recovery_error, "json_failure_kind", "unknown"),
                 ) from recovery_error
 
     def _run_remote_attempt(self, runner: Any, request: BrainRunRequest, *, json_recovery: bool) -> dict[str, Any]:
@@ -781,7 +803,12 @@ def _collect_openai_chat_completion_stream(
                     record_stage_event("brain_provider", "stream_first_content_observed")
                     chunks.append(str(content))
     if not done:
-        raise BrainInvalidJsonResponse("remote brain stream ended before the complete JSON response marker")
+        raise BrainInvalidJsonResponse(
+            "remote brain stream ended before the complete JSON response marker",
+            json_failure_kind="missing_complete_marker",
+            json_parse_started=False,
+            json_parse_completed=False,
+        )
     return "".join(chunks)
 
 
@@ -835,20 +862,29 @@ def _int_env(name: str, default: int) -> int:
 def _loads_json_object(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
     if not raw:
-        raise BrainInvalidJsonResponse("remote brain returned empty JSON output")
+        raise BrainInvalidJsonResponse("remote brain returned empty JSON output", json_failure_kind="empty_json")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as first_error:
         start = raw.find("{")
         end = raw.rfind("}")
         if start < 0 or end <= start:
-            raise BrainInvalidJsonResponse("remote brain returned malformed JSON output") from first_error
+            raise BrainInvalidJsonResponse(
+                "remote brain returned malformed JSON output",
+                json_failure_kind="malformed_json",
+            ) from first_error
         try:
             parsed = json.loads(raw[start : end + 1])
         except json.JSONDecodeError as sliced_error:
-            raise BrainInvalidJsonResponse("remote brain returned malformed JSON output") from sliced_error
+            raise BrainInvalidJsonResponse(
+                "remote brain returned malformed JSON output",
+                json_failure_kind="malformed_json",
+            ) from sliced_error
     if not isinstance(parsed, dict):
-        raise BrainProviderError("remote brain json output was not an object")
+        raise BrainInvalidJsonResponse(
+            "remote brain json output was not an object",
+            json_failure_kind="non_object_json",
+        )
     return parsed
 
 

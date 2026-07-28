@@ -163,13 +163,16 @@ def test_openai_chat_stream_collector_rejects_incomplete_stream(monkeypatch) -> 
         ['data: {"choices":[{"delta":{"content":"{\\"image_set_plan\\":{}"}}]}'],
     )
 
-    with pytest.raises(BrainInvalidJsonResponse, match="complete JSON response marker"):
+    with pytest.raises(BrainInvalidJsonResponse, match="complete JSON response marker") as failure:
         _collect_openai_chat_completion_stream(
             url="https://brain.example/v1/chat/completions",
             api_key="redacted",
             payload={"stream": True},
             timeout_seconds=120,
         )
+    assert failure.value.safe_metadata()["json_failure_kind"] == "missing_complete_marker"
+    assert failure.value.safe_metadata()["json_parse_started"] is False
+    assert failure.value.safe_metadata()["json_parse_completed"] is False
 
 
 def test_openai_chat_stream_collector_rejects_output_limit(monkeypatch) -> None:

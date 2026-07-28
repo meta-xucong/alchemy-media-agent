@@ -885,6 +885,7 @@ def test_required_remote_json_decode_failure_records_serialization_recovery_with
                 json_recovery_succeeded=False,
                 json_parse_started=True,
                 json_parse_completed=False,
+                json_failure_kind="malformed_json",
             )
 
     monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
@@ -912,6 +913,7 @@ def test_required_remote_json_decode_failure_records_serialization_recovery_with
         "stage": "plan",
         "transport_error_class": "invalid_json_response",
         "error_family": "json_decode",
+        "json_failure_kind": "malformed_json",
         "attempts": 2,
         "json_serialization_recovery_attempted": True,
         "json_serialization_recovery_succeeded": False,
@@ -919,6 +921,69 @@ def test_required_remote_json_decode_failure_records_serialization_recovery_with
         "json_parse_completed": False,
     }
     assert "remote_image_set_validation_audit" not in result.audit
+
+
+def test_required_remote_n2_complete_malformed_json_is_classified_without_host_retry(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    class CompleteMalformedJsonProvider:
+        provider = "openai"
+        model = "remote-n2-malformed-json-test"
+
+        def __init__(self) -> None:
+            self.requests = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            self.requests += 1
+            raise BrainInvalidJsonResponse(
+                "remote brain returned malformed JSON after one bounded serialization recovery",
+                stage=request.stage,
+                attempts=2,
+                json_recovery_attempted=True,
+                json_recovery_succeeded=False,
+                json_parse_started=True,
+                json_parse_completed=False,
+                json_failure_kind="malformed_json",
+            )
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    provider = CompleteMalformedJsonProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = adapter.build_request(
+        user_input="Create exactly two Professional E-Commerce poolside product-on-person images.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={"requested_image_count": 2, "real_image_generation": True},
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    result = adapter.run(request)
+
+    assert provider.requests == 1
+    assert result.provider == "remote_required"
+    assert result.llm_used is False
+    assert result.fallback_used is True
+    assert result.audit["creative_fallback_executed"] is False
+    assert result.audit["remote_provider_error_class"] == "invalid_response"
+    assert result.audit["remote_brain_stage"] == "plan"
+    assert result.audit["remote_brain_serialization_failure"] == {
+        "schema_version": "v3_brain_serialization_failure_v1",
+        "stage": "plan",
+        "transport_error_class": "invalid_json_response",
+        "error_family": "json_decode",
+        "json_failure_kind": "malformed_json",
+        "attempts": 2,
+        "json_serialization_recovery_attempted": True,
+        "json_serialization_recovery_succeeded": False,
+        "json_parse_started": True,
+        "json_parse_completed": False,
+    }
+    assert "remote_image_set_validation_audit" not in result.audit
+    assert "remote_contract_validation_audit" not in result.audit
 
 
 def test_required_remote_truncated_response_is_not_reported_as_json_decode(monkeypatch) -> None:
@@ -1206,10 +1271,12 @@ def test_remote_json_failure_safe_metadata_sanitizes_stage() -> None:
 
     assert invalid_metadata["stage"] == "unknown"
     assert invalid_metadata["error_family"] == "json_decode"
+    assert invalid_metadata["json_failure_kind"] == "unknown"
     assert invalid_metadata["transport_error_class"] == "invalid_json_response"
     assert unsafe_stage not in json.dumps(invalid_metadata, sort_keys=True)
     assert truncated_metadata["stage"] == "unknown"
     assert truncated_metadata["error_family"] == "output_truncated"
+    assert truncated_metadata["json_failure_kind"] == "output_truncated"
     assert truncated_metadata["transport_error_class"] == "truncated_response"
     assert unsafe_stage not in json.dumps(truncated_metadata, sort_keys=True)
 
@@ -1496,6 +1563,7 @@ def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None
         "stage": "generate",
         "transport_error_class": "invalid_json_response",
         "error_family": "json_decode",
+        "json_failure_kind": "malformed_json",
         "attempts": 2,
         "json_serialization_recovery_attempted": True,
         "json_serialization_recovery_succeeded": False,
@@ -1595,6 +1663,7 @@ def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> No
         "stage": "generate",
         "transport_error_class": "truncated_response",
         "error_family": "output_truncated",
+        "json_failure_kind": "output_truncated",
         "attempts": 2,
         "json_serialization_recovery_attempted": True,
         "json_serialization_recovery_succeeded": False,

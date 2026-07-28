@@ -11,6 +11,12 @@ transport truth (`BrainOutputTruncated`) and the safe default output capacity
 is documented in Doc149.  The one-recovery limit and same-frozen-request rule
 in this document remain unchanged.
 
+**Doc259 follow-up.** Plan-stage N=2 poolside diagnostics now expose a closed,
+public-safe `json_failure_kind` inside the existing serialization-failure
+receipt. This is observability only: it distinguishes malformed complete JSON
+from missing completion markers, empty JSON, non-object JSON, and truncation
+without changing prompts, routes, budgets, recovery count, or provider choice.
+
 ## Observed failure
 
 The controlled post-Doc144 blue-dress plan reached the configured remote
@@ -78,6 +84,29 @@ or the corresponding `attempts: 2` / `true` values after a successful
 re-answer. Raw malformed content, credentials, URLs, complete payloads, and
 provider diagnostics must not be persisted or shown to ordinary users.
 
+Rejected results may expose only this safe failure receipt:
+
+```json
+{
+  "schema_version": "v3_brain_serialization_failure_v1",
+  "stage": "plan",
+  "transport_error_class": "invalid_json_response",
+  "error_family": "json_decode",
+  "json_failure_kind": "malformed_json",
+  "attempts": 2,
+  "json_serialization_recovery_attempted": true,
+  "json_serialization_recovery_succeeded": false,
+  "json_parse_started": true,
+  "json_parse_completed": false
+}
+```
+
+Allowed `json_failure_kind` values are closed: `empty_json`,
+`malformed_json`, `missing_complete_marker`, `non_object_json`,
+`output_truncated`, and `unknown`. Output-token truncation remains a separate
+`v3_brain_truncated_response_v1` receipt and must not be reported as
+`json_decode`.
+
 ## Relation to existing authority
 
 Doc122's rule against automatic creative re-planning remains intact after a
@@ -92,5 +121,7 @@ authoritative for Brain-owned final prompts and shared Human Realism approval.
 | First answer valid JSON | One request; safe receipt says one attempt. |
 | First answer empty/malformed, second valid | Exactly two remote calls with identical user payload; recovery system instruction only on call two; accepted result records the receipt. |
 | Both answers empty/malformed | Fail closed after exactly two calls; no local fallback prompt or third call. |
+| Complete response marker observed but JSON parse fails | Fail closed after the bounded recovery with `error_family=json_decode` and `json_failure_kind=malformed_json`; do not treat it as Pydantic validation. |
+| Output token limit / truncation | Fail closed or recover once as existing transport policy allows; if still failed, classify as `output_truncated`, not `json_decode`. |
 | Timeout / HTTP / policy / valid-but-invalid schema | No serialization recovery; existing failure classification remains authoritative. |
 | General, E-Commerce, Photography, Local MCP | Shared behavior only; specialist fail-closed gates and template isolation remain unchanged. |
