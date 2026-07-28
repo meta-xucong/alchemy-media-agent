@@ -94,7 +94,7 @@ class BrainInvalidJsonResponse(BrainProviderError):
         json_parse_completed: bool = False,
     ) -> None:
         super().__init__(message)
-        self.stage = str(stage or "unknown")
+        self.stage = _safe_brain_stage(stage)
         self.attempts = max(1, min(2, int(attempts)))
         self.json_recovery_attempted = bool(json_recovery_attempted)
         self.json_recovery_succeeded = bool(json_recovery_succeeded)
@@ -119,6 +119,40 @@ class BrainInvalidJsonResponse(BrainProviderError):
 
 class BrainOutputTruncated(BrainInvalidJsonResponse):
     """The remote Brain exhausted its transport output budget before JSON completed."""
+
+    def safe_metadata(self) -> dict[str, Any]:
+        """Return public-safe truncation facts without model text or prompts."""
+
+        return {
+            "schema_version": "v3_brain_truncated_response_v1",
+            "stage": self.stage,
+            "transport_error_class": "truncated_response",
+            "error_family": "output_truncated",
+            "attempts": self.attempts,
+            "json_serialization_recovery_attempted": self.json_recovery_attempted,
+            "json_serialization_recovery_succeeded": self.json_recovery_succeeded,
+            "json_parse_started": self.json_parse_started,
+            "json_parse_completed": self.json_parse_completed,
+        }
+
+
+_SAFE_BRAIN_STAGES = {
+    "activation",
+    "generate",
+    "plan",
+    "provider_prompt_developmental_presence_verify",
+    "provider_prompt_finalize",
+    "provider_prompt_human_naturalness_resign",
+    "provider_prompt_professional_capture_resign",
+    "remote_intent",
+}
+
+
+def _safe_brain_stage(stage: Any) -> str:
+    value = str(stage or "").strip()
+    if value in _SAFE_BRAIN_STAGES:
+        return value
+    return "unknown"
 
 
 class BrainSemanticPreflightMissing(BrainProviderError):

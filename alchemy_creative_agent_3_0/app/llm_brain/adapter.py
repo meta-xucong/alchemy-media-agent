@@ -1218,6 +1218,8 @@ def _remote_brain_serialization_failure(exc: Exception) -> dict[str, Any]:
     """Extract only safe JSON serialization diagnostics from known provider errors."""
 
     for item in _exception_chain(exc):
+        if isinstance(item, BrainOutputTruncated):
+            return {}
         if isinstance(item, BrainInvalidJsonResponse):
             return item.safe_metadata()
     return {}

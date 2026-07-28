@@ -921,6 +921,84 @@ def test_required_remote_json_decode_failure_records_serialization_recovery_with
     assert "remote_image_set_validation_audit" not in result.audit
 
 
+def test_required_remote_truncated_response_is_not_reported_as_json_decode(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    class TruncatedProvider:
+        provider = "openai"
+        model = "remote-truncated-test"
+
+        def __init__(self) -> None:
+            self.requests = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            self.requests += 1
+            raise BrainOutputTruncated(
+                "remote brain response was truncated after one bounded serialization recovery",
+                stage=request.stage,
+                attempts=2,
+                json_recovery_attempted=True,
+                json_recovery_succeeded=False,
+                json_parse_started=True,
+                json_parse_completed=False,
+            )
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    provider = TruncatedProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = adapter.build_request(
+        user_input="Create one real product image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={"requested_image_count": 1, "real_image_generation": True},
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    result = adapter.run(request)
+
+    assert provider.requests == 1
+    assert result.provider == "remote_required"
+    assert result.llm_used is False
+    assert result.fallback_used is True
+    assert result.audit["creative_fallback_executed"] is False
+    assert result.audit["remote_provider_error_class"] == "truncated_response"
+    assert "remote_brain_serialization_failure" not in result.audit
+    assert "remote_image_set_validation_audit" not in result.audit
+
+
+def test_remote_json_failure_safe_metadata_sanitizes_stage() -> None:
+    unsafe_stage = "D:/unsafe/original.png?provider_payload=secret"
+
+    invalid_json = BrainInvalidJsonResponse(
+        "malformed",
+        stage=unsafe_stage,
+        attempts=2,
+        json_recovery_attempted=True,
+    )
+    truncated = BrainOutputTruncated(
+        "truncated",
+        stage=unsafe_stage,
+        attempts=2,
+        json_recovery_attempted=True,
+    )
+
+    invalid_metadata = invalid_json.safe_metadata()
+    truncated_metadata = truncated.safe_metadata()
+
+    assert invalid_metadata["stage"] == "unknown"
+    assert invalid_metadata["error_family"] == "json_decode"
+    assert invalid_metadata["transport_error_class"] == "invalid_json_response"
+    assert unsafe_stage not in json.dumps(invalid_metadata, sort_keys=True)
+    assert truncated_metadata["stage"] == "unknown"
+    assert truncated_metadata["error_family"] == "output_truncated"
+    assert truncated_metadata["transport_error_class"] == "truncated_response"
+    assert unsafe_stage not in json.dumps(truncated_metadata, sort_keys=True)
+
+
 def test_required_remote_schema_validation_failure_is_not_serialization_failure(monkeypatch) -> None:
     from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
 
@@ -1270,37 +1348,44 @@ def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> No
 
     attempts = 0
 
-    class FakeCompletions:
+    class FakeResponses:
         def create(self, **kwargs):  # noqa: ANN003
             nonlocal attempts
             attempts += 1
             return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(content='{"remote":'),
-                        finish_reason="length",
-                    )
-                ]
+                output_text='{"remote":',
+                incomplete_details=SimpleNamespace(reason="max_output_tokens"),
             )
 
     class FakeOpenAI:
         def __init__(self, **kwargs):  # noqa: ANN003
-            self.chat = SimpleNamespace(completions=FakeCompletions())
+            self.responses = FakeResponses()
 
-    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
     monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
 
-    with pytest.raises(BrainOutputTruncated, match="truncated after one bounded"):
+    with pytest.raises(BrainOutputTruncated, match="truncated after one bounded") as exc_info:
         V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
 
     assert attempts == 2
+    assert exc_info.value.safe_metadata() == {
+        "schema_version": "v3_brain_truncated_response_v1",
+        "stage": "generate",
+        "transport_error_class": "truncated_response",
+        "error_family": "output_truncated",
+        "attempts": 2,
+        "json_serialization_recovery_attempted": True,
+        "json_serialization_recovery_succeeded": False,
+        "json_parse_started": True,
+        "json_parse_completed": False,
+    }
 
 
 def test_remote_brain_explicit_v3_provider_still_overrides_default(monkeypatch) -> None:
