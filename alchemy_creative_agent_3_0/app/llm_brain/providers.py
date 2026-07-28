@@ -82,6 +82,40 @@ class BrainExecutionBudgetExceeded(BrainProviderError):
 class BrainInvalidJsonResponse(BrainProviderError):
     """The remote Brain did not provide a usable serialized JSON response."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str = "unknown",
+        attempts: int = 1,
+        json_recovery_attempted: bool = False,
+        json_recovery_succeeded: bool = False,
+        json_parse_started: bool = True,
+        json_parse_completed: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.stage = str(stage or "unknown")
+        self.attempts = max(1, min(2, int(attempts)))
+        self.json_recovery_attempted = bool(json_recovery_attempted)
+        self.json_recovery_succeeded = bool(json_recovery_succeeded)
+        self.json_parse_started = bool(json_parse_started)
+        self.json_parse_completed = bool(json_parse_completed)
+
+    def safe_metadata(self) -> dict[str, Any]:
+        """Return public-safe serialization facts without model text or prompts."""
+
+        return {
+            "schema_version": "v3_brain_serialization_failure_v1",
+            "stage": self.stage,
+            "transport_error_class": "invalid_json_response",
+            "error_family": "json_decode",
+            "attempts": self.attempts,
+            "json_serialization_recovery_attempted": self.json_recovery_attempted,
+            "json_serialization_recovery_succeeded": self.json_recovery_succeeded,
+            "json_parse_started": self.json_parse_started,
+            "json_parse_completed": self.json_parse_completed,
+        }
+
 
 class BrainOutputTruncated(BrainInvalidJsonResponse):
     """The remote Brain exhausted its transport output budget before JSON completed."""
@@ -236,14 +270,26 @@ class V3LLMBrainProvider:
                     attempts=2,
                     json_recovery_attempted=True,
                     execution_budget=self.execution_budget_receipt(),
-                )
+            )
             except BrainInvalidJsonResponse as recovery_error:
                 if isinstance(recovery_error, BrainOutputTruncated):
                     raise BrainOutputTruncated(
-                        "remote brain response was truncated after one bounded serialization recovery"
+                        "remote brain response was truncated after one bounded serialization recovery",
+                        stage=request.stage,
+                        attempts=2,
+                        json_recovery_attempted=True,
+                        json_recovery_succeeded=False,
+                        json_parse_started=True,
+                        json_parse_completed=False,
                     ) from recovery_error
                 raise BrainInvalidJsonResponse(
-                    "remote brain returned malformed JSON after one bounded serialization recovery"
+                    "remote brain returned malformed JSON after one bounded serialization recovery",
+                    stage=request.stage,
+                    attempts=2,
+                    json_recovery_attempted=True,
+                    json_recovery_succeeded=False,
+                    json_parse_started=True,
+                    json_parse_completed=False,
                 ) from recovery_error
 
     def _run_remote_attempt(self, runner: Any, request: BrainRunRequest, *, json_recovery: bool) -> dict[str, Any]:

@@ -862,6 +862,148 @@ def test_real_image_request_allows_remote_brain_without_v3_specific_key(monkeypa
     assert result.checkpoints[0].checkpoint_id == "intent"
 
 
+def test_required_remote_json_decode_failure_records_serialization_recovery_without_creative_fallback(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    class InvalidJsonProvider:
+        provider = "openai"
+        model = "remote-json-invalid-test"
+
+        def __init__(self) -> None:
+            self.requests = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            self.requests += 1
+            raise BrainInvalidJsonResponse(
+                "remote brain returned malformed JSON after one bounded serialization recovery",
+                stage=request.stage,
+                attempts=2,
+                json_recovery_attempted=True,
+                json_recovery_succeeded=False,
+                json_parse_started=True,
+                json_parse_completed=False,
+            )
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    provider = InvalidJsonProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = adapter.build_request(
+        user_input="Create one real product image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={"requested_image_count": 1, "real_image_generation": True},
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    result = adapter.run(request)
+
+    assert provider.requests == 1
+    assert result.provider == "remote_required"
+    assert result.llm_used is False
+    assert result.fallback_used is True
+    assert result.audit["creative_fallback_executed"] is False
+    assert result.audit["remote_provider_error_class"] == "invalid_response"
+    assert result.audit["remote_brain_serialization_failure"] == {
+        "schema_version": "v3_brain_serialization_failure_v1",
+        "stage": "plan",
+        "transport_error_class": "invalid_json_response",
+        "error_family": "json_decode",
+        "attempts": 2,
+        "json_serialization_recovery_attempted": True,
+        "json_serialization_recovery_succeeded": False,
+        "json_parse_started": True,
+        "json_parse_completed": False,
+    }
+    assert "remote_image_set_validation_audit" not in result.audit
+
+
+def test_required_remote_schema_validation_failure_is_not_serialization_failure(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
+
+    class InvalidSchemaProvider:
+        provider = "openai"
+        model = "remote-schema-invalid-test"
+
+        def __init__(self) -> None:
+            self.requests = 0
+
+        def available(self, *, force: bool = False) -> bool:
+            return True
+
+        def run(self, request):  # noqa: ANN001
+            self.requests += 1
+            return {
+                "image_set_plan": {
+                    "set_goal": "remote object with invalid image-set evidence",
+                    "image_count": 1,
+                    "size": request.requested_image_size,
+                    "shot_plan": ["valid count but invalid evidence payload"],
+                    "evidence_dimensions_by_output": [
+                        {
+                            "output_index": 0,
+                            "evidence_dimensions": [{"not": "a string"}],
+                        }
+                    ],
+                },
+                "visual_task_profile": {
+                    "profile_id": "profile_remote_schema_invalid",
+                    "project_id": request.project_id,
+                    "job_id": request.job_id,
+                    "template_id": request.template_id,
+                    "scenario_id": request.scenario_id,
+                    "subject_entities": ["product"],
+                    "visual_intent_tags": ["product"],
+                    "unknown_requirements": [],
+                    "confidence": 0.9,
+                    "evidence": [],
+                    "rendering_intent": {
+                        "rendering_mode": "photoreal",
+                        "stylization_scope": "none",
+                        "decision_owner": "remote_brain",
+                    },
+                },
+                "capability_activation_intent": {
+                    "intent_id": "intent_remote_schema_invalid",
+                    "task_profile_id": "profile_remote_schema_invalid",
+                    "requested_capabilities": [],
+                    "rejected_capabilities": [],
+                    "unresolved_signals": [],
+                    "confidence": 0.9,
+                },
+                "prompt_guidance": {"optimized_direction": "remote direction"},
+            }
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    provider = InvalidSchemaProvider()
+    adapter = V3LLMBrainAdapter(provider=provider)
+    request = adapter.build_request(
+        user_input="Create one real product image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={"requested_image_count": 1, "real_image_generation": True},
+        template_capability_policy=ecommerce_capability_policy(),
+    )
+
+    result = adapter.run(request)
+
+    assert provider.requests == 2
+    assert result.llm_used is True
+    assert result.fallback_used is False
+    assert result.audit["remote_semantic_contract_recovery_attempted"] is True
+    assert "remote_brain_serialization_failure" not in result.audit
+    validation_audit = result.audit["remote_image_set_validation_audit"]
+    assert validation_audit["validation_error_paths"] == [
+        "image_set_plan.evidence_dimensions_by_output.item.output_index",
+        "image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions.item",
+    ]
+    assert validation_audit["validation_error_types"]
+
+
 def test_remote_brain_default_timeout_allows_slow_reasoning(monkeypatch) -> None:
     monkeypatch.delenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", raising=False)
@@ -1032,30 +1174,41 @@ def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None
 
     attempts = 0
 
-    class FakeCompletions:
+    class FakeResponses:
         def create(self, **kwargs):  # noqa: ANN003
             nonlocal attempts
             attempts += 1
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"remote":'))])
+            return SimpleNamespace(output_text='{"remote":')
 
     class FakeOpenAI:
         def __init__(self, **kwargs):  # noqa: ANN003
-            self.chat = SimpleNamespace(completions=FakeCompletions())
+            self.responses = FakeResponses()
 
-    monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_API_KEY", raising=False)
-    monkeypatch.delenv("V3_LLM_BRAIN_BASE_URL", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "deepseek")
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
     monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
 
-    with pytest.raises(BrainInvalidJsonResponse, match="after one bounded serialization recovery"):
+    with pytest.raises(BrainInvalidJsonResponse, match="after one bounded serialization recovery") as exc_info:
         V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
 
     assert attempts == 2
+    assert exc_info.value.safe_metadata() == {
+        "schema_version": "v3_brain_serialization_failure_v1",
+        "stage": "generate",
+        "transport_error_class": "invalid_json_response",
+        "error_family": "json_decode",
+        "attempts": 2,
+        "json_serialization_recovery_attempted": True,
+        "json_serialization_recovery_succeeded": False,
+        "json_parse_started": True,
+        "json_parse_completed": False,
+    }
 
 
 def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(monkeypatch) -> None:

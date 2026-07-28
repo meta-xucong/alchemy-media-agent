@@ -25,6 +25,7 @@ from .providers import (
     BrainDevelopmentalAgeDecisionMissing,
     BrainDevelopmentalPresenceDecisionMissing,
     BrainExecutionBudgetExceeded,
+    BrainInvalidJsonResponse,
     BrainOutputTruncated,
     BrainHumanNaturalnessDecisionMissing,
     BrainPromptContractInvalid,
@@ -222,11 +223,13 @@ class V3LLMBrainAdapter:
             }
             return result
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
+            serialization_failure = _remote_brain_serialization_failure(exc)
             record_stage_event(
                 "brain_adapter",
                 "semantic_plan_blocked",
                 stage=request.stage,
                 terminal_reason=_remote_provider_error_class(exc),
+                extra=serialization_failure,
             )
             fallback.warnings.append(str(exc))
             remote_http_status_code = _remote_provider_http_status_code(exc)
@@ -245,6 +248,11 @@ class V3LLMBrainAdapter:
                 **(
                     {"remote_brain_transport_failure": remote_transport_failure}
                     if remote_transport_failure
+                    else {}
+                ),
+                **(
+                    {"remote_brain_serialization_failure": serialization_failure}
+                    if serialization_failure
                     else {}
                 ),
                 **(
@@ -1202,6 +1210,15 @@ def _remote_brain_transport_failure(exc: Exception) -> dict[str, Any]:
 
     for item in _exception_chain(exc):
         if isinstance(item, BrainTransportTimeoutError):
+            return item.safe_metadata()
+    return {}
+
+
+def _remote_brain_serialization_failure(exc: Exception) -> dict[str, Any]:
+    """Extract only safe JSON serialization diagnostics from known provider errors."""
+
+    for item in _exception_chain(exc):
+        if isinstance(item, BrainInvalidJsonResponse):
             return item.safe_metadata()
     return {}
 
