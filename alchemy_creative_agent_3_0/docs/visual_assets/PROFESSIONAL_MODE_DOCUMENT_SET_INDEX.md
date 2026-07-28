@@ -185,6 +185,20 @@ behavior, runtime fields, planning, Host/MCP/ImageGen, formal receipts, slots,
 or activations. Any future Body Silhouette standard or shared review work must
 pass a separate reviewer gate.
 
+### Body Silhouette Source Standard Upgrade Gate Plan
+
+`PROFESSIONAL_MODE_BODY_SILHOUETTE_SOURCE_STANDARD_UPGRADE_GATE_PLAN.md`
+
+Document-only reviewer-gate request. It converts the recent real-model
+comparison and downstream body-only projection results into a proposed next
+gate for universal Body Silhouette source-standard design. It keeps Face
+Identity stable, treats Body Silhouette front/side/rear as the likely source
+quality owner, and explicitly forbids immediate Character Card generation,
+slot, review, activation, storage, runtime, planning, Host/MCP/ImageGen, or
+formal delivery changes. It does not certify current or historical Body
+Silhouette assets and carries no implementation authority until reviewer opens
+a separate gate.
+
 ### M5 Real-Pixel Acceptance Record
 
 `PROFESSIONAL_MODE_M5_REAL_PIXEL_ACCEPTANCE_BLOCKED_20260717.md`
