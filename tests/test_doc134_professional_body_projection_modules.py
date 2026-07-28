@@ -15,10 +15,23 @@ from typing import Any
 import pytest
 
 from alchemy_creative_agent_3_0.app.generation_router.providers import (
+    GenerationRequest,
     ProviderPromptMaterialization,
+    ProductionImageGenerationProvider,
 )
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
+from alchemy_creative_agent_3_0.app.schemas import (
+    AssetSpec,
+    AssetType,
+    ConditionPlan,
+    GenerationPlan,
+    LayoutPlan,
+    LayoutRegion,
+    Platform,
+    PromptCompilationResult,
+    ProviderStrategy,
+)
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.visual_assets import (
     PersistentVisualAssetLibraryCatalog,
@@ -30,6 +43,7 @@ from alchemy_creative_agent_3_0.tests.photography_test_support import (
     PhotographyRemoteBrainTestProvider,
 )
 from services.alchemy_codex_local_adapter.contracts import (
+    NativeReferenceInput,
     NativeProfessionalImageGenPlanRequest,
 )
 from services.alchemy_codex_local_adapter.native_planner import (
@@ -171,6 +185,22 @@ def _body_truth_refs(materialized_refs: list[dict[str, Any]]) -> list[dict[str, 
     ]
 
 
+def _identity_truth_refs(materialized_refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in materialized_refs
+        if str(item.get("reference_truth_layer") or "") == "portrait_identity_truth"
+    ]
+
+
+def _product_truth_refs(materialized_refs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in materialized_refs
+        if str(item.get("reference_truth_layer") or "") == "product_identity_truth"
+    ]
+
+
 def _trusted_professional_body_metadata() -> dict[str, Any]:
     return {
         "require_real_images": True,
@@ -210,6 +240,186 @@ def _payload_contains_body_receipt_schema(payload: dict[str, Any]) -> bool:
         "professional_body_proportion_requirement" in serialized
         or "professional_body_view_kind" in serialized
     )
+
+
+def _provider_materialization_for_refs(
+    reference_assets: list[dict[str, Any]],
+    *,
+    strategy: str,
+    template_id: str,
+) -> ProviderPromptMaterialization:
+    asset = AssetSpec(
+        asset_id="asset_provider_body_projection",
+        asset_type=AssetType.MAIN_POSTER,
+        platform=Platform.GENERIC,
+        aspect_ratio="2:3",
+        purpose="deterministic Professional body projection materializer regression",
+    )
+    generation_plan = GenerationPlan(
+        generation_plan_id="gen_provider_body_projection",
+        asset_id=asset.asset_id,
+        provider_strategy=ProviderStrategy.PLANNING_ONLY,
+        rendering_required=True,
+        metadata={
+            "template_id": template_id,
+            "require_real_images": True,
+            "real_image_generation": True,
+            "professional_identity_reference_strategy": strategy,
+            "professional_body_proportion_projection_active": True,
+            "reference_assets": reference_assets,
+            "uploaded_assets": reference_assets,
+            "output_index": 0,
+            "llm_brain": {
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "review_status": "approved",
+                        "prompt": "Professional visible-body materializer regression.",
+                    }
+                ]
+            },
+        },
+    )
+    request = GenerationRequest(
+        asset_spec=asset,
+        layout_plan=LayoutPlan(
+            layout_plan_id="layout_provider_body_projection",
+            asset_id=asset.asset_id,
+            platform=Platform.GENERIC,
+            aspect_ratio="2:3",
+            product_area=LayoutRegion(name="image", position="full_frame"),
+        ),
+        prompt_compilation=PromptCompilationResult(
+            prompt_compilation_id="prompt_provider_body_projection",
+            asset_id=asset.asset_id,
+            visual_prompt="Professional visible-body materializer regression.",
+            text_policy="no_text",
+        ),
+        condition_plan=ConditionPlan(
+            condition_plan_id="condition_provider_body_projection",
+            asset_id=asset.asset_id,
+        ),
+        generation_plan=generation_plan,
+        metadata=dict(generation_plan.metadata),
+    )
+    return ProductionImageGenerationProvider(output_store=object()).materialize_final_prompt(request)
+
+
+def _server_owned_reference_assets_for_body_view(
+    *,
+    library_root: Path,
+    project_id: str,
+    people_asset_id: str,
+    body_view_kind: str = "front_full",
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    binding = visual_asset_library_professional_binding_resolver(library_root)(
+        project_id=project_id,
+        people_asset_id=people_asset_id,
+        job_id="provider_body_projection_regression",
+        reference_view_ids=["face_front"],
+    )
+    assert binding is not None
+    assert len(binding.identity_references) == 2
+    body_by_view = {item.body_view_kind: item for item in binding.body_references}
+    assert body_view_kind in body_by_view
+    selected_body = body_by_view[body_view_kind]
+    refs = [
+        CodexNativeImageGenPlanner._uploaded_asset_from_reference(item).model_dump(mode="json")
+        for item in (*binding.identity_references, selected_body)
+    ]
+    return refs, {
+        "identity_reference_count": len(binding.identity_references),
+        "body_reference_count": len(binding.body_references),
+        "selected_body_source_asset_id": selected_body.asset_id,
+    }
+
+
+@pytest.mark.parametrize(
+    ("template_id", "strategy", "include_product", "expected_reference_count"),
+    [
+        ("general_template", "character_card_shared_identity_v1", False, 3),
+        ("photographer_template", "character_card_shared_identity_v1", False, 3),
+        ("ecommerce_template", "visual_asset_library_product_model_v1", True, 4),
+    ],
+)
+def test_shared_provider_materializer_body_projection_matches_derivative_budget(
+    tmp_path: Path,
+    template_id: str,
+    strategy: str,
+    include_product: bool,
+    expected_reference_count: int,
+) -> None:
+    root_source_id = "v3_asset_root"
+    face_output_id = "v3_output_front"
+    body_output_id = "v3_output_body_front_full"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=face_output_id,
+        include_body=True,
+        body_output_id=body_output_id,
+    )
+    reference_assets, resolver_counts = _server_owned_reference_assets_for_body_view(
+        library_root=library_root,
+        project_id="project_professional",
+        people_asset_id=asset.visual_asset_id,
+        body_view_kind="front_full",
+    )
+    product_source_id: str | None = None
+    if include_product:
+        product_path = _write_png(tmp_path / "product.png", color=(80, 145, 210))
+        product_ref = NativeReferenceInput.from_value(
+            {"channel": "product_truth", "file_path": str(product_path)}
+        )
+        product_source_id = product_ref.asset_id
+        product_asset = CodexNativeImageGenPlanner._uploaded_asset_from_reference(product_ref).model_dump(
+            mode="json"
+        )
+        product_metadata = dict(product_asset.get("metadata") or {})
+        product_metadata["reference_sanitization"] = {
+            "suppress_full_frame_provider_reference": True,
+            "reason_codes": ["professional_product_model_uses_selected_product_truth_crop"],
+        }
+        product_asset["metadata"] = product_metadata
+        reference_assets.append(product_asset)
+
+    materialization = _provider_materialization_for_refs(
+        reference_assets,
+        strategy=strategy,
+        template_id=template_id,
+    )
+    materialized_refs = materialization.reference_assets
+    source_ids = [
+        str(item.get("source_asset_id") or item.get("asset_id") or "")
+        for item in materialized_refs
+    ]
+    identity_refs = _identity_truth_refs(materialized_refs)
+    body_refs = _body_truth_refs(materialized_refs)
+    product_refs = _product_truth_refs(materialized_refs)
+
+    assert resolver_counts == {
+        "identity_reference_count": 2,
+        "body_reference_count": 1,
+        "selected_body_source_asset_id": body_output_id,
+    }
+    assert len(materialized_refs) == expected_reference_count
+    assert len(materialized_refs) <= ProductionImageGenerationProvider.max_provider_reference_images
+    assert len(identity_refs) == 2
+    assert source_ids.count(root_source_id) == 1
+    assert source_ids.count(face_output_id) == 1
+    assert len(body_refs) == 1
+    assert body_refs[0]["source_asset_id"] == body_output_id
+    assert body_refs[0]["derivative_kind"] == "body_proportion_reference"
+    assert body_refs[0]["body_view_kind"] == "front_full"
+    assert body_refs[0]["role"] == "body_proportion_reference"
+    assert body_refs[0]["reference_truth_layer"] == "body_proportion_truth"
+    if include_product:
+        assert product_source_id is not None
+        assert len(product_refs) == 1
+        assert source_ids.count(product_source_id) == 1
+    else:
+        assert product_refs == []
 
 
 @pytest.mark.parametrize(
@@ -330,12 +540,24 @@ def _assert_single_body_only_projection(
     assert contract["professional_body_view_kind"] == view_kind
     assert contract["professional_body_source_asset_id"] == body_source_id
     admitted_sources = contract["admitted_reference_source_asset_ids"]
+    identity_sources = contract["professional_identity_source_asset_ids"]
+    selected_products = contract.get("selected_product_truth_asset_ids") or []
     assert body_source_id in admitted_sources
     assert contract["declared_reference_count"] == len(admitted_sources)
+    assert len(materialized_refs) == len(admitted_sources)
     assert contract["admitted_body_proportion_source_asset_ids"] == [body_source_id]
     assert contract["admitted_body_proportion_derivative_asset_ids"] == [
         f"{body_source_id}::body_proportion_reference"
     ]
+    source_ids = [
+        str(item.get("source_asset_id") or item.get("asset_id") or "")
+        for item in materialized_refs
+    ]
+    for source_id in identity_sources:
+        assert source_ids.count(source_id) == 1
+    for source_id in selected_products:
+        assert source_ids.count(source_id) == 1
+    assert source_ids.count(body_source_id) == 1
     assert len(body_refs) == 1
     body_ref = body_refs[0]
     assert body_ref["asset_id"] == f"{body_source_id}::body_proportion_reference"
@@ -566,6 +788,12 @@ def test_professional_not_required_outputs_do_not_leak_body_reference(
     admitted_sources = contract["admitted_reference_source_asset_ids"]
     assert contract["declared_reference_count"] == len(admitted_sources)
     assert body_output_id not in admitted_sources
+    source_ids = [
+        str(item.get("source_asset_id") or item.get("asset_id") or "")
+        for item in captured[0]
+    ]
+    assert source_ids.count(root_source_id) == 2
+    assert source_ids.count(face_output_id) == 2
 
 
 @pytest.mark.parametrize(

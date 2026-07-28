@@ -2513,6 +2513,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     }
                 )
             reference_sanitization = self._full_frame_reference_sanitization(
+                request,
                 asset,
                 derivatives=derivatives,
                 truth_layers=truth_layers,
@@ -2874,6 +2875,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _full_frame_reference_sanitization(
         self,
+        request: GenerationRequest,
         asset: dict[str, Any],
         *,
         derivatives: list[dict[str, Any]],
@@ -2902,6 +2904,28 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return {
                 "applies": True,
                 "reason_codes": reason_codes or ["source_artifact_excluded_from_truth"],
+            }
+
+        request_metadata = self._generation_request_metadata(request)
+        codex_native_channel = str(
+            asset.get("codex_native_reference_channel")
+            or metadata.get("codex_native_reference_channel")
+            or ""
+        ).strip()
+        codex_native_server_owned = bool(
+            asset.get("codex_native_server_owned_reference")
+            or metadata.get("codex_native_server_owned_reference")
+        )
+        if (
+            request_metadata.get("professional_body_proportion_projection_active") is True
+            and codex_native_server_owned
+            and codex_native_channel in {"portrait_identity", "selected_identity_reference"}
+            and "portrait_identity_truth" in truth_layers
+            and usable_derivatives
+        ):
+            return {
+                "applies": True,
+                "reason_codes": ["professional_body_projection_uses_single_identity_derivative"],
             }
 
         # A product/appearance reference normally owns product facts only.
@@ -3231,6 +3255,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         metadata = ProductionImageGenerationProvider._generation_request_metadata(request)
         if metadata.get("professional_identity_reference_strategy") == "character_card_shared_identity_v1":
+            asset_metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+            server_owned = bool(
+                asset.get("codex_native_server_owned_reference")
+                or asset_metadata.get("codex_native_server_owned_reference")
+            )
+            channel = str(
+                asset.get("codex_native_reference_channel")
+                or asset_metadata.get("codex_native_reference_channel")
+                or ""
+            ).strip()
+            if (
+                metadata.get("professional_body_proportion_projection_active") is True
+                and server_owned
+                and channel in {"portrait_identity", "selected_identity_reference"}
+            ):
+                return ("portrait_identity_crop",)
             stage = str(metadata.get("professional_character_card_stage") or "").strip()
             if stage == "expression_set":
                 return ("portrait_identity_crop", "portrait_identity_pose_geometry_crop")
