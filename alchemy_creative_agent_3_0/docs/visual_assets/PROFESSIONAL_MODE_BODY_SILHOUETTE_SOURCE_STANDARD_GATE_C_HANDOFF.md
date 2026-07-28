@@ -136,3 +136,44 @@ refresh gate may be requested. That gate must still use existing append-only
 candidate/winner/slot lifecycle and must preserve all historical active Body
 Silhouette evidence until new candidates pass visual review and explicit
 activation.
+
+## 8. Gate C reviewer correction after initial blocked implementation
+
+Initial implementation commit `b6703f2` was blocked and must be treated as a
+superseded feature-branch attempt, not as an approved merge candidate.
+
+The corrected authority model is:
+
+1. `score_dimensions` are not proof.  A Body candidate only satisfies the
+   source standard when the shared review receipt carries both the closed
+   dimension name and the Body-owner closed verified evidence code for that
+   dimension.  A declared dimension without the corresponding verified evidence
+   code remains fail-closed.
+   The Body-owner `professional_body_silhouette_source_standard_v1` contract
+   uses `dimension_score_floor=0.80` only as a new-candidate review eligibility
+   floor for emitting those verified evidence codes.  It is not a grade,
+   commercial certification, downstream runtime field, migration rule, or
+   historical asset invalidation rule.  Missing, non-finite, non-numeric, or
+   below-floor scores do not emit verified evidence.
+2. Body Silhouette owns the source-standard vocabulary under
+   `visual_assets`.  Shared Vision may project the Body-owner allowlist for the
+   Body stage, but it does not globally own or apply Professional Body
+   Silhouette source standards.
+3. Cross-view parity is not a single-candidate dimension.  It is owned by the
+   Body three-slot formal acceptance/card-level gate after front, side, and rear
+   slot receipts exist.  That gate requires the server-owned positive evidence
+   code `body_silhouette_cross_view_parity_verified`; absence of a mismatch
+   issue is not enough.  Per-slot source proof stays limited to per-image body
+   chain, stage-aware proportion, neck/shoulder continuity, torso/limb/joint
+   plausibility, and stance/ground contact.
+4. Historical active or winner-selected Body slots remain readable.  Existing
+   persisted formal receipts are validated as durable receipts and are not
+   retroactively recomputed through the new candidate proof.
+5. Prompt projection remains scene-neutral.  It may expose the Body-owner source
+   standard and closed issue vocabulary to shared review, but it must not add a
+   six-year-old, swimwear, poolside, kidswear, E-Commerce, commercial-grade, or
+   fixed-ratio recipe.
+
+The refresh gate is still separate: no modeling regeneration, slot activation,
+Host/MCP/ImageGen, business record, or downstream runtime behavior is
+authorized by this handoff.

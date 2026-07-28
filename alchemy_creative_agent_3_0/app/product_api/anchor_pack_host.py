@@ -22,12 +22,18 @@ from ..shared_capabilities.visual_cluster.micro_real_human_fidelity import (
 )
 from ..shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
-    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     expression_front_card_framing_materialization_directive,
     laugh_expression_materialization_directive,
     project_expression_model_card_proofs,
     project_generic_visual_review_receipt,
     project_laugh_expression_review_receipt,
+)
+from ..visual_assets.body_silhouette_source_standard import (
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION,
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+    BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
 )
 from ..shared_capabilities.visual_cluster.identity_metric import create_default_identity_metric_provider
 from ..visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
@@ -2408,10 +2414,22 @@ class ProductApiAnchorPackPreparationHost:
                 (
                     *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
                     *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+                    BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION,
                 )
                 if request.module == "body_silhouette"
                 else None
             ),
+            verified_dimension_evidence_codes=(
+                {
+                    **BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+                    BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION: (
+                        BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE
+                    ),
+                }
+                if request.module == "body_silhouette"
+                else None
+            ),
+            verified_dimension_floor=BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
         )
         evidence_codes.extend(generic_receipt.evidence_codes)
         if generic_receipt.status != "pass":

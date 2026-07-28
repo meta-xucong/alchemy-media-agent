@@ -14,8 +14,6 @@ from .absolute_portrait_realism import REQUIRED_REALISM_DIMENSIONS
 from .contracts import GeneratedOutputResolution
 from .expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
-    BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES,
-    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     EXPRESSION_FRAMING_DELTA_MAX,
     EXPRESSION_REVIEW_BLOCKING_ISSUE_CODES,
     LAUGH_EXPRESSION_SCORE_FLOORS,
@@ -27,6 +25,9 @@ from .micro_real_human_fidelity import (
     MICRO_REAL_HUMAN_FIDELITY_TRUSTED_PROVENANCE,
     OPTIONAL_VISIBLE_DIMENSIONS,
     REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS,
+)
+from ...visual_assets.body_silhouette_source_standard import (
+    validated_body_silhouette_source_standard_contract,
 )
 
 
@@ -532,6 +533,16 @@ def _enforced_inspection_prompt(
                 "not as a Face Identity card. Frozen body authority: "
                 + json.dumps(body_silhouette_review, ensure_ascii=False)
             )
+            if body_silhouette_review.get("source_standard_contract"):
+                lines.append(
+                    "Body Silhouette source-standard review: judge only the closed, scene-neutral dimensions in "
+                    "the frozen source_standard_contract. Return verified evidence only when the pixels support "
+                    "that dimension; declared dimension names alone are not proof. Use the allowed source-standard "
+                    "issue codes for pasted head/body boundaries, incoherent stage-aware proportions, broken "
+                    "head-neck-shoulder support, implausible torso/limb/joint structure, or invalid stance/ground "
+                    "contact. Do not apply a fixed numeric head-count ratio, clothing recipe, scene-specific "
+                    "recipe, vertical-specific rule, commercial grade, or stage-specific shortcut."
+                )
             if body_silhouette_review.get("slot_key") == "body.rear_full":
                 lines.append(
                     "Body rear-full evidence rule: the target is an intentional full-body rear view, so a visible face "
@@ -930,16 +941,35 @@ def _professional_identity_quality_contract(
         "shared_affective_expression_framing_drift",
         "shared_affective_expression_framing_receipt_missing",
     ]
+    source_standard_contract = validated_body_silhouette_source_standard_contract(
+        contract.get("body_silhouette_source_standard_contract")
+    )
+    body_source_standard_dimensions = [
+        str(item).strip()
+        for item in source_standard_contract.get("required_dimensions", [])
+        if str(item).strip()
+    ]
+    body_source_standard_issue_codes = [
+        str(item).strip()
+        for item in source_standard_contract.get("blocking_issue_codes", [])
+        if str(item).strip()
+    ]
+    body_cross_view_issue_codes = [
+        str(item).strip()
+        for item in source_standard_contract.get("cross_view_parity_blocking_issue_codes", [])
+        if str(item).strip()
+    ]
     body_silhouette_score_dimensions = [
         *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
-        *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+        *body_source_standard_dimensions,
     ]
     body_silhouette_issue_codes = [
         "body_silhouette_framing_drift",
         "body_silhouette_full_body_framing_missing",
         "body_silhouette_wardrobe_contract_drift",
         "body_silhouette_hair_continuity_drift",
-        *sorted(BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES),
+        *body_source_standard_issue_codes,
+        *body_cross_view_issue_codes,
     ]
     absolute_portrait_realism_issue_codes = [
         "absolute_eye_gaze_alignment_failed",
@@ -1110,8 +1140,8 @@ def _professional_identity_quality_contract(
                 "issue_codes": list(dict.fromkeys(body_silhouette_issue_codes)),
                 "framing_baseline": "body.slot",
                 "framing_delta_dimensions": list(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS),
-                "source_standard_dimensions": list(BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS),
-                "source_standard_contract": contract.get("body_silhouette_source_standard_contract"),
+                "source_standard_dimensions": list(body_source_standard_dimensions),
+                "source_standard_contract": source_standard_contract,
                 "wardrobe_contract": contract.get("body_silhouette_wardrobe_contract"),
                 "hair_continuity_contract": contract.get("body_silhouette_hair_continuity_contract"),
             }

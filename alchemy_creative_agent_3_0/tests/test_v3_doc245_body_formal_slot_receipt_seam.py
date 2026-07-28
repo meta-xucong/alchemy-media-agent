@@ -16,7 +16,6 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorReviewDecision
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
-    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     project_generic_visual_review_receipt,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import (
@@ -39,6 +38,18 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardState,
     character_card_formal_slot_receipt_public_summary,
     project_character_card_slot_success_receipt,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    mark_formal_slot_receipt_reload_public_projection_verified,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION,
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+    BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
+    body_silhouette_source_standard_contract,
+    validated_body_silhouette_source_standard_contract,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
 from alchemy_creative_agent_3_0.app.visual_assets.library import VisualAssetLibraryLifecycleService
@@ -120,25 +131,33 @@ def _generic_body_shared_receipt(
     *,
     status: str = "pass",
     include_source_standard: bool = True,
+    include_source_standard_evidence: bool = True,
+    include_cross_view_parity_evidence: bool = True,
     issue_codes: list[str] | None = None,
 ) -> dict[str, object]:
     normalized_issue_codes = list(issue_codes or ([] if status == "pass" else ["shared_visual_review_rejected"]))
+    evidence_codes = [
+        "shared_visual_review_verified",
+        "shared_visual_review_status_pass",
+        "body_silhouette_framing_reviewed",
+    ]
+    if status == "pass" and include_source_standard and include_source_standard_evidence:
+        evidence_codes.extend(BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES.values())
+    if status == "pass" and include_cross_view_parity_evidence:
+        evidence_codes.append(BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE)
     return {
         "owner": "v3_shared_visual_cluster",
         "contract_version": "v3_character_card_generic_slot_review_receipt_v1",
         "status": status,
-        "evidence_codes": [
-            "shared_visual_review_verified",
-            "shared_visual_review_status_pass",
-            "body_silhouette_framing_reviewed",
-        ]
-        if status == "pass"
-        else ["shared_visual_review_unverified"],
+        "evidence_codes": evidence_codes if status == "pass" else ["shared_visual_review_unverified"],
         "issue_codes": normalized_issue_codes,
         "score_dimensions": [
             "generic_visual_quality",
             "identity_or_subject_consistency",
             *(BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS if include_source_standard else ()),
+            *((
+                BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION,
+            ) if include_cross_view_parity_evidence else ()),
         ],
         "framing_delta_dimensions": ["body_scale_delta", "ground_contact_delta"],
     }
@@ -432,6 +451,17 @@ def test_doc245_body_rear_review_uses_rear_continuity_instead_of_visible_face() 
     assert "full-body containment" in prompt
 
 
+def test_doc245_body_source_standard_prompt_projection_is_scene_neutral() -> None:
+    metadata = _body_review_metadata_for_vision("body.front_full")
+    prompt = _inspection_prompt(metadata)
+
+    assert "professional_body_silhouette_source_standard_v1" in prompt
+    for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS:
+        assert dimension in prompt
+    for forbidden in ("six", "6-year", "swimwear", "poolside", "kidswear", "e-commerce"):
+        assert forbidden not in prompt.lower()
+
+
 def test_doc245_generic_projector_preserves_body_source_standard_dimensions_only_when_allowed() -> None:
     score_card = {
         "generic_visual_quality": 0.96,
@@ -465,9 +495,14 @@ def test_doc245_generic_projector_preserves_body_source_standard_dimensions_only
             *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
             *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
         ),
+        verified_dimension_evidence_codes=BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+        verified_dimension_floor=BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
     )
 
     assert set(BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS).issubset(set(body_receipt.score_dimensions))
+    assert set(BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES.values()).issubset(
+        set(body_receipt.evidence_codes)
+    )
     assert set(body_receipt.framing_delta_dimensions) == {
         "body_scale_delta",
         "ground_contact_delta",
@@ -493,6 +528,37 @@ def _legacy_body_slot_success_receipt(slot_key: str, output_id: str) -> dict[str
     )
 
 
+def _legacy_body_formal_receipt_without_source_standard(receipt):
+    legacy_candidates = []
+    for candidate in receipt.candidates:
+        proof = candidate.enhanced_proof
+        if proof is not None:
+            proof = proof.model_copy(
+                update={
+                    "evidence_codes": [
+                        code
+                        for code in proof.evidence_codes
+                        if code == "body_silhouette_profile_eligible"
+                        or code.startswith("body_source_class_")
+                        or code
+                        in {
+                            "body_face_reference_scope_verified",
+                            "body_candidate_contract_verified",
+                            "body_shared_review_pass_verified",
+                            "body_consent_not_required",
+                            "body_observed_consent_verified",
+                        }
+                    ],
+                    "dimensions": {
+                        "profile_score": 1.0 if proof.eligible else 0.0,
+                        "face_reference_scope_score": 1.0,
+                    },
+                }
+            )
+        legacy_candidates.append(candidate.model_copy(update={"enhanced_proof": proof}))
+    return receipt.model_copy(update={"candidates": legacy_candidates})
+
+
 def _scores(index: int, *, body_eligible: bool = True) -> IdentityScoreSummary:
     evidence_codes = ["body_candidate_reviewed"]
     if body_eligible:
@@ -510,6 +576,8 @@ def _review(
     status: str = "pass",
     body_eligible: bool = True,
     include_source_standard: bool = True,
+    include_source_standard_evidence: bool = True,
+    include_cross_view_parity_evidence: bool = True,
     extra_issue_codes: list[str] | None = None,
 ) -> AnchorReviewDecision:
     normalized_issue_codes = [] if status == "pass" else ["candidate_failed"]
@@ -524,6 +592,8 @@ def _review(
             _generic_body_shared_receipt(
                 status=status,
                 include_source_standard=include_source_standard,
+                include_source_standard_evidence=include_source_standard_evidence,
+                include_cross_view_parity_evidence=include_cross_view_parity_evidence,
                 issue_codes=normalized_issue_codes,
             )
         ],
@@ -616,15 +686,22 @@ class _BodyReviewer:
         *,
         failing_indexes: set[int] | None = None,
         enhanced_failing_indexes: set[int] | None = None,
+        cross_view_mismatch_slots: set[str] | None = None,
     ) -> None:
         self.failing_indexes = set(failing_indexes or set())
         self.enhanced_failing_indexes = set(enhanced_failing_indexes or set())
+        self.cross_view_mismatch_slots = set(cross_view_mismatch_slots or set())
 
     def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
         return _review(
             candidate.candidate_index,
             status="fail" if candidate.candidate_index in self.failing_indexes else "pass",
             body_eligible=candidate.candidate_index not in self.enhanced_failing_indexes,
+            extra_issue_codes=(
+                ["cross_view_body_parity_mismatch"]
+                if candidate.slot_key in self.cross_view_mismatch_slots
+                else None
+            ),
         )
 
 
@@ -792,6 +869,138 @@ def test_doc245_body_formal_receipt_requires_source_standard_dimensions() -> Non
     assert proof.dimensions["source_standard_score"] == 0.0
 
 
+def test_doc245_body_formal_receipt_rejects_dimensions_without_verified_evidence_codes() -> None:
+    attempts = [
+        _body_attempt(index, review=_review(index, include_source_standard_evidence=False))
+        for index in (1, 2, 3)
+    ]
+
+    with pytest.raises(ValueError, match="external eligibility passing candidate"):
+        CharacterCardPreparationService._formal_body_slot_receipt(  # noqa: SLF001
+            slot_key="body.front_full",
+            attempts=attempts,  # type: ignore[arg-type]
+        )
+
+    proof = CharacterCardPreparationService._formal_body_enhanced_proof(  # noqa: SLF001
+        slot_key="body.front_full",
+        attempt=attempts[0],  # type: ignore[arg-type]
+    )
+    assert proof.eligible is False
+    assert "body_silhouette_source_standard_evidence_missing" in proof.issue_codes
+    assert all(
+        proof.dimensions[f"source_standard_{dimension}"] == 0.0
+        for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS
+    )
+
+
+def test_doc245_body_source_standard_evidence_uses_score_floor_not_dimension_names() -> None:
+    score_card = {
+        "generic_visual_quality": 0.96,
+        "identity_or_subject_consistency": 0.94,
+        "body_scale_delta": 0.02,
+        "ground_contact_delta": 0.01,
+        **{dimension: 0.99 for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS},
+    }
+    score_card["head_neck_shoulder_continuity"] = BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR - 0.01
+
+    receipt = project_generic_visual_review_receipt(
+        score_card=score_card,
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        framing_dimension_allowlist=(
+            *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
+            *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+        ),
+        verified_dimension_evidence_codes=BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+        verified_dimension_floor=BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
+    )
+
+    assert "head_neck_shoulder_continuity" in receipt.score_dimensions
+    assert (
+        BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES["head_neck_shoulder_continuity"]
+        not in receipt.evidence_codes
+    )
+
+
+def test_doc245_body_source_standard_evidence_accepts_exact_floor_and_rejects_nonfinite_scores() -> None:
+    exact_floor_score_card = {
+        "generic_visual_quality": 0.96,
+        "identity_or_subject_consistency": 0.94,
+        **{dimension: BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS},
+    }
+    exact_floor_receipt = project_generic_visual_review_receipt(
+        score_card=exact_floor_score_card,
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        verified_dimension_evidence_codes=BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+        verified_dimension_floor=BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
+    )
+    assert set(BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES.values()).issubset(
+        set(exact_floor_receipt.evidence_codes)
+    )
+
+    nonfinite_score_card = dict(exact_floor_score_card)
+    nonfinite_score_card["body_chain_coherence"] = float("nan")
+    nonfinite_receipt = project_generic_visual_review_receipt(
+        score_card=nonfinite_score_card,
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+        verified_dimension_evidence_codes=BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+        verified_dimension_floor=BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
+    )
+    assert BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES["body_chain_coherence"] not in (
+        nonfinite_receipt.evidence_codes
+    )
+
+
+def test_doc245_generic_projector_does_not_emit_body_evidence_without_body_owner_map() -> None:
+    score_card = {
+        "generic_visual_quality": 0.96,
+        "identity_or_subject_consistency": 0.94,
+        **{dimension: 0.99 for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS},
+        BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION: 0.99,
+    }
+
+    receipt = project_generic_visual_review_receipt(
+        score_card=score_card,
+        issue_codes=[],
+        verified=True,
+        raw_status="pass",
+    )
+
+    body_evidence = set(BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES.values())
+    body_evidence.add(BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE)
+    assert body_evidence.isdisjoint(set(receipt.evidence_codes))
+
+
+def test_doc245_body_source_standard_contract_validator_rejects_tampered_runtime_contract() -> None:
+    contract = body_silhouette_source_standard_contract()
+    assert validated_body_silhouette_source_standard_contract(contract) == contract
+
+    tampered = dict(contract)
+    tampered["dimension_score_floor"] = "0.8"
+    assert validated_body_silhouette_source_standard_contract(tampered) == {}
+
+    tampered = dict(contract)
+    tampered["dimension_score_floor"] = float("nan")
+    assert validated_body_silhouette_source_standard_contract(tampered) == {}
+
+    tampered = dict(contract)
+    tampered["required_dimensions"] = [*contract["required_dimensions"], contract["required_dimensions"][0]]
+    assert validated_body_silhouette_source_standard_contract(tampered) == {}
+
+    tampered = dict(contract)
+    tampered["required_dimensions"] = [*contract["required_dimensions"], "poolside_body_recipe"]
+    assert validated_body_silhouette_source_standard_contract(tampered) == {}
+
+    tampered = dict(contract)
+    tampered["provider_private_payload"] = {"unsafe": True}
+    assert validated_body_silhouette_source_standard_contract(tampered) == {}
+
+
 def test_doc245_body_formal_receipt_blocks_source_standard_issue_codes() -> None:
     attempts = [
         _body_attempt(
@@ -914,6 +1123,47 @@ def test_doc245_body_formal_core_blocks_when_all_enhanced_profiles_fail() -> Non
     assert result.failures[-1].failure_code == "character_card_formal_slot_receipt_invalid"
 
 
+def test_doc245_body_three_slot_acceptance_blocks_cross_view_parity_mismatch() -> None:
+    service = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_BodyReviewer(cross_view_mismatch_slots={"body.side_full"}),
+    )
+
+    result = service.prepare_body_silhouette(
+        _card_ready_for_body(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert result.status == "blocked"
+    assert result.failure_codes == ["body_silhouette_cross_view_parity_mismatch"]
+    assert result.card.body_silhouette_status == "blocked"
+    assert result.formal_slot_receipts == {}
+
+
+def test_doc245_body_three_slot_acceptance_requires_cross_view_positive_evidence() -> None:
+    class _MissingCrossViewBodyReviewer(_BodyReviewer):
+        def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
+            return _review(candidate.candidate_index, include_cross_view_parity_evidence=False)
+
+    service = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_MissingCrossViewBodyReviewer(),
+    )
+
+    result = service.prepare_body_silhouette(
+        _card_ready_for_body(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert result.status == "blocked"
+    assert result.failure_codes == ["body_silhouette_cross_view_parity_evidence_missing"]
+    assert result.card.body_silhouette_status == "blocked"
+
+
 def test_doc245_body_stage_level_runtime_receipt_cannot_replace_per_slot_formal_receipts() -> None:
     card = _card_ready_for_body()
     body_slots = {}
@@ -1013,12 +1263,19 @@ def test_doc245_body_set_carries_existing_formal_receipts_during_partial_resume(
     )
     existing_front = existing_result.card.body_slots["body.front_full"]
     assert existing_front.formal_slot_receipt is not None
+    legacy_front = existing_front.model_copy(
+        update={
+            "formal_slot_receipt": _legacy_body_formal_receipt_without_source_standard(
+                existing_front.formal_slot_receipt
+            )
+        }
+    )
     card_with_existing_front = base_card.model_copy(
         update={
             "body_silhouette_status": "reviewing",
             "body_slots": {
                 **base_card.body_slots,
-                "body.front_full": existing_front,
+                "body.front_full": legacy_front,
             },
         }
     )
@@ -1032,9 +1289,15 @@ def test_doc245_body_set_carries_existing_formal_receipts_during_partial_resume(
     )
 
     assert result.status == "review"
-    assert result.winner_output_ids["body.front_full"] == existing_front.output_id
+    assert result.winner_output_ids["body.front_full"] == legacy_front.output_id
     assert "body.front_full" in result.formal_slot_receipts
-    assert result.formal_slot_receipts["body.front_full"].winner_output_id == existing_front.output_id
+    assert result.formal_slot_receipts["body.front_full"].winner_output_id == legacy_front.output_id
+    assert not any(
+        "source_standard" in code
+        for candidate in result.formal_slot_receipts["body.front_full"].candidates
+        if candidate.enhanced_proof is not None
+        for code in candidate.enhanced_proof.evidence_codes
+    )
     assert [request.slot_key for request in generator.requests] == [
         "body.side_full",
         "body.side_full",
@@ -1043,6 +1306,50 @@ def test_doc245_body_set_carries_existing_formal_receipts_during_partial_resume(
         "body.rear_full",
         "body.rear_full",
     ]
+
+
+def test_doc245_legacy_body_formal_receipt_survives_persisted_public_readback_without_recompute() -> None:
+    service = CharacterCardPreparationService(generator=_BodyGenerator(), reviewer=_BodyReviewer())
+    result = service.prepare_body_silhouette(
+        _card_ready_for_body(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+    front = result.card.body_slots["body.front_full"]
+    assert front.formal_slot_receipt is not None
+    legacy_front = front.model_copy(
+        update={
+            "formal_slot_receipt": _legacy_body_formal_receipt_without_source_standard(
+                front.formal_slot_receipt
+            )
+        }
+    )
+    serialized = legacy_front.model_dump(mode="json")
+
+    reloaded_slot = CharacterCardSlot.model_validate(serialized)
+    assert reloaded_slot.formal_slot_receipt is not None
+    assert reloaded_slot.formal_slot_receipt.reload_public_projection_verified is False
+    verified_slot = reloaded_slot.model_copy(
+        update={
+            "formal_slot_receipt": mark_formal_slot_receipt_reload_public_projection_verified(
+                reloaded_slot.formal_slot_receipt
+            )
+        }
+    )
+    summary = character_card_formal_slot_receipt_public_summary(verified_slot)
+
+    assert summary is not None
+    assert summary["module"] == "body_silhouette"
+    assert summary["slot_key"] == "body.front_full"
+    assert summary["winner_output_id"] == legacy_front.output_id
+    evidence_codes = {
+        code
+        for candidate in reloaded_slot.formal_slot_receipt.candidates
+        if candidate.enhanced_proof is not None
+        for code in candidate.enhanced_proof.evidence_codes
+    }
+    assert "body_silhouette_source_standard_verified" not in evidence_codes
 
 
 def test_doc245_body_provider_reference_subset_keeps_side_profile_authority() -> None:

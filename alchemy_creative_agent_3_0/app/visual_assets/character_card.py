@@ -15,11 +15,7 @@ from uuid import uuid4
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
-from ..shared_capabilities.visual_cluster.expression_review import (
-    BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES,
-    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
-    laugh_expression_receipt_allows_slot,
-)
+from ..shared_capabilities.visual_cluster.expression_review import laugh_expression_receipt_allows_slot
 from ..shared_capabilities.visual_cluster.review_repair import (
     shared_review_repair_context_from_decision,
 )
@@ -33,6 +29,13 @@ from .formal_slot_acceptance import (
     HISTORICAL_IDENTITY_CONTEXT_ONLY,
     project_formal_slot_public_summary,
     validate_formal_slot_receipt_for_activation,
+)
+from .body_silhouette_source_standard import (
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_BLOCKING_ISSUE_CODES,
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE,
+    BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
 )
 from .expression_model_card_framing import compose_expression_model_card_enhanced_summary
 
@@ -1436,6 +1439,25 @@ class CharacterCardPreparationService:
             formal_slot_receipts=formal_slot_receipts,
         )
 
+    @staticmethod
+    def _body_silhouette_cross_view_parity_failure(
+        formal_slot_receipts: dict[str, FormalSlotReceipt],
+    ) -> str | None:
+        if set(formal_slot_receipts) != set(BODY_SLOT_KEYS):
+            return "body_silhouette_cross_view_parity_receipts_missing"
+        for receipt in formal_slot_receipts.values():
+            selected = [candidate for candidate in receipt.candidates if candidate.selected_as_winner]
+            if len(selected) != 1:
+                return "body_silhouette_cross_view_parity_winner_missing"
+            if BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE not in set(
+                selected[0].shared_review.evidence_codes
+            ):
+                return "body_silhouette_cross_view_parity_evidence_missing"
+            issue_codes = set(selected[0].shared_review.issue_codes)
+            if issue_codes.intersection(BODY_SILHOUETTE_CROSS_VIEW_PARITY_BLOCKING_ISSUE_CODES):
+                return "body_silhouette_cross_view_parity_mismatch"
+        return None
+
     def prepare_expression_slot(
         self,
         card: CharacterCardState,
@@ -1642,6 +1664,31 @@ class CharacterCardPreparationService:
             if formal_receipt is not None:
                 formal_slot_receipts[slot_key] = formal_receipt
             winners[slot_key] = winner.output_id
+        parity_failure_code = self._body_silhouette_cross_view_parity_failure(formal_slot_receipts)
+        if parity_failure_code:
+            failure = CharacterCardFailureEvent(
+                module="body_silhouette",
+                slot_key="body.front_full",
+                candidate_index=self.CANDIDATE_COUNT,
+                failure_code=parity_failure_code,
+            )
+            failures.append(failure)
+            return CharacterCardStageResult(
+                status="blocked",
+                card=self._blocked_card(
+                    card,
+                    module="body_silhouette",
+                    slot_key="body.front_full",
+                    failure_code=parity_failure_code,
+                    failure_attempt_count=self.CANDIDATE_COUNT,
+                    slots=slots,
+                    status_field="body_silhouette_status",
+                ),
+                attempts=attempts,
+                winner_output_ids=winners,
+                failure_codes=[parity_failure_code],
+                failures=failures,
+            )
         updated = card.model_copy(
             update={
                 "body_slots": slots,
@@ -2249,7 +2296,11 @@ class CharacterCardPreparationService:
         missing_source_standard_dimensions = [
             dimension
             for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS
-            if dimension not in shared_score_dimensions
+            if (
+                dimension not in shared_score_dimensions
+                or BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES[dimension]
+                not in set(shared_review_summary.evidence_codes if shared_review_summary is not None else [])
+            )
         ]
         if missing_source_standard_dimensions:
             issue_codes.append(BODY_SOURCE_STANDARD_MISSING_ISSUE_CODE)
@@ -2293,7 +2344,11 @@ class CharacterCardPreparationService:
         dimensions.update(
             {
                 f"source_standard_{dimension}": 1.0
-                if dimension in shared_score_dimensions
+                if (
+                    dimension in shared_score_dimensions
+                    and BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES[dimension]
+                    in set(shared_review_summary.evidence_codes if shared_review_summary is not None else [])
+                )
                 else 0.0
                 for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS
             }

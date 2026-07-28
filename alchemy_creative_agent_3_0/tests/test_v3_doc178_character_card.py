@@ -12,11 +12,17 @@ from pydantic import ValidationError
 
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
-    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     EXPRESSION_FRAMING_DELTA_MAX,
     LAUGH_EXPRESSION_SLOT_REQUIRED_EVIDENCE_CODES,
     project_generic_visual_review_receipt,
     project_laugh_expression_review_receipt,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION,
+    BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+    BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+    BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BODY_ENHANCED_PROFILE_EVIDENCE_CODE,
@@ -365,6 +371,7 @@ def _doc178_generic_review_receipt(*, body_silhouette: bool = False) -> dict[str
             score_card[dimension] = 0.01
         for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS:
             score_card[dimension] = 0.91
+        score_card[BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION] = 0.91
     return project_generic_visual_review_receipt(
         score_card=score_card,
         issue_codes=[],
@@ -375,10 +382,20 @@ def _doc178_generic_review_receipt(*, body_silhouette: bool = False) -> dict[str
             (
                 *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
                 *BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
+                BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION,
             )
             if body_silhouette
             else None
         ),
+        verified_dimension_evidence_codes=(
+            {
+                **BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
+                BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION: BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE,
+            }
+            if body_silhouette
+            else None
+        ),
+        verified_dimension_floor=BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
     ).to_public_dict()
 
 
