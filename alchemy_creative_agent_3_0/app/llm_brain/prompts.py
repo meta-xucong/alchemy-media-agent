@@ -132,6 +132,19 @@ least 2. If the selected identity and
 product references cannot fit the renderer admission cap, the run must stop
 fail-closed rather than silently trimming or replacing product truth. Never
 select the full product truth pool for one output."""
+PROFESSIONAL_ECOMMERCE_POSE_CONTRACT_INSTRUCTIONS = """When
+ecommerce_creative_context.professional_ecommerce_pose_contract is present,
+it is a closed Professional E-Commerce deliverable acceptance contract. Return
+the matching professional_ecommerce_pose_role for every output_index. Allowed
+pose roles are seated_poolside and standing_poolside. For standing_poolside,
+standing_pose_requirements must contain exactly these closed requirements:
+both_feet_weight_bearing, no_kneeling, no_crouched_low_support,
+interaction_may_use_one_hand_but_body_remains_standing. This is a structural
+acceptance receipt, not a provider prompt patch or prompt fragment: low-support,
+kneeling, crouching, or half-sitting results do not satisfy standing_poolside.
+The final natural-language prompt
+is still authored in provider_prompt_finalize, but it must satisfy the frozen
+pose role."""
 PHOTOGRAPHY_CONTEXT_INSTRUCTIONS = """Treat photography_creative_context as a frozen
 non-creative delivery contract. The role IDs only bind output lineage and
 cardinality. Invent the complete photographic composition, scene, camera,
@@ -257,6 +270,13 @@ def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
     return bool(metadata.get("professional_product_truth_required"))
 
 
+def _professional_ecommerce_pose_contract(ecommerce_context: dict[str, object] | None) -> dict[str, object] | None:
+    if not isinstance(ecommerce_context, dict):
+        return None
+    raw = ecommerce_context.get("professional_ecommerce_pose_contract")
+    return raw if isinstance(raw, dict) else None
+
+
 def _product_truth_reference_budget(ecommerce_context: dict[str, object] | None) -> int | None:
     if not isinstance(ecommerce_context, dict):
         return None
@@ -279,6 +299,7 @@ def _image_set_evidence_dimensions_schema(
     requires_apparel_evidence_dimensions: bool,
     requires_product_truth_selection: bool,
     product_truth_reference_budget: int | None = None,
+    professional_ecommerce_pose_contract: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     schema: dict[str, object] = {
         "output_index": (
@@ -313,6 +334,16 @@ def _image_set_evidence_dimensions_schema(
             )
         schema["product_truth_selection_role"] = role_contract
         schema["selected_product_truth_asset_ids"] = [selection_contract]
+    if professional_ecommerce_pose_contract:
+        schema["professional_ecommerce_pose_role"] = (
+            "closed pose role required by ecommerce_creative_context.professional_ecommerce_pose_contract; "
+            "one of seated_poolside|standing_poolside"
+        )
+        schema["standing_pose_requirements"] = [
+            "for standing_poolside exactly: both_feet_weight_bearing|no_kneeling|"
+            "no_crouched_low_support|interaction_may_use_one_hand_but_body_remains_standing; "
+            "empty list for seated_poolside"
+        ]
     return [schema]
 
 
@@ -545,14 +576,20 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             requested_image_count=request.requested_image_count,
         )
         requires_product_truth_selection = _requires_product_truth_selection(request)
+        professional_ecommerce_pose_contract = _professional_ecommerce_pose_contract(ecommerce_context)
         compact_schema = _compact_required_remote_creative_schema()
-        if requires_apparel_evidence_dimensions or requires_product_truth_selection:
+        if (
+            requires_apparel_evidence_dimensions
+            or requires_product_truth_selection
+            or professional_ecommerce_pose_contract
+        ):
             compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = (
                 _image_set_evidence_dimensions_schema(
                     requested_image_count=request.requested_image_count,
                     requires_apparel_evidence_dimensions=requires_apparel_evidence_dimensions,
                     requires_product_truth_selection=requires_product_truth_selection,
                     product_truth_reference_budget=_product_truth_reference_budget(ecommerce_context),
+                    professional_ecommerce_pose_contract=professional_ecommerce_pose_contract,
                 )
             )
         payload["return_schema"] = compact_schema
@@ -569,6 +606,10 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             "the return schema, never natural-language aliases. Developmental age and expression are governed by "
             "their separate semantic fields and are not reference-channel IDs."
         )
+        if professional_ecommerce_pose_contract:
+            payload["professional_ecommerce_pose_contract_instructions"] = (
+                PROFESSIONAL_ECOMMERCE_POSE_CONTRACT_INSTRUCTIONS
+            )
         recovery = request.metadata.get("remote_semantic_contract_recovery")
         if isinstance(recovery, dict) and recovery.get("contract_version") == "v3_remote_semantic_contract_recovery_v1":
             rejected_sections = [

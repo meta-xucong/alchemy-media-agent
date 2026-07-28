@@ -28,6 +28,7 @@ from ..scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
     ecommerce_human_realism_review_context_from_preflight_payload,
     professional_identity_view_kinds_from_selectors,
+    validate_professional_ecommerce_pose_contract_payload,
 )
 from ..shared_capabilities import (
     VISUAL_CAPABILITY_CLUSTER_ID,
@@ -2804,6 +2805,9 @@ class ScenarioRuntime:
                             "product_truth_selection_source",
                             "product_truth_pool_asset_ids",
                             "brain_evidence_dimensions",
+                            "professional_ecommerce_pose_role",
+                            "professional_ecommerce_pose_acceptance",
+                            "professional_ecommerce_pose_contract_source",
                             "specialized_role_key",
                         }
                     },
@@ -3650,6 +3654,11 @@ class ScenarioRuntime:
             brain_result=brain_result,
             expected_count=expected,
         )
+        professional_pose_contract_by_output = self._validated_professional_ecommerce_pose_contract_by_output(
+            request=request,
+            brain_result=brain_result,
+            expected_count=expected,
+        )
         role_recipes = (
             specialized_plan.execution_plan.get("role_recipes", [])
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
@@ -3714,6 +3723,13 @@ class ScenarioRuntime:
                     for asset in request.uploaded_assets
                     if self._uploaded_asset_reference_channel(asset) == "product_truth"
                 ]
+            pose_contract = professional_pose_contract_by_output.get(index)
+            if pose_contract:
+                deliverable_metadata["professional_ecommerce_pose_role"] = pose_contract["pose_role"]
+                deliverable_metadata["professional_ecommerce_pose_acceptance"] = dict(pose_contract)
+                deliverable_metadata["professional_ecommerce_pose_contract_source"] = (
+                    "remote_brain_image_set_plan.evidence_dimensions_by_output"
+                )
             deliverables.append(
                 TemplateDeliverable(
                     deliverable_id=stable_id("template_deliverable", normalized_intent.intent_id, index, direction),
@@ -3760,6 +3776,76 @@ class ScenarioRuntime:
         if role == "face_reference":
             return "portrait_identity"
         return role
+
+    @staticmethod
+    def _validated_professional_ecommerce_pose_contract_by_output(
+        *,
+        request: ScenarioRuntimeRequest,
+        brain_result: BrainRunResult,
+        expected_count: int,
+    ) -> dict[int, dict[str, Any]]:
+        """Freeze Remote-Brain pose acceptance for Professional E-Commerce.
+
+        This is intentionally a specialized deliverable contract. It does not
+        add a Human Realism or Provider-global pose recipe, and it never
+        rewrites renderer prompts locally.
+        """
+
+        metadata = dict(request.metadata or {})
+        ecommerce_context = metadata.get("ecommerce_creative_context")
+        ecommerce_context = ecommerce_context if isinstance(ecommerce_context, dict) else {}
+        raw_contract = ecommerce_context.get("professional_ecommerce_pose_contract")
+        if raw_contract is None:
+            return {}
+        try:
+            expected_contract = validate_professional_ecommerce_pose_contract_payload(
+                raw_contract,
+                requested_image_count=expected_count,
+            )
+        except ValueError:
+            raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid") from None
+        required_by_index = {
+            item.output_index: item.model_dump(mode="json")
+            for item in expected_contract.required_pose_by_output
+        }
+        raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
+        if len(raw_entries) != expected_count:
+            raise CapabilityActivationError("professional_ecommerce_pose_contract_missing_or_incomplete")
+        resolved: dict[int, dict[str, Any]] = {}
+        required_standing = {
+            "both_feet_weight_bearing",
+            "no_kneeling",
+            "no_crouched_low_support",
+            "interaction_may_use_one_hand_but_body_remains_standing",
+        }
+        for entry in raw_entries:
+            index = int(entry.output_index)
+            expected = required_by_index.get(index)
+            if expected is None or index in resolved or index < 1 or index > expected_count:
+                raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
+            pose_role = str(getattr(entry, "professional_ecommerce_pose_role", "") or "").strip()
+            if pose_role != expected["pose_role"]:
+                raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
+            standing_requirements = [
+                str(item).strip()
+                for item in getattr(entry, "standing_pose_requirements", [])
+                if str(item).strip()
+            ]
+            if pose_role == "standing_poolside":
+                if set(standing_requirements) != required_standing:
+                    raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
+            elif standing_requirements:
+                raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
+            resolved[index] = {
+                "pose_role": pose_role,
+                "standing_requirements": list(standing_requirements),
+                "contract_version": expected_contract.contract_version,
+                "owner": expected_contract.owner,
+                "source": "remote_brain_image_set_plan.evidence_dimensions_by_output",
+            }
+        if sorted(resolved) != list(range(1, expected_count + 1)):
+            raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
+        return resolved
 
     def _validated_ecommerce_product_truth_selection_by_output(
         self,
@@ -5651,10 +5737,40 @@ class ScenarioRuntime:
             pre_activation_capabilities=pre_activation_capabilities,
             template_capability_policy=template_capability_policy,
         )
+        blocked_by_pose_contract = self._professional_ecommerce_pose_contract_result(brain_request)
+        if blocked_by_pose_contract is not None:
+            return blocked_by_pose_contract
         blocked_by_preflight = self._ecommerce_creative_risk_preflight_result(brain_request)
         if blocked_by_preflight is not None:
             return blocked_by_preflight
         return self.llm_brain_adapter.run(brain_request)
+
+    @staticmethod
+    def _professional_ecommerce_pose_contract_result(
+        brain_request: BrainRunRequest,
+    ) -> BrainRunResult | None:
+        """Fail closed before remote Brain when a supplied pose contract is invalid."""
+
+        if str(brain_request.scenario_id or "").strip().lower() != "ecommerce":
+            return None
+        context = brain_request.metadata.get("ecommerce_creative_context")
+        if not isinstance(context, dict):
+            return None
+        raw_contract = context.get("professional_ecommerce_pose_contract")
+        if not isinstance(raw_contract, dict):
+            return None
+        if raw_contract.get("status") != "invalid":
+            return None
+        result = build_remote_required_result(
+            brain_request,
+            "professional_ecommerce_pose_contract_invalid",
+        )
+        result.audit = {
+            **dict(result.audit or {}),
+            "professional_ecommerce_pose_contract_invalid": True,
+            "creative_fallback_executed": False,
+        }
+        return result
 
     @staticmethod
     def _ecommerce_creative_risk_preflight_result(

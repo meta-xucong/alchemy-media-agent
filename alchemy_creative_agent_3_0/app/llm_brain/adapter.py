@@ -43,6 +43,7 @@ from ..scenario_packs.ecommerce import (
     EcommerceCreativeRiskPreflight,
     professional_identity_view_kinds_from_selectors,
     validate_ecommerce_creative_risk_preflight_payload,
+    validate_professional_ecommerce_pose_contract_payload,
 )
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapabilityPolicy, general_capability_policy
 
@@ -52,6 +53,11 @@ _INVALID_ECOMMERCE_CREATIVE_RISK_PREFLIGHT = {
     "contract_version": "ecommerce_creative_risk_preflight_v1",
     "owner": "ecommerce_specialized_preflight",
     "applies_to": "ecommerce",
+    "status": "invalid",
+}
+_INVALID_PROFESSIONAL_ECOMMERCE_POSE_CONTRACT = {
+    "contract_version": "professional_ecommerce_pose_contract_v1",
+    "owner": "professional_ecommerce_deliverable_pose_acceptance",
     "status": "invalid",
 }
 GENERAL_TEMPLATE_ID = "general_template"
@@ -948,6 +954,7 @@ def _ecommerce_creative_context(
         "product_set_style",
         "role_specific_creative_intent",
         "provider_reference_budget",
+        "professional_ecommerce_pose_contract",
         "category_evidence_questions",
         "seller_inputs",
         "approved_literal_copy",
@@ -957,6 +964,11 @@ def _ecommerce_creative_context(
         "metadata",
     }
     context = {key: raw[key] for key in allowed if key in raw}
+    if "professional_ecommerce_pose_contract" in raw:
+        context["professional_ecommerce_pose_contract"] = _professional_ecommerce_pose_contract(
+            raw["professional_ecommerce_pose_contract"],
+            requested_image_count=requested_image_count,
+        )
     if "creative_risk_preflight" in raw:
         context["creative_risk_preflight"] = _ecommerce_creative_risk_preflight(
             raw["creative_risk_preflight"],
@@ -964,6 +976,24 @@ def _ecommerce_creative_context(
             requested_image_count=requested_image_count,
         )
     return context
+
+
+def _professional_ecommerce_pose_contract(
+    raw: Any,
+    *,
+    requested_image_count: int,
+) -> dict[str, Any]:
+    """Return a typed pose contract or a sanitized invalid sentinel."""
+
+    if raw is None or not isinstance(raw, dict):
+        return dict(_INVALID_PROFESSIONAL_ECOMMERCE_POSE_CONTRACT)
+    try:
+        return validate_professional_ecommerce_pose_contract_payload(
+            raw,
+            requested_image_count=requested_image_count,
+        ).model_dump(mode="json")
+    except ValueError:
+        return dict(_INVALID_PROFESSIONAL_ECOMMERCE_POSE_CONTRACT)
 
 
 def _ecommerce_creative_risk_preflight(
@@ -2606,6 +2636,9 @@ def _safe_validation_path(loc: Any, *, section: str) -> str:
         "image_set_plan.evidence_dimensions_by_output.item.product_truth_selection_role",
         "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids",
         "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids.item",
+        "image_set_plan.evidence_dimensions_by_output.item.professional_ecommerce_pose_role",
+        "image_set_plan.evidence_dimensions_by_output.item.standing_pose_requirements",
+        "image_set_plan.evidence_dimensions_by_output.item.standing_pose_requirements.item",
         "image_set_plan.composition_rules",
         "image_set_plan.quality_bar",
         "image_set_plan.size",

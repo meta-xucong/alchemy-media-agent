@@ -82,6 +82,20 @@ ProfessionalIdentityStrategy = Literal[
 
 CreativeRiskMode = Literal["standard", "professional"]
 
+ProfessionalEcommercePoseRole = Literal[
+    "seated_poolside",
+    "standing_poolside",
+]
+
+ProfessionalEcommerceStandingRequirement = Literal[
+    "both_feet_weight_bearing",
+    "no_kneeling",
+    "no_crouched_low_support",
+    "interaction_may_use_one_hand_but_body_remains_standing",
+]
+
+_REQUIRED_STANDING_REQUIREMENTS = set(get_args(ProfessionalEcommerceStandingRequirement))
+
 ECOMMERCE_CREATIVE_RISK_ALLOWED_VALUES: dict[str, tuple[str, ...]] = {
     "contract_version": ("ecommerce_creative_risk_preflight_v1",),
     "mode": get_args(CreativeRiskMode),
@@ -456,6 +470,105 @@ def ecommerce_human_realism_review_context_from_preflight_payload(
     return preflight.shared_human_realism_review_context(
         requested_image_count=requested_image_count
     )
+
+
+class ProfessionalEcommercePoseContractItem(V3BaseModel):
+    """One output-level Professional E-Commerce pose acceptance requirement.
+
+    It is a deliverable contract, not renderer prose. The Remote Brain must
+    return the same closed role in `image_set_plan`, and native planning can
+    reject a host-bound output before rendering when the role is missing or
+    contradictory.
+    """
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    output_index: StrictInt = Field(ge=1)
+    pose_role: ProfessionalEcommercePoseRole
+    standing_requirements: list[ProfessionalEcommerceStandingRequirement] = Field(default_factory=list)
+
+    @field_validator("standing_requirements")
+    @classmethod
+    def _dedupe_standing_requirements(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("duplicate_standing_requirement")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_pose_requirements(self) -> "ProfessionalEcommercePoseContractItem":
+        if self.pose_role == "standing_poolside":
+            if set(self.standing_requirements) != _REQUIRED_STANDING_REQUIREMENTS:
+                raise ValueError("standing_requirements_incomplete")
+        elif self.standing_requirements:
+            raise ValueError("standing_requirements_only_for_standing_pose")
+        return self
+
+
+class ProfessionalEcommercePoseContract(V3BaseModel):
+    """Closed Professional E-Commerce deliverable pose acceptance contract.
+
+    This may be produced only by the server-side Professional E-Commerce
+    planning layer after explicit deliverable coverage requirements are known.
+    It carries no raw IDs, paths, hashes, provider payloads, or prompt
+    fragments.
+    """
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    contract_version: Literal["professional_ecommerce_pose_contract_v1"] = (
+        "professional_ecommerce_pose_contract_v1"
+    )
+    owner: Literal["professional_ecommerce_deliverable_pose_acceptance"] = (
+        "professional_ecommerce_deliverable_pose_acceptance"
+    )
+    source: Literal["explicit_user_pose_coverage_request"] = "explicit_user_pose_coverage_request"
+    required_pose_by_output: list[ProfessionalEcommercePoseContractItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_indexes(self) -> "ProfessionalEcommercePoseContract":
+        indexes = [item.output_index for item in self.required_pose_by_output]
+        if not indexes:
+            raise ValueError("pose_contract_empty")
+        if len(indexes) != len(set(indexes)):
+            raise ValueError("duplicate_pose_contract_output_index")
+        return self
+
+
+def build_professional_ecommerce_poolside_pose_contract(
+    *,
+    requested_image_count: int,
+) -> ProfessionalEcommercePoseContract:
+    """Build the explicit exact-N=2 seated/standing poolside contract."""
+
+    if type(requested_image_count) is not int or requested_image_count != 2:
+        raise ValueError("poolside_pose_contract_requires_exact_two")
+    return ProfessionalEcommercePoseContract(
+        required_pose_by_output=[
+            ProfessionalEcommercePoseContractItem(
+                output_index=1,
+                pose_role="seated_poolside",
+            ),
+            ProfessionalEcommercePoseContractItem(
+                output_index=2,
+                pose_role="standing_poolside",
+                standing_requirements=sorted(_REQUIRED_STANDING_REQUIREMENTS),
+            ),
+        ]
+    )
+
+
+def validate_professional_ecommerce_pose_contract_payload(
+    payload: Any,
+    *,
+    requested_image_count: int,
+) -> ProfessionalEcommercePoseContract:
+    if type(requested_image_count) is not int or requested_image_count < 1:
+        raise ValueError("pose_contract_requested_image_count_invalid")
+    contract = ProfessionalEcommercePoseContract.model_validate(payload)
+    indexes = [item.output_index for item in contract.required_pose_by_output]
+    if sorted(indexes) != list(range(1, requested_image_count + 1)):
+        raise ValueError("pose_contract_exact_n_mismatch")
+    return contract
 
 
 class ProductTruthLock(V3BaseModel):

@@ -560,6 +560,7 @@ def _reference_channel_ownership_intent(request) -> dict:  # noqa: ANN001
 def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
     context = request.metadata.get("ecommerce_creative_context") if isinstance(request.metadata, dict) else None
     profile = context.get("apparel_on_model_evidence_profile") if isinstance(context, dict) else None
+    pose_contract_by_output = _professional_ecommerce_pose_contract_by_output(request)
     product_truth_ids = _product_truth_asset_ids(request)
     requires_product_truth_selection = bool(
         isinstance(request.metadata, dict)
@@ -589,8 +590,37 @@ def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
             entry["selected_product_truth_asset_ids"] = [
                 product_truth_ids[(index - 1) % len(product_truth_ids)]
             ]
+        pose_contract = pose_contract_by_output.get(index)
+        if pose_contract:
+            entry["professional_ecommerce_pose_role"] = pose_contract.get("pose_role")
+            entry["standing_pose_requirements"] = list(
+                pose_contract.get("standing_requirements") or []
+            )
         entries.append(entry)
     return entries
+
+
+def _professional_ecommerce_pose_contract_by_output(request) -> dict[int, dict]:  # noqa: ANN001
+    context = request.metadata.get("ecommerce_creative_context") if isinstance(request.metadata, dict) else None
+    contract = (
+        context.get("professional_ecommerce_pose_contract")
+        if isinstance(context, dict)
+        else None
+    )
+    if not isinstance(contract, dict):
+        return {}
+    entries = contract.get("required_pose_by_output")
+    if not isinstance(entries, list):
+        return {}
+    resolved: dict[int, dict] = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        index = item.get("output_index")
+        if type(index) is not int:
+            continue
+        resolved[index] = item
+    return resolved
 
 
 def _product_truth_selection_role(index: int) -> str:

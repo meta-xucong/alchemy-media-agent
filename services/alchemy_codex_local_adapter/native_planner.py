@@ -9,6 +9,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import queue
+import re
 import sys
 import threading
 import time
@@ -37,6 +38,7 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import (
 from alchemy_creative_agent_3_0.app.llm_brain.stage_trace import record_stage_event
 from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
+    build_professional_ecommerce_poolside_pose_contract,
     build_professional_ecommerce_identity_preflight,
     professional_identity_view_kinds_from_selectors,
 )
@@ -446,6 +448,9 @@ class CodexNativeImageGenPlanner:
             ecommerce_context["provider_reference_budget"] = self._brain_safe_provider_reference_budget(
                 provider_budget
             )
+            pose_contract = self._professional_ecommerce_pose_contract_for_request(request)
+            if pose_contract:
+                ecommerce_context["professional_ecommerce_pose_contract"] = pose_contract
             if professional_identity_hints_by_output:
                 try:
                     creative_risk_preflight = build_professional_ecommerce_identity_preflight(
@@ -577,6 +582,22 @@ class CodexNativeImageGenPlanner:
             if key in provider_budget
         }
 
+    @staticmethod
+    def _professional_ecommerce_pose_contract_for_request(
+        request: NativeProfessionalImageGenPlanRequest,
+    ) -> dict[str, Any] | None:
+        if request.template_id != "ecommerce_template" or request.requested_image_count != 2:
+            return None
+        tokens = set(re.findall(r"[a-z]+", request.user_input.lower()))
+        has_pool_context = bool(tokens.intersection({"pool", "poolside"}))
+        has_seated = bool(tokens.intersection({"sit", "sits", "sitting", "seated"}))
+        has_standing = bool(tokens.intersection({"stand", "stands", "standing"}))
+        if not (has_pool_context and has_seated and has_standing):
+            return None
+        return build_professional_ecommerce_poolside_pose_contract(
+            requested_image_count=request.requested_image_count
+        ).model_dump(mode="json")
+
     def _professional_product_truth_selection_by_asset(
         self,
         *,
@@ -705,6 +726,12 @@ class CodexNativeImageGenPlanner:
                 for item in reference_assets
                 if isinstance(item, dict)
             ]
+            pose_acceptance = (
+                deliverable_metadata.get("professional_ecommerce_pose_acceptance")
+                if isinstance(deliverable_metadata.get("professional_ecommerce_pose_acceptance"), dict)
+                else None
+            )
+            pose_role = str(deliverable_metadata.get("professional_ecommerce_pose_role") or "").strip()
             selection_audit = {
                 "selection_source": selection_source,
                 "product_truth_pool_asset_ids": list(product_truth_ids),
@@ -717,6 +744,9 @@ class CodexNativeImageGenPlanner:
                 "final_reference_source_sha256": final_hashes,
                 "selection_policy": "remote_brain_structured_frozen_metadata_only",
             }
+            if pose_acceptance and pose_role:
+                selection_audit["professional_ecommerce_pose_role"] = pose_role
+                selection_audit["professional_ecommerce_pose_acceptance"] = dict(pose_acceptance)
             selection_by_asset_id[asset.asset_id] = {
                 **selection_audit,
                 "metadata_overrides": {
@@ -729,6 +759,14 @@ class CodexNativeImageGenPlanner:
                     "product_truth_pool_asset_ids": list(product_truth_ids),
                     "provider_reference_budget": dict(provider_budget),
                     "omitted_product_truth": omitted,
+                    **(
+                        {
+                            "professional_ecommerce_pose_role": pose_role,
+                            "professional_ecommerce_pose_acceptance": dict(pose_acceptance),
+                        }
+                        if pose_acceptance and pose_role
+                        else {}
+                    ),
                 },
             }
         return selection_by_asset_id
@@ -1186,6 +1224,17 @@ class CodexNativeImageGenPlanner:
                         output["reference_input_contract"]["product_truth_pool_source_sha256"] = product_truth_pool_hashes
                         if professional_product_model:
                             output["reference_input_contract"]["product_truth_selection_role"] = selection_role
+                            pose_role = str(
+                                selection_contract.get("professional_ecommerce_pose_role") or ""
+                            ).strip()
+                            pose_acceptance = selection_contract.get(
+                                "professional_ecommerce_pose_acceptance"
+                            )
+                            if pose_role and isinstance(pose_acceptance, dict):
+                                output["reference_input_contract"]["professional_ecommerce_pose_role"] = pose_role
+                                output["reference_input_contract"]["professional_ecommerce_pose_acceptance"] = (
+                                    dict(pose_acceptance)
+                                )
                         output["reference_input_contract"]["selected_product_truth_asset_ids"] = selected_product_truth_ids
                         output["reference_input_contract"]["admitted_product_truth_asset_ids"] = [
                             source_id for source_id in dict.fromkeys(

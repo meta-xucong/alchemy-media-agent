@@ -3,7 +3,7 @@
 Status: Doc127 Phase 4 acceptance preparation; one historical controlled Gate C
 case is recorded, while current-release Gate C re-certification and Gate D
 remain pending
-Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E24
+Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E25
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -29,8 +29,9 @@ commerce-specific deliverables.
 8. E19 real Provider Gate C/D acceptance record.
 9. E20 Doc127 Phase 4 execution pack.
 10. E24 Creative Risk Preflight Contract, once reviewer-approved.
-11. This E-Commerce module family.
-12. Implementation notes and examples.
+11. E25 Professional E-Commerce Pose Acceptance Contract, once reviewer-approved.
+12. This E-Commerce module family.
+13. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -95,12 +96,16 @@ E20 supplies the non-sensitive operator manifest and checklist for that work.
 An old desktop example remains ineligible unless the material owner provides
 an explicit rights record for the current evaluation.
 
-E24 is a documentation-only design proposal for an E-Commerce creative risk
-preflight contract. It records the boundary between already-implemented product
-truth, product truth pool selection, Remote Brain output planning, Professional
-Mode identity binding, and shared Human Realism. It must not be treated as
-runtime behavior until reviewer-approved implementation and isolation tests
-land.
+E24 is the accepted staged design and implementation authority for the
+E-Commerce creative risk preflight contract through Phase 4B. It records the
+boundary between already-implemented product truth, product truth pool
+selection, Remote Brain output planning, Professional Mode identity binding,
+and shared Human Realism. Later phases still require their own reviewer gates.
+
+E25 records the Professional E-Commerce pose acceptance correction for explicit
+deliverable coverage such as a two-image seated/standing poolside set. It is a
+Professional E-Commerce deliverable contract only; it must not become a shared
+Human Realism, General Template, Provider, or E24 risk-preflight rule.
 
 ## Definition of preparation complete
 
@@ -123,3 +128,6 @@ Before implementation starts, the team must have accepted:
 13. E24 creative risk preflight design, after reviewer acceptance, for any
     future implementation that teaches E-Commerce to pass structured
     pre-generation risk context to the Remote Brain.
+14. E25 pose acceptance contract, after reviewer acceptance, for Professional
+    E-Commerce requests whose exact-N deliverable coverage explicitly requires
+    closed pose roles such as seated and standing.

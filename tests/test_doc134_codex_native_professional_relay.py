@@ -132,6 +132,45 @@ class _ProductTruthSelectionFaultProvider(EcommerceRemoteBrainTestProvider):
         return payload
 
 
+class _ProfessionalEcommercePoseFaultProvider(EcommerceRemoteBrainTestProvider):
+    def __init__(self, pose_fault: str) -> None:
+        super().__init__()
+        self.pose_fault = pose_fault
+
+    def run(self, request):
+        payload = super().run(request)
+        if request.stage != "plan":
+            return payload
+        image_set_plan = payload.get("image_set_plan")
+        entries = (
+            image_set_plan.get("evidence_dimensions_by_output")
+            if isinstance(image_set_plan, dict)
+            else None
+        )
+        if not isinstance(entries, list) or not entries:
+            return payload
+        if self.pose_fault == "missing":
+            for entry in entries:
+                if isinstance(entry, dict):
+                    entry.pop("professional_ecommerce_pose_role", None)
+                    entry.pop("standing_pose_requirements", None)
+        elif self.pose_fault == "wrong_standing":
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("professional_ecommerce_pose_role") == "standing_poolside":
+                    entry["standing_pose_requirements"] = ["both_feet_weight_bearing"]
+        elif self.pose_fault == "wrong_role":
+            entries[0]["professional_ecommerce_pose_role"] = "standing_poolside"
+            entries[0]["standing_pose_requirements"] = [
+                "both_feet_weight_bearing",
+                "no_kneeling",
+                "no_crouched_low_support",
+                "interaction_may_use_one_hand_but_body_remains_standing",
+            ]
+        return payload
+
+
 class _ProviderAdmissionOmittingProvider(EcommerceRemoteBrainTestProvider):
     def run(self, request):
         payload = super().run(request)
@@ -785,6 +824,138 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         or "product_identity_truth" in list(item.get("truth_layers") or [])
         for item in product_materialized_refs
     )
+
+
+def test_professional_ecommerce_poolside_pose_contract_is_frozen_and_projected(
+    tmp_path: Path,
+) -> None:
+    root_source_id = "v3_asset_pose_root"
+    output_id = "v3_output_pose_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product-front.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            requested_image_count=2,
+            user_input=(
+                "Professional modeled child product-on-model poolside commercial set: "
+                "exactly two images, one seated poolside and one standing poolside."
+            ),
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    brain = EcommerceRemoteBrainTestProvider()
+    capturing = _CapturingRuntime(
+        ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "planned_for_codex_native_imagegen"
+    assert result["requested_output_count"] == 2
+    plan_context = brain.requests[0]["metadata"]["ecommerce_creative_context"]
+    pose_contract = plan_context["professional_ecommerce_pose_contract"]
+    assert pose_contract["contract_version"] == "professional_ecommerce_pose_contract_v1"
+    assert [item["pose_role"] for item in pose_contract["required_pose_by_output"]] == [
+        "seated_poolside",
+        "standing_poolside",
+    ]
+    output_contracts = [output["reference_input_contract"] for output in result["outputs"]]
+    assert output_contracts[0]["professional_ecommerce_pose_role"] == "seated_poolside"
+    assert output_contracts[0]["professional_ecommerce_pose_acceptance"]["standing_requirements"] == []
+    assert output_contracts[1]["professional_ecommerce_pose_role"] == "standing_poolside"
+    assert set(
+        output_contracts[1]["professional_ecommerce_pose_acceptance"]["standing_requirements"]
+    ) == {
+        "both_feet_weight_bearing",
+        "no_kneeling",
+        "no_crouched_low_support",
+        "interaction_may_use_one_hand_but_body_remains_standing",
+    }
+    deliverables = [
+        request
+        for request in brain.requests
+        if request["stage"] == "provider_prompt_finalize"
+    ][-1]["metadata"]["canonical_prompt_context"]["deliverables"]
+    assert [item["metadata"]["professional_ecommerce_pose_role"] for item in deliverables] == [
+        "seated_poolside",
+        "standing_poolside",
+    ]
+
+
+@pytest.mark.parametrize("pose_fault", ["missing", "wrong_standing", "wrong_role"])
+def test_professional_ecommerce_pose_contract_fault_blocks_before_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pose_fault: str,
+) -> None:
+    root_source_id = "v3_asset_pose_fault_root"
+    output_id = "v3_output_pose_fault_front"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product-front.png", color=(80, 145, 210))
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            requested_image_count=2,
+            user_input=(
+                "Professional modeled child product-on-model poolside commercial set: "
+                "exactly two images, one seated poolside and one standing poolside."
+            ),
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    materializer_calls = 0
+
+    def fail_if_materialized(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal materializer_calls
+        materializer_calls += 1
+        raise AssertionError("pose contract faults must block before host materialization")
+
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_canonical_materializations",
+        staticmethod(fail_if_materialized),
+    )
+    capturing = _CapturingRuntime(
+        ScenarioRuntime(
+            llm_brain_adapter=V3LLMBrainAdapter(
+                provider=_ProfessionalEcommercePoseFaultProvider(pose_fault)
+            )
+        )
+    )
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: capturing,
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_planning_blocked"
+    assert materializer_calls == 0
+    assert "professional_ecommerce_pose_contract" in " ".join(capturing.last_result.warnings)
 
 
 def test_professional_ecommerce_age_sensitive_product_model_requires_provider_admission_receipt(
@@ -1478,6 +1649,128 @@ def test_professional_ecommerce_product_truth_role_enum_is_consistent_across_bou
     assert schema_roles == native_planner_module._ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES
     assert ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE == native_planner_module._ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE
     assert ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE in schema_roles
+
+
+def test_professional_ecommerce_remote_payload_requires_pose_contract_when_present() -> None:
+    request = BrainRunRequest(
+        user_input="Create exactly two poolside product-on-model images: one seated and one standing.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        requested_image_count=2,
+        metadata={
+            "real_image_generation": True,
+            "professional_product_truth_required": True,
+            "professional_product_model_planning": True,
+            "ecommerce_creative_context": {
+                "professional_ecommerce_pose_contract": {
+                    "contract_version": "professional_ecommerce_pose_contract_v1",
+                    "owner": "professional_ecommerce_deliverable_pose_acceptance",
+                    "source": "explicit_user_pose_coverage_request",
+                    "required_pose_by_output": [
+                        {
+                            "output_index": 1,
+                            "pose_role": "seated_poolside",
+                            "standing_requirements": [],
+                        },
+                        {
+                            "output_index": 2,
+                            "pose_role": "standing_poolside",
+                            "standing_requirements": [
+                                "both_feet_weight_bearing",
+                                "no_kneeling",
+                                "no_crouched_low_support",
+                                "interaction_may_use_one_hand_but_body_remains_standing",
+                            ],
+                        },
+                    ],
+                }
+            },
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    evidence_schema = payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"][0]
+    assert evidence_schema["professional_ecommerce_pose_role"] == (
+        "closed pose role required by ecommerce_creative_context.professional_ecommerce_pose_contract; "
+        "one of seated_poolside|standing_poolside"
+    )
+    assert evidence_schema["standing_pose_requirements"] == [
+        "for standing_poolside exactly: both_feet_weight_bearing|no_kneeling|"
+        "no_crouched_low_support|interaction_may_use_one_hand_but_body_remains_standing; "
+        "empty list for seated_poolside"
+    ]
+    instructions = " ".join(payload["professional_ecommerce_pose_contract_instructions"].split())
+    assert "Return the matching professional_ecommerce_pose_role for every output_index" in instructions
+    assert "standing_pose_requirements must contain exactly these closed requirements" in instructions
+    assert "not a provider prompt patch" in instructions
+    assert "low-support, kneeling, crouching, or half-sitting" in instructions
+
+
+def test_professional_ecommerce_pose_contract_does_not_leak_to_general_payload() -> None:
+    request = V3LLMBrainAdapter().build_request(
+        user_input="Create a simple product image.",
+        job_id="job_general_pose_isolation",
+        stage="plan",
+        scenario_id="general",
+        template_id="general_template",
+        metadata={
+            "requested_image_count": 2,
+            "ecommerce_creative_context": {
+                "professional_ecommerce_pose_contract": {
+                    "contract_version": "professional_ecommerce_pose_contract_v1",
+                    "owner": "professional_ecommerce_deliverable_pose_acceptance",
+                    "source": "explicit_user_pose_coverage_request",
+                    "required_pose_by_output": [
+                        {"output_index": 1, "pose_role": "seated_poolside"},
+                        {"output_index": 2, "pose_role": "standing_poolside"},
+                    ],
+                }
+            },
+        },
+    )
+
+    payload = json.loads(build_remote_payload(request))
+
+    assert "professional_ecommerce_pose_contract_instructions" not in payload
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "professional_ecommerce_pose_role" not in serialized
+    assert "standing_pose_requirements" not in serialized
+    assert "seated_poolside" not in serialized
+    assert "standing_poolside" not in serialized
+
+
+def test_professional_ecommerce_invalid_pose_contract_blocks_before_brain() -> None:
+    brain_request = V3LLMBrainAdapter().build_request(
+        user_input="Create exactly two poolside product-on-model images.",
+        job_id="job_invalid_pose_contract",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata={
+            "requested_image_count": 2,
+            "real_image_generation": True,
+            "professional_product_truth_required": True,
+            "professional_product_model_planning": True,
+            "ecommerce_creative_context": {
+                "professional_ecommerce_pose_contract": None,
+            },
+        },
+    )
+
+    context = brain_request.metadata["ecommerce_creative_context"]
+    assert context["professional_ecommerce_pose_contract"] == {
+        "contract_version": "professional_ecommerce_pose_contract_v1",
+        "owner": "professional_ecommerce_deliverable_pose_acceptance",
+        "status": "invalid",
+    }
+    result = ScenarioRuntime._professional_ecommerce_pose_contract_result(brain_request)
+
+    assert result is not None
+    assert result.provider == "remote_required"
+    assert result.audit["professional_ecommerce_pose_contract_invalid"] is True
+    assert result.audit["creative_fallback_executed"] is False
 
 
 def test_professional_ecommerce_remote_payload_combines_apparel_and_product_selection_contracts() -> None:
