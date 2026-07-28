@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from ..scenario_packs.ecommerce.contracts import (
@@ -44,6 +44,12 @@ class BrainOutputEvidenceContract(V3BaseModel):
 
     output_index: int = Field(ge=1)
     evidence_dimensions: list[str] = Field(default_factory=list)
+    professional_body_proportion_requirement: Literal[
+        "not_required",
+        "visible_body_required",
+        "full_body_required",
+    ] | None = None
+    professional_body_view_kind: Literal["front_full", "side_full", "rear_full"] | None = None
     product_truth_selection_role: str | None = None
     selected_product_truth_asset_ids: list[str] = Field(default_factory=list, max_length=2)
     professional_ecommerce_pose_role: ProfessionalEcommercePoseRole | None = None
@@ -51,6 +57,21 @@ class BrainOutputEvidenceContract(V3BaseModel):
     standing_presentation_requirements: list[ProfessionalEcommerceStandingPresentationRequirement] = Field(
         default_factory=list
     )
+
+    @model_validator(mode="after")
+    def validate_professional_body_receipt(self) -> "BrainOutputEvidenceContract":
+        requirement = self.professional_body_proportion_requirement
+        view_kind = self.professional_body_view_kind
+        if requirement is None:
+            if view_kind is not None:
+                raise ValueError("professional_body_view_kind requires a body proportion requirement")
+            return self
+        if requirement == "not_required":
+            if view_kind is not None:
+                raise ValueError("not_required body proportion receipt must not carry a body view")
+        elif view_kind is None:
+            raise ValueError("visible/full body proportion receipt requires a body view")
+        return self
 
 
 class BrainImageSetPlan(V3BaseModel):

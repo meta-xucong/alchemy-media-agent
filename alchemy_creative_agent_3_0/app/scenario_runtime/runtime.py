@@ -2316,6 +2316,8 @@ class ScenarioRuntime:
                 }
 
         signing_metadata: dict[str, Any] = {"canonical_prompt_context": canonical_prompt_context}
+        if self._canonical_context_has_professional_body_contract(canonical_prompt_context):
+            signing_metadata["professional_body_proportion_receipt_required"] = True
         if request.trusted_professional_anchor_view_decision_reuse:
             trusted_reuse = request.metadata.get(
                 "trusted_professional_anchor_view_decision_reuse"
@@ -2808,6 +2810,9 @@ class ScenarioRuntime:
                             "professional_ecommerce_pose_role",
                             "professional_ecommerce_pose_acceptance",
                             "professional_ecommerce_pose_contract_source",
+                            "professional_body_proportion_requirement",
+                            "professional_body_view_kind",
+                            "professional_body_proportion_contract_source",
                             "specialized_role_key",
                         }
                     },
@@ -3659,6 +3664,11 @@ class ScenarioRuntime:
             brain_result=brain_result,
             expected_count=expected,
         )
+        professional_body_contract_by_output = self._validated_professional_body_proportion_contract_by_output(
+            request=request,
+            brain_result=brain_result,
+            expected_count=expected,
+        )
         role_recipes = (
             specialized_plan.execution_plan.get("role_recipes", [])
             if specialized_plan is not None and isinstance(specialized_plan.execution_plan, dict)
@@ -3728,6 +3738,16 @@ class ScenarioRuntime:
                 deliverable_metadata["professional_ecommerce_pose_role"] = pose_contract["pose_role"]
                 deliverable_metadata["professional_ecommerce_pose_acceptance"] = dict(pose_contract)
                 deliverable_metadata["professional_ecommerce_pose_contract_source"] = (
+                    "remote_brain_image_set_plan.evidence_dimensions_by_output"
+                )
+            body_contract = professional_body_contract_by_output.get(index)
+            if body_contract:
+                deliverable_metadata["professional_body_proportion_requirement"] = body_contract[
+                    "requirement"
+                ]
+                if body_contract.get("body_view_kind") is not None:
+                    deliverable_metadata["professional_body_view_kind"] = body_contract["body_view_kind"]
+                deliverable_metadata["professional_body_proportion_contract_source"] = (
                     "remote_brain_image_set_plan.evidence_dimensions_by_output"
                 )
             deliverables.append(
@@ -3869,6 +3889,107 @@ class ScenarioRuntime:
         if sorted(resolved) != list(range(1, expected_count + 1)):
             raise CapabilityActivationError("professional_ecommerce_pose_contract_invalid")
         return resolved
+
+    @staticmethod
+    def _validated_professional_body_proportion_contract_by_output(
+        *,
+        request: ScenarioRuntimeRequest,
+        brain_result: BrainRunResult,
+        expected_count: int,
+    ) -> dict[int, dict[str, Any]]:
+        """Freeze Remote-Brain body proportion receipts for Professional outputs.
+
+        This only validates a typed per-output receipt.  It does not select a
+        Character Card image, infer body visibility from prompt text, or author
+        renderer wording; the native Professional planner must later map the
+        signed view kind to an active server-owned Body Silhouette slot.
+        """
+
+        metadata = dict(request.metadata or {})
+        if not ScenarioRuntime._professional_body_proportion_server_context(metadata):
+            return {}
+        raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
+        receipt_required = ScenarioRuntime._professional_body_proportion_receipt_required_from_server_context(metadata)
+        if not receipt_required and not any(
+            getattr(entry, "professional_body_proportion_requirement", None) is not None
+            or getattr(entry, "professional_body_view_kind", None) is not None
+            for entry in raw_entries
+        ):
+            return {}
+        if len(raw_entries) != expected_count:
+            raise CapabilityActivationError("professional_body_proportion_contract_missing_or_incomplete")
+        allowed_requirements = {"not_required", "visible_body_required", "full_body_required"}
+        allowed_views = {"front_full", "side_full", "rear_full"}
+        resolved: dict[int, dict[str, Any]] = {}
+        for entry in raw_entries:
+            index = getattr(entry, "output_index", None)
+            if type(index) is not int or index < 1 or index > expected_count or index in resolved:
+                raise CapabilityActivationError("professional_body_proportion_contract_invalid")
+            requirement = str(getattr(entry, "professional_body_proportion_requirement", "") or "").strip()
+            if requirement not in allowed_requirements:
+                raise CapabilityActivationError("professional_body_proportion_contract_missing_or_incomplete")
+            body_view_kind = getattr(entry, "professional_body_view_kind", None)
+            if requirement == "not_required":
+                if body_view_kind is not None:
+                    raise CapabilityActivationError("professional_body_proportion_contract_contradictory")
+                resolved[index] = {
+                    "requirement": requirement,
+                    "body_view_kind": None,
+                    "source": "remote_brain_image_set_plan.evidence_dimensions_by_output",
+                }
+                continue
+            view = str(body_view_kind or "").strip()
+            if view not in allowed_views:
+                raise CapabilityActivationError("professional_body_proportion_contract_view_invalid")
+            resolved[index] = {
+                "requirement": requirement,
+                "body_view_kind": view,
+                "source": "remote_brain_image_set_plan.evidence_dimensions_by_output",
+            }
+        if sorted(resolved) != list(range(1, expected_count + 1)):
+            raise CapabilityActivationError("professional_body_proportion_contract_invalid")
+        return resolved
+
+    @staticmethod
+    def _professional_body_proportion_receipt_required_from_server_context(
+        metadata: dict[str, Any],
+    ) -> bool:
+        """Trust body-proportion receipts only from native Professional binding resolution."""
+
+        if metadata.get("professional_body_proportion_receipt_required") is not True:
+            return False
+        return ScenarioRuntime._professional_body_proportion_server_context(metadata)
+
+    @staticmethod
+    def _professional_body_proportion_server_context(metadata: dict[str, Any]) -> bool:
+        """Recognize the server-owned Professional body projection context."""
+
+        raw_mode = metadata.get("professional_mode")
+        mode = "professional" if raw_mode is True else str(raw_mode or "").strip().lower()
+        if mode != "professional":
+            return False
+        if metadata.get("local_mcp_professional_relay") is not True:
+            return False
+        if metadata.get("professional_body_proportion_contract_source") != "server_owned_professional_binding_resolver":
+            return False
+        return isinstance(metadata.get("professional_mode_binding_record"), dict)
+
+    @staticmethod
+    def _canonical_context_has_professional_body_contract(context: dict[str, Any]) -> bool:
+        """Detect an already-validated frozen body-proportion receipt."""
+
+        for deliverable in context.get("deliverables", []):
+            if not isinstance(deliverable, dict):
+                continue
+            metadata = deliverable.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            if (
+                metadata.get("professional_body_proportion_requirement") is not None
+                or metadata.get("professional_body_view_kind") is not None
+            ):
+                return True
+        return False
 
     def _validated_ecommerce_product_truth_selection_by_output(
         self,
@@ -5709,7 +5830,10 @@ class ScenarioRuntime:
             # payloads remain local provenance and never become Brain input.
             safe_binding = request.metadata.get("professional_mode_binding")
             safe_admission = request.metadata.get("professional_planning_metadata")
-            base_metadata.pop("professional_mode_binding_record", None)
+            # Keep the raw binding snapshot available to the adapter's local
+            # trust gate.  build_request() exposes only public-safe typed
+            # markers to the remote Brain; the binding record itself must not
+            # cross that boundary.
             base_metadata.pop("professional_reference_channel_plans", None)
             base_metadata.pop("professional_planning_metadata", None)
             base_metadata["professional_mode"] = True

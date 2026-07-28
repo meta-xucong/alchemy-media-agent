@@ -31,6 +31,7 @@ class ProfessionalBindingResolution:
 
     binding: ProfessionalModeBinding
     identity_references: tuple[NativeReferenceInput, ...] = ()
+    body_references: tuple[NativeReferenceInput, ...] = ()
     binding_snapshot: FrozenVisualAssetBindingSet | None = None
     professional_identity_hints_by_output: dict[int, dict[str, str]] | None = None
 
@@ -41,6 +42,12 @@ _FACE_SLOT_SELECTOR_BY_KEY = {
     "face.profile": "face_profile",
     "face.reverse_three_quarter": "face_reverse_three_quarter",
     "face.rear_head": "face_rear_head",
+}
+
+_BODY_VIEW_KIND_BY_SLOT_KEY = {
+    "body.front_full": "front_full",
+    "body.side_full": "side_full",
+    "body.rear_full": "rear_full",
 }
 
 
@@ -205,6 +212,38 @@ def visual_asset_library_professional_binding_resolver(
                     server_owned=True,
                 )
             )
+        body_references: list[NativeReferenceInput] = []
+        for slot_key, body_view_kind in _BODY_VIEW_KIND_BY_SLOT_KEY.items():
+            slot = card.body_slots.get(slot_key)
+            if (
+                slot is None
+                or slot.state != "active"
+                or not slot.output_id
+                or not slot.review_verified
+                or not slot.prompt_reference_parity_verified
+                or slot.formal_slot_receipt is None
+            ):
+                continue
+            output_id = str(slot.output_id)
+            image_path = output_root / output_id / "original.png"
+            output_reference = _validated_output_reference(
+                output_id,
+                image_path=image_path,
+            )
+            if output_reference is None:
+                continue
+            image_path, digest = output_reference
+            body_references.append(
+                NativeReferenceInput(
+                    channel="body_proportion_reference",
+                    file_path=str(image_path.resolve()),
+                    source_sha256=digest,
+                    source_asset_id=output_id,
+                    output_id=output_id,
+                    server_owned=True,
+                    body_view_kind=body_view_kind,
+                )
+            )
         face_module_id = (
             card.face_identity_version_id
             or asset.active_version_id
@@ -221,6 +260,7 @@ def visual_asset_library_professional_binding_resolver(
         return ProfessionalBindingResolution(
             binding=binding,
             identity_references=tuple(identity_references),
+            body_references=tuple(body_references),
             binding_snapshot=binding_snapshot,
         )
 

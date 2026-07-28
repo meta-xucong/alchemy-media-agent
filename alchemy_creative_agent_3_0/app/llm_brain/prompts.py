@@ -283,6 +283,27 @@ def _professional_ecommerce_pose_contract(ecommerce_context: dict[str, object] |
     return raw if isinstance(raw, dict) else None
 
 
+def _requires_professional_body_proportion_receipt(request: BrainRunRequest) -> bool:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    if metadata.get("professional_body_proportion_receipt_required") is not True:
+        return False
+    context = metadata.get("professional_body_proportion_server_context")
+    if isinstance(context, dict):
+        metadata = context
+    raw_mode = metadata.get("professional_mode")
+    mode = "professional" if raw_mode is True else str(raw_mode or "").strip().lower()
+    if mode != "professional":
+        return False
+    if metadata.get("local_mcp_professional_relay") is not True:
+        return False
+    if (
+        metadata.get("professional_body_proportion_contract_source")
+        != "server_owned_professional_binding_resolver"
+    ):
+        return False
+    return isinstance(metadata.get("professional_mode_binding_record"), dict)
+
+
 def _product_truth_reference_budget(ecommerce_context: dict[str, object] | None) -> int | None:
     if not isinstance(ecommerce_context, dict):
         return None
@@ -306,6 +327,7 @@ def _image_set_evidence_dimensions_schema(
     requires_product_truth_selection: bool,
     product_truth_reference_budget: int | None = None,
     professional_ecommerce_pose_contract: dict[str, object] | None = None,
+    requires_professional_body_proportion_receipt: bool = False,
 ) -> list[dict[str, object]]:
     schema: dict[str, object] = {
         "output_index": (
@@ -340,6 +362,14 @@ def _image_set_evidence_dimensions_schema(
             )
         schema["product_truth_selection_role"] = role_contract
         schema["selected_product_truth_asset_ids"] = [selection_contract]
+    if requires_professional_body_proportion_receipt:
+        schema["professional_body_proportion_requirement"] = (
+            "closed Professional body receipt; exactly one of not_required|visible_body_required|full_body_required"
+        )
+        schema["professional_body_view_kind"] = (
+            "front_full|side_full|rear_full when requirement is visible_body_required or full_body_required; "
+            "null or absent when requirement is not_required"
+        )
     if professional_ecommerce_pose_contract:
         schema["professional_ecommerce_pose_role"] = (
             "closed pose role required by ecommerce_creative_context.professional_ecommerce_pose_contract; "
@@ -588,11 +618,13 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         )
         requires_product_truth_selection = _requires_product_truth_selection(request)
         professional_ecommerce_pose_contract = _professional_ecommerce_pose_contract(ecommerce_context)
+        requires_professional_body_proportion_receipt = _requires_professional_body_proportion_receipt(request)
         compact_schema = _compact_required_remote_creative_schema()
         if (
             requires_apparel_evidence_dimensions
             or requires_product_truth_selection
             or professional_ecommerce_pose_contract
+            or requires_professional_body_proportion_receipt
         ):
             compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = (
                 _image_set_evidence_dimensions_schema(
@@ -601,6 +633,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
                     requires_product_truth_selection=requires_product_truth_selection,
                     product_truth_reference_budget=_product_truth_reference_budget(ecommerce_context),
                     professional_ecommerce_pose_contract=professional_ecommerce_pose_contract,
+                    requires_professional_body_proportion_receipt=requires_professional_body_proportion_receipt,
                 )
             )
         payload["return_schema"] = compact_schema
@@ -776,10 +809,15 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         requested_image_count=request.requested_image_count,
     )
     requires_product_truth_selection = _requires_product_truth_selection(request)
+    requires_professional_body_proportion_receipt = _requires_professional_body_proportion_receipt(request)
     if isinstance(ecommerce_context, dict) and ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
-    if requires_apparel_evidence_dimensions or requires_product_truth_selection:
+    if (
+        requires_apparel_evidence_dimensions
+        or requires_product_truth_selection
+        or requires_professional_body_proportion_receipt
+    ):
         selection_instruction_parts = []
         if requires_apparel_evidence_dimensions:
             selection_instruction_parts.append(APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS)
@@ -798,6 +836,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
                 product_truth_reference_budget=_product_truth_reference_budget(
                     ecommerce_context if isinstance(ecommerce_context, dict) else None
                 ),
+                requires_professional_body_proportion_receipt=requires_professional_body_proportion_receipt,
             )
         )
     photography_context = request.metadata.get("photography_creative_context")

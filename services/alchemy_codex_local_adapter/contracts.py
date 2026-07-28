@@ -47,8 +47,15 @@ _ALLOWED_REFERENCE_FIELDS = {"channel", "file_path"}
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_]{1,95}$")
 _SENSITIVE_KEY_FRAGMENTS = ("apikey", "secret", "token", "password", "authorization", "credential")
 _HARD_REFERENCE_CHANNELS = frozenset(
-    {"portrait_identity", "selected_identity_reference", "product_truth", "nonhuman_identity"}
+    {
+        "portrait_identity",
+        "selected_identity_reference",
+        "body_proportion_reference",
+        "product_truth",
+        "nonhuman_identity",
+    }
 )
+_BODY_VIEW_KINDS = frozenset({"front_full", "side_full", "rear_full"})
 
 
 class CodexNativeImageGenError(RuntimeError):
@@ -108,6 +115,25 @@ class NativeReferenceInput:
     source_asset_id: str | None = None
     output_id: str | None = None
     server_owned: bool = False
+    body_view_kind: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.channel == "body_proportion_reference":
+            if self.body_view_kind not in _BODY_VIEW_KINDS:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_body_view_invalid",
+                    "Server-owned body proportion references require a closed body view kind.",
+                )
+            if not self.server_owned:
+                raise CodexNativeImageGenError(
+                    "codex_native_imagegen_body_reference_forbidden",
+                    "Body proportion references are accepted only from the server-owned Professional resolver.",
+                )
+        elif self.body_view_kind is not None:
+            raise CodexNativeImageGenError(
+                "codex_native_imagegen_body_view_invalid",
+                "Body view kind is valid only for server-owned body proportion references.",
+            )
 
     @property
     def required(self) -> bool:
@@ -554,6 +580,7 @@ def reference_role_for_channel(channel: str) -> str:
         # for reviewed generated winners.  The channel name keeps the source
         # ownership explicit without inventing a new shared asset enum.
         "selected_identity_reference": "face_reference",
+        "body_proportion_reference": "body_proportion_reference",
         "product_truth": "product_reference",
         "nonhuman_identity": "nonhuman_identity_reference",
         "style_reference": "style_reference",

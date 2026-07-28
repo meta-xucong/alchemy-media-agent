@@ -2302,6 +2302,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
     def _reference_evidence_role(self, role: str, use_policy: str) -> str:
         value = f"{role} {use_policy}".lower()
+        if role.strip().lower() == "body_proportion_reference":
+            return "body_proportion_reference"
         if "nonhuman_identity_reference" in value or "nonhuman_subject_identity" in value:
             return "nonhuman_subject_identity"
         if any(term in value for term in ("face", "portrait", "identity", "person", "character")):
@@ -2461,6 +2463,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "truth_layers": truth_layers,
                         "provider_reference_derivative": True,
                         "derivative_kind": derivative.get("derivative_kind"),
+                        "body_view_kind": derivative.get("body_view_kind"),
+                        "body_reference_policy": derivative.get("body_reference_policy"),
+                        "forbidden_inheritance_channels": derivative.get("forbidden_inheritance_channels") or [],
                         "fallback_to_original": bool(derivative.get("fallback_to_original")),
                         "identity_color_neutralized": bool(derivative.get("identity_color_neutralized")),
                         "identity_color_retention": derivative.get("identity_color_retention"),
@@ -2682,6 +2687,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "derivative_kind": item.get("derivative_kind"),
                         "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
                         "fallback_to_original": bool(item.get("fallback_to_original")),
+                        "body_view_kind": item.get("body_view_kind"),
+                        "body_reference_policy": item.get("body_reference_policy"),
+                        "forbidden_inheritance_channels": item.get("forbidden_inheritance_channels") or [],
                     }
                     for item in assets
                     if item.get("provider_input_mode") == "reference_image"
@@ -2912,6 +2920,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         product_or_appearance_truth = bool(
             {"product_identity_truth", "structured_appearance_truth"} & set(truth_layers)
         )
+        if "body_proportion_truth" in truth_layers and usable_derivatives:
+            return {
+                "applies": True,
+                "reason_codes": ["professional_body_proportion_uses_body_only_derivative"],
+            }
         source_frame_channels = (
             "lighting_color",
             "scene_background",
@@ -2973,6 +2986,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "character_card_framing_reference_mode"
                     ),
                     "character_card_framing_mirrored": item.get("character_card_framing_mirrored"),
+                    "body_view_kind": item.get("body_view_kind"),
+                    "body_reference_policy": item.get("body_reference_policy"),
+                    "forbidden_inheritance_channels": item.get("forbidden_inheritance_channels") or [],
                 }
             )
         return resolved
@@ -3032,6 +3048,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 asset.get("codex_native_server_owned_reference")
                 or asset_metadata.get("codex_native_server_owned_reference")
             )
+            is_body_proportion = (
+                codex_native_server_owned
+                and codex_native_channel == "body_proportion_reference"
+                and str(asset.get("role") or "").strip().lower() == "body_proportion_reference"
+            )
             is_selected = self._is_selected_generated_source(asset)
             is_nonhuman = self._is_nonhuman_truth_reference(asset)
             is_product = self._is_product_truth_reference(asset, allow_product_language=allow_product_language)
@@ -3043,7 +3064,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             layers: list[str] = []
             priority_note = "style_or_context_reference"
             channel_policy = self._reference_channel_policy_for_asset(request, asset)
-            if (
+            if is_body_proportion:
+                layers = ["body_proportion_truth"]
+                priority_note = "professional_server_owned_body_proportion_truth"
+            elif (
                 professional_server_owned_identity_chain
                 and codex_native_server_owned
                 and codex_native_channel in {"portrait_identity", "selected_identity_reference"}
@@ -3138,6 +3162,40 @@ class ProductionImageGenerationProvider(GenerationProvider):
         reference_policy: dict[str, Any] | None = None,
         portrait_identity_derivative_kinds: tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
+        if "body_proportion_truth" in truth_layers:
+            path = str(asset.get("file_path") or "")
+            if not path:
+                return []
+            metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+            body_view_kind = str(
+                asset.get("body_view_kind")
+                or metadata.get("body_view_kind")
+                or metadata.get("professional_body_view_kind")
+                or ""
+            ).strip()
+            if body_view_kind not in {"front_full", "side_full", "rear_full"}:
+                return []
+            return [
+                {
+                    "derivative_kind": "body_proportion_reference",
+                    "truth_layer": "body_proportion_truth",
+                    "path": path,
+                    "path_name": asset.get("filename"),
+                    "body_view_kind": body_view_kind,
+                    "fallback_to_original": False,
+                    "body_reference_policy": "body_scale_neck_shoulder_torso_limb_developmental_stage_only",
+                    "forbidden_inheritance_channels": [
+                        "wardrobe",
+                        "pose",
+                        "lighting",
+                        "camera",
+                        "background",
+                        "expression",
+                        "scene",
+                        "product_identity",
+                    ],
+                }
+            ]
         provider_layers = [layer for layer in truth_layers if layer in {"portrait_identity_truth", "product_identity_truth", "structured_appearance_truth"}]
         if not provider_layers:
             return []
@@ -3182,8 +3240,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 # shared Provider reference budget.
                 return ("portrait_identity_crop",)
         if metadata.get("professional_identity_reference_strategy") == "visual_asset_library_product_model_v1":
-            if bool(asset.get("codex_native_server_owned_reference")):
-                return ()
+            asset_metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+            server_owned = bool(
+                asset.get("codex_native_server_owned_reference")
+                or asset_metadata.get("codex_native_server_owned_reference")
+            )
+            channel = str(
+                asset.get("codex_native_reference_channel")
+                or asset_metadata.get("codex_native_reference_channel")
+                or ""
+            ).strip()
+            if server_owned and channel in {"portrait_identity", "selected_identity_reference"}:
+                if metadata.get("professional_body_proportion_projection_active") is True:
+                    return ("portrait_identity_crop",)
+                return None
             return None
         if metadata.get("professional_identity_reference_strategy") != "serial_anchor_pack_root_reuse_v1":
             return None
@@ -3554,6 +3624,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
         layer = str(truth_layer or "")
         if layer == "portrait_identity_truth":
             return "portrait_identity"
+        if layer == "body_proportion_truth":
+            return "body_proportion_reference"
         if layer == "nonhuman_subject_identity_truth":
             return "subject_reference"
         if layer in {"product_identity_truth", "structured_appearance_truth"}:
@@ -3565,6 +3637,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         source_bonus = 40 if self._is_uploaded_truth_source(asset) else 0
         base = {
             "portrait_identity_truth": 260,
+            "body_proportion_truth": 257,
             "nonhuman_subject_identity_truth": 258,
             "product_identity_truth": 255,
             "structured_appearance_truth": 250,
@@ -3595,6 +3668,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "head geometry, body proportions, distinctive markings or pattern, and visible coat, feather, scale, or surface character. "
                 "The prompt may change habitat, action, camera, lighting, color treatment, and finish, but must not replace the individual "
                 "or use the source habitat, lighting, or whole-image style as an unrequested template."
+            )
+        if layer == "body_proportion_truth":
+            return (
+                f"Reference truth layer from {filename}: Professional Body Silhouette body-proportion truth only. "
+                "Use only body scale, neck-to-shoulder transition, torso-to-limb proportion, and developmental-stage coherence. "
+                "Do not inherit wardrobe, pose, lighting, camera, background, expression, scene, or product identity from this reference."
             )
         if layer == "product_identity_truth":
             return (
@@ -3637,6 +3716,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "the requested head direction, visible ear relationship, forehead-to-midface-to-lower-face plane, cheek-to-jaw "
                 "silhouette, chin projection, neck entry, and shoulder/head-axis continuity. It is allowed to carry neutral "
                 "pose evidence, but ignore its hair styling, clothing, background, light, color grade, and whole-image style. "
+                + base
+            )
+        if kind == "body_proportion_reference":
+            return (
+                "Single body-only Professional Character Card evidence input: preserve body scale, neck/shoulder transition, "
+                "torso/limb proportion, and developmental-stage body coherence only. Ignore and do not copy its wardrobe, pose, "
+                "studio background, lighting, camera, expression, scene, or product appearance. "
                 + base
             )
         return base

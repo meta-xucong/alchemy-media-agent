@@ -7,7 +7,7 @@ import os
 import re
 import time
 from json import JSONDecodeError
-from typing import Any
+from typing import Any, Mapping
 
 from pydantic import ValidationError
 
@@ -641,6 +641,16 @@ class V3LLMBrainAdapter:
             request_metadata["professional_product_model_planning"] = bool(
                 metadata.get("professional_product_model_planning")
             )
+        if self._professional_body_proportion_receipt_required(metadata):
+            request_metadata["professional_body_proportion_receipt_required"] = True
+            request_metadata["professional_body_proportion_server_context"] = {
+                "professional_mode": "professional",
+                "local_mcp_professional_relay": True,
+                "professional_body_proportion_contract_source": "server_owned_professional_binding_resolver",
+                "professional_mode_binding_record": {
+                    "server_owned_binding_resolver_validated": True,
+                },
+            }
         if ecommerce_creative_context:
             # Deliberately absent from General and Photography requests.
             request_metadata["ecommerce_creative_context"] = ecommerce_creative_context
@@ -678,6 +688,28 @@ class V3LLMBrainAdapter:
             pre_activation_capabilities=dict(pre_activation_capabilities or {}),
             template_capability_policy=template_capability_policy or general_capability_policy(),
         )
+
+    @staticmethod
+    def _professional_body_proportion_receipt_required(metadata: Mapping[str, Any]) -> bool:
+        """Expose body-proportion receipt only from server-owned Professional planning.
+
+        Public metadata can contain arbitrary keys, so the Brain payload must
+        not trust a lone boolean.  The native Professional planner sets the
+        relay marker, binding record, and closed source marker after resolving
+        a server-owned Character Card binding.
+        """
+
+        if metadata.get("professional_body_proportion_receipt_required") is not True:
+            return False
+        raw_mode = metadata.get("professional_mode")
+        mode = "professional" if raw_mode is True else str(raw_mode or "").strip().lower()
+        if mode != "professional":
+            return False
+        if metadata.get("local_mcp_professional_relay") is not True:
+            return False
+        if metadata.get("professional_body_proportion_contract_source") != "server_owned_professional_binding_resolver":
+            return False
+        return isinstance(metadata.get("professional_mode_binding_record"), dict)
 
     def _activation_scope_enabled(self, request: BrainRunRequest) -> bool:
         if not request.template_capability_policy.brain_activation_enabled:
@@ -2943,6 +2975,8 @@ def _safe_validation_path(loc: Any, *, section: str) -> str:
         "image_set_plan.evidence_dimensions_by_output.item.output_index",
         "image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions",
         "image_set_plan.evidence_dimensions_by_output.item.evidence_dimensions.item",
+        "image_set_plan.evidence_dimensions_by_output.item.professional_body_proportion_requirement",
+        "image_set_plan.evidence_dimensions_by_output.item.professional_body_view_kind",
         "image_set_plan.evidence_dimensions_by_output.item.product_truth_selection_role",
         "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids",
         "image_set_plan.evidence_dimensions_by_output.item.selected_product_truth_asset_ids.item",

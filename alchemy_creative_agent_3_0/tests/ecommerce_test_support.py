@@ -566,8 +566,13 @@ def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
         isinstance(request.metadata, dict)
         and request.metadata.get("professional_product_truth_required")
     )
+    requires_body_proportion_receipt = bool(
+        isinstance(request.metadata, dict)
+        and request.metadata.get("professional_body_proportion_receipt_required")
+    )
     if (
         not requires_product_truth_selection
+        and not requires_body_proportion_receipt
         and (not isinstance(profile, dict) or not profile.get("applies") or count <= 1)
     ):
         return []
@@ -590,6 +595,8 @@ def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
             entry["selected_product_truth_asset_ids"] = [
                 product_truth_ids[(index - 1) % len(product_truth_ids)]
             ]
+        if requires_body_proportion_receipt:
+            entry["professional_body_proportion_requirement"] = "not_required"
         pose_contract = pose_contract_by_output.get(index)
         if pose_contract:
             entry["professional_ecommerce_pose_role"] = pose_contract.get("pose_role")

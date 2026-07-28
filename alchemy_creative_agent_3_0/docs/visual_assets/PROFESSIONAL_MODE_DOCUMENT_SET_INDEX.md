@@ -5,7 +5,7 @@
 ```text
 DOC173_LIBRARY_FIRST_RECONSTRUCTION_AUTHORITATIVE
 DOC178_CHARACTER_CARD_MODULE_EXTENSION_AUTHORITATIVE
-PROFESSIONAL_BODY_PROPORTION_RUNTIME_PROJECTION_DOCUMENTED_APPROVED_IMPLEMENTATION_PENDING
+PROFESSIONAL_BODY_PROPORTION_RUNTIME_PROJECTION_IMPLEMENTED_DETERMINISTIC_TESTS_PENDING_PLANNING_VISUAL_ACCEPTANCE
 DOC182_CHARACTER_CARD_RESUMABLE_FAILURE_RECOVERY_AUTHORITATIVE
 LEGACY_PROJECT_SCOPED_COMPATIBILITY_RETAINED_READ_ONLY
 FRONTEND_RECONSTRUCTION_REQUIRED
@@ -18,10 +18,12 @@ is intentionally unnumbered and lives under `docs/visual_assets/`. It does not
 rename, edit, supersede, or reinterpret the existing numbered V3 documents.
 
 The Body Proportion Runtime Projection design document has passed its
-document-only review gate. Runtime implementation, deterministic tests,
-planning-only materialization audit, and per-module controlled visual review
-remain pending; the current runtime must not be described as having completed
-Professional full/visible-body Body Silhouette projection.
+document-only review gate. A scoped runtime implementation feature branch has
+implemented typed body projection and deterministic regression tests, but
+reviewer merge approval, planning-only materialization audit, and per-module
+controlled visual review remain pending. The current mainline runtime must not
+be described as having completed Professional full/visible-body Body Silhouette
+projection until those gates pass.
 
 The forward product model is **Visual Asset Library first**: users build and
 explicitly activate reusable assets in a dedicated library, then optionally
@@ -158,14 +160,16 @@ Visual Asset's owned channels.
 
 `PROFESSIONAL_MODE_BODY_PROPORTION_RUNTIME_PROJECTION_DESIGN.md`
 
-Documents the proposed runtime-only projection for existing active Character
-Card Body Silhouette evidence into Professional visible/full-body image
-outputs. It does not change Doc178 Body Silhouette generation, slots, review,
-activation, or asset storage. It narrows historical Face-Identity-only
-Professional runtime wording: root portrait plus selected face winner remains
-valid for face-only and upper-body/detail outputs, but visible/full-body
-Professional outputs require a body-only reference admission gate or must be
-blocked/marked uncertified before Host.
+Documents the approved runtime-only projection design for existing active
+Character Card Body Silhouette evidence into Professional visible/full-body
+image outputs. The current feature branch has implemented the typed runtime
+projection and deterministic regression tests, while planning-only and
+controlled visual acceptance remain pending. It does not change Doc178 Body
+Silhouette generation, slots, review, activation, or asset storage. It narrows
+historical Face-Identity-only Professional runtime wording: root portrait plus
+selected face winner remains valid for face-only and local detail outputs, but
+visible/full-body Professional outputs require a body-only reference admission
+gate or must be blocked/marked uncertified before Host.
 
 ### M5 Real-Pixel Acceptance Record
 

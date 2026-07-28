@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from alchemy_creative_agent_3_0.app.generation_router import (
     ProductionImageGenerationProvider,
@@ -23,6 +24,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 from alchemy_creative_agent_3_0.app.generation_router.providers import ProviderPromptMaterialization
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
+from alchemy_creative_agent_3_0.app.llm_brain.contracts import BrainOutputEvidenceContract
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import (
@@ -388,6 +390,34 @@ def _face_receipt(*, role: str, output_id: str) -> FormalSlotReceipt:
     )
 
 
+def _body_receipt(*, slot_key: str, output_id: str) -> FormalSlotReceipt:
+    candidates = [
+        FormalSlotCandidateSummary(
+            candidate_index=index,
+            candidate_id=f"candidate_{slot_key.replace('.', '_')}_{index}",
+            output_id=f"output_{slot_key.replace('.', '_')}_{index}" if index != 3 else output_id,
+            reviewed=True,
+            selected_as_winner=index == 3,
+            shared_review=_shared_review_summary(),
+        )
+        for index in (1, 2, 3)
+    ]
+    return FormalSlotReceipt(
+        module="body_silhouette",
+        slot_key=slot_key,
+        acceptance_mode="standard_three_candidate",
+        reviewed_candidate_count=3,
+        candidates=candidates,
+        winner_candidate_id=f"candidate_{slot_key.replace('.', '_')}_3",
+        winner_output_id=output_id,
+        winner_shared_review=candidates[2].shared_review,
+        framing_summary=_requirement_summary("body_silhouette_framing_verified"),
+        parity_summary=_requirement_summary("body_silhouette_reference_parity_verified"),
+        identity_summary=_requirement_summary("body_silhouette_identity_continuity_verified"),
+        reload_public_projection_verified=True,
+    )
+
+
 def _write_root_upload_evidence(
     repository_root: Path,
     *,
@@ -423,6 +453,9 @@ def _library_with_active_front(
     project_id: str = "project_professional",
     root_source_id: str = "v3_asset_root",
     output_id: str = "v3_output_front",
+    include_body: bool = False,
+    body_output_id: str = "v3_output_body_front_full",
+    body_slot_key: str = "body.front_full",
     bind_to_project: bool = True,
 ):
     library_root = repository_root / ".media_storage" / "v3_visual_asset_library"
@@ -471,12 +504,54 @@ def _library_with_active_front(
     )
     updated_slots = dict(card.face_slots)
     updated_slots["face.front"] = front_slot
+    updated_body_slots = dict(card.body_slots)
+    if include_body:
+        body_original = _write_png(
+            library_root.parent / "v3_outputs" / body_output_id / "original.png",
+            color=(86, 129, 164),
+        )
+        (body_original.parent / "output.json").write_text(
+            json.dumps(
+                {
+                    "output_id": body_output_id,
+                    "file_path": str(body_original.resolve()),
+                    "metadata": {"output_sha256": _sha256(body_original)},
+                }
+            ),
+            encoding="utf-8",
+        )
+        updated_body_slots[body_slot_key] = CharacterCardSlot(
+            slot_key=body_slot_key,
+            module="body_silhouette",
+            state="active",
+            output_id=body_output_id,
+            source_candidate_ids=[
+                f"candidate_{body_slot_key.replace('.', '_')}_1",
+                f"candidate_{body_slot_key.replace('.', '_')}_2",
+                f"candidate_{body_slot_key.replace('.', '_')}_3",
+            ],
+            source_class="brain_inferred",
+            candidate_attempt_count=3,
+            review_verified=True,
+            prompt_reference_parity_verified=True,
+            formal_slot_receipt=_body_receipt(slot_key=body_slot_key, output_id=body_output_id).model_dump(mode="json"),
+        )
     updated_card = card.model_copy(
         update={
             "face_identity_status": "active",
             "face_identity_version_id": "face_v1",
+            **(
+                {
+                    "body_silhouette_status": "active",
+                    "body_silhouette_version_id": "body_v1",
+                    "body_activation_confirmed": True,
+                }
+                if include_body
+                else {}
+            ),
             "user_activation_confirmed": True,
             "face_slots": updated_slots,
+            "body_slots": updated_body_slots,
         }
     )
     updated = activated.model_copy(
@@ -603,6 +678,94 @@ def test_professional_ecommerce_product_refs_do_not_infer_serial_identity_stage(
     assert [item.channel for item in request.reference_inputs] == ["product_truth"]
 
 
+def test_professional_body_receipt_contract_rejects_contradictory_view() -> None:
+    BrainOutputEvidenceContract.model_validate(
+        {
+            "output_index": 1,
+            "evidence_dimensions": [],
+            "professional_body_proportion_requirement": "not_required",
+        }
+    )
+    BrainOutputEvidenceContract.model_validate(
+        {
+            "output_index": 1,
+            "evidence_dimensions": [],
+            "professional_body_proportion_requirement": "visible_body_required",
+            "professional_body_view_kind": "front_full",
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        BrainOutputEvidenceContract.model_validate(
+            {
+                "output_index": 1,
+                "evidence_dimensions": [],
+                "professional_body_proportion_requirement": "not_required",
+                "professional_body_view_kind": "front_full",
+            }
+        )
+    with pytest.raises(ValidationError):
+        BrainOutputEvidenceContract.model_validate(
+            {
+                "output_index": 1,
+                "evidence_dimensions": [],
+                "professional_body_proportion_requirement": "visible_body_required",
+            }
+        )
+
+
+def test_professional_body_reference_is_internal_only_and_closed_view(
+    tmp_path: Path,
+) -> None:
+    body = _write_png(tmp_path / "body.png")
+    trusted = NativeReferenceInput(
+        channel="body_proportion_reference",
+        file_path=str(body),
+        source_sha256=_sha256(body),
+        source_asset_id="v3_output_body_front_full",
+        server_owned=True,
+        body_view_kind="front_full",
+    )
+    assert trusted.body_view_kind == "front_full"
+
+    with pytest.raises(CodexNativeImageGenError) as bad_view:
+        NativeReferenceInput(
+            channel="body_proportion_reference",
+            file_path=str(body),
+            source_sha256=_sha256(body),
+            source_asset_id="v3_output_body_bad",
+            server_owned=True,
+            body_view_kind="diagonal_full",
+        )
+    assert bad_view.value.code == "codex_native_imagegen_body_view_invalid"
+
+    with pytest.raises(CodexNativeImageGenError) as public_body:
+        NativeReferenceInput(
+            channel="body_proportion_reference",
+            file_path=str(body),
+            source_sha256=_sha256(body),
+            source_asset_id="v3_output_body_public",
+            server_owned=False,
+            body_view_kind="front_full",
+        )
+    assert public_body.value.code == "codex_native_imagegen_body_reference_forbidden"
+
+    with pytest.raises(CodexNativeImageGenError) as public_mcp:
+        NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+            _arguments(
+                body,
+                reference_inputs=[
+                    {
+                        "channel": "portrait_identity",
+                        "file_path": str(body),
+                        "body_view_kind": "front_full",
+                    }
+                ],
+            )
+        )
+    assert public_mcp.value.code == "codex_native_imagegen_reference_input_invalid"
+
+
 def test_visual_asset_library_resolver_requires_verified_root_truth(
     tmp_path: Path,
 ) -> None:
@@ -628,6 +791,7 @@ def test_visual_asset_library_resolver_projects_root_and_stable_view_selectors(
         tmp_path,
         root_source_id=root_source_id,
         output_id=output_id,
+        include_body=True,
     )
 
     resolver = visual_asset_library_professional_binding_resolver(library_root)
@@ -650,6 +814,10 @@ def test_visual_asset_library_resolver_projects_root_and_stable_view_selectors(
         output_id,
     ]
     assert all(item.server_owned is True for item in resolved.identity_references)
+    assert [item.channel for item in resolved.body_references] == ["body_proportion_reference"]
+    assert [item.asset_id for item in resolved.body_references] == ["v3_output_body_front_full"]
+    assert [item.body_view_kind for item in resolved.body_references] == ["front_full"]
+    assert all(item.server_owned is True for item in resolved.body_references)
     assert resolver(
         project_id="project_professional",
         people_asset_id=asset.visual_asset_id,
@@ -692,6 +860,7 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         tmp_path,
         root_source_id=root_source_id,
         output_id=output_id,
+        include_body=True,
     )
     product_a = _write_png(tmp_path / "product-front.png", color=(80, 145, 210))
     product_b = _write_png(tmp_path / "product-back.png", color=(88, 150, 220))
@@ -749,12 +918,17 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     )
     contract = result["outputs"][0]["reference_input_contract"]
     assert contract["declared_reference_count"] == 4
-    # The canonical Provider materializer expands the two identity sources into
-    # feature-detail + geometry inputs, then admits the one selected product
-    # truth crop: 2*identity + 1*product = 5 renderer references.
+    # The default E-Commerce fixture is a face+product compatibility path.
+    # Even when a Body Silhouette exists in the active card, a frozen
+    # not_required receipt must not silently admit it.
     assert contract["admitted_reference_count"] == 5
     assert len(result["outputs"][0]["reference_image_paths"]) == 5
     assert contract["professional_identity_source_asset_ids"] == [root_source_id, output_id]
+    assert contract["professional_body_proportion_requirement"] == "not_required"
+    assert contract["professional_body_view_kind"] is None
+    assert contract["professional_body_source_asset_id"] is None
+    assert contract["admitted_body_proportion_source_asset_ids"] == []
+    assert contract["admitted_body_proportion_derivative_asset_ids"] == []
     assert contract["product_truth_pool_asset_ids"] == product_ids
     assert contract["product_truth_selection_role"] == "lifestyle_primary_product_view"
     assert contract["selected_product_truth_asset_ids"] == [product_ids[0]]
@@ -819,6 +993,8 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     deliverable_context = finalizer["metadata"]["canonical_prompt_context"]["deliverables"][0]
     assert deliverable_context["metadata"]["product_truth_selection_role"] == "lifestyle_primary_product_view"
     assert deliverable_context["metadata"]["selected_product_truth_asset_ids"] == [product_ids[0]]
+    assert deliverable_context["metadata"]["professional_body_proportion_requirement"] == "not_required"
+    assert "professional_body_view_kind" not in deliverable_context["metadata"]
     product_materialized_refs = [
         item
         for item in materialized_reference_assets
@@ -839,6 +1015,12 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         or "product_identity_truth" in list(item.get("truth_layers") or [])
         for item in product_materialized_refs
     )
+    body_materialized_refs = [
+        item
+        for item in materialized_reference_assets
+        if str(item.get("reference_truth_layer") or "") == "body_proportion_truth"
+    ]
+    assert body_materialized_refs == []
 
 
 def test_professional_ecommerce_poolside_pose_contract_is_frozen_and_projected(
@@ -1450,13 +1632,14 @@ def test_professional_ecommerce_two_selected_products_pass_when_materialized_cap
     )
     monkeypatch.setattr(
         CodexNativeImageGenPlanner,
-        "_professional_product_model_provider_budget",
+        "_professional_provider_reference_budget",
         staticmethod(
-            lambda server_owned_references: {
-                "contract_version": "professional_ecommerce_provider_reference_budget_v1",
+            lambda server_owned_references, **_kwargs: {
+                "contract_version": "professional_provider_reference_budget_v1",
                 "max_provider_reference_images": 5,
                 "identity_source_asset_ids": [item.asset_id for item in server_owned_references],
                 "identity_derivative_reference_count": 3,
+                "body_proportion_derivative_reference_count": 0,
                 "product_truth_derivative_reference_count_per_source": 1,
                 "max_product_truth_source_refs_per_output": 2,
                 "owner": "codex_native_professional_planner",
@@ -1514,12 +1697,13 @@ def test_professional_ecommerce_requires_provider_reference_budget_before_select
     )
     materializer_calls = 0
 
-    def invalid_budget(server_owned_references):  # noqa: ANN001
+    def invalid_budget(server_owned_references, **_kwargs):  # noqa: ANN001
         return {
-            "contract_version": "professional_ecommerce_provider_reference_budget_v1",
+            "contract_version": "professional_provider_reference_budget_v1",
             "max_provider_reference_images": 5,
             "identity_source_asset_ids": [item.asset_id for item in server_owned_references],
             "identity_derivative_reference_count": 4,
+            "body_proportion_derivative_reference_count": 0,
             "product_truth_derivative_reference_count_per_source": 1,
             "max_product_truth_source_refs_per_output": budget_value,
             "owner": "codex_native_professional_planner",
@@ -1533,7 +1717,7 @@ def test_professional_ecommerce_requires_provider_reference_budget_before_select
 
     monkeypatch.setattr(
         CodexNativeImageGenPlanner,
-        "_professional_product_model_provider_budget",
+        "_professional_provider_reference_budget",
         staticmethod(invalid_budget),
     )
     monkeypatch.setattr(

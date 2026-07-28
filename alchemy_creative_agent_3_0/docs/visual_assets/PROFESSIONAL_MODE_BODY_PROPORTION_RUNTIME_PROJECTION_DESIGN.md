@@ -1,9 +1,21 @@
 # Professional Mode Body-Proportion Runtime Projection Design
 
-Status: **document-only reviewer gate proposal; no code, planning-only run,
-Host/MCP/ImageGen call, business receipt, slot, activation, Character Card
-generation, Body preparation, slot review, activation, or asset-storage change
-is authorized by this document.**
+Status: **documented design approved; runtime implementation feature branch
+under reviewer audit.** The current feature work implements typed
+body-proportion projection and deterministic regression coverage for
+Professional `general_template`, `ecommerce_template`, and
+`photographer_template`, but it has not yet passed planning-only materialization
+audit or controlled per-module visual acceptance. No Host/MCP/ImageGen call,
+business receipt, slot, activation, Character Card generation, Body
+preparation, slot review, activation, or asset-storage change is authorized by
+this document.
+
+Implementation closure note (2026-07-28): the runtime feature branch now
+projects existing active Body Silhouette evidence through a body-only reference
+role/truth layer, validates per-output closed body receipts, and tests final
+materialized provider references for body role/view/count parity. This is not a
+production completion claim: planning-only evidence, controlled visual review,
+and reviewer merge approval remain pending.
 
 Scope: Professional runtime reference inheritance for existing active
 Character Card Body Silhouette evidence. This design covers the current native

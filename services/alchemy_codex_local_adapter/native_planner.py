@@ -78,6 +78,12 @@ _ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES = {
     "product_detail_or_print_view",
 }
 _ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE = "product_detail_or_print_view"
+_PROFESSIONAL_BODY_REQUIREMENTS = {
+    "not_required",
+    "visible_body_required",
+    "full_body_required",
+}
+_PROFESSIONAL_BODY_VIEW_KINDS = {"front_full", "side_full", "rear_full"}
 
 ProfessionalBindingResolver = Callable[..., ProfessionalModeBinding | ProfessionalBindingResolution | None]
 
@@ -367,6 +373,7 @@ class CodexNativeImageGenPlanner:
         if isinstance(binding_resolution, ProfessionalBindingResolution):
             binding = binding_resolution.binding
             server_owned_identity_references = tuple(binding_resolution.identity_references)
+            server_owned_body_references = tuple(binding_resolution.body_references)
             binding_snapshot = binding_resolution.binding_snapshot
             professional_identity_hints_by_output = (
                 binding_resolution.professional_identity_hints_by_output or {}
@@ -374,6 +381,7 @@ class CodexNativeImageGenPlanner:
         else:
             binding = binding_resolution
             server_owned_identity_references = ()
+            server_owned_body_references = ()
             binding_snapshot = None
             professional_identity_hints_by_output = {}
         if not isinstance(binding, ProfessionalModeBinding):
@@ -435,7 +443,10 @@ class CodexNativeImageGenPlanner:
                 "photographer_profile_binding": profile_binding.model_dump(mode="json"),
             }
         if professional_product_model:
-            provider_budget = self._professional_product_model_provider_budget(server_owned_identity_references)
+            provider_budget = self._professional_provider_reference_budget(
+                server_owned_identity_references,
+                body_proportion_reference_admitted=False,
+            )
             approved_view_kinds = professional_identity_view_kinds_from_selectors(
                 list(binding.identity_view_ids)
             )
@@ -443,6 +454,8 @@ class CodexNativeImageGenPlanner:
                 "professional_identity_reference_strategy": "visual_asset_library_product_model_v1",
                 "professional_product_model_planning": True,
                 "professional_product_truth_required": True,
+                "professional_body_proportion_receipt_required": True,
+                "professional_body_proportion_contract_source": "server_owned_professional_binding_resolver",
             }
             ecommerce_context = dict(metadata.get("ecommerce_creative_context") or {})
             ecommerce_context["provider_reference_budget"] = self._brain_safe_provider_reference_budget(
@@ -468,24 +481,27 @@ class CodexNativeImageGenPlanner:
                 )
             metadata["ecommerce_creative_context"] = ecommerce_context
         else:
-            anchor_preparation_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
-                view_role=request.professional_reference_stage or "standard_front"
-            )
-            professional_metadata = {
-                # The serial relay is a conversation-only projection of the
-                # formal anchor-preparation path, not an ordinary Professional
-                # delivery.  Reuse the typed server contract so the Remote
-                # Brain owns neutral capture and exact view resolution; never
-                # repair a missing capture decision with local prompt prose.
-                "professional_anchor_pack_preparation": True,
-                "professional_planning_metadata": anchor_preparation_metadata,
-                "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
-                **(
-                    {"professional_reference_stage": request.professional_reference_stage}
-                    if request.professional_reference_stage
-                    else {}
-                ),
-            }
+            if request.professional_reference_stage:
+                anchor_preparation_metadata = ProfessionalModeRuntimeBridge.anchor_pack_preparation_metadata(
+                    view_role=request.professional_reference_stage
+                )
+                professional_metadata = {
+                    # The serial relay is a conversation-only projection of the
+                    # formal anchor-preparation path, not an ordinary Professional
+                    # delivery.  Reuse the typed server contract so the Remote
+                    # Brain owns neutral capture and exact view resolution; never
+                    # repair a missing capture decision with local prompt prose.
+                    "professional_anchor_pack_preparation": True,
+                    "professional_planning_metadata": anchor_preparation_metadata,
+                    "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+                    "professional_reference_stage": request.professional_reference_stage,
+                }
+            else:
+                professional_metadata = {
+                    "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+                    "professional_body_proportion_receipt_required": True,
+                    "professional_body_proportion_contract_source": "server_owned_professional_binding_resolver",
+                }
         metadata.update(
             {
                 "professional_mode": "professional",
@@ -506,6 +522,7 @@ class CodexNativeImageGenPlanner:
             scenario_selection=scenario_selection,
             metadata=metadata,
             server_owned_references=server_owned_identity_references,
+            server_owned_body_references=server_owned_body_references,
         )
         if result.get("status") == "planned_for_codex_native_imagegen":
             identity_strategy = (
@@ -544,8 +561,10 @@ class CodexNativeImageGenPlanner:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _professional_product_model_provider_budget(
+    def _professional_provider_reference_budget(
         server_owned_references: tuple[NativeReferenceInput, ...],
+        *,
+        body_proportion_reference_admitted: bool = False,
     ) -> dict[str, Any]:
         # The shared Provider materializer expands each Professional identity
         # source into feature-detail and head-geometry provider derivatives.
@@ -553,15 +572,24 @@ class CodexNativeImageGenPlanner:
         # admission shape, not just raw source IDs.  Product truth inputs are
         # suppressed to focused product crops, so they currently consume one
         # provider input each.
-        identity_derivative_count = len(server_owned_references) * 2
+        identity_derivative_count = (
+            len(server_owned_references)
+            if body_proportion_reference_admitted
+            else len(server_owned_references) * 2
+        )
+        body_derivative_count = 1 if body_proportion_reference_admitted else 0
         max_refs = ProductionImageGenerationProvider.max_provider_reference_images
         return {
-            "contract_version": "professional_ecommerce_provider_reference_budget_v1",
+            "contract_version": "professional_provider_reference_budget_v1",
             "max_provider_reference_images": max_refs,
             "identity_source_asset_ids": [item.asset_id for item in server_owned_references],
             "identity_derivative_reference_count": identity_derivative_count,
+            "body_proportion_derivative_reference_count": body_derivative_count,
             "product_truth_derivative_reference_count_per_source": 1,
-            "max_product_truth_source_refs_per_output": max(0, max_refs - identity_derivative_count),
+            "max_product_truth_source_refs_per_output": max(
+                0,
+                max_refs - identity_derivative_count - body_derivative_count,
+            ),
             "owner": "codex_native_professional_planner",
             "basis": "provider_materialized_reference_derivative_count",
         }
@@ -574,6 +602,7 @@ class CodexNativeImageGenPlanner:
                 "contract_version",
                 "max_provider_reference_images",
                 "identity_derivative_reference_count",
+                "body_proportion_derivative_reference_count",
                 "product_truth_derivative_reference_count_per_source",
                 "max_product_truth_source_refs_per_output",
                 "owner",
@@ -640,8 +669,6 @@ class CodexNativeImageGenPlanner:
         identity_asset_ids = [item.asset_id for item in server_owned_references]
         product_truth_hashes = {item.asset_id: item.source_sha256 for item in product_truth_pool}
         generation_plans = {item.asset_id: item for item in planning_result.generation_plans}
-        provider_budget = self._professional_product_model_provider_budget(server_owned_references)
-        max_product_truth_refs = int(provider_budget["max_product_truth_source_refs_per_output"])
         selection_by_asset_id: dict[str, dict[str, Any]] = {}
         for index, asset in enumerate(planning_result.series_plan.assets, start=1):
             deliverable = deliverables[index - 1] if index <= len(deliverables) else {}
@@ -711,6 +738,14 @@ class CodexNativeImageGenPlanner:
                     "code": "codex_native_imagegen_product_truth_selection_invalid",
                     "message": "Professional E-Commerce planning may select two product truth references only for a detail or print output role.",
                 }
+            body_contract = self._professional_body_contract_from_deliverable(deliverable_metadata)
+            if body_contract.get("blocked"):
+                return body_contract
+            provider_budget = self._professional_provider_reference_budget(
+                server_owned_references,
+                body_proportion_reference_admitted=body_contract["requirement"] != "not_required",
+            )
+            max_product_truth_refs = int(provider_budget["max_product_truth_source_refs_per_output"])
             if len(selected) > max_product_truth_refs:
                 return {
                     "blocked": True,
@@ -742,11 +777,6 @@ class CodexNativeImageGenPlanner:
                     }
                 data["metadata"] = metadata
                 reference_assets.append(data)
-            final_hashes = [
-                str((item.get("metadata") or {}).get("source_integrity_id") or "")
-                for item in reference_assets
-                if isinstance(item, dict)
-            ]
             pose_acceptance = (
                 deliverable_metadata.get("professional_ecommerce_pose_acceptance")
                 if isinstance(deliverable_metadata.get("professional_ecommerce_pose_acceptance"), dict)
@@ -762,12 +792,17 @@ class CodexNativeImageGenPlanner:
                 "omitted_product_truth": omitted,
                 "identity_source_asset_ids": list(identity_asset_ids),
                 "provider_reference_budget": dict(provider_budget),
-                "final_reference_source_sha256": final_hashes,
                 "selection_policy": "remote_brain_structured_frozen_metadata_only",
             }
             if pose_acceptance and pose_role:
                 selection_audit["professional_ecommerce_pose_role"] = pose_role
                 selection_audit["professional_ecommerce_pose_acceptance"] = dict(pose_acceptance)
+            final_hashes = [
+                str((item.get("metadata") or {}).get("source_integrity_id") or "")
+                for item in reference_assets
+                if isinstance(item, dict)
+            ]
+            selection_audit["final_reference_source_sha256"] = final_hashes
             selection_by_asset_id[asset.asset_id] = {
                 **selection_audit,
                 "metadata_overrides": {
@@ -792,6 +827,109 @@ class CodexNativeImageGenPlanner:
             }
         return selection_by_asset_id
 
+    @staticmethod
+    def _professional_body_contract_from_deliverable(deliverable_metadata: dict[str, Any]) -> dict[str, Any]:
+        requirement = str(
+            deliverable_metadata.get("professional_body_proportion_requirement") or ""
+        ).strip()
+        raw_view = deliverable_metadata.get("professional_body_view_kind")
+        view_kind = str(raw_view or "").strip() if raw_view is not None else None
+        if requirement not in _PROFESSIONAL_BODY_REQUIREMENTS:
+            return {
+                "blocked": True,
+                "code": "codex_native_imagegen_professional_body_receipt_missing",
+                "message": "Professional visible/full-body planning requires a frozen body proportion receipt for every output.",
+            }
+        if requirement == "not_required":
+            if view_kind:
+                return {
+                    "blocked": True,
+                    "code": "codex_native_imagegen_professional_body_receipt_invalid",
+                    "message": "Professional body receipt cannot carry a body view when body evidence is not required.",
+                }
+            return {"requirement": requirement, "body_view_kind": None}
+        if view_kind not in _PROFESSIONAL_BODY_VIEW_KINDS:
+            return {
+                "blocked": True,
+                "code": "codex_native_imagegen_professional_body_view_invalid",
+                "message": "Professional visible/full-body planning requires a closed active Body Silhouette view kind.",
+            }
+        return {"requirement": requirement, "body_view_kind": view_kind}
+
+    @staticmethod
+    def _deliverables_have_professional_body_contract(deliverables: list[Any]) -> bool:
+        for deliverable in deliverables:
+            metadata = deliverable.get("metadata") if isinstance(deliverable, dict) else None
+            if not isinstance(metadata, dict):
+                continue
+            if (
+                metadata.get("professional_body_proportion_requirement") is not None
+                or metadata.get("professional_body_view_kind") is not None
+            ):
+                return True
+        return False
+
+    def _professional_body_projection_by_asset(
+        self,
+        *,
+        planning_result: Any,
+        deliverables: list[Any],
+        uploaded_assets: list[UploadedAssetInfo],
+        server_owned_body_references: tuple[NativeReferenceInput, ...],
+        existing_metadata_overrides_by_asset_id: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        body_by_view_kind = {
+            str(item.body_view_kind): item
+            for item in server_owned_body_references
+            if item.channel == "body_proportion_reference"
+            and item.body_view_kind in _PROFESSIONAL_BODY_VIEW_KINDS
+        }
+        existing_metadata_overrides_by_asset_id = dict(existing_metadata_overrides_by_asset_id or {})
+        base_reference_assets = [item.model_dump(mode="json") for item in uploaded_assets]
+        projection_by_asset_id: dict[str, dict[str, Any]] = {}
+        for index, asset in enumerate(planning_result.series_plan.assets, start=1):
+            asset_id = str(asset.asset_id)
+            deliverable = deliverables[index - 1] if index <= len(deliverables) else {}
+            deliverable_metadata = deliverable.get("metadata") if isinstance(deliverable, dict) else None
+            deliverable_metadata = dict(deliverable_metadata) if isinstance(deliverable_metadata, dict) else {}
+            body_contract = self._professional_body_contract_from_deliverable(deliverable_metadata)
+            if body_contract.get("blocked"):
+                return body_contract
+            selected_body_ref: NativeReferenceInput | None = None
+            if body_contract["requirement"] != "not_required":
+                selected_body_ref = body_by_view_kind.get(str(body_contract.get("body_view_kind") or ""))
+                if selected_body_ref is None:
+                    return {
+                        "blocked": True,
+                        "code": "codex_native_imagegen_professional_body_reference_missing",
+                        "message": "Professional visible/full-body output requires the exact active Body Silhouette view selected by the frozen receipt.",
+                    }
+            existing_overrides = dict(existing_metadata_overrides_by_asset_id.get(asset_id) or {})
+            existing_reference_assets = existing_overrides.get("reference_assets")
+            reference_assets = (
+                list(existing_reference_assets)
+                if isinstance(existing_reference_assets, list)
+                else list(base_reference_assets)
+            )
+            if selected_body_ref is not None:
+                reference_assets.append(self._uploaded_asset_from_reference(selected_body_ref).model_dump(mode="json"))
+            metadata_overrides = {
+                **existing_overrides,
+                "reference_assets": reference_assets,
+                "uploaded_assets": reference_assets,
+                "professional_body_proportion_projection_active": selected_body_ref is not None,
+                "professional_body_proportion_requirement": body_contract["requirement"],
+                "professional_body_view_kind": body_contract.get("body_view_kind"),
+                "professional_body_source_asset_id": selected_body_ref.asset_id if selected_body_ref else None,
+            }
+            projection_by_asset_id[asset_id] = {
+                "professional_body_proportion_requirement": body_contract["requirement"],
+                "professional_body_view_kind": body_contract.get("body_view_kind"),
+                "professional_body_source_asset_id": selected_body_ref.asset_id if selected_body_ref else None,
+                "metadata_overrides": metadata_overrides,
+            }
+        return projection_by_asset_id
+
     def _prepare_frozen_plan(
         self,
         request: NativeImageGenPlanRequest | NativeSpecializedImageGenPlanRequest | NativeProfessionalImageGenPlanRequest,
@@ -800,6 +938,7 @@ class CodexNativeImageGenPlanner:
         scenario_selection: dict[str, Any],
         metadata: dict[str, Any],
         server_owned_references: tuple[NativeReferenceInput, ...] = (),
+        server_owned_body_references: tuple[NativeReferenceInput, ...] = (),
     ) -> dict[str, Any]:
         runtime = None if self._uses_default_runtime_factory else self._runtime_factory()
         uploaded_assets = self._uploaded_assets(request, server_owned_references=server_owned_references)
@@ -872,6 +1011,7 @@ class CodexNativeImageGenPlanner:
             materialization_metadata: dict[str, Any] = {}
             materialization_metadata_by_asset_id: dict[str, dict[str, Any]] = {}
             professional_product_truth_by_asset_id: dict[str, dict[str, Any]] = {}
+            professional_body_projection_by_asset_id: dict[str, dict[str, Any]] = {}
             if isinstance(request, NativeProfessionalImageGenPlanRequest):
                 # Product-model plans freeze their
                 # visual_asset_library_product_model_v1 strategy and complete
@@ -967,6 +1107,24 @@ class CodexNativeImageGenPlanner:
                         "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
                         "professional_reference_stage": request.professional_reference_stage,
                     }
+                if (
+                    request.professional_reference_stage is None
+                    and self._deliverables_have_professional_body_contract(deliverables)
+                ):
+                    body_projection = self._professional_body_projection_by_asset(
+                        planning_result=result.planning_result,
+                        deliverables=deliverables,
+                        uploaded_assets=uploaded_assets,
+                        server_owned_body_references=server_owned_body_references,
+                        existing_metadata_overrides_by_asset_id=materialization_metadata_by_asset_id,
+                    )
+                    if isinstance(body_projection, dict) and body_projection.get("blocked"):
+                        return self._blocked(str(body_projection["code"]), str(body_projection["message"]))
+                    professional_body_projection_by_asset_id = body_projection
+                    for asset_id, projection in professional_body_projection_by_asset_id.items():
+                        materialization_metadata_by_asset_id[asset_id] = dict(
+                            projection.get("metadata_overrides") or {}
+                        )
             materializations = self._canonical_materializations(
                 result.planning_result,
                 metadata_overrides=materialization_metadata,
@@ -1007,6 +1165,7 @@ class CodexNativeImageGenPlanner:
                 request.template_id == "ecommerce_template"
                 and request.professional_reference_stage is None
             )
+            professional_body_delivery = bool(professional_body_projection_by_asset_id)
             for asset_id, materialization in zip(materialization_asset_ids, materializations):
                 admitted_source_ids = {
                     str(item.get("source_asset_id") or item.get("asset_id") or "").strip()
@@ -1019,6 +1178,58 @@ class CodexNativeImageGenPlanner:
                     item.asset_id for item in request.reference_inputs if item.channel == "product_truth"
                 }
                 selected_product_truth_source_ids: set[str] = set()
+                body_projection = professional_body_projection_by_asset_id.get(asset_id)
+                if professional_body_delivery:
+                    if not isinstance(body_projection, dict):
+                        return self._blocked(
+                            "codex_native_imagegen_professional_body_receipt_missing",
+                            "Professional planning requires a frozen body proportion receipt for every delivery output.",
+                        )
+                    body_requirement = str(
+                        body_projection.get("professional_body_proportion_requirement") or ""
+                    ).strip()
+                    body_view_kind = body_projection.get("professional_body_view_kind")
+                    selected_body_source_id = str(
+                        body_projection.get("professional_body_source_asset_id") or ""
+                    ).strip()
+                    admitted_body_refs = [
+                        item
+                        for item in materialization.reference_assets
+                        if isinstance(item, dict)
+                        and str(item.get("reference_truth_layer") or "") == "body_proportion_truth"
+                    ]
+                    if body_requirement == "not_required":
+                        if body_view_kind is not None or admitted_body_refs:
+                            return self._blocked(
+                                "codex_native_imagegen_professional_body_reference_leaked",
+                                "Professional body evidence was admitted for an output whose frozen receipt marked body evidence not required.",
+                            )
+                    elif body_requirement in {"visible_body_required", "full_body_required"}:
+                        if not selected_body_source_id or selected_body_source_id not in admitted_source_ids:
+                            return self._blocked(
+                                "codex_native_imagegen_professional_body_reference_missing",
+                                "The shared Provider materializer did not admit the selected Professional Body Silhouette reference; no image was created.",
+                            )
+                        if not any(
+                            str(item.get("source_asset_id") or "") == selected_body_source_id
+                            and str(item.get("body_view_kind") or "") == str(body_view_kind or "")
+                            and str(item.get("role") or "") == "body_proportion_reference"
+                            for item in admitted_body_refs
+                        ):
+                            return self._blocked(
+                                "codex_native_imagegen_professional_body_reference_mismatch",
+                                "The shared Provider materializer did not preserve the selected body-only role and view kind.",
+                            )
+                    else:
+                        return self._blocked(
+                            "codex_native_imagegen_professional_body_receipt_invalid",
+                            "Professional planning produced an invalid body proportion receipt.",
+                        )
+                    if len(materialization.reference_assets) > ProductionImageGenerationProvider.max_provider_reference_images:
+                        return self._blocked(
+                            "codex_native_imagegen_reference_input_capacity_exceeded",
+                            "V3 cannot admit every required Professional face, body, and truth reference within the configured image-input capacity.",
+                        )
                 if professional_product_model:
                     if not isinstance(selection_contract, dict):
                         return self._blocked(
@@ -1265,6 +1476,54 @@ class CodexNativeImageGenPlanner:
                             )
                         ]
                         output["reference_input_contract"]["omitted_product_truth"] = omitted_product_truth
+                    body_projection = professional_body_projection_by_asset_id.get(asset_id)
+                    if isinstance(body_projection, dict):
+                        body_requirement = str(
+                            body_projection.get("professional_body_proportion_requirement") or ""
+                        ).strip()
+                        body_view_kind = body_projection.get("professional_body_view_kind")
+                        body_source_id = str(
+                            body_projection.get("professional_body_source_asset_id") or ""
+                        ).strip()
+                        admitted_body_source_ids = [
+                            source_id for source_id in dict.fromkeys(
+                                str(item.get("source_asset_id") or item.get("asset_id") or "")
+                                for item in materialization.reference_assets
+                                if isinstance(item, dict)
+                                and str(item.get("reference_truth_layer") or "") == "body_proportion_truth"
+                            ) if source_id
+                        ]
+                        admitted_body_derivative_ids = [
+                            str(item.get("asset_id") or "")
+                            for item in materialization.reference_assets
+                            if isinstance(item, dict)
+                            and str(item.get("reference_truth_layer") or "") == "body_proportion_truth"
+                            and item.get("provider_reference_derivative") is True
+                            and str(item.get("asset_id") or "")
+                        ]
+                        output["reference_input_contract"]["professional_body_proportion_requirement"] = body_requirement
+                        output["reference_input_contract"]["professional_body_view_kind"] = body_view_kind
+                        output["reference_input_contract"]["professional_body_source_asset_id"] = body_source_id or None
+                        output["reference_input_contract"]["declared_reference_count"] = (
+                            len(request.reference_inputs)
+                            + len(server_owned_references)
+                            + (1 if body_source_id else 0)
+                        )
+                        output["reference_input_contract"]["admitted_body_proportion_source_asset_ids"] = admitted_body_source_ids
+                        output["reference_input_contract"]["admitted_body_proportion_derivative_asset_ids"] = admitted_body_derivative_ids
+                        output["reference_input_contract"]["body_reference_policy"] = (
+                            "body_scale_neck_shoulder_torso_limb_developmental_stage_only"
+                            if admitted_body_source_ids
+                            else None
+                        )
+                        if body_source_id:
+                            body_hashes = {
+                                item.asset_id: item.source_sha256
+                                for item in server_owned_body_references
+                            }
+                            body_hash = body_hashes.get(body_source_id)
+                            if body_hash and body_hash not in output["reference_input_contract"]["source_sha256"]:
+                                output["reference_input_contract"]["source_sha256"].append(body_hash)
                 output.update(self._specialized_lineage_projection(request.template_id, deliverables[index - 1]))
             except ValueError:
                 return self._blocked(
@@ -1737,38 +1996,62 @@ class CodexNativeImageGenPlanner:
         """
 
         references = (*server_owned_references, *request.reference_inputs)
-        return [
-            UploadedAssetInfo(
-                asset_id=item.asset_id,
-                role=AssetRole(reference_role_for_channel(item.channel)),
-                file_path=item.file_path,
-                filename=item.file_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
-                mime_type=reference_mime_type(item.file_path),
-                metadata={
-                    "provider_input_required": True,
-                    "source_integrity_id": item.source_sha256,
-                    "codex_native_server_owned_reference": item.server_owned,
-                    # Keep the shared Brain's existing public channel vocabulary
-                    # stable; the adapter-only source label remains separate.
-                    "codex_native_reference_channel": (
-                        "portrait_identity" if item.channel == "selected_identity_reference" else item.channel
-                    ),
-                    "codex_native_selected_identity_reference": item.channel == "selected_identity_reference",
-                    "selected_generated_output": item.channel == "selected_identity_reference",
-                    "professional_anchor_lineage_role": (
-                        "prior_view_winner"
-                        if item.channel == "selected_identity_reference"
-                        else "identity_root"
-                    ),
-                    "source_type": (
-                        "selected_generated_output" if item.channel == "selected_identity_reference" else "uploaded"
-                    ),
-                    "output_id": item.asset_id if item.channel == "selected_identity_reference" else None,
-                    "v3_owned_upload": True,
-                },
+        return [CodexNativeImageGenPlanner._uploaded_asset_from_reference(item) for item in references]
+
+    @staticmethod
+    def _uploaded_asset_from_reference(item: NativeReferenceInput) -> UploadedAssetInfo:
+        codex_channel = "portrait_identity" if item.channel == "selected_identity_reference" else item.channel
+        lineage_role = (
+            "prior_view_winner"
+            if item.channel == "selected_identity_reference"
+            else "identity_root"
+            if item.channel == "portrait_identity"
+            else "body_proportion_reference"
+            if item.channel == "body_proportion_reference"
+            else "hard_reference"
+        )
+        metadata = {
+            "provider_input_required": True,
+            "source_integrity_id": item.source_sha256,
+            "codex_native_server_owned_reference": item.server_owned,
+            # Keep the shared Brain's existing public channel vocabulary
+            # stable; the adapter-only source label remains separate.
+            "codex_native_reference_channel": codex_channel,
+            "codex_native_selected_identity_reference": item.channel == "selected_identity_reference",
+            "selected_generated_output": item.channel == "selected_identity_reference",
+            "professional_anchor_lineage_role": lineage_role,
+            "source_type": (
+                "selected_generated_output" if item.channel == "selected_identity_reference" else "uploaded"
+            ),
+            "output_id": item.asset_id if item.channel == "selected_identity_reference" else None,
+            "v3_owned_upload": True,
+        }
+        if item.channel == "body_proportion_reference":
+            metadata.update(
+                {
+                    "professional_body_view_kind": item.body_view_kind,
+                    "body_view_kind": item.body_view_kind,
+                    "body_reference_policy": "body_scale_neck_shoulder_torso_limb_developmental_stage_only",
+                    "forbidden_inheritance_channels": [
+                        "wardrobe",
+                        "pose",
+                        "lighting",
+                        "camera",
+                        "background",
+                        "expression",
+                        "scene",
+                        "product_identity",
+                    ],
+                }
             )
-            for item in references
-        ]
+        return UploadedAssetInfo(
+            asset_id=item.asset_id,
+            role=AssetRole(reference_role_for_channel(item.channel)),
+            file_path=item.file_path,
+            filename=item.file_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
+            mime_type=reference_mime_type(item.file_path),
+            metadata=metadata,
+        )
 
     @staticmethod
     def _canonical_materializations(
