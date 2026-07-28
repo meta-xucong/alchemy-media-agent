@@ -217,3 +217,44 @@ The controlled modeling refresh gate is still separate: no modeling
 regeneration, slot activation, Host/MCP/ImageGen, business record, or
 downstream runtime behavior is authorized by this handoff or by the append-only
 refresh entry alone.
+
+## 9. Strict refresh source-admission closure
+
+The first body-source admission implementation (`caea911`) separated Face
+Identity references from Body-owner evidence, but its strict refresh path still
+accepted `user_described` provenance.  That wording and behavior are narrowed
+by the follow-up `strict_body_source_repair` source-admission closure
+(`05908f5`): a strict body-proportion repair refresh may certify only a
+server-resolved `observed` source that is ready and projected as
+`body_proportion_reference` with `body_proportion_truth`.
+
+This is a source-authority rule, not a prompt recipe:
+
+1. `brain_inferred` and `user_described` remain readable historical/public
+   provenance classes and may still be used by ordinary non-certifying
+   `prepare_body_silhouette` flows where existing compatibility allows them.
+   They do not provide approved body truth for strict body-proportion repair.
+2. `user_described` body facts are direction/provenance only.  Raw body facts,
+   prompt prose, paths, URLs, provider payloads, asset ids, or biometric
+   vectors must not become Provider-facing body evidence and must not be used
+   to form an activation-certifiable strict refresh.
+3. A strict refresh without a server-resolved ready Body-only source must
+   fail closed before generation/review.  It must not create body candidates,
+   pending refresh winners, formal activation eligibility, or downstream
+   product-image body certification.
+4. Observed strict refresh input must keep Body and Face ownership separate:
+   the Body source may enter only as `body_proportion_reference` /
+   `body_proportion_truth`, while Face Identity references remain identity
+   references.  A legacy or generic `full_body_reference`, `body_reference`, or
+   `body_full_reference` is not enough for strict body-proportion repair unless
+   it is first resolved by the server into the closed Body-only truth role.
+5. Existing active Body slots, historical receipts, and old readback records
+   are not invalidated, migrated, recomputed, or rewritten by this stricter
+   rule.  The new fail-closed behavior applies to new strict refresh attempts
+   and their candidate/winner formation only.
+
+Any older handoff wording that implied a broad refresh could be certified from
+`user_described` or face-only inference is superseded by this section.  The
+section does not add runtime grade, commercial certification, scene-specific
+age/wardrobe/poolside/E-Commerce rules, Provider cap changes, downstream
+projection changes, or activation authority.
