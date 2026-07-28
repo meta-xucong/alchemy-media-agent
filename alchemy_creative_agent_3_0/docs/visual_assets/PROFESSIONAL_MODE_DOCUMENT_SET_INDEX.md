@@ -171,6 +171,20 @@ selected face winner remains valid for face-only and local detail outputs, but
 visible/full-body Professional outputs require a body-only reference admission
 gate or must be blocked/marked uncertified before Host.
 
+### Body Silhouette Realism Diagnostic Note
+
+`PROFESSIONAL_MODE_BODY_SILHOUETTE_REALISM_STANDARD_DESIGN.md`
+
+Deferred diagnostic note only. It records the observed gap between current
+Body Silhouette evidence and stronger commercial full-body realism expectations
+such as body proportion, head-neck-shoulder continuity, torso/limb plausibility,
+stance, and cross-view body parity. It is explicitly non-runtime and carries no
+implementation authority: it does not modify Doc178 Character Card generation,
+Body Silhouette slots, review, activation, asset storage, downstream template
+behavior, runtime fields, planning, Host/MCP/ImageGen, formal receipts, slots,
+or activations. Any future Body Silhouette standard or shared review work must
+pass a separate reviewer gate.
+
 ### M5 Real-Pixel Acceptance Record
 
 `PROFESSIONAL_MODE_M5_REAL_PIXEL_ACCEPTANCE_BLOCKED_20260717.md`
