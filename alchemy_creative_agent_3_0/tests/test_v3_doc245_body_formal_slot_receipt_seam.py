@@ -36,6 +36,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardSharedRuntimeReceipt,
     CharacterCardSlot,
     CharacterCardState,
+    BodySilhouettePublicRequest,
     character_card_formal_slot_receipt_public_summary,
     project_character_card_slot_success_receipt,
 )
@@ -52,7 +53,11 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standar
     validated_body_silhouette_source_standard_contract,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.contracts import IdentityScoreSummary
-from alchemy_creative_agent_3_0.app.visual_assets.library import VisualAssetLibraryLifecycleService
+from alchemy_creative_agent_3_0.app.visual_assets.library import (
+    LibraryVisualAssetCreateRequest,
+    VisualAssetLibraryCatalog,
+    VisualAssetLibraryLifecycleService,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 
 
@@ -705,6 +710,33 @@ class _BodyReviewer:
         )
 
 
+class _BodyStageHost:
+    production_shared_runtime = True
+
+    def __init__(self, service: CharacterCardPreparationService) -> None:
+        self.service = service
+        self.refresh_calls = 0
+
+    def refresh_body_silhouette(self, *, asset: object, card: CharacterCardState, request: object) -> object:
+        self.refresh_calls += 1
+        face_reference_output_ids = [
+            str(card.face_slots[key].output_id or "")
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ]
+        return self.service.refresh_body_silhouette(
+            card,
+            face_reference_output_ids=face_reference_output_ids,
+            source_class=request.source_class,
+            body_evidence_ids=(
+                [str(request.body_reference_asset_id)]
+                if request.source_class == "observed" and request.body_reference_asset_id
+                else []
+            ),
+            consent_provenance_id="consent_123" if request.source_class == "observed" else None,
+            user_intent=str(request.body_facts or getattr(asset, "preparation_intent", "")),
+        )
+
+
 def _card_ready_for_body() -> CharacterCardState:
     card = CharacterCardState.initial(card_version_id="card_body_formal")
     face_slots = dict(card.face_slots)
@@ -747,6 +779,25 @@ def _card_ready_for_body() -> CharacterCardState:
             "face_slots": face_slots,
             "expression_slots": expression_slots,
         }
+    )
+
+
+def _active_body_card() -> CharacterCardState:
+    service = CharacterCardPreparationService(generator=_BodyGenerator(), reviewer=_BodyReviewer())
+    prepared = service.prepare_body_silhouette(
+        _card_ready_for_body(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+    verified = VisualAssetLibraryLifecycleService._mark_formal_receipts_after_projection(
+        prepared.card,
+        stage="body_silhouette",
+    )
+    return CharacterCardPreparationService.activate_module(
+        verified,
+        module="body_silhouette",
+        confirmed=True,
     )
 
 
@@ -1184,6 +1235,273 @@ def test_doc245_body_stage_level_runtime_receipt_cannot_replace_per_slot_formal_
 
     with pytest.raises(ValueError, match="formal"):
         CharacterCardPreparationService.activate_module(card, module="body_silhouette", confirmed=True)
+
+
+def test_doc245_active_body_refresh_adds_pending_review_without_replacing_active_slots() -> None:
+    active_card = _active_body_card()
+    active_slots_before = {
+        key: slot.model_dump(mode="json")
+        for key, slot in active_card.body_slots.items()
+    }
+    generator = _BodyGenerator()
+    service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+
+    result = service.refresh_body_silhouette(
+        active_card,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert [request.slot_key for request in generator.requests] == [
+        "body.front_full",
+        "body.front_full",
+        "body.front_full",
+        "body.side_full",
+        "body.side_full",
+        "body.side_full",
+        "body.rear_full",
+        "body.rear_full",
+        "body.rear_full",
+    ]
+    assert result.status == "review"
+    assert result.card.body_silhouette_status == "active"
+    assert result.card.body_activation_confirmed is True
+    assert result.card.body_slots == active_card.body_slots
+    assert {
+        key: slot.model_dump(mode="json")
+        for key, slot in result.card.body_slots.items()
+    } == active_slots_before
+    assert result.card.body_silhouette_refresh_status == "reviewing"
+    assert set(result.card.body_silhouette_refresh_slots) == set(BODY_SLOT_KEYS)
+    assert set(result.formal_slot_receipts) == set(BODY_SLOT_KEYS)
+    for slot_key, refresh_slot in result.card.body_silhouette_refresh_slots.items():
+        assert refresh_slot.state == "winner_selected"
+        assert refresh_slot.output_id == f"output_{slot_key}_3"
+        assert refresh_slot.formal_slot_receipt is not None
+        assert refresh_slot.formal_slot_receipt.activation_eligible is False
+    refresh_intents = " ".join(str(request.user_intent) for request in generator.requests).lower()
+    assert "pool" not in refresh_intents
+    assert "swim" not in refresh_intents
+    assert "ecommerce" not in refresh_intents
+    assert "kidswear" not in refresh_intents
+
+
+def test_doc245_body_refresh_slots_reject_non_body_or_activation_bypass() -> None:
+    active_card = _active_body_card()
+
+    invalid_module = active_card.model_copy(
+        update={
+            "body_silhouette_refresh_status": "reviewing",
+            "body_silhouette_refresh_slots": {
+                slot_key: slot.model_copy(
+                    update={"module": "expression_set"} if slot_key == "body.front_full" else {}
+                )
+                for slot_key, slot in active_card.body_slots.items()
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="module mismatch"):
+        invalid_module.validate_slots_and_order()
+    with pytest.raises(ValueError, match="Body Silhouette refresh cannot activate"):
+        active_card.model_copy(
+            update={
+                "body_silhouette_refresh_status": "reviewing",
+                "body_silhouette_refresh_slots": {
+                    slot_key: slot.model_copy(update={"state": "active"})
+                    for slot_key, slot in active_card.body_slots.items()
+                },
+            }
+        ).validate_slots_and_order()
+
+
+def test_doc245_normal_body_prepare_still_skips_active_winners_without_refresh() -> None:
+    active_card = _active_body_card()
+    generator = _BodyGenerator()
+    service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+
+    result = service.prepare_body_silhouette(
+        active_card,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert generator.requests == []
+    assert result.winner_output_ids == {
+        slot_key: active_card.body_slots[slot_key].output_id
+        for slot_key in BODY_SLOT_KEYS
+    }
+
+
+def test_doc245_body_refresh_rejects_existing_pending_refresh_without_overwrite() -> None:
+    active_card = _active_body_card()
+    generator = _BodyGenerator()
+    service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+    first = service.refresh_body_silhouette(
+        active_card,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+    pending_version = first.card.body_silhouette_refresh_version_id
+    pending_winners = {
+        slot_key: slot.output_id
+        for slot_key, slot in first.card.body_silhouette_refresh_slots.items()
+    }
+    request_count = len(generator.requests)
+
+    with pytest.raises(ValueError, match="body_silhouette_refresh_pending"):
+        service.refresh_body_silhouette(
+            first.card,
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+            source_class="brain_inferred",
+            user_intent="neutral body silhouette profile",
+        )
+
+    assert len(generator.requests) == request_count
+    assert first.card.body_silhouette_refresh_version_id == pending_version
+    assert {
+        slot_key: slot.output_id
+        for slot_key, slot in first.card.body_silhouette_refresh_slots.items()
+    } == pending_winners
+
+
+def test_doc245_body_refresh_fail_closed_without_cross_view_positive_evidence() -> None:
+    class _MissingCrossViewBodyReviewer(_BodyReviewer):
+        def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
+            return _review(candidate.candidate_index, include_cross_view_parity_evidence=False)
+
+    active_card = _active_body_card()
+    service = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_MissingCrossViewBodyReviewer(),
+    )
+
+    result = service.refresh_body_silhouette(
+        active_card,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert result.status == "blocked"
+    assert result.failure_codes == ["body_silhouette_cross_view_parity_evidence_missing"]
+    assert result.card.body_silhouette_status == "active"
+    assert result.card.body_slots == active_card.body_slots
+    assert result.card.body_silhouette_refresh_status == "blocked"
+    blocked_revision = result.card.append_only_revision
+
+    recovered = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_BodyReviewer(),
+    ).refresh_body_silhouette(
+        result.card,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+    )
+
+    assert recovered.status == "review"
+    assert recovered.card.append_only_revision == blocked_revision + 1
+    assert recovered.card.body_silhouette_refresh_status == "reviewing"
+    assert recovered.card.body_slots == active_card.body_slots
+
+
+def test_doc245_visual_asset_library_body_refresh_uses_explicit_lifecycle_entry() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    created = catalog.create(
+        owner_scope="owner",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Model",
+            root_source_asset_id="root_source",
+            consent_reference="consent",
+            preparation_intent="scene-neutral body silhouette source refresh",
+        ),
+    )
+    active_card = _active_body_card()
+    asset = created.model_copy(
+        update={
+            "lifecycle_status": "active",
+            "active_version_id": "version_1",
+            "versions": [
+                {
+                    "version_id": "version_1",
+                    "visual_asset_id": created.visual_asset_id,
+                    "lifecycle_status": "active",
+                    "approved_evidence_ids": ["face_front_output"],
+                    "activation_confirmed": True,
+                    "immutable_source_provenance": created.root_source_provenance,
+                }
+            ],
+            "character_card": active_card,
+        }
+    )
+    catalog.save(asset)
+    generator = _BodyGenerator()
+    body_service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+    lifecycle = VisualAssetLibraryLifecycleService(
+        catalog,
+        character_card_stage_host=_BodyStageHost(body_service),
+    )
+
+    refreshed = lifecycle.refresh_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=created.visual_asset_id,
+        body_request=BodySilhouettePublicRequest(source_class="brain_inferred"),
+    )
+
+    assert len(generator.requests) == 9
+    assert refreshed.character_card.body_slots == active_card.body_slots
+    assert refreshed.character_card.body_silhouette_status == "active"
+    assert refreshed.character_card.body_silhouette_refresh_status == "reviewing"
+    assert set(refreshed.character_card.body_silhouette_refresh_slots) == set(BODY_SLOT_KEYS)
+    reloaded = lifecycle.get(owner_scope="owner", visual_asset_id=created.visual_asset_id)
+    assert reloaded.character_card.body_slots == active_card.body_slots
+    assert reloaded.character_card.body_silhouette_refresh_status == "reviewing"
+
+    pending_version = reloaded.character_card.body_silhouette_refresh_version_id
+    pending_winners = {
+        slot_key: slot.output_id
+        for slot_key, slot in reloaded.character_card.body_silhouette_refresh_slots.items()
+    }
+    request_count = len(generator.requests)
+    with pytest.raises(ValueError, match="character_card_body_refresh_pending"):
+        lifecycle.refresh_character_card_body_silhouette(
+            owner_scope="owner",
+            visual_asset_id=created.visual_asset_id,
+            body_request=BodySilhouettePublicRequest(source_class="brain_inferred"),
+        )
+    blocked_reloaded = lifecycle.get(owner_scope="owner", visual_asset_id=created.visual_asset_id)
+    assert len(generator.requests) == request_count
+    assert blocked_reloaded.character_card.body_silhouette_refresh_version_id == pending_version
+    assert {
+        slot_key: slot.output_id
+        for slot_key, slot in blocked_reloaded.character_card.body_silhouette_refresh_slots.items()
+    } == pending_winners
+    assert blocked_reloaded.character_card.body_slots == active_card.body_slots
+
+
+def test_doc245_visual_asset_library_body_refresh_requires_explicit_shared_host() -> None:
+    catalog = VisualAssetLibraryCatalog()
+    created = catalog.create(
+        owner_scope="owner",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Model",
+            root_source_asset_id="root_source",
+            consent_reference="consent",
+            preparation_intent="scene-neutral body silhouette source refresh",
+        ),
+    )
+    catalog.save(created.model_copy(update={"character_card": _active_body_card()}))
+    lifecycle = VisualAssetLibraryLifecycleService(catalog)
+
+    with pytest.raises(Exception, match="character_card_body_refresh_unavailable"):
+        lifecycle.refresh_character_card_body_silhouette(
+            owner_scope="owner",
+            visual_asset_id=created.visual_asset_id,
+            body_request=BodySilhouettePublicRequest(source_class="brain_inferred"),
+        )
 
 
 def test_doc245_body_source_class_and_consent_contract_still_apply() -> None:

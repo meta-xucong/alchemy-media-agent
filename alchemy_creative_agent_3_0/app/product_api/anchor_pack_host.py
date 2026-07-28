@@ -1235,6 +1235,44 @@ class ProductApiAnchorPackPreparationHost:
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
 
+    def refresh_body_silhouette(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        request: Any = None,
+        generation_channel: str = "provider",
+    ) -> CharacterCardStageResult:
+        if request is None:
+            raise ValueError("character_card_body_source_required")
+        face_reference_output_ids = [
+            str(card.face_slots[key].output_id or "").strip()
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ]
+        if any(not item for item in face_reference_output_ids):
+            raise ValueError("character_card_body_face_winners_missing")
+        body_evidence_ids = (
+            [str(request.body_reference_asset_id)]
+            if request.source_class == "observed" and request.body_reference_asset_id
+            else []
+        )
+        user_intent = str(request.body_facts or getattr(asset, "preparation_intent", "") or "").strip()
+        if not user_intent:
+            raise ValueError("character_card_body_intent_missing")
+        preparation = CharacterCardPreparationService(generator=self, reviewer=self)
+        result = preparation.refresh_body_silhouette(
+            card,
+            face_reference_output_ids=face_reference_output_ids,
+            source_class=request.source_class,
+            project_id=f"visual_asset_{asset.visual_asset_id}",
+            people_asset_id=asset.visual_asset_id,
+            body_evidence_ids=body_evidence_ids,
+            consent_provenance_id=getattr(asset.root_source_provenance, "consent_reference", None),
+            user_intent=user_intent,
+            generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
+        )
+        return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
+
     def _attach_character_card_receipt(
         self,
         result: CharacterCardStageResult,

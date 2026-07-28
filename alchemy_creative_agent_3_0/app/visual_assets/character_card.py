@@ -431,6 +431,9 @@ class CharacterCardState(_CharacterCardModel):
     face_slots: dict[str, CharacterCardSlot] = Field(default_factory=dict)
     expression_slots: dict[str, CharacterCardSlot] = Field(default_factory=dict)
     body_slots: dict[str, CharacterCardSlot] = Field(default_factory=dict)
+    body_silhouette_refresh_status: CharacterCardModuleStatus = "empty"
+    body_silhouette_refresh_version_id: str | None = None
+    body_silhouette_refresh_slots: dict[str, CharacterCardSlot] = Field(default_factory=dict)
     active_version_id: str | None = None
     user_activation_confirmed: bool = False
     expression_activation_confirmed: bool = False
@@ -547,6 +550,22 @@ class CharacterCardState(_CharacterCardModel):
             raise ValueError("Character Card must expose all Expression Set slots")
         if set(self.body_slots) != set(BODY_SLOT_KEYS):
             raise ValueError("Character Card must expose all Body Silhouette slots")
+        if self.body_silhouette_refresh_slots:
+            if not set(self.body_silhouette_refresh_slots).issubset(set(BODY_SLOT_KEYS)):
+                raise ValueError("Body Silhouette refresh slots must use Body Silhouette slot keys")
+            if self.body_silhouette_refresh_status == "reviewing" and set(self.body_silhouette_refresh_slots) != set(BODY_SLOT_KEYS):
+                raise ValueError("Body Silhouette refresh review requires all three Body slots")
+            for slot_key, slot in self.body_silhouette_refresh_slots.items():
+                if slot_key != slot.slot_key:
+                    raise ValueError("Body Silhouette refresh slot key mismatch")
+                if slot.module != "body_silhouette":
+                    raise ValueError("Body Silhouette refresh module mismatch")
+                if slot.state == "active":
+                    raise ValueError("Body Silhouette refresh cannot activate slots")
+                if slot.state not in {"winner_selected", "blocked"}:
+                    raise ValueError("Body Silhouette refresh slots must be pending winners or blocked")
+        elif self.body_silhouette_refresh_status not in {"empty", "blocked"}:
+            raise ValueError("Body Silhouette refresh status requires refresh slots")
         if self.expression_set_status in {"preparing", "reviewing", "partial", "active"} and self.face_identity_status != "active":
             raise ValueError("Expression Set requires an active Face Identity module")
         if self.body_silhouette_status in {"preparing", "reviewing", "partial", "active"}:
@@ -1267,6 +1286,13 @@ class CharacterCardStageHost(Protocol):
     ) -> CharacterCardStageResult:
         ...
 
+    def refresh_body_silhouette(
+        self, *, asset: Any, card: CharacterCardState,
+        request: BodySilhouettePublicRequest | None = None,
+        generation_channel: str = "provider",
+    ) -> CharacterCardStageResult:
+        ...
+
 
 class CharacterCardPreparationService:
     """Offline contract helper; never a production stage host.
@@ -1695,6 +1721,149 @@ class CharacterCardPreparationService:
                 "body_silhouette_status": "reviewing",
                 "body_silhouette_version_id": f"body_{uuid4().hex}",
                 "body_activation_confirmed": False,
+                "append_only_revision": card.append_only_revision + 1,
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_attempt_count": 0,
+                "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
+                "resume_available": False,
+                "pending_mcp_handoff_ids": [],
+            }
+        )
+        return CharacterCardStageResult(
+            status="review",
+            card=updated,
+            attempts=attempts,
+            winner_output_ids=winners,
+            failures=failures,
+            formal_slot_receipts=formal_slot_receipts,
+        )
+
+    def refresh_body_silhouette(
+        self,
+        card: CharacterCardState,
+        *,
+        face_reference_output_ids: list[str],
+        source_class: BodySourceClass,
+        project_id: str = "project",
+        people_asset_id: str = "people_asset",
+        body_evidence_ids: list[str] | None = None,
+        consent_provenance_id: str | None = None,
+        user_intent: str | None = None,
+        generation_channel: Literal["provider", "mcp"] = "provider",
+    ) -> CharacterCardStageResult:
+        """Append a pending Body Silhouette refresh without replacing active slots."""
+
+        if card.face_identity_status != "active":
+            raise ValueError("Body Silhouette refresh requires an active Face Identity module")
+        if card.body_silhouette_status != "active":
+            raise ValueError("Body Silhouette refresh requires active Body Silhouette slots")
+        if card.body_silhouette_refresh_status == "reviewing" or (
+            card.body_silhouette_refresh_status != "blocked" and card.body_silhouette_refresh_slots
+        ):
+            raise ValueError("body_silhouette_refresh_pending")
+        if self.generator is None or self.reviewer is None:
+            raise RuntimeError("shared Character Card candidate/review seam is unavailable")
+        if not str(user_intent or "").strip():
+            raise ValueError("Body Silhouette refresh requires Brain/user-owned body preparation intent")
+        request = BodyPreparationRequest(
+            source_class=source_class,
+            face_reference_output_ids=face_reference_output_ids,
+            body_evidence_ids=list(body_evidence_ids or []),
+            consent_provenance_id=consent_provenance_id,
+        )
+        attempts: list[CharacterCardCandidateAttempt] = []
+        winners: dict[str, str] = {}
+        formal_slot_receipts: dict[str, FormalSlotReceipt] = {}
+        failures: list[CharacterCardFailureEvent] = []
+        refresh_slots: dict[str, CharacterCardSlot] = {}
+        for slot_key in BODY_SLOT_KEYS:
+            winner, slot_attempts, slot_failures, formal_receipt = self._prepare_slot(
+                card=card,
+                module="body_silhouette",
+                slot_key=slot_key,
+                project_id=project_id,
+                people_asset_id=people_asset_id,
+                reference_output_ids=request.reference_output_ids,
+                user_intent=user_intent,
+                source_class=source_class,
+                consent_provenance_id=consent_provenance_id,
+                generation_channel=generation_channel,
+                attempts=attempts,
+            )
+            attempts.extend(slot_attempts)
+            failures.extend(slot_failures)
+            if winner is None:
+                failure_code = slot_failures[-1].failure_code if slot_failures else f"{slot_key}_review_failed"
+                blocked = card.model_copy(
+                    update={
+                        "body_silhouette_refresh_status": "blocked",
+                        "body_silhouette_refresh_slots": refresh_slots,
+                        "last_failed_module": "body_silhouette",
+                        "last_failed_slot_key": slot_key,
+                        "last_failure_code": failure_code,
+                        "last_failure_attempt_count": self._failure_attempt_count(slot_failures),
+                        "resume_available": False,
+                        "append_only_revision": card.append_only_revision + 1,
+                        "pending_mcp_handoff_ids": self._mcp_handoff_ids(slot_failures),
+                    }
+                )
+                return CharacterCardStageResult(
+                    status="blocked",
+                    card=blocked,
+                    attempts=attempts,
+                    winner_output_ids=winners,
+                    failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
+                    failures=failures,
+                    mcp_handoff_ids=self._mcp_handoff_ids(failures),
+                )
+            refresh_slots[slot_key] = self._winner_slot(
+                module="body_silhouette",
+                slot_key=slot_key,
+                winner=winner,
+                source_class=source_class,
+                consent_provenance_id=consent_provenance_id,
+                formal_slot_receipt=formal_receipt,
+            )
+            if formal_receipt is not None:
+                formal_slot_receipts[slot_key] = formal_receipt
+            winners[slot_key] = winner.output_id
+        parity_failure_code = self._body_silhouette_cross_view_parity_failure(formal_slot_receipts)
+        if parity_failure_code:
+            failure = CharacterCardFailureEvent(
+                module="body_silhouette",
+                slot_key="body.front_full",
+                candidate_index=self.CANDIDATE_COUNT,
+                failure_code=parity_failure_code,
+            )
+            failures.append(failure)
+            blocked = card.model_copy(
+                update={
+                    "body_silhouette_refresh_status": "blocked",
+                    "body_silhouette_refresh_slots": refresh_slots,
+                    "last_failed_module": "body_silhouette",
+                    "last_failed_slot_key": "body.front_full",
+                    "last_failure_code": parity_failure_code,
+                    "last_failure_attempt_count": self.CANDIDATE_COUNT,
+                    "resume_available": False,
+                    "append_only_revision": card.append_only_revision + 1,
+                }
+            )
+            return CharacterCardStageResult(
+                status="blocked",
+                card=blocked,
+                attempts=attempts,
+                winner_output_ids=winners,
+                failure_codes=[parity_failure_code],
+                failures=failures,
+            )
+        updated = card.model_copy(
+            update={
+                "body_silhouette_refresh_status": "reviewing",
+                "body_silhouette_refresh_version_id": f"body_refresh_{uuid4().hex}",
+                "body_silhouette_refresh_slots": refresh_slots,
                 "append_only_revision": card.append_only_revision + 1,
                 "last_failed_module": None,
                 "last_failed_slot_key": None,

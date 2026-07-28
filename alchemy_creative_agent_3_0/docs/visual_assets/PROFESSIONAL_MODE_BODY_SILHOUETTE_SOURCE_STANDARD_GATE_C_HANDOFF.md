@@ -129,13 +129,42 @@ Gate C tests should prove:
 - no downstream body-only projection, provider cap, runtime grade, planning, or
   Host behavior changes.
 
-## 7. Refresh gate remains separate
+## 7. Gate D append-only refresh entry status
 
-After code and deterministic tests pass, a later controlled modeling-card
-refresh gate may be requested. That gate must still use existing append-only
-candidate/winner/slot lifecycle and must preserve all historical active Body
-Silhouette evidence until new candidates pass visual review and explicit
-activation.
+The original Gate C wording treated the append-only Body Silhouette refresh
+entry as a future design concern. That wording is superseded by the
+`body-silhouette-append-only-refresh` lifecycle gate: Gate C now provides an
+explicit Body-owner refresh entry for active `body.front_full`,
+`body.side_full`, and `body.rear_full` slots.
+
+The implemented refresh entry is still not a controlled modeling refresh,
+visual acceptance, activation, Host/MCP/ImageGen run, downstream product-image
+change, provider-cap change, UI change, storage migration, grade, or
+commercial certification. It only creates a pending append-only Body
+Silhouette refresh review state through the existing three-candidate shared
+review -> formal slot receipt -> winner-selected lifecycle.
+
+Lifecycle invariants:
+
+1. Existing active Body slots, old active output ids, and old formal receipts
+   remain readable and are not rewritten, recomputed, superseded, or activated
+   by the refresh entry.
+2. A pending `reviewing` refresh cannot be silently overwritten. Re-entry while
+   reviewing fails closed with a refresh-pending error.
+3. A `blocked` refresh may start a new explicit refresh revision after a
+   theory-first correction, so a failed review does not become a permanent
+   deadlock. The new revision remains append-only and still cannot activate
+   without a later explicit activation authority.
+4. The refresh path remains scene-neutral: no fixed age, fixed head/body ratio,
+   swimwear, poolside, kidswear, E-Commerce, wardrobe, pose, lighting, camera,
+   expression, downstream prompt, provider-route, or product recipe is added.
+5. Ordinary `prepare_body_silhouette` keeps the active/winner skip semantics;
+   `retry_failed_slot` is not expanded into refresh authority.
+
+A later Gate D controlled modeling refresh may use this entry, but that gate
+must still be separately approved and must separately verify candidate
+generation, visual review, pending winners, mutation boundaries, and explicit
+activation eligibility before any active Body slot is replaced.
 
 ## 8. Gate C reviewer correction after initial blocked implementation
 
@@ -174,6 +203,7 @@ The corrected authority model is:
    six-year-old, swimwear, poolside, kidswear, E-Commerce, commercial-grade, or
    fixed-ratio recipe.
 
-The refresh gate is still separate: no modeling regeneration, slot activation,
-Host/MCP/ImageGen, business record, or downstream runtime behavior is
-authorized by this handoff.
+The controlled modeling refresh gate is still separate: no modeling
+regeneration, slot activation, Host/MCP/ImageGen, business record, or
+downstream runtime behavior is authorized by this handoff or by the append-only
+refresh entry alone.

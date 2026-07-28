@@ -22,6 +22,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from ..schemas.models import V3BaseModel
 from .anchor_pack import AnchorPackPreparationResult
 from .character_card import (
+    BODY_SLOT_KEYS,
     BodySilhouettePublicRequest,
     CharacterCardPreparationService,
     CharacterCardRuntimeUnavailable,
@@ -1086,6 +1087,74 @@ class VisualAssetLibraryLifecycleService:
                 )
         return saved_asset
 
+    def refresh_character_card_body_silhouette(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        body_request: BodySilhouettePublicRequest,
+        generation_channel: Literal["provider", "mcp"] = "provider",
+    ) -> VisualAsset:
+        """Append a pending Body Silhouette refresh through the owning lifecycle."""
+
+        if self.character_card_stage_host is None:
+            raise CharacterCardRuntimeUnavailable("character_card_body_refresh_unavailable")
+        if getattr(self.character_card_stage_host, "production_shared_runtime", False) is not True:
+            raise CharacterCardRuntimeUnavailable("character_card_stage_host_shared_runtime_required")
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        card = asset.character_card
+        if card.face_identity_status != "active":
+            raise ValueError("character_card_body_requires_face_identity")
+        if card.body_silhouette_status != "active":
+            raise ValueError("character_card_body_refresh_requires_active_body")
+        if card.body_silhouette_refresh_status == "reviewing" or (
+            card.body_silhouette_refresh_status != "blocked" and card.body_silhouette_refresh_slots
+        ):
+            raise ValueError("character_card_body_refresh_pending")
+        if body_request.source_class == "observed":
+            self._require_authorized_body_reference(body_request)
+        method = getattr(self.character_card_stage_host, "refresh_body_silhouette", None)
+        if not callable(method):
+            raise CharacterCardRuntimeUnavailable("character_card_body_refresh_unavailable")
+        method_kwargs = {"asset": asset, "card": card, "request": body_request}
+        if generation_channel == "mcp":
+            method_kwargs["generation_channel"] = "mcp"
+        result = method(**method_kwargs)
+        if getattr(result, "card", None) is None:
+            raise ValueError("character_card_stage_result_missing")
+        if getattr(result, "status", None) == "review":
+            formal_receipts = dict(getattr(result, "formal_slot_receipts", {}) or {})
+            if not formal_receipts:
+                raise CharacterCardRuntimeUnavailable("character_card_formal_receipt_required")
+            persisted_card = self._persist_body_refresh_success_receipts(result)
+        elif getattr(result, "status", None) == "blocked":
+            if getattr(result, "shared_runtime_failure", None) is None and not getattr(result, "failure_codes", None):
+                raise CharacterCardRuntimeUnavailable("character_card_shared_runtime_failure_receipt_required")
+            persisted_card = result.card
+            if getattr(result, "shared_runtime_failure", None) is not None:
+                persisted_card = persisted_card.model_copy(
+                    update={
+                        "last_shared_runtime_failure": result.shared_runtime_failure.model_dump(mode="json")
+                    }
+                )
+        else:
+            raise CharacterCardRuntimeUnavailable("character_card_stage_status_invalid")
+        saved_asset = self.catalog.save(
+            asset.model_copy(update={"character_card": persisted_card, "updated_at": _utc_now()})
+        )
+        if getattr(result, "status", None) == "review":
+            reloaded_asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+            verified_card = self._mark_body_refresh_formal_receipts_after_projection(
+                reloaded_asset.character_card
+            )
+            if verified_card != reloaded_asset.character_card:
+                saved_asset = self.catalog.save(
+                    reloaded_asset.model_copy(
+                        update={"character_card": verified_card, "updated_at": _utc_now()}
+                    )
+                )
+        return saved_asset
+
     @staticmethod
     def _expression_mcp_resume_requires_review_only(
         card: CharacterCardState,
@@ -1225,6 +1294,48 @@ class VisualAssetLibraryLifecycleService:
         )
 
     @staticmethod
+    def _persist_body_refresh_success_receipts(result: Any) -> CharacterCardState:
+        formal_receipts = {
+            str(slot_key): FormalSlotReceipt.model_validate(receipt)
+            for slot_key, receipt in dict(getattr(result, "formal_slot_receipts", {}) or {}).items()
+        }
+        winners = {
+            str(slot_key): str(output_id)
+            for slot_key, output_id in dict(getattr(result, "winner_output_ids", {}) or {}).items()
+            if str(slot_key).strip() and str(output_id).strip()
+        }
+        if set(winners) != set(BODY_SLOT_KEYS):
+            raise CharacterCardRuntimeUnavailable("character_card_body_refresh_winner_map_required")
+        if set(formal_receipts) != set(BODY_SLOT_KEYS):
+            raise CharacterCardRuntimeUnavailable("character_card_body_refresh_formal_receipt_required")
+        card: CharacterCardState = result.card
+        slots = dict(card.body_silhouette_refresh_slots)
+        for slot_key in BODY_SLOT_KEYS:
+            output_id = winners[slot_key]
+            slot = slots.get(slot_key)
+            receipt = formal_receipts[slot_key]
+            if slot is None or slot.module != "body_silhouette":
+                raise CharacterCardRuntimeUnavailable("character_card_body_refresh_slot_mismatch")
+            if slot.output_id != output_id or slot.state != "winner_selected":
+                raise CharacterCardRuntimeUnavailable("character_card_body_refresh_output_mismatch")
+            if receipt.module != "body_silhouette":
+                raise CharacterCardRuntimeUnavailable("character_card_body_refresh_formal_module_mismatch")
+            if receipt.slot_key != slot_key:
+                raise CharacterCardRuntimeUnavailable("character_card_body_refresh_formal_slot_mismatch")
+            if receipt.winner_output_id != output_id:
+                raise CharacterCardRuntimeUnavailable("character_card_body_refresh_formal_output_mismatch")
+            slots[slot_key] = CharacterCardSlot.model_validate(
+                slot.model_copy(update={"formal_slot_receipt": receipt}).model_dump(mode="python")
+            )
+        return card.model_copy(
+            update={
+                "body_silhouette_refresh_slots": slots,
+                "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
+            }
+        )
+
+    @staticmethod
     def _stage_uses_formal_slot_receipt(
         stage: Literal["expression_set", "body_silhouette"],
         slot_key: str,
@@ -1259,6 +1370,25 @@ class VisualAssetLibraryLifecycleService:
         return card.model_copy(
             update={"expression_slots" if stage == "expression_set" else "body_slots": slots}
         )
+
+    @staticmethod
+    def _mark_body_refresh_formal_receipts_after_projection(card: CharacterCardState) -> CharacterCardState:
+        slots = dict(card.body_silhouette_refresh_slots)
+        changed = False
+        for slot_key, slot in list(slots.items()):
+            receipt = slot.formal_slot_receipt
+            if receipt is None:
+                continue
+            marked = mark_formal_slot_receipt_reload_public_projection_verified(receipt)
+            validate_formal_slot_receipt_for_activation(marked)
+            if marked != receipt:
+                slots[slot_key] = CharacterCardSlot.model_validate(
+                    slot.model_copy(update={"formal_slot_receipt": marked}).model_dump(mode="python")
+                )
+                changed = True
+        if not changed:
+            return card
+        return card.model_copy(update={"body_silhouette_refresh_slots": slots})
 
     @staticmethod
     def _mark_expression_formal_receipts_after_projection(card: CharacterCardState) -> CharacterCardState:
