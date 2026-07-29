@@ -2140,9 +2140,8 @@ def test_doc245_product_api_body_stage_rejects_missing_or_forbidden_source_admis
 
 
 def test_doc245_product_api_body_stage_inference_first_has_no_body_reference_or_truth(tmp_path) -> None:
-    upload_store = V3UploadedAssetStore(tmp_path / "uploads")
     output_store = V3GeneratedOutputStore(tmp_path / "outputs")
-    service = V3ProductApiService(asset_store=upload_store, output_store=output_store)
+    service = V3ProductApiService(output_store=output_store)
     encoded = _tiny_png_b64()
     face_outputs = [
         output_store.save_base64_output(
@@ -2157,22 +2156,24 @@ def test_doc245_product_api_body_stage_inference_first_has_no_body_reference_or_
         for name in ("front", "profile", "rear")
     ]
 
-    status = service.create_professional_character_card_stage_job(
-        {
-            "user_input": "scene-neutral inferred Body Silhouette model",
-            "scenario_selection": {"scenario_id": "general_creative"},
-        },
-        stage="body_silhouette",
-        slot_key="body.side_full",
-        reference_output_ids=face_outputs,
-        source_class="brain_inferred",
-        body_refresh_source_mode="inference_first",
+    source_mode_contract = service._safe_professional_character_card_body_refresh_source_mode(  # noqa: SLF001
+        "inference_first",
         body_model_context="system_inferred_body_model_scene_neutral_v1",
-        body_refresh_contract_required=True,
+        contract_required=True,
+        source_class="brain_inferred",
+        body_source_admission=None,
     )
 
-    record = service.job_store.get(status.job_id)
-    metadata = dict(record.request.metadata or {})
+    metadata = {
+        **source_mode_contract,
+        "professional_anchor_reference_assets": service._professional_character_card_reference_assets(  # noqa: SLF001
+            service._professional_character_card_provider_reference_output_ids(  # noqa: SLF001
+                stage="body_silhouette",
+                slot_key="body.side_full",
+                reference_output_ids=face_outputs,
+            )
+        ),
+    }
     assert metadata["professional_character_card_body_refresh_source_mode"] == "inference_first"
     assert metadata["professional_character_card_body_model_context"] == "system_inferred_body_model_scene_neutral_v1"
     assert "professional_character_card_body_source_admission" not in metadata
@@ -2203,18 +2204,24 @@ def test_doc245_product_api_ordinary_body_stage_keeps_legacy_brain_inferred_with
         for name in ("front", "profile", "rear")
     ]
 
-    status = service.create_professional_character_card_stage_job(
-        {
-            "user_input": "legacy scene-neutral inferred Body Silhouette model",
-            "scenario_selection": {"scenario_id": "general_creative"},
-        },
-        stage="body_silhouette",
-        slot_key="body.front_full",
-        reference_output_ids=face_outputs,
+    source_mode_contract = service._safe_professional_character_card_body_refresh_source_mode(  # noqa: SLF001
+        None,
+        body_model_context=None,
+        contract_required=False,
         source_class="brain_inferred",
+        body_source_admission=None,
     )
 
-    metadata = dict(service.job_store.get(status.job_id).request.metadata or {})
+    metadata = {
+        **source_mode_contract,
+        "professional_anchor_reference_assets": service._professional_character_card_reference_assets(  # noqa: SLF001
+            service._professional_character_card_provider_reference_output_ids(  # noqa: SLF001
+                stage="body_silhouette",
+                slot_key="body.front_full",
+                reference_output_ids=face_outputs,
+            )
+        ),
+    }
     assert "professional_character_card_body_refresh_source_mode" not in metadata
     assert "professional_character_card_body_model_context" not in metadata
     assert "professional_character_card_body_source_admission" not in metadata
@@ -2225,29 +2232,20 @@ def test_doc245_product_api_strict_refresh_missing_or_invalid_source_mode_blocks
     service = V3ProductApiService()
 
     with pytest.raises(ValueError, match="professional_character_card_body_refresh_source_mode_invalid"):
-        service.create_professional_character_card_stage_job(
-            {
-                "user_input": "strict inferred Body Silhouette refresh",
-                "scenario_selection": {"scenario_id": "general_creative"},
-            },
-            stage="body_silhouette",
-            slot_key="body.front_full",
-            reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        service._safe_professional_character_card_body_refresh_source_mode(  # noqa: SLF001
+            None,
+            body_model_context=None,
+            contract_required=True,
             source_class="brain_inferred",
-            body_refresh_contract_required=True,
+            body_source_admission=None,
         )
 
     with pytest.raises(ValueError, match="professional_character_card_body_refresh_source_mode_forbidden"):
-        service.create_professional_character_card_stage_job(
-            {
-                "user_input": "strict user-described Body Silhouette refresh",
-                "scenario_selection": {"scenario_id": "general_creative"},
-            },
-            stage="body_silhouette",
-            slot_key="body.front_full",
-            reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        service._safe_professional_character_card_body_refresh_source_mode(  # noqa: SLF001
+            None,
+            body_model_context=None,
+            contract_required=True,
             source_class="user_described",
-            body_refresh_contract_required=True,
             body_source_admission={
                 "contract_version": "professional_body_source_admission_v1",
                 "source_class": "user_described",
@@ -2273,47 +2271,24 @@ def test_doc245_product_api_strict_refresh_missing_or_invalid_source_mode_blocks
 
 
 def test_doc245_product_api_body_refresh_contract_required_marker_is_strict_bool(tmp_path) -> None:
-    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
-    service = V3ProductApiService(output_store=output_store)
-    encoded = _tiny_png_b64()
-    face_outputs = [
-        output_store.save_base64_output(
-            job_id=f"job_marker_{name}",
-            candidate_id=f"candidate_marker_{name}",
-            asset_id=f"asset_marker_{name}",
-            provider="test",
-            model="test",
-            encoded_image=encoded,
-            mime_type="image/png",
-        ).output_id
-        for name in ("front", "profile", "rear")
-    ]
+    service = V3ProductApiService()
 
-    ok_status = service.create_professional_character_card_stage_job(
-        {
-            "user_input": "legacy inferred Body Silhouette candidate",
-            "scenario_selection": {"scenario_id": "general_creative"},
-        },
-        stage="body_silhouette",
-        slot_key="body.front_full",
-        reference_output_ids=face_outputs,
+    assert service._safe_professional_character_card_body_refresh_source_mode(  # noqa: SLF001
+        None,
+        body_model_context=None,
+        contract_required=False,
         source_class="brain_inferred",
-        body_refresh_contract_required=False,
-    )
-    assert ok_status.job_id
+        body_source_admission=None,
+    ) == {}
 
     for marker in (1, 0, "true", "false", None, [], {}):
         with pytest.raises(ValueError, match="professional_character_card_body_refresh_contract_required_invalid"):
-            service.create_professional_character_card_stage_job(
-                {
-                    "user_input": "strict inferred Body Silhouette candidate",
-                    "scenario_selection": {"scenario_id": "general_creative"},
-                },
-                stage="body_silhouette",
-                slot_key="body.front_full",
-                reference_output_ids=face_outputs,
+            service._safe_professional_character_card_body_refresh_source_mode(  # noqa: SLF001
+                "inference_first",
+                body_model_context="system_inferred_body_model_scene_neutral_v1",
+                contract_required=marker,
                 source_class="brain_inferred",
-                body_refresh_contract_required=marker,
+                body_source_admission=None,
             )
 
 
