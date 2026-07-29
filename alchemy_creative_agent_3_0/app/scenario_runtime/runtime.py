@@ -1717,8 +1717,8 @@ class ScenarioRuntime:
                         "size": requested_size,
                         "shot_plan": [prompt],
                         "composition_rules": [
-                            "full body visible from head to feet",
-                            "plain white studio background",
+                            "full body contained from head to feet",
+                            "body-only source-standard visibility",
                             "single complete image frame",
                         ],
                         "quality_bar": [
@@ -1732,14 +1732,14 @@ class ScenarioRuntime:
                     update={
                         "optimized_direction": prompt,
                         "visual_direction_addons": [prompt],
-                        "layout_notes": ["vertical 2:3 full-body model-card frame"],
+                        "layout_notes": ["vertical 2:3 full-body source-standard frame"],
                         "hard_constraints": [
                             "Use the approved Face Identity references for identity and hair continuity only.",
-                            "Keep a full-body white-studio model-card frame with head, neck, shoulders, torso, hands, legs, and feet visible.",
-                            "Use simple non-styling body-source presentation only so body chain, proportions, stance, and ground contact remain reviewable.",
+                            "Keep a full-body source-standard frame with head, neck, shoulders, torso, hands, legs, and feet visible.",
+                            "Use body-only source presentation so body chain, proportions, stance, and ground contact remain reviewable.",
                         ],
                         "negative_prompt_addons": [
-                            "avoid fashion styling, costume styling, scene-specific wardrobe, or downstream product wardrobe inheritance",
+                            "avoid assigning non-body visual channels or downstream product inheritance",
                             "avoid changing hairstyle category, hair-length tier, bangs or parting pattern",
                         ],
                         "consistency_strategy": "reference_led_character_card_body_slot_delta_recovery",
@@ -2138,20 +2138,16 @@ class ScenarioRuntime:
             "body.rear_full": "rear-view",
         }.get(slot_key, "full-body")
         return (
-            f"A full-body {view} professional model-card photograph of the same person from the approved "
-            "Face Identity references, standing naturally on a clean white studio background. "
-            "Use a photographer's standard full-body model-card distance: the entire figure is visible "
-            "from the top of the head to the feet, with hands, legs, shoulders, neck, "
+            f"A full-body {view} Body Silhouette source-standard materialization of the same person from the approved "
+            "Face Identity references, using those references only for identity continuity. "
+            "The entire figure is visible from the top of the head to the feet, with hands, legs, shoulders, neck, "
             "and head contained inside the frame. "
-            "Use simple non-styling body-source presentation only, with no fixed clothing recipe, so "
-            "body chain, stage-aware proportion, neck-shoulder continuity, torso-limb plausibility, "
-            "stance, and ground contact remain reviewable. "
-            "Preserve identity, age coherence, natural body proportions, and the hairstyle from the "
-            "current Face references: same hairstyle category, same hair-length tier, same bangs or "
-            "parting pattern, and same overall hair outline, allowing natural movement from body pose, "
-            "view angle, and studio light. "
-            "Keep the finish as mature clean commercial photography with soft even studio light and a "
-            "seamless white backdrop."
+            "Resolve only body-owned source channels: body scale, body chain, stage-aware proportion, "
+            "neck-shoulder continuity, torso-limb plausibility, stance-ground contact, and cross-view parity. "
+            "Keep non-body visual channels unspecified. "
+            "Carry identity and hair continuity through the approved Face references: same hairstyle category, "
+            "same hair-length tier, same bangs or parting pattern, and same overall hair outline, allowing natural "
+            "movement from the requested body view."
         )
 
     @staticmethod

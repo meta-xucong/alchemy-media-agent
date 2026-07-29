@@ -9,6 +9,7 @@ or globally apply the contract.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 
@@ -70,6 +71,168 @@ BODY_SILHOUETTE_CROSS_VIEW_PARITY_BLOCKING_ISSUE_CODES = frozenset(
         "view_specific_age_stage_drift",
     }
 )
+
+BODY_SILHOUETTE_MCP_MATERIALIZATION_CHANNEL_CONTRACT_VERSION = (
+    "professional_body_silhouette_mcp_materialization_channel_v1"
+)
+
+BODY_SILHOUETTE_MCP_ALLOWED_BODY_CHANNELS = (
+    "body_proportion",
+    "body_scale",
+    "neck_shoulder_continuity",
+    "torso_limb_relationship",
+    "developmental_stage_body_context",
+    "stance_ground_contact",
+    "cross_view_body_parity",
+)
+
+BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS = (
+    "wardrobe_or_attire_channel_present",
+    "formal_business_styling_present",
+    "expression_or_professional_pose_language_present",
+    "scene_or_studio_styling_present",
+)
+
+_BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS = {
+    "wardrobe_or_attire_channel_present": (
+        "wardrobe",
+        "attire",
+        "outfit",
+        "dress",
+        "skirt",
+        "shirt",
+        "shorts",
+        "shoes",
+        "barefoot",
+        "bare feet",
+    ),
+    "formal_business_styling_present": (
+        "formal",
+        "business",
+        "suit",
+        "blazer",
+        "tie",
+        "commercial photography",
+        "professional model-card",
+        "professional model card",
+    ),
+    "expression_or_professional_pose_language_present": (
+        "expression",
+        "smile",
+        "smiling",
+        "professional pose",
+        "model pose",
+        "headshot",
+        "portrait pose",
+    ),
+    "scene_or_studio_styling_present": (
+        "scene",
+        "studio",
+        "background",
+        "backdrop",
+        "lighting",
+        "camera",
+        "lens",
+        "white field",
+    ),
+}
+
+
+def body_silhouette_mcp_materialization_channel_contract() -> dict[str, Any]:
+    """Return the closed Body-owned channel contract for MCP materialization.
+
+    The contract narrows only Professional Character Card Body Silhouette
+    MCP handoffs.  It does not define a new quality grade, activation state,
+    downstream reference projection, scene recipe, or provider capability.
+    """
+
+    return {
+        "contract_version": BODY_SILHOUETTE_MCP_MATERIALIZATION_CHANNEL_CONTRACT_VERSION,
+        "applies": True,
+        "scope": "professional_character_card_body_silhouette_mcp_materialization_only",
+        "allowed_body_owned_channels": list(BODY_SILHOUETTE_MCP_ALLOWED_BODY_CHANNELS),
+        "face_identity_reference_scope": "identity_continuity_only",
+        "body_reference_scope": "body_only_when_server_resolved_reference_assisted",
+        "non_body_owned_channels": "unspecified_not_authored_by_body_silhouette",
+        "forbidden_channel_findings": list(BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS),
+        "source_mode_scope": ["inference_first", "reference_assisted"],
+    }
+
+
+def body_silhouette_mcp_materialization_prompt_findings(prompt: Any) -> tuple[str, ...]:
+    """Return closed findings for non-Body-owned MCP renderer prompt channels.
+
+    This is a defensive handoff check.  The owning fix remains the Body
+    Silhouette source contract and Brain/recovery prompt contract; this helper
+    prevents stale contracts from reaching MCP materialization.
+    """
+
+    raw_prompt = str(prompt or "").lower().replace("_", " ").replace("-", " ")
+    normalized = " ".join(raw_prompt.split())
+    if not normalized:
+        return ()
+
+    def term_present(term: str) -> bool:
+        normalized_term = " ".join(str(term or "").lower().replace("_", " ").replace("-", " ").split())
+        if not normalized_term:
+            return False
+        if " " in normalized_term:
+            pattern = re.compile(rf"\b{re.escape(normalized_term)}\b")
+        else:
+            pattern = re.compile(rf"\b{re.escape(normalized_term)}\b")
+
+        term_pattern = re.escape(normalized_term).replace(r"\ ", r"\s+")
+
+        def negative_or_unspecified_context() -> bool:
+            return bool(
+                re.search(
+                    r"\b(?:do\s+not\s+(?:author|assign|include|emit|carry|preserve|inherit|lock)|"
+                    r"avoid|without|no|not|never)\b"
+                    rf"[^.?!;:]{{0,160}}\b{term_pattern}\b",
+                    raw_prompt,
+                )
+                or re.search(
+                    rf"\b{term_pattern}\b[^.?!;:]{{0,80}}"
+                    r"\b(?:unspecified|unassigned|not\s+authored|neutral)\b",
+                    raw_prompt,
+                )
+            )
+
+        if negative_or_unspecified_context():
+            return False
+
+        for match in pattern.finditer(normalized):
+            before = normalized[max(0, match.start() - 42):match.start()].strip()
+            after = normalized[match.end():match.end() + 42].strip()
+            local = f"{before} {normalized_term} {after}"
+            if (
+                re.search(
+                    r"\b(no|not|never|without|avoid)\s+"
+                    rf"(?:\w+\s+){{0,4}}{re.escape(normalized_term)}\b",
+                    local,
+                )
+                or re.search(
+                    r"\bdo\s+not\s+(?:author|assign|include|emit|carry|preserve|inherit|lock)\s+"
+                    rf"(?:\w+\s+){{0,4}}{re.escape(normalized_term)}\b",
+                    local,
+                )
+                or re.search(
+                    rf"\b{re.escape(normalized_term)}\s+(?:channel\s+)?(?:unspecified|unassigned|not\s+authored|neutral)\b",
+                    local,
+                )
+            ):
+                continue
+            if normalized_term == "scene" and re.search(r"\bscene\s+neutral\b", local):
+                continue
+            return True
+        return False
+
+    findings: list[str] = []
+    for finding in BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS:
+        terms = _BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS[finding]
+        if any(term_present(term) for term in terms):
+            findings.append(finding)
+    return tuple(findings)
 
 
 def body_silhouette_source_standard_contract() -> dict[str, Any]:
@@ -166,10 +329,15 @@ __all__ = [
     "BODY_SILHOUETTE_CROSS_VIEW_PARITY_BLOCKING_ISSUE_CODES",
     "BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION",
     "BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE",
+    "BODY_SILHOUETTE_MCP_ALLOWED_BODY_CHANNELS",
+    "BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS",
+    "BODY_SILHOUETTE_MCP_MATERIALIZATION_CHANNEL_CONTRACT_VERSION",
     "BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES",
     "BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES",
     "BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS",
     "BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR",
+    "body_silhouette_mcp_materialization_channel_contract",
+    "body_silhouette_mcp_materialization_prompt_findings",
     "body_silhouette_source_standard_contract",
     "validated_body_silhouette_source_standard_contract",
 ]

@@ -206,3 +206,57 @@ def test_index_registers_two_mode_source_contract_without_runtime_authority() ->
     assert "similar-person Body source is bound to the current refresh/card request" in squashed
     assert "not current-person identity truth" in squashed
     assert "cannot replace the Character Card Face Identity references" in squashed
+
+
+def test_mcp_body_materialization_channel_contract_is_documented_without_generation_authority() -> None:
+    mcp = _section(_handoff_text(), "10. MCP Body materialization channel contract closure")
+    squashed = _squash(mcp)
+
+    assert "professional_body_silhouette_mcp_materialization_channel_v1" in mcp
+    assert "professional_character_card_body_silhouette_mcp_materialization_only" in mcp
+    assert "inference_first" in mcp
+    assert "reference_assisted" in mcp
+    for allowed in (
+        "body proportion",
+        "body scale",
+        "neck/shoulder continuity",
+        "torso/limb relationship",
+        "developmental-stage body context",
+        "stance/ground contact",
+        "cross-view body parity",
+    ):
+        assert allowed in mcp
+
+    assert "Character Card Face Identity references remain identity-continuity" in mcp
+    assert "they do not become Body truth, wardrobe truth, pose truth, scene truth" in squashed
+    assert "All non-Body-owned channels must remain unspecified" in mcp
+    for forbidden_channel in (
+        "wardrobe",
+        "attire",
+        "formal or business styling",
+        "suit/headshot",
+        "facial expression",
+        "professional pose",
+        "scene",
+        "studio",
+        "lighting",
+        "camera",
+        "background",
+        "product",
+        "General",
+        "Photography",
+        "E-Commerce",
+    ):
+        assert forbidden_channel in mcp
+
+    assert "reject a stale frozen handoff before MCP handoff creation" in squashed
+    assert "old wardrobe, formal/business, expression/professional-pose, or scene/studio channel findings" in squashed
+    assert "Negative or scene-neutral wording" in mcp
+    assert "This closure does not change the standard three-candidate requirement" in mcp
+    assert "shared review" in squashed
+    assert "formal slot receipt" in squashed
+    assert "card-level cross-view parity" in mcp
+    assert "explicit activation" in mcp
+    assert "downstream General/Photography/E-Commerce projection" in squashed
+    assert "provider cap" in mcp
+    assert "It authorizes no real generation by itself" in mcp

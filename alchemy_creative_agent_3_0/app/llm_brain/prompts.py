@@ -1298,7 +1298,12 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             body_slot = str(slot_delta_target.get("body_slot") or "").strip()
             response_contract += (
                 f" The current Body Silhouette slot is body.{body_slot}. Align the whole-body orientation with that slot "
-                "while using the approved Face Identity references only for identity continuity."
+                "while using the approved Face Identity references only for identity continuity. "
+                "This is a Body-owned source-standard materialization: author only body proportion, body scale, "
+                "neck-shoulder continuity, torso-limb relationship, developmental-stage body context, "
+                "stance-ground contact, and cross-view parity. Do not author wardrobe, attire, formal or business styling, "
+                "headshot language, facial expression, professional pose, scene, studio, lighting, camera, or background recipe; "
+                "keep those non-Body-owned channels unspecified."
             )
     if decision_required:
         response_contract += (

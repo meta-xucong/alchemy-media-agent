@@ -333,3 +333,67 @@ Any older handoff wording that implied all strict Body Silhouette refreshes
 require observed `body_proportion_reference` / `body_proportion_truth` is
 superseded by this section.  Observed Body-only admission is required for
 `reference_assisted`; it is not required for `inference_first`.
+
+## 10. MCP Body materialization channel contract closure
+
+The MCP materialization route uses the same Professional Character Card Body
+Silhouette ownership rules as the Provider route.  The MCP handoff store is a
+transport relay for a frozen canonical prompt and reference hashes; it does
+not own Body source standards, Face Identity, candidate acceptance, or
+activation.
+
+The Body-owner MCP materialization channel contract is:
+
+```text
+contract_version:
+  professional_body_silhouette_mcp_materialization_channel_v1
+scope:
+  professional_character_card_body_silhouette_mcp_materialization_only
+source modes:
+  inference_first
+  reference_assisted
+```
+
+Allowed Body-owned channels are limited to:
+
+- body proportion;
+- body scale;
+- neck/shoulder continuity;
+- torso/limb relationship;
+- developmental-stage body context;
+- stance/ground contact;
+- cross-view body parity.
+
+The current Character Card Face Identity references remain identity-continuity
+evidence only.  They may preserve the same person and approved hair-continuity
+evidence, but they do not become Body truth, wardrobe truth, pose truth, scene
+truth, lighting truth, camera truth, or downstream product truth.
+
+All non-Body-owned channels must remain unspecified by the Body Silhouette MCP
+handoff.  In particular, Body MCP handoff prompts and rendering contracts must
+not author wardrobe, attire, formal or business styling, suit/headshot
+language, facial expression, professional pose, scene, studio, lighting,
+camera, background, product, General, Photography, or E-Commerce recipes.
+Negative or scene-neutral wording that explicitly leaves those channels
+unspecified is allowed as governance language; it is not evidence that the Body
+handoff owns those channels.
+
+The fail-closed boundary is intentionally two-layered:
+
+1. The Body Silhouette planning/recovery contract must only ask the Brain or
+   bounded recovery path for Body-owned channels.
+2. The MCP materialization boundary must reject a stale frozen handoff before
+   MCP handoff creation when the canonical prompt carries old wardrobe,
+   formal/business, expression/professional-pose, or scene/studio channel
+   findings.
+
+This section supersedes any older Body MCP handoff behavior that allowed
+`professional_body_silhouette_wardrobe_v1`, formal/business styling,
+expression/professional-pose language, or studio/scene/camera/lighting recipe
+to enter a new Body Silhouette MCP handoff.
+
+This closure does not change the standard three-candidate requirement, shared
+review, Body source-standard positive evidence, formal slot receipt,
+card-level cross-view parity, pending refresh, explicit activation, downstream
+General/Photography/E-Commerce projection, provider cap, or any real
+Host/MCP/ImageGen authorization.  It authorizes no real generation by itself.

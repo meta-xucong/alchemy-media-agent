@@ -20,7 +20,10 @@ from .authority import (
     ReferenceEvidencePacket,
     VisualAssetBindingSet,
 )
-from .body_silhouette_source_standard import body_silhouette_source_standard_contract
+from .body_silhouette_source_standard import (
+    body_silhouette_mcp_materialization_channel_contract,
+    body_silhouette_source_standard_contract,
+)
 from .contracts import ProfessionalModeBinding
 
 
@@ -342,6 +345,9 @@ class ProfessionalModeRuntimeBridge:
             quality_contract["body_silhouette_contract"] = "preserve_identity_scale_and_age_appropriate_body_proportion"
             quality_contract["body_silhouette_source_standard_contract"] = (
                 body_silhouette_source_standard_contract()
+            )
+            quality_contract["body_silhouette_mcp_materialization_channel_contract"] = (
+                body_silhouette_mcp_materialization_channel_contract()
             )
             quality_contract["body_silhouette_hair_continuity_contract"] = {
                 "contract_version": "professional_body_silhouette_hair_continuity_v1",

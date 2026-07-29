@@ -24,6 +24,10 @@ from ..creative_core.rules import stable_id
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
+from ..visual_assets.body_silhouette_source_standard import (
+    body_silhouette_mcp_materialization_channel_contract,
+    body_silhouette_mcp_materialization_prompt_findings,
+)
 from app.providers.base import ProviderRuntimeError
 from .mcp_materialization import McpMaterializationError, McpMaterializationHandoffStore
 
@@ -5487,6 +5491,7 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
     def _build_app_request(self, request: GenerationRequest):
         app_request, provider_name, reference_assets = super()._build_app_request(request)
         variables = dict(getattr(app_request.prompt_plan, "variables", {}) or {})
+        metadata = self._generation_request_metadata(request)
         contract = {
             "renderer": "codex_builtin_imagegen",
             "model": "gpt-image-2",
@@ -5499,7 +5504,10 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "input_fidelity_required": bool(variables.get("input_fidelity_required")),
             "size_normalization": "white_matte_contain_to_contract_size",
         }
-        metadata = self._generation_request_metadata(request)
+        if self._is_character_card_body_mcp_materialization(metadata):
+            contract["body_silhouette_mcp_materialization_channel_contract"] = (
+                body_silhouette_mcp_materialization_channel_contract()
+            )
         context = {
             "operation_id": str(
                 metadata.get("mcp_operation_id")
@@ -5542,8 +5550,41 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 rendering_contract=dict(context.get("rendering_contract") or contract),
             )
         variables["mcp_materialization_context"] = context
+        self._assert_character_card_body_mcp_materialization_prompt_current(
+            metadata,
+            str(variables.get("generation_prompt") or ""),
+        )
         prompt_plan = app_request.prompt_plan.model_copy(update={"variables": variables})
         return app_request.model_copy(update={"prompt_plan": prompt_plan}), provider_name, reference_assets
+
+    @staticmethod
+    def _is_character_card_body_mcp_materialization(metadata: dict[str, Any]) -> bool:
+        return (
+            str(metadata.get("professional_character_card_stage") or "").strip() == "body_silhouette"
+            and str(metadata.get("professional_character_card_slot") or "").strip().startswith("body.")
+        )
+
+    def _assert_character_card_body_mcp_materialization_prompt_current(
+        self,
+        metadata: dict[str, Any],
+        prompt: str,
+    ) -> None:
+        if not self._is_character_card_body_mcp_materialization(metadata):
+            return
+        findings = body_silhouette_mcp_materialization_prompt_findings(prompt)
+        if not findings:
+            return
+        raise ProviderRuntimeError(
+            "MCP Body Silhouette handoff carries non-Body-owned prompt channels.",
+            provider=self.provider_name,
+            detail={
+                "failure_code": "character_card_body_mcp_source_contract_invalid",
+                "contract_version": body_silhouette_mcp_materialization_channel_contract()["contract_version"],
+                "forbidden_channel_findings": list(findings),
+                "stage": "body_silhouette",
+                "fallback": "blocked",
+            },
+        )
 
     def _mcp_expected_checkpoint_context(
         self,

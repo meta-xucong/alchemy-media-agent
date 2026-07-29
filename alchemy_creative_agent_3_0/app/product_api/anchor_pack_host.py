@@ -34,6 +34,7 @@ from ..visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
+    body_silhouette_mcp_materialization_prompt_findings,
 )
 from ..shared_capabilities.visual_cluster.identity_metric import create_default_identity_metric_provider
 from ..visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
@@ -3856,6 +3857,8 @@ def _character_card_stage_mcp_prompt_current(slot_key: str, prompt: str) -> bool
     slot = str(slot_key or "").strip()
     if not normalized:
         return False
+    if slot.startswith("body."):
+        return not body_silhouette_mcp_materialization_prompt_findings(normalized)
     expression_terms = {
         "expression.laugh": ("laugh", "laughing", "amused", "delighted", "joyful"),
         "expression.smile": ("smile", "smiling", "happy", "joyful", "cheerful"),

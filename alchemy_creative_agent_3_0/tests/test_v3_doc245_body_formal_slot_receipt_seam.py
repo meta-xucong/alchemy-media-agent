@@ -15,8 +15,21 @@ from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetSto
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from app.providers.base import ProviderRuntimeError
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.generation_router.providers import GenerationRequest, McpMaterializationProvider
+from alchemy_creative_agent_3_0.app.schemas import (
+    AssetSpec,
+    AssetType,
+    ConditionPlan,
+    GenerationPlan,
+    LayoutPlan,
+    LayoutRegion,
+    Platform,
+    PromptCompilationResult,
+    ProviderStrategy,
+)
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
     CapabilityActivationPlan,
     TemplateCapabilityPolicy,
@@ -66,9 +79,13 @@ from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import 
 from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION,
     BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE,
+    BODY_SILHOUETTE_MCP_ALLOWED_BODY_CHANNELS,
+    BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS,
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
+    body_silhouette_mcp_materialization_channel_contract,
+    body_silhouette_mcp_materialization_prompt_findings,
     body_silhouette_source_standard_contract,
     validated_body_silhouette_source_standard_contract,
 )
@@ -78,7 +95,10 @@ from alchemy_creative_agent_3_0.app.visual_assets.library import (
     VisualAssetLibraryCatalog,
     VisualAssetLibraryLifecycleService,
 )
-from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
+    ProductApiAnchorPackPreparationHost,
+    _character_card_stage_mcp_prompt_current,
+)
 from alchemy_creative_agent_3_0.app.visual_assets import character_card as character_card_module
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 
@@ -100,6 +120,27 @@ BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS = (
     "skirt_or_dress",
     "body wardrobe contract",
     "body_wardrobe_contract_application",
+)
+
+BODY_MCP_NON_BODY_FORBIDDEN_TERMS = (
+    "professional model-card",
+    "professional model card",
+    "commercial photography",
+    "clean white studio",
+    "white studio",
+    "studio light",
+    "white backdrop",
+    "background",
+    "wardrobe",
+    "attire",
+    "formal",
+    "business",
+    "suit",
+    "headshot",
+    "expression",
+    "professional pose",
+    "camera",
+    "lighting",
 )
 
 
@@ -178,6 +219,68 @@ def _remote_required_body_brain_result(slot_key: str = "body.front_full"):
             metadata=_body_slot_delta_runtime_request(slot_key).metadata,
         ),
         "Remote Brain timed out before the Character Card body slot prompt.",
+    )
+
+
+def _mcp_body_generation_request(
+    prompt: str,
+    *,
+    stage: str = "body_silhouette",
+    slot_key: str = "body.front_full",
+    source_mode: str = "inference_first",
+) -> GenerationRequest:
+    asset = AssetSpec(
+        asset_id="asset_doc245_mcp_body",
+        asset_type=AssetType.SINGLE_IMAGE,
+        platform=Platform.GENERIC,
+        aspect_ratio="2:3",
+        purpose="character_card_body_silhouette",
+    )
+    prompt_compilation = PromptCompilationResult(
+        prompt_compilation_id="prompt_doc245_mcp_body",
+        asset_id=asset.asset_id,
+        visual_prompt="Body Silhouette MCP handoff test.",
+        text_policy="none",
+    )
+    layout = LayoutPlan(
+        layout_plan_id="layout_doc245_mcp_body",
+        asset_id=asset.asset_id,
+        platform=Platform.GENERIC,
+        aspect_ratio="2:3",
+        product_area=LayoutRegion(name="subject", position="full_frame"),
+    )
+    metadata = {
+        "job_id": "job_doc245_mcp_body",
+        "output_index": 0,
+        "generation_channel": "mcp",
+        "mcp_operation_id": "asset_doc245:body_silhouette:body.front_full:1",
+        "professional_character_card_stage": stage,
+        "professional_character_card_slot": slot_key,
+        "professional_character_card_body_refresh_source_mode": source_mode,
+        "llm_brain": {
+            "canonical_provider_prompts": [
+                {
+                    "output_index": 1,
+                    "review_status": "approved",
+                    "prompt": prompt,
+                }
+            ]
+        },
+    }
+    return GenerationRequest(
+        asset_spec=asset,
+        layout_plan=layout,
+        prompt_compilation=prompt_compilation,
+        condition_plan=ConditionPlan(condition_plan_id="condition_doc245_mcp_body", asset_id=asset.asset_id),
+        generation_plan=GenerationPlan(
+            generation_plan_id="generation_doc245_mcp_body",
+            asset_id=asset.asset_id,
+            provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+            candidate_count=1,
+            max_refine_rounds=0,
+            metadata={"output_index": 0},
+        ),
+        metadata=metadata,
     )
 
 
@@ -423,7 +526,8 @@ def test_doc245_body_brain_timeout_uses_bounded_body_slot_delta_recovery() -> No
 
     assert recovered.canonical_provider_prompts
     canonical = recovered.canonical_provider_prompts[0]
-    assert "full-body front-view professional model-card photograph" in canonical.prompt
+    assert "full-body front-view Body Silhouette source-standard materialization" in canonical.prompt
+    assert "body scale" in canonical.prompt
     assert "body chain" in canonical.prompt
     assert "stage-aware proportion" in canonical.prompt
     assert "same hairstyle category" in canonical.prompt
@@ -443,6 +547,9 @@ def test_doc245_body_brain_timeout_uses_bounded_body_slot_delta_recovery() -> No
     ).lower()
     for forbidden in BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS:
         assert forbidden not in serialized_recovery
+    for forbidden in BODY_MCP_NON_BODY_FORBIDDEN_TERMS:
+        assert forbidden not in serialized_recovery
+    assert _character_card_stage_mcp_prompt_current("body.front_full", canonical.prompt)
     assert canonical.reference_led_slot_delta_decision is not None
     assert canonical.reference_led_slot_delta_decision.slot_delta_type == "body_pose"
     assert canonical.provider_admission_decision is not None
@@ -551,6 +658,160 @@ def test_doc245_body_source_standard_prompt_projection_is_scene_neutral() -> Non
         assert dimension in prompt
     for forbidden in BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS:
         assert forbidden not in prompt.lower()
+
+
+def test_doc245_body_stage_metadata_projects_mcp_body_owned_channel_contract() -> None:
+    metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    quality_contract = metadata["professional_face_identity_quality_contract"]
+
+    contract = quality_contract["body_silhouette_mcp_materialization_channel_contract"]
+    expected = body_silhouette_mcp_materialization_channel_contract()
+
+    assert contract == expected
+    assert contract["allowed_body_owned_channels"] == list(BODY_SILHOUETTE_MCP_ALLOWED_BODY_CHANNELS)
+    assert contract["forbidden_channel_findings"] == list(BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS)
+    assert contract["face_identity_reference_scope"] == "identity_continuity_only"
+
+    expression_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="expression_set",
+        slot_key="expression.smile",
+    )
+    expression_quality = expression_metadata["professional_face_identity_quality_contract"]
+    assert "body_silhouette_mcp_materialization_channel_contract" not in expression_quality
+
+
+def test_doc245_body_mcp_handoff_rejects_superseded_non_body_channels() -> None:
+    stale_prompt = (
+        "Create a full-body professional model-card photograph on a clean white studio background. "
+        "Use a formal business suit, white shirt, a pleasant professional smile expression, "
+        "studio lighting, camera-ready portrait pose, and polished commercial photography."
+    )
+
+    findings = body_silhouette_mcp_materialization_prompt_findings(stale_prompt)
+
+    assert findings == BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS
+    assert not _character_card_stage_mcp_prompt_current("body.front_full", stale_prompt)
+
+    provider = McpMaterializationProvider()
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider._assert_character_card_body_mcp_materialization_prompt_current(  # noqa: SLF001
+            {
+                "professional_character_card_stage": "body_silhouette",
+                "professional_character_card_slot": "body.front_full",
+                "professional_character_card_body_refresh_source_mode": "inference_first",
+            },
+            stale_prompt,
+        )
+
+    detail = getattr(exc_info.value, "detail", {})
+    serialized = repr(detail).lower()
+    assert detail["failure_code"] == "character_card_body_mcp_source_contract_invalid"
+    assert detail["forbidden_channel_findings"] == list(BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS)
+    for raw in ("clean white studio", "business suit", "white shirt", "professional smile"):
+        assert raw not in serialized
+
+
+def test_doc245_body_mcp_handoff_allows_inference_and_reference_assisted_body_owned_prompt_only() -> None:
+    prompt = (
+        "Full-body front-view Body Silhouette source-standard materialization. "
+        "Use Face Identity references only for identity continuity. Resolve body scale, body chain, "
+        "stage-aware proportion, neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+        "and cross-view parity. Keep non-body visual channels unspecified."
+    )
+
+    assert _character_card_stage_mcp_prompt_current("body.front_full", prompt)
+    provider = McpMaterializationProvider()
+    for mode in ("inference_first", "reference_assisted"):
+        provider._assert_character_card_body_mcp_materialization_prompt_current(  # noqa: SLF001
+            {
+                "professional_character_card_stage": "body_silhouette",
+                "professional_character_card_slot": "body.front_full",
+                "professional_character_card_body_refresh_source_mode": mode,
+            },
+            prompt,
+        )
+
+
+def test_doc245_body_mcp_prompt_findings_do_not_flag_negative_or_unspecified_governance_language() -> None:
+    prompt = (
+        "Full-body side-view Body Silhouette source-standard materialization. "
+        "Resolve body scale, neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+        "and cross-view parity. Keep scene-neutral body source visibility. "
+        "Do not author wardrobe, attire, formal styling, expression, professional pose, scene, studio, "
+        "lighting, camera, or background; leave those channels unspecified."
+    )
+
+    assert body_silhouette_mcp_materialization_prompt_findings(prompt) == ()
+    assert _character_card_stage_mcp_prompt_current("body.side_full", prompt)
+
+
+def test_doc245_body_mcp_build_app_request_freezes_body_owned_rendering_contract() -> None:
+    prompt = (
+        "Full-body front-view Body Silhouette source-standard materialization. "
+        "Use Face Identity references only for identity continuity. Resolve body scale, body chain, "
+        "stage-aware proportion, neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+        "and cross-view parity. Keep non-body visual channels unspecified."
+    )
+    provider = McpMaterializationProvider()
+
+    app_request, _, _ = provider._build_app_request(  # noqa: SLF001
+        _mcp_body_generation_request(prompt, source_mode="reference_assisted")
+    )
+
+    variables = app_request.prompt_plan.variables
+    context = variables["mcp_materialization_context"]
+    assert context["canonical_prompt"] == prompt
+    assert context["rendering_contract"]["body_silhouette_mcp_materialization_channel_contract"] == (
+        body_silhouette_mcp_materialization_channel_contract()
+    )
+
+
+def test_doc245_body_mcp_build_app_request_blocks_stale_prompt_before_handoff_creation() -> None:
+    stale_prompt = (
+        "Create a full-body professional model-card photograph on a clean white studio background. "
+        "Use formal business attire, a suit, professional smile expression, professional pose, "
+        "studio lighting, and camera-ready pose."
+    )
+    provider = McpMaterializationProvider()
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider._build_app_request(  # noqa: SLF001
+            _mcp_body_generation_request(stale_prompt, source_mode="inference_first")
+        )
+
+    detail = getattr(exc_info.value, "detail", {})
+    assert detail["failure_code"] == "character_card_body_mcp_source_contract_invalid"
+    assert detail["forbidden_channel_findings"] == list(BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS)
+    assert provider.handoff_store.list_unconsumed_by_operation(
+        "asset_doc245:body_silhouette:body.front_full:1"
+    ) == []
+
+
+def test_doc245_body_mcp_channel_contract_isolated_from_expression_and_non_body_paths() -> None:
+    expression_prompt = (
+        "Same face in the front card, smiling naturally with white studio card framing and upper shoulders."
+    )
+
+    assert _character_card_stage_mcp_prompt_current("expression.smile", expression_prompt)
+    provider = McpMaterializationProvider()
+    provider._assert_character_card_body_mcp_materialization_prompt_current(  # noqa: SLF001
+        {
+            "professional_character_card_stage": "expression_set",
+            "professional_character_card_slot": "expression.smile",
+            "generation_channel": "mcp",
+        },
+        expression_prompt,
+    )
+    provider._assert_character_card_body_mcp_materialization_prompt_current(  # noqa: SLF001
+        {
+            "professional_template": "ecommerce_template",
+            "generation_channel": "mcp",
+        },
+        "A product-on-person prompt may keep product styling in the E-Commerce owner path.",
+    )
 
 
 def test_doc245_generic_projector_preserves_body_source_standard_dimensions_only_when_allowed() -> None:
