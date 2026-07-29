@@ -1514,6 +1514,8 @@ class ProductApiAnchorPackPreparationHost:
                 slot_key=request.slot_key,
                 reference_output_ids=request.reference_output_ids,
                 source_class=request.source_class,
+                body_refresh_source_mode=request.body_refresh_source_mode,
+                body_model_context=request.body_model_context,
                 body_source_admission=(
                     request.body_source_admission.model_dump(mode="json")
                     if request.body_source_admission is not None

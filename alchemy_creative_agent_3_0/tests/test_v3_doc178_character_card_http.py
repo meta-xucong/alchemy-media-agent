@@ -255,6 +255,12 @@ class _SharedStageHost:
             user_intent="shared-runtime-owned test intent",
             source_class="observed" if module == "body_silhouette" else None,
             consent_provenance_id="body-consent" if module == "body_silhouette" else None,
+            body_refresh_source_mode="reference_assisted" if module == "body_silhouette" else None,
+            body_model_context=(
+                "similar_person_body_reference_assisted_v1"
+                if module == "body_silhouette"
+                else None
+            ),
             body_source_admission=(
                 {
                     "contract_version": "professional_body_source_admission_v1",

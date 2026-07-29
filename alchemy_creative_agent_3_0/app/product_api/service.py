@@ -937,6 +937,8 @@ class V3ProductApiService:
         professional_character_card_slot: str | None = None,
         professional_character_card_reference_output_ids: list[str] | None = None,
         professional_character_card_source_class: str | None = None,
+        professional_character_card_body_refresh_source_mode: str | None = None,
+        professional_character_card_body_model_context: str | None = None,
         professional_character_card_body_source_admission: dict[str, Any] | None = None,
         professional_character_card_attempt_round: int = 1,
         generation_channel: Literal["provider", "mcp"] = "provider",
@@ -1028,14 +1030,20 @@ class V3ProductApiService:
             if not reference_ids or len(reference_ids) != len(set(reference_ids)):
                 raise ValueError("professional_character_card_reference_chain_invalid")
             if professional_character_card_stage == "body_silhouette":
-                if professional_character_card_source_class in {"observed", "user_described"} and (
-                    professional_character_card_body_source_admission is None
-                ):
+                if professional_character_card_source_class == "observed" and professional_character_card_body_source_admission is None:
                     raise ValueError("professional_character_card_body_source_admission_required")
                 if professional_character_card_source_class == "brain_inferred" and (
                     professional_character_card_body_source_admission is not None
                 ):
                     raise ValueError("professional_character_card_body_source_admission_forbidden")
+                source_mode_contract = self._safe_professional_character_card_body_refresh_source_mode(
+                    professional_character_card_body_refresh_source_mode,
+                    body_model_context=professional_character_card_body_model_context,
+                    source_class=professional_character_card_source_class,
+                    body_source_admission=professional_character_card_body_source_admission,
+                )
+            else:
+                source_mode_contract = {}
             planning_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
                 stage=professional_character_card_stage,
                 slot_key=str(professional_character_card_slot),
@@ -1051,6 +1059,7 @@ class V3ProductApiService:
                 "professional_character_card_stage": professional_character_card_stage,
                 "professional_character_card_slot": str(professional_character_card_slot),
                 "professional_character_card_source_class": professional_character_card_source_class,
+                **source_mode_contract,
                 "professional_character_card_attempt_round": max(
                     1, int(professional_character_card_attempt_round)
                 ),
@@ -1290,6 +1299,8 @@ class V3ProductApiService:
         slot_key: str,
         reference_output_ids: list[str],
         source_class: str | None = None,
+        body_refresh_source_mode: str | None = None,
+        body_model_context: str | None = None,
         body_source_admission: dict[str, Any] | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
@@ -1305,6 +1316,8 @@ class V3ProductApiService:
             professional_character_card_slot=slot_key,
             professional_character_card_reference_output_ids=list(reference_output_ids),
             professional_character_card_source_class=source_class,
+            professional_character_card_body_refresh_source_mode=body_refresh_source_mode,
+            professional_character_card_body_model_context=body_model_context,
             professional_character_card_body_source_admission=body_source_admission,
             professional_character_card_attempt_round=attempt_round,
             generation_channel=generation_channel,
@@ -1465,6 +1478,44 @@ class V3ProductApiService:
                 }
             )
         return references
+
+    @staticmethod
+    def _safe_professional_character_card_body_refresh_source_mode(
+        source_mode: str | None,
+        *,
+        body_model_context: str | None,
+        source_class: str | None,
+        body_source_admission: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if source_class == "observed":
+            if source_mode != "reference_assisted":
+                raise ValueError("professional_character_card_body_refresh_source_mode_invalid")
+            if body_model_context != "similar_person_body_reference_assisted_v1":
+                raise ValueError("professional_character_card_body_model_context_invalid")
+            if body_source_admission is None:
+                raise ValueError("professional_character_card_body_source_admission_required")
+            return {
+                "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
+            }
+        if source_class == "brain_inferred":
+            if source_mode != "inference_first":
+                raise ValueError("professional_character_card_body_refresh_source_mode_invalid")
+            if body_model_context != "system_inferred_body_model_scene_neutral_v1":
+                raise ValueError("professional_character_card_body_model_context_invalid")
+            if body_source_admission is not None:
+                raise ValueError("professional_character_card_body_source_admission_forbidden")
+            return {
+                "professional_character_card_body_refresh_source_mode": "inference_first",
+                "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            }
+        if source_class == "user_described":
+            if source_mode is not None or body_model_context is not None:
+                raise ValueError("professional_character_card_body_refresh_source_mode_forbidden")
+            return {}
+        if source_mode is not None or body_model_context is not None:
+            raise ValueError("professional_character_card_body_refresh_source_mode_forbidden")
+        return {}
 
     @staticmethod
     def _safe_professional_character_card_body_source_admission(
@@ -8986,6 +9037,8 @@ class V3ProductApiService:
             "professional_character_card_stage",
             "professional_character_card_slot",
             "professional_character_card_source_class",
+            "professional_character_card_body_refresh_source_mode",
+            "professional_character_card_body_model_context",
             "professional_character_card_reference_output_ids",
             "professional_character_card_body_source_admission",
             "generation_channel",
