@@ -12,6 +12,7 @@ from PIL import Image
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
+from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
@@ -1698,6 +1699,101 @@ def test_doc245_anchor_host_propagates_closed_pre_durable_candidate_lifecycle_bo
         assert forbidden not in serialized
 
 
+def test_doc245_anchor_host_sends_server_owned_candidate_index_to_product_api_boundary() -> None:
+    class _CapturingBoundaryProductService:
+        visual_asset_catalog = object()
+
+        def __init__(self) -> None:
+            self.captured_kwargs: dict[str, object] | None = None
+
+        def create_professional_character_card_stage_job(self, *args: object, **kwargs: object) -> object:
+            self.captured_kwargs = dict(kwargs)
+            raise CharacterCardCandidateLifecycleBoundaryError(
+                lifecycle_phase="planning",
+                failure_family="candidate_planning",
+                failure_code="candidate_pre_durable_planning_blocked",
+            )
+
+    service = _CapturingBoundaryProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    request = _body_attempt(2, slot_key="body.rear_full").request
+
+    with pytest.raises(CharacterCardCandidateLifecycleBoundaryError):
+        host.generate(request)
+
+    assert service.captured_kwargs is not None
+    assert service.captured_kwargs["stage"] == "body_silhouette"
+    assert service.captured_kwargs["slot_key"] == "body.rear_full"
+    assert service.captured_kwargs["candidate_index"] == 2
+
+
+def test_doc245_anchor_generated_review_extraction_gap_projects_closed_lifecycle_boundary() -> None:
+    class _EmptyOutputStore:
+        def list_by_job(self, job_id: str) -> list[object]:
+            return []
+
+    class _GeneratedButUnboundProductService:
+        visual_asset_catalog = object()
+
+        def __init__(self) -> None:
+            self.output_store = _EmptyOutputStore()
+
+        def create_professional_character_card_stage_job(self, *args: object, **kwargs: object) -> object:
+            return SimpleNamespace(job_id="safe_job_generated_unbound", status=ProductJobStatusValue.PLANNED)
+
+        def generate_job(self, job_id: str, payload: dict[str, object]) -> object:
+            return SimpleNamespace(job_id=job_id, status=ProductJobStatusValue.GENERATED, metadata={})
+
+        def get_job_record(self, job_id: str) -> object:
+            return SimpleNamespace(
+                generation_result=SimpleNamespace(
+                    metadata={
+                        "post_generation_review_package": {
+                            "inspections": [
+                                {
+                                    "output_id": "v3_output_missing_store",
+                                    "raw_prompt": "raw prompt must not leak",
+                                    "provider_payload": "secret provider payload",
+                                    "source_url": "https://provider.invalid/private",
+                                    "path": "C:\\private\\artifact.png",
+                                }
+                            ]
+                        }
+                    }
+                ),
+                planning_result=None,
+                request=SimpleNamespace(metadata={}),
+            )
+
+    host = ProductApiAnchorPackPreparationHost(_GeneratedButUnboundProductService())  # type: ignore[arg-type]
+    request = _body_attempt(2, slot_key="body.rear_full").request
+
+    with pytest.raises(CharacterCardCandidateLifecycleBoundaryError) as raised:
+        host.generate(request)
+
+    public = CharacterCardPreparationService._candidate_lifecycle_projection_from_exception(  # noqa: SLF001
+        raised.value,
+        module="body_silhouette",
+        slot_key="body.rear_full",
+        candidate_index=2,
+        default_phase="review",
+        default_family="candidate_review",
+        default_code="candidate_review_blocked",
+    )
+    assert public.lifecycle_phase == "review"
+    assert public.failure_family == "candidate_review"
+    assert public.failure_code == "candidate_review_extraction_unbound"
+    serialized = public.model_dump_json()
+    for forbidden in (
+        "raw prompt",
+        "provider_payload",
+        "https://provider.invalid",
+        "C:\\private",
+        "v3_output_missing_store",
+    ):
+        assert forbidden not in serialized
+
+
 def test_doc245_body_formal_failure_projection_classifies_source_standard_missing_separately() -> None:
     class _MissingSourceStandardReviewer(_BodyReviewer):
         def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
@@ -2428,6 +2524,7 @@ def test_doc245_public_metadata_cannot_forge_body_refresh_source_mode() -> None:
                 "professional_character_card_body_refresh_source_mode": "inference_first",
                 "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
                 "professional_character_card_body_refresh_contract_required": True,
+                "professional_character_card_candidate_index": 2,
                 "body_reference_asset_id": "D:/unsafe/body.png",
                 "raw_body_facts": "raw_prompt provider_payload https://example.invalid",
             },
@@ -2453,6 +2550,7 @@ def test_doc245_product_api_body_stage_rejects_missing_or_forbidden_source_admis
             stage="body_silhouette",
             slot_key="body.front_full",
             reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+            candidate_index=1,
             source_class="observed",
             body_refresh_source_mode="reference_assisted",
             body_model_context="similar_person_body_reference_assisted_v1",
@@ -2467,6 +2565,7 @@ def test_doc245_product_api_body_stage_rejects_missing_or_forbidden_source_admis
             stage="body_silhouette",
             slot_key="body.front_full",
             reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+            candidate_index=1,
             source_class="brain_inferred",
             body_refresh_source_mode="inference_first",
             body_model_context="system_inferred_body_model_scene_neutral_v1",
@@ -2646,6 +2745,16 @@ def test_doc245_product_api_body_refresh_contract_required_marker_is_strict_bool
                 source_class="brain_inferred",
                 body_source_admission=None,
             )
+
+
+def test_doc245_product_api_character_card_candidate_index_is_strict_server_owned_int() -> None:
+    service = V3ProductApiService()
+
+    assert service._safe_professional_character_card_candidate_index(1) == 1  # noqa: SLF001
+    assert service._safe_professional_character_card_candidate_index(3) == 3  # noqa: SLF001
+    for value in (0, 4, True, False, "1", "3", None, [], {}):
+        with pytest.raises(ValueError, match="professional_character_card_candidate_index_invalid"):
+            service._safe_professional_character_card_candidate_index(value)  # noqa: SLF001[arg-type]
 
 
 def _safe_provider_no_pixel_retry_summary() -> dict[str, object]:

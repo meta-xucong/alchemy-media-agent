@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, Literal
 
 from PIL import Image
 
@@ -49,6 +49,7 @@ from ..visual_assets.anchor_pack import (
 from ..visual_assets.character_card import (
     BodyPreparationRequest,
     CharacterCardCandidateAttempt,
+    CharacterCardCandidateLifecycleBoundaryError,
     CharacterCardCandidateRequest,
     CharacterCardCandidateResult,
     CharacterCardFailureEvent,
@@ -1516,6 +1517,7 @@ class ProductApiAnchorPackPreparationHost:
                 stage=request.module,
                 slot_key=request.slot_key,
                 reference_output_ids=request.reference_output_ids,
+                candidate_index=request.candidate_index,
                 source_class=request.source_class,
                 body_refresh_source_mode=request.body_refresh_source_mode,
                 body_model_context=request.body_model_context,
@@ -2445,7 +2447,9 @@ class ProductApiAnchorPackPreparationHost:
         record = self.product_service.get_job_record(job_id)
         result = record.generation_result if record is not None else None
         if result is None:
-            raise RuntimeError("character_card_generation_result_missing")
+            raise self._character_card_candidate_review_boundary(
+                "candidate_review_generation_result_missing"
+            )
         package = result.metadata.get("post_generation_review_package")
         inspections = [
             dict(item)
@@ -2454,7 +2458,9 @@ class ProductApiAnchorPackPreparationHost:
         ]
         outputs = self.product_service.output_store.list_by_job(job_id)
         if not outputs or not inspections:
-            raise RuntimeError("character_card_real_pixel_review_missing")
+            raise self._character_card_candidate_review_boundary(
+                "candidate_review_extraction_unbound"
+            )
         by_output = {
             str(item.get("output_id") or ""): item
             for item in inspections
@@ -2462,7 +2468,9 @@ class ProductApiAnchorPackPreparationHost:
         }
         reviewed = [item for item in outputs if item.output_id in by_output]
         if not reviewed:
-            raise RuntimeError("character_card_review_output_binding_missing")
+            raise self._character_card_candidate_review_boundary(
+                "candidate_review_output_binding_missing"
+            )
         selected = max(reviewed, key=lambda item: self._review_rank(by_output[item.output_id]))
         inspection = by_output[selected.output_id]
         raw_status = _inspection_status(inspection)
@@ -2619,6 +2627,20 @@ class ProductApiAnchorPackPreparationHost:
         if expression_model_card_proofs is not None:
             object.__setattr__(review, "expression_model_card_proofs", expression_model_card_proofs)
         return candidate, review
+
+    @staticmethod
+    def _character_card_candidate_review_boundary(
+        failure_code: Literal[
+            "candidate_review_generation_result_missing",
+            "candidate_review_extraction_unbound",
+            "candidate_review_output_binding_missing",
+        ],
+    ) -> CharacterCardCandidateLifecycleBoundaryError:
+        return CharacterCardCandidateLifecycleBoundaryError(
+            lifecycle_phase="review",
+            failure_family="candidate_review",
+            failure_code=failure_code,
+        )
 
     @staticmethod
     def _character_card_job_metadata(record: Any) -> dict[str, Any]:

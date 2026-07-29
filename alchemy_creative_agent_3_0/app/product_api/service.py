@@ -941,6 +941,7 @@ class V3ProductApiService:
         professional_character_card_body_model_context: str | None = None,
         professional_character_card_body_refresh_contract_required: bool = False,
         professional_character_card_body_source_admission: dict[str, Any] | None = None,
+        professional_character_card_candidate_index: int | None = None,
         professional_character_card_attempt_round: int = 1,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
@@ -1023,6 +1024,9 @@ class V3ProductApiService:
                 raise ValueError("professional_character_card_stage_invalid")
             if not str(professional_character_card_slot or "").strip():
                 raise ValueError("professional_character_card_slot_invalid")
+            character_card_candidate_index = self._safe_professional_character_card_candidate_index(
+                professional_character_card_candidate_index
+            )
             reference_ids = [
                 str(item or "").strip()
                 for item in (professional_character_card_reference_output_ids or [])
@@ -1062,6 +1066,7 @@ class V3ProductApiService:
                 "professional_character_card_preparation": True,
                 "professional_character_card_stage": professional_character_card_stage,
                 "professional_character_card_slot": str(professional_character_card_slot),
+                "professional_character_card_candidate_index": character_card_candidate_index,
                 "professional_character_card_source_class": professional_character_card_source_class,
                 **source_mode_contract,
                 "professional_character_card_attempt_round": max(
@@ -1302,6 +1307,7 @@ class V3ProductApiService:
         stage: Literal["expression_set", "body_silhouette"],
         slot_key: str,
         reference_output_ids: list[str],
+        candidate_index: int,
         source_class: str | None = None,
         body_refresh_source_mode: str | None = None,
         body_model_context: str | None = None,
@@ -1320,6 +1326,7 @@ class V3ProductApiService:
             professional_character_card_stage=stage,
             professional_character_card_slot=slot_key,
             professional_character_card_reference_output_ids=list(reference_output_ids),
+            professional_character_card_candidate_index=candidate_index,
             professional_character_card_source_class=source_class,
             professional_character_card_body_refresh_source_mode=body_refresh_source_mode,
             professional_character_card_body_model_context=body_model_context,
@@ -1531,6 +1538,12 @@ class V3ProductApiService:
         if strict_source_mode:
             raise ValueError("professional_character_card_body_refresh_source_mode_forbidden")
         return {}
+
+    @staticmethod
+    def _safe_professional_character_card_candidate_index(value: int | None) -> int:
+        if type(value) is not int or value < 1 or value > 3:
+            raise ValueError("professional_character_card_candidate_index_invalid")
+        return value
 
     @staticmethod
     def _safe_professional_character_card_body_source_admission(
@@ -9148,6 +9161,7 @@ class V3ProductApiService:
             "professional_character_card_preparation",
             "professional_character_card_stage",
             "professional_character_card_slot",
+            "professional_character_card_candidate_index",
             "professional_character_card_source_class",
             "professional_character_card_body_refresh_source_mode",
             "professional_character_card_body_model_context",
