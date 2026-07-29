@@ -67,17 +67,23 @@ def test_source_mode_and_reference_admission_are_server_owned_not_client_forged(
 def test_reference_assisted_requires_server_resolved_body_truth_and_keeps_channels_separate() -> None:
     source_mode = _section(_handoff_text(), "9. Body refresh source-mode closure")
     assisted = source_mode.split("### 9.1 `reference_assisted`", 1)[1].split("### 9.2", 1)[0]
+    squashed = _squash(assisted)
 
     for required in (
         "source class is `observed`",
         "role is `body_proportion_reference`",
         "`metadata.reference_truth_layer` is `body_proportion_truth`",
         "consent or rights provenance is present",
-        "bound to the current Professional Character Card subject",
     ):
         assert required in assisted
 
+    assert "similar-person full-body proportion reference" in squashed
+    assert "must not be represented as, the same person as the current Character Card subject" in squashed
+    assert "source provenance is bound to the current Professional Character Card Body refresh/card request" in squashed
+    assert "not as same-person identity evidence" in squashed
     assert "not Face Identity truth" in assisted
+    assert "current subject's Face Identity remains owned by the existing Character Card Face Identity references" in squashed
+    assert "cannot replace, override, or weaken those Face Identity references" in squashed
     for forbidden_lock in (
         "wardrobe",
         "pose",
@@ -197,3 +203,6 @@ def test_index_registers_two_mode_source_contract_without_runtime_authority() ->
     assert "Historical brain-inferred active Body slots remain readable" in squashed
     assert "not relabelled observed" in squashed
     assert "pending refresh and explicit activation remain separate gates" in squashed
+    assert "similar-person Body source is bound to the current refresh/card request" in squashed
+    assert "not current-person identity truth" in squashed
+    assert "cannot replace the Character Card Face Identity references" in squashed

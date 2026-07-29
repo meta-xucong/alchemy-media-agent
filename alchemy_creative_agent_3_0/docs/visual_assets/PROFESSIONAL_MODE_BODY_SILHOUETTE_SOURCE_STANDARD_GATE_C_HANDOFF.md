@@ -245,14 +245,19 @@ path, a filename, an output id, provider payload, or free prompt prose.
 ### 9.1 `reference_assisted`
 
 `reference_assisted` is used only when the server resolver admits a ready
-Body-only source for the current person.  Its reference admission must be
-computed by the server and must prove all of the following:
+Body-only source for the current Body Silhouette refresh/card request.  The
+source may be a similar-person full-body proportion reference supplied for
+body modeling; it is not required to be, and must not be represented as, the
+same person as the current Character Card subject.  Its reference admission
+must be computed by the server and must prove all of the following:
 
 - source class is `observed`;
 - role is `body_proportion_reference`;
 - `metadata.reference_truth_layer` is `body_proportion_truth`;
 - consent or rights provenance is present;
-- the source is bound to the current Professional Character Card subject.
+- the source provenance is bound to the current Professional Character Card
+  Body refresh/card request as Body-only proportion evidence, not as same-person
+  identity evidence.
 
 The admitted Body reference may be projected only as Body-owner evidence for
 body scale, neck/shoulder transition, torso/limb proportion,
@@ -260,6 +265,9 @@ developmental-stage coherence, stance/ground contact, and cross-view support.
 It is not Face Identity truth and must not lock wardrobe, pose, lighting,
 camera, expression, background, scene, product identity, swimwear, poolside,
 kidswear, E-Commerce, Photography, or General deliverable semantics.
+The current subject's Face Identity remains owned by the existing Character
+Card Face Identity references; a similar-person Body reference cannot replace,
+override, or weaken those Face Identity references.
 
 Client-provided `body_reference_admission`, raw metadata, user-described body
 facts, paths, URLs, provider payloads, asset ids, or output ids cannot make a

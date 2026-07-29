@@ -225,7 +225,10 @@ Body reference exists. The source mode is server-owned and cannot be forged by
 client metadata, raw `body_facts`, paths, URLs, asset/output ids, provider
 payloads, or free prompt prose. Historical brain-inferred active Body slots
 remain readable and are not relabelled observed; pending refresh and explicit
-activation remain separate gates.
+activation remain separate gates. A `reference_assisted` similar-person Body
+source is bound to the current refresh/card request only as Body-only
+proportion evidence; it is not current-person identity truth and cannot replace
+the Character Card Face Identity references.
 
 ### M5 Real-Pixel Acceptance Record
 
