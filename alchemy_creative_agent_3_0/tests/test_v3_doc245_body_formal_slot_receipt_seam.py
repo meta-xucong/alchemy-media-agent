@@ -11,6 +11,9 @@ from PIL import Image
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
+from alchemy_creative_agent_3_0.app.llm_brain.prompts import (
+    _canonical_provider_prompt_finalization_payload,
+)
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
@@ -282,6 +285,68 @@ def _mcp_body_generation_request(
         ),
         metadata=metadata,
     )
+
+
+def _doc245_slot_delta_finalizer_context(*, stage: str, slot_key: str) -> dict[str, object]:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage=stage,
+        slot_key=slot_key,
+    )
+    slot_delta_contract = dict(stage_metadata["reference_led_slot_delta_contract"])
+    slot_delta_contract["frozen_binding"] = {
+        "envelope_id": "opaque_doc245_envelope",
+        "ledger_id": "opaque_doc245_ledger",
+    }
+    context: dict[str, object] = {
+        "frozen_binding": {
+            "envelope_id": "opaque_doc245_envelope",
+            "ledger_id": "opaque_doc245_ledger",
+        },
+        "professional_face_identity_quality_contract": stage_metadata[
+            "professional_face_identity_quality_contract"
+        ],
+        "reference_led_slot_delta_decision": slot_delta_contract,
+        "provider_admission_decision": {
+            "required": True,
+            "contract_version": "v3_provider_admission_decision_v1",
+            "provider_admission_status": "admitted",
+            "prompt_language_mode": "concise_positive_renderer_direction",
+            "safety_sensitive_prompt_normalized": "applied",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": {
+                "envelope_id": "opaque_doc245_envelope",
+                "ledger_id": "opaque_doc245_ledger",
+            },
+        },
+    }
+    if stage == "body_silhouette":
+        context["character_card_slot_delta_target"] = {
+            "stage": "body_silhouette",
+            "slot_key": slot_key,
+            "body_slot": slot_key.split(".", 1)[1],
+        }
+    if stage == "expression_set":
+        context["character_card_slot_delta_target"] = {
+            "stage": "expression_set",
+            "slot_key": slot_key,
+            "expression": slot_key.split(".", 1)[1],
+        }
+    return context
+
+
+def _doc245_finalizer_response_contract(context: dict[str, object]) -> str:
+    payload = _canonical_provider_prompt_finalization_payload(
+        BrainRunRequest(
+            user_input="Finalize one Professional Character Card slot prompt.",
+            stage="provider_prompt_finalize",
+            scenario_id="general_creative",
+            template_id="general_template",
+            requested_image_count=1,
+            requested_image_size="1024x1536",
+            metadata={"canonical_prompt_context": context},
+        )
+    )
+    return str(payload["remote_response_contract"])
 
 
 def _generic_body_shared_receipt(
@@ -681,6 +746,105 @@ def test_doc245_body_stage_metadata_projects_mcp_body_owned_channel_contract() -
     )
     expression_quality = expression_metadata["professional_face_identity_quality_contract"]
     assert "body_silhouette_mcp_materialization_channel_contract" not in expression_quality
+
+
+def test_doc245_body_canonical_finalizer_uses_body_owned_contract_not_face_anchor_pack() -> None:
+    context = _doc245_slot_delta_finalizer_context(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+
+    contract = _doc245_finalizer_response_contract(context)
+    normalized = contract.lower()
+
+    for required in (
+        "body-owned source-standard materialization",
+        "body proportion",
+        "body scale",
+        "neck-shoulder continuity",
+        "torso-limb relationship",
+        "developmental-stage body context",
+        "stance-ground contact",
+        "cross-view parity",
+        "approved face identity references only for identity continuity",
+        "non-body-owned channels unspecified",
+    ):
+        assert required in normalized
+
+    for forbidden in (
+        "professional face identity anchor-pack contract",
+        "mature photographer-shot model-card baseline",
+        "commercially clean",
+        "product framing and photography-quality boundary",
+        "selected view and user-owned styling intact",
+        "mature model-card photography finish",
+    ):
+        assert forbidden not in normalized
+
+    assert body_silhouette_mcp_materialization_prompt_findings(contract) == ()
+
+
+def test_doc245_face_and_expression_canonical_finalizers_keep_face_contract() -> None:
+    expression_context = _doc245_slot_delta_finalizer_context(
+        stage="expression_set",
+        slot_key="expression.smile",
+    )
+    expression_contract = _doc245_finalizer_response_contract(expression_context).lower()
+
+    assert "professional face identity anchor-pack contract" in expression_contract
+    assert "mature photographer-shot model-card baseline" in expression_contract
+    assert "the current expression slot is expression.smile" in expression_contract
+
+    face_context = {
+        "frozen_binding": {
+            "envelope_id": "opaque_doc245_envelope",
+            "ledger_id": "opaque_doc245_ledger",
+        },
+        "professional_face_identity_quality_contract": {
+            "contract_version": "professional_face_identity_quality_v2",
+            "scope": "character_card_face_identity",
+            "owner": "remote_v3_llm_brain",
+            "capture_presentation": "neutral_identity_evidence_capture",
+            "geometry_scope": "face_and_head_only",
+        },
+        "professional_anchor_view_decision": {
+            "required": True,
+            "contract_version": "v3_professional_anchor_view_decision_v3",
+            "target_view_role": "standard_front",
+            "capture_presentation": "neutral_identity_evidence_capture",
+            "capture_continuity": "establish_neutral_capture",
+            "capture_scope": "character_card_face_identity",
+            "framing_standard": "consistent_head_and_upper_shoulders_reference_crop",
+            "crop_policy": "head_top_margin_full_face_neck_and_upper_shoulders_visible",
+            "torso_scope": "visible_neck_collar_and_upper_shoulders",
+            "aspect_ratio_standard": "honor_frozen_rendering_size_as_reference_card_aspect_ratio",
+            "source_viewpoint_inheritance": "identity_only_do_not_inherit_source_pose_angle",
+            "front_pose_normalization": "standard_front_model_card_view",
+            "face_axis_alignment": "camera_facing_front_model_card_view",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": {
+                "envelope_id": "opaque_doc245_envelope",
+                "ledger_id": "opaque_doc245_ledger",
+            },
+        },
+        "provider_admission_decision": {
+            "required": True,
+            "contract_version": "v3_provider_admission_decision_v1",
+            "provider_admission_status": "admitted",
+            "prompt_language_mode": "concise_positive_renderer_direction",
+            "safety_sensitive_prompt_normalized": "applied",
+            "owner": "remote_v3_llm_brain",
+            "frozen_binding": {
+                "envelope_id": "opaque_doc245_envelope",
+                "ledger_id": "opaque_doc245_ledger",
+            },
+        },
+    }
+    face_contract = _doc245_finalizer_response_contract(face_context).lower()
+
+    assert "professional face identity anchor-pack contract" in face_contract
+    assert "mature photographer-shot model-card baseline" in face_contract
+    assert "character card face identity capture" in face_contract
 
 
 def test_doc245_body_mcp_handoff_rejects_superseded_non_body_channels() -> None:

@@ -1104,6 +1104,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     )
     if isinstance(slot_delta_requirement, dict) and not slot_delta_required:
         raise ValueError("Reference-led slot-delta finalization requires one valid frozen Brain contract.")
+    body_slot_delta_finalization = bool(
+        slot_delta_required
+        and slot_delta_type == "body_pose"
+        and str(slot_delta_target.get("body_slot") or "").strip()
+    )
     if decision_required and not (
         isinstance(decision_requirement, dict)
         and decision_requirement.get("required") is True
@@ -1294,7 +1299,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
                     "Keep the same 2:3 front-card head/neck/upper-shoulder framing, camera distance, white background, lighting and white balance "
                     "from the approved neutral front card; vary only the facial affect and a tiny amount of natural head-shoulder energy."
                 )
-        if slot_delta_type == "body_pose" and slot_delta_target.get("body_slot"):
+        if body_slot_delta_finalization:
             body_slot = str(slot_delta_target.get("body_slot") or "").strip()
             response_contract += (
                 f" The current Body Silhouette slot is body.{body_slot}. Align the whole-body orientation with that slot "
@@ -1487,7 +1492,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "head, neck and upper-shoulder Face Identity crop."
         )
     professional_anchor_contract = context.get("professional_face_identity_quality_contract")
-    if isinstance(professional_anchor_contract, dict):
+    if isinstance(professional_anchor_contract, dict) and not body_slot_delta_finalization:
         response_contract += (
             " For the Professional Face Identity anchor-pack contract, likeness to the selected person is the first-order "
             "criterion. Preserve the person's age direction and distinctive feature relationships before aesthetic polish. "
