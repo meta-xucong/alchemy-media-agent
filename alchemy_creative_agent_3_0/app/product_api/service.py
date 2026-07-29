@@ -7000,7 +7000,10 @@ class V3ProductApiService:
             scenario=self._scenario_summary(record),
             balance_estimate=dict(record.balance_estimate),
             routes=get_route_contracts(),
-            warnings=list(dict.fromkeys(record.warnings)),
+            warnings=self._public_job_warnings(
+                list(record.warnings),
+                dict(record.request.metadata or {}),
+            ),
             general_creative=self._general_creative_summary(record),
             ecommerce=self._ecommerce_summary(record),
             metadata={
@@ -7659,13 +7662,12 @@ class V3ProductApiService:
             "remaining_roles_failed": True,
             "append_only_history_preserved": True,
         }
-        warnings = list(
-            dict.fromkeys(
-                [
-                    *record.warnings,
-                    "A generated image was preserved after a later set role failed; it is available as a recoverable partial result.",
-                ]
-            )
+        warnings = self._public_job_warnings(
+            [
+                *record.warnings,
+                "A generated image was preserved after a later set role failed; it is available as a recoverable partial result.",
+            ],
+            dict(record.request.metadata or {}),
         )
         return restored.model_copy(
             update={
@@ -8968,6 +8970,10 @@ class V3ProductApiService:
                 and "output review ran without live image inspection" not in str(warning).lower()
                 and "no candidate pixels supplied; review is metadata-only" not in str(warning).lower()
             ]
+        warnings = self._public_job_warnings(
+            warnings,
+            dict(record.request.metadata or {}),
+        )
         return self._public_warnings_from(warnings, scenario_id="general_creative")
 
     def _public_warnings_from(self, warnings: list[Any], *, scenario_id: str) -> list[str]:

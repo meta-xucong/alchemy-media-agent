@@ -131,6 +131,37 @@ def _malformed_remote_outcome() -> dict[str, object]:
     }
 
 
+def _provider_no_pixel_retry_summary() -> dict[str, object]:
+    return {
+        "executed_count": 0,
+        "max_attempts": 1,
+        "fresh_upstream_requests": 1,
+        "final_status": "failed",
+        "final_classification": "non_retryable_provider_failure",
+        "final_failure_code": "image_edit_invalid_request_unattributed",
+        "attempts": [
+            {
+                "attempt": 1,
+                "status": "failed",
+                "classification": "non_retryable_provider_failure",
+                "failure_code": "image_edit_invalid_request_unattributed",
+                "message": "OpenAI image reference generation failed. Error code: 400 - raw provider body",
+                "retryable": False,
+                "provider_payload": {"secret": "must not leak"},
+            }
+        ],
+        "reference_input_execution": {
+            "schema_version": "v3_reference_input_execution_v1",
+            "operation": "image_edit",
+            "reference_count": 1,
+            "operation_outcome": "failed",
+            "failure_code": "image_edit_invalid_request_unattributed",
+            "safe_message": "The image-edit request was rejected before image pixels were returned.",
+            "delivery_binding_id": "internal-binding-must-not-leak",
+        },
+    }
+
+
 class _RemoteFinalizerTimeoutRuntime:
     def __init__(
         self,
@@ -503,6 +534,33 @@ def test_no_pixel_provider_failure_has_safe_reference_execution_projection() -> 
     ) == {}
 
 
+def test_empty_job_status_sanitizes_provider_failure_warnings() -> None:
+    service, _, _ = _service("empty_status_warning_sanitizer")
+    created = service.create_job({"user_input": "Create one neutral product image."})
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.job_id_value = created.job_id
+    record.status = ProductJobStatusValue.BLOCKED
+    record.planning_result = None
+    record.generation_result = None
+    record.request.metadata["provider_failure_retry"] = _provider_no_pixel_retry_summary()
+    record.warnings.append(
+        "OpenAI image reference generation failed. Error code: 400 - raw provider body"
+    )
+    service.job_store.save(record)
+
+    status = service.get_job(created.job_id)
+
+    assert status.status == ProductJobStatusValue.BLOCKED
+    joined = " ".join(status.warnings)
+    assert "image_edit_invalid_request_unattributed" in joined
+    payload = status.model_dump_json()
+    assert "raw provider body" not in payload
+    assert "OpenAI image reference generation failed" not in payload
+    assert "internal-binding-must-not-leak" not in payload
+    assert "provider_payload" not in payload
+
+
 def test_remote_finalizer_timeout_block_has_closed_lifecycle_failure_on_create_and_generate() -> None:
     create_service, _, _ = _service("remote_finalizer_timeout_create")
     create_service.scenario_runtime = _RemoteFinalizerTimeoutRuntime(
@@ -659,6 +717,10 @@ def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_j
     assert record is not None
     record.status = ProductJobStatusValue.BLOCKED
     record.warnings.append("later_role_provider_failure")
+    record.warnings.append(
+        "OpenAI image reference generation failed. Error code: 400 - raw provider body"
+    )
+    record.request.metadata["provider_failure_retry"] = _provider_no_pixel_retry_summary()
     service.job_store.save(record)
 
     buffer = BytesIO()
@@ -687,6 +749,12 @@ def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_j
         "append_only_history_preserved": True,
     }
     assert any("recoverable partial result" in warning for warning in recovered.warnings)
+    assert any("image_edit_invalid_request_unattributed" in warning for warning in recovered.warnings)
+    recovered_payload = recovered.model_dump_json()
+    assert "raw provider body" not in recovered_payload
+    assert "OpenAI image reference generation failed" not in recovered_payload
+    assert "internal-binding-must-not-leak" not in recovered_payload
+    assert "provider_payload" not in recovered_payload
     assert history.items[0].status == ProductJobStatusValue.GENERATED
     assert history.items[0].candidate_count == 1
 
