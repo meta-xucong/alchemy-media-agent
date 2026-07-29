@@ -73,6 +73,9 @@ _ANCHOR_REMOTE_FAILURE_CODES = {
     "remote_brain_unauthorized",
     "remote_creative_brain_prompt_signoff_unavailable",
 }
+_ANCHOR_PROVIDER_NO_PIXEL_FAILURE_CODES = {
+    "image_edit_invalid_request_unattributed",
+}
 
 
 class ProductApiAnchorPackPreparationHost:
@@ -1684,6 +1687,33 @@ class ProductApiAnchorPackPreparationHost:
             if isinstance(remote_outcome, dict):
                 code = str(remote_outcome.get("reason_code") or "").strip()
                 if code in _ANCHOR_REMOTE_FAILURE_CODES:
+                    return code
+            provider_failure = metadata.get("provider_failure_retry")
+            if isinstance(provider_failure, dict):
+                code = str(
+                    provider_failure.get("final_failure_code")
+                    or provider_failure.get("failure_code")
+                    or ""
+                ).strip()
+                classification = str(
+                    provider_failure.get("final_classification")
+                    or provider_failure.get("classification")
+                    or ""
+                ).strip()
+                reference_execution = provider_failure.get("reference_input_execution")
+                operation_outcome = (
+                    str(reference_execution.get("operation_outcome") or "").strip()
+                    if isinstance(reference_execution, dict)
+                    else ""
+                )
+                if (
+                    code in _ANCHOR_PROVIDER_NO_PIXEL_FAILURE_CODES
+                    and classification in {
+                        "non_retryable_provider_failure",
+                        "retryable_provider_failure",
+                    }
+                    and operation_outcome in {"", "failed"}
+                ):
                     return code
         return ""
 

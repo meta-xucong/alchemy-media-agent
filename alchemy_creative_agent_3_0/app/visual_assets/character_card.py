@@ -98,6 +98,23 @@ BodyFormalSlotFailureCategory = Literal[
     "enhanced_proof_unavailable",
 ]
 BodyFormalSlotSharedReviewStatus = Literal["pass", "fail", "borderline", "missing"]
+BodyCandidateGenerationFailureFamily = Literal[
+    "provider_no_pixel",
+    "remote_brain",
+    "mcp_materialization",
+    "candidate_generation",
+]
+BodyCandidateGenerationFailureCode = Literal[
+    "image_edit_invalid_request_unattributed",
+    "remote_brain_unavailable",
+    "remote_brain_unauthorized",
+    "remote_creative_brain_prompt_signoff_unavailable",
+    "mcp_materialization_pending",
+    "mcp_materialization_failed",
+    "mcp_review_pending",
+    "character_card_candidate_generation_failed",
+    "unknown_candidate_generation_failure",
+]
 EXPRESSION_LABELS = {
     "expression.neutral": "中性",
     "expression.laugh": "开心笑",
@@ -998,6 +1015,16 @@ class BodyFormalSlotCandidateFailureSummary(_CharacterCardModel):
         return value
 
 
+class BodyFormalSlotCandidateGenerationFailureSummary(_CharacterCardModel):
+    """Closed public-safe summary for a candidate that never reached review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_index: StrictInt = Field(ge=1, le=3)
+    failure_family: BodyCandidateGenerationFailureFamily
+    failure_code: BodyCandidateGenerationFailureCode
+
+
 class BodyFormalSlotFailureDetails(_CharacterCardModel):
     """Closed public-safe diagnostic for Body formal receipt rejection."""
 
@@ -1015,6 +1042,9 @@ class BodyFormalSlotFailureDetails(_CharacterCardModel):
     source_standard_evidence_missing_count: StrictInt = Field(ge=0, le=3)
     source_standard_blocking_issue_count: StrictInt = Field(ge=0, le=3)
     candidate_contract_mismatch_count: StrictInt = Field(ge=0, le=3)
+    candidate_generation_blocked_count: StrictInt = Field(default=0, ge=0, le=3)
+    candidate_generation_blocked_indexes: list[StrictInt] = Field(default_factory=list)
+    candidate_generation_failures: list[BodyFormalSlotCandidateGenerationFailureSummary] = Field(default_factory=list)
     candidate_summaries: list[BodyFormalSlotCandidateFailureSummary] = Field(default_factory=list)
 
     @field_validator("candidate_indexes")
@@ -1026,12 +1056,27 @@ class BodyFormalSlotFailureDetails(_CharacterCardModel):
             raise ValueError("Body formal failure candidate indexes must be unique")
         return value
 
+    @field_validator("candidate_generation_blocked_indexes")
+    @classmethod
+    def validate_candidate_generation_indexes(cls, value: list[StrictInt]) -> list[StrictInt]:
+        if any(index not in {1, 2, 3} for index in value):
+            raise ValueError("Body candidate generation indexes must be closed to 1..3")
+        if len(value) != len(set(value)):
+            raise ValueError("Body candidate generation indexes must be unique")
+        return value
+
     @model_validator(mode="after")
     def validate_counts(self) -> "BodyFormalSlotFailureDetails":
         if self.candidate_count != len(self.candidate_indexes):
             raise ValueError("Body formal failure candidate_count must equal candidate_indexes")
         if self.candidate_count != len(self.candidate_summaries):
             raise ValueError("Body formal failure candidate_count must equal candidate_summaries")
+        if self.candidate_generation_blocked_count != len(self.candidate_generation_blocked_indexes):
+            raise ValueError("Body candidate generation blocked count must equal indexes")
+        if self.candidate_generation_blocked_count != len(self.candidate_generation_failures):
+            raise ValueError("Body candidate generation blocked count must equal summaries")
+        if self.candidate_count + self.candidate_generation_blocked_count > 3:
+            raise ValueError("Body reviewed and blocked candidate counts must not exceed three")
         for count in (
             self.passed_shared_review_count,
             self.enhanced_eligible_count,
@@ -1042,6 +1087,8 @@ class BodyFormalSlotFailureDetails(_CharacterCardModel):
         ):
             if count > self.candidate_count:
                 raise ValueError("Body formal failure counts must not exceed candidate_count")
+        if set(self.candidate_indexes).intersection(self.candidate_generation_blocked_indexes):
+            raise ValueError("Body candidate cannot be both reviewed and generation-blocked")
         return self
 
 
@@ -2321,6 +2368,7 @@ class CharacterCardPreparationService:
                     self._formal_body_slot_failure_projection(
                         slot_key=slot_key,
                         attempts=slot_attempts,
+                        candidate_generation_failures=slot_failures,
                     )
                     if module == "body_silhouette"
                     else None
@@ -2702,6 +2750,7 @@ class CharacterCardPreparationService:
         *,
         slot_key: str,
         attempts: list[CharacterCardCandidateAttempt],
+        candidate_generation_failures: list[CharacterCardFailureEvent] | None = None,
     ) -> BodyFormalSlotFailureDetails:
         """Closed, public-safe reason for a failed Body formal-slot receipt.
 
@@ -2718,6 +2767,10 @@ class CharacterCardPreparationService:
         source_standard_blocking_count = 0
         candidate_contract_mismatch_count = 0
         candidate_summaries: list[dict[str, Any]] = []
+        generation_failure_summaries = cls._formal_body_candidate_generation_failures(
+            slot_key=slot_key,
+            failures=candidate_generation_failures or [],
+        )
         fatal_issue_codes = {
             "body_candidate_module_mismatch",
             "body_candidate_slot_mismatch",
@@ -2811,8 +2864,65 @@ class CharacterCardPreparationService:
             source_standard_evidence_missing_count=source_standard_missing_count,
             source_standard_blocking_issue_count=source_standard_blocking_count,
             candidate_contract_mismatch_count=candidate_contract_mismatch_count,
+            candidate_generation_blocked_count=len(generation_failure_summaries),
+            candidate_generation_blocked_indexes=[
+                summary.candidate_index for summary in generation_failure_summaries
+            ],
+            candidate_generation_failures=generation_failure_summaries,
             candidate_summaries=candidate_summaries,
         )
+
+    @staticmethod
+    def _formal_body_candidate_generation_failures(
+        *,
+        slot_key: str,
+        failures: list[CharacterCardFailureEvent],
+    ) -> list[BodyFormalSlotCandidateGenerationFailureSummary]:
+        summaries: list[BodyFormalSlotCandidateGenerationFailureSummary] = []
+        reviewed_failure_codes = {
+            "character_card_formal_slot_receipt_invalid",
+            "character_card_shared_review_failed",
+        }
+        for failure in failures:
+            if failure.module != "body_silhouette" or failure.slot_key != slot_key:
+                continue
+            raw_code = str(failure.failure_code or "").strip()
+            if not raw_code or raw_code in reviewed_failure_codes:
+                continue
+            if raw_code == "image_edit_invalid_request_unattributed":
+                family: BodyCandidateGenerationFailureFamily = "provider_no_pixel"
+                code: BodyCandidateGenerationFailureCode = "image_edit_invalid_request_unattributed"
+            elif raw_code in {
+                "remote_brain_unavailable",
+                "remote_brain_unauthorized",
+                "remote_creative_brain_prompt_signoff_unavailable",
+            }:
+                family = "remote_brain"
+                code = raw_code  # type: ignore[assignment]
+            elif raw_code in {
+                "mcp_materialization_pending",
+                "mcp_materialization_failed",
+                "mcp_review_pending",
+            }:
+                family = "mcp_materialization"
+                code = raw_code  # type: ignore[assignment]
+            elif raw_code == "character_card_candidate_generation_failed":
+                family = "candidate_generation"
+                code = "character_card_candidate_generation_failed"
+            else:
+                family = "candidate_generation"
+                code = "unknown_candidate_generation_failure"
+            summaries.append(
+                BodyFormalSlotCandidateGenerationFailureSummary(
+                    candidate_index=min(3, max(1, int(failure.candidate_index or 1))),
+                    failure_family=family,
+                    failure_code=code,
+                )
+            )
+        deduped: dict[int, BodyFormalSlotCandidateGenerationFailureSummary] = {}
+        for summary in summaries:
+            deduped.setdefault(summary.candidate_index, summary)
+        return [deduped[index] for index in sorted(deduped)]
 
     @staticmethod
     def _formal_body_enhanced_proof(

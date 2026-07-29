@@ -20,7 +20,10 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
     CapabilityActivationPlan,
     TemplateCapabilityPolicy,
 )
-from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorReviewDecision
+from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import (
+    AnchorCandidateUnavailable,
+    AnchorReviewDecision,
+)
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.expression_review import (
     BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
     project_generic_visual_review_receipt,
@@ -72,6 +75,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.library import (
     VisualAssetLibraryCatalog,
     VisualAssetLibraryLifecycleService,
 )
+from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 
 
@@ -1352,6 +1356,66 @@ def test_doc245_body_formal_failure_projection_classifies_shared_review_rejectio
     assert result.card.last_failure_details == details
 
 
+def test_doc245_body_formal_failure_preserves_candidate_generation_blocked_evidence() -> None:
+    class _ThirdCandidateProviderBlockedGenerator(_BodyGenerator):
+        def generate(self, request: CharacterCardCandidateRequest) -> CharacterCardCandidateResult:
+            if request.candidate_index == 3:
+                self.requests.append(request)
+                raise AnchorCandidateUnavailable("image_edit_invalid_request_unattributed")
+            return super().generate(request)
+
+    class _SecondCandidateSourceStandardBlockedReviewer(_BodyReviewer):
+        def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
+            if candidate.candidate_index == 2:
+                return _review(
+                    candidate.candidate_index,
+                    status="fail",
+                    include_source_standard=True,
+                    include_source_standard_evidence=False,
+                    extra_issue_codes=["head_body_scale_mismatch"],
+                )
+            return _review(candidate.candidate_index)
+
+    generator = _ThirdCandidateProviderBlockedGenerator()
+    service = CharacterCardPreparationService(
+        generator=generator,
+        reviewer=_SecondCandidateSourceStandardBlockedReviewer(),
+    )
+
+    result = service.refresh_body_silhouette(
+        _active_body_card(),
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="scene-neutral inference-first body silhouette profile",
+    )
+
+    assert [request.candidate_index for request in generator.requests] == [1, 2, 3]
+    assert result.status == "blocked"
+    assert result.failures[0].failure_code == "image_edit_invalid_request_unattributed"
+    assert result.failures[-1].failure_code == "character_card_formal_slot_receipt_invalid"
+    details = result.failures[-1].failure_details
+    assert details is not None
+    assert details.failure_code == BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE
+    assert details.candidate_count == 2
+    assert details.candidate_indexes == [1, 2]
+    assert details.passed_shared_review_count == 1
+    assert details.source_standard_evidence_missing_count == 1
+    assert details.source_standard_blocking_issue_count == 1
+    assert details.candidate_generation_blocked_count == 1
+    assert details.candidate_generation_blocked_indexes == [3]
+    assert len(details.candidate_generation_failures) == 1
+    blocked = details.candidate_generation_failures[0]
+    assert blocked.candidate_index == 3
+    assert blocked.failure_family == "provider_no_pixel"
+    assert blocked.failure_code == "image_edit_invalid_request_unattributed"
+    serialized = details.model_dump_json()
+    assert "OpenAI image reference generation failed" not in serialized
+    assert "provider_payload" not in serialized
+    assert "http://" not in serialized
+    assert "https://" not in serialized
+    assert "D:\\" not in serialized
+
+
 def test_doc245_body_formal_failure_projection_classifies_source_standard_missing_separately() -> None:
     class _MissingSourceStandardReviewer(_BodyReviewer):
         def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
@@ -2290,6 +2354,75 @@ def test_doc245_product_api_body_refresh_contract_required_marker_is_strict_bool
                 source_class="brain_inferred",
                 body_source_admission=None,
             )
+
+
+def _safe_provider_no_pixel_retry_summary() -> dict[str, object]:
+    return {
+        "executed_count": 0,
+        "max_attempts": 2,
+        "fresh_upstream_requests": 1,
+        "final_status": "failed",
+        "final_classification": "non_retryable_provider_failure",
+        "final_failure_code": "image_edit_invalid_request_unattributed",
+        "attempts": [
+            {
+                "attempt": 1,
+                "status": "failed",
+                "classification": "non_retryable_provider_failure",
+                "failure_code": "image_edit_invalid_request_unattributed",
+                "message": "OpenAI image reference generation failed. Error code: 400 - raw provider body",
+                "retryable": False,
+            }
+        ],
+        "reference_input_execution": {
+            "schema_version": "v3_reference_input_execution_v1",
+            "admission_outcome": "admitted",
+            "operation_outcome": "failed",
+            "operation": "image_edit",
+            "reference_count": 2,
+            "failure_code": "image_edit_invalid_request_unattributed",
+            "safe_message": "The image-edit request was rejected before image pixels were returned.",
+        },
+        "execution_audit": {
+            "gateway_managed_failover": False,
+            "gateway_managed_failover_timeout_seconds": 660.0,
+            "outer_timeout_seconds": 435.0,
+            "outer_max_attempts": 2,
+            "operation": "image_edit",
+        },
+    }
+
+
+def test_doc245_anchor_maps_safe_provider_no_pixel_failure_without_raw_text() -> None:
+    safe_retry = V3ProductApiService._public_provider_failure_retry(_safe_provider_no_pixel_retry_summary())  # noqa: SLF001
+    status = SimpleNamespace(metadata={"provider_failure_retry": safe_retry})
+
+    failure_code = ProductApiAnchorPackPreparationHost._candidate_failure_code_from_blocked_status(  # noqa: SLF001
+        status
+    )
+
+    assert failure_code == "image_edit_invalid_request_unattributed"
+    serialized = str(safe_retry)
+    assert "raw provider body" not in serialized
+    assert "OpenAI image reference generation failed" not in serialized
+
+
+def test_doc245_product_api_public_warnings_sanitize_provider_error_text() -> None:
+    raw_warning = (
+        "V3 real image generation failed via openai_gpt_image (provider_error): "
+        "OpenAI image reference generation failed. Error code: 400 - raw provider body"
+    )
+
+    warnings = V3ProductApiService._public_job_warnings(  # noqa: SLF001
+        [raw_warning, "asset packaged with reject recommendation"],
+        {"provider_failure_retry": _safe_provider_no_pixel_retry_summary()},
+    )
+
+    joined = "\n".join(warnings)
+    assert "OpenAI image reference generation failed" not in joined
+    assert "raw provider body" not in joined
+    assert "image_edit_invalid_request_unattributed" in joined
+    assert "asset packaged with reject recommendation" in warnings
 
 
 def test_doc245_body_refresh_fail_closed_without_cross_view_positive_evidence() -> None:

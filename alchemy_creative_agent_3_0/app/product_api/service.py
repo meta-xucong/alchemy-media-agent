@@ -2119,7 +2119,13 @@ class V3ProductApiService:
                         "resume_required": True,
                     },
                 }
-            record.warnings.append(self._generation_failure_message(exc, provider_strategy))
+            record.warnings.append(
+                self._safe_generation_failure_message(
+                    provider_strategy=provider_strategy,
+                    provider_failure_retry=provider_failure_retry,
+                    fallback_code=getattr(exc, "code", exc.__class__.__name__),
+                )
+            )
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
             return self._status_from_record(record)
@@ -3080,6 +3086,88 @@ class V3ProductApiService:
             prefix = "V3 candidate generation failed"
         provider_text = f" via {provider}" if provider else ""
         return f"{prefix}{provider_text} ({code}): {message[:500]}"
+
+    @staticmethod
+    def _provider_failure_closed_code(summary: dict[str, Any] | None) -> str:
+        if not isinstance(summary, dict):
+            return ""
+        code = str(summary.get("final_failure_code") or summary.get("failure_code") or "").strip()
+        if code:
+            return code
+        attempts = [item for item in summary.get("attempts", []) if isinstance(item, dict)]
+        for attempt in attempts:
+            code = str(attempt.get("failure_code") or "").strip()
+            if code:
+                return code
+        return ""
+
+    @staticmethod
+    def _provider_failure_closed_classification(summary: dict[str, Any] | None) -> str:
+        if not isinstance(summary, dict):
+            return "provider_failure"
+        return str(
+            summary.get("final_classification")
+            or summary.get("classification")
+            or "provider_failure"
+        ).strip() or "provider_failure"
+
+    @classmethod
+    def _safe_generation_failure_message(
+        cls,
+        *,
+        provider_strategy: ProviderStrategy,
+        provider_failure_retry: dict[str, Any] | None,
+        fallback_code: Any,
+    ) -> str:
+        prefix = "V3 real image generation failed"
+        if provider_strategy == ProviderStrategy.MOCK_GENERATION:
+            prefix = "V3 candidate generation failed"
+        failure_code = cls._provider_failure_closed_code(provider_failure_retry)
+        classification = cls._provider_failure_closed_classification(provider_failure_retry)
+        if failure_code:
+            return f"{prefix} with closed provider failure ({classification}: {failure_code})."
+        safe_code = str(fallback_code or "provider_failure").strip() or "provider_failure"
+        return f"{prefix} with closed provider failure ({safe_code})."
+
+    @classmethod
+    def _public_job_warnings(
+        cls,
+        warnings: list[str],
+        metadata: dict[str, Any] | None,
+    ) -> list[str]:
+        metadata = dict(metadata or {})
+        provider_failure_retry = metadata.get("provider_failure_retry")
+        safe_provider_warning = (
+            cls._safe_generation_failure_message(
+                provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+                provider_failure_retry=provider_failure_retry if isinstance(provider_failure_retry, dict) else None,
+                fallback_code="provider_failure",
+            )
+            if isinstance(provider_failure_retry, dict)
+            else None
+        )
+        projected: list[str] = []
+        provider_warning_added = False
+        raw_provider_markers = (
+            "openai image reference generation failed",
+            "error code:",
+            "invalid_request_error",
+            "provider_payload",
+            "raw provider",
+        )
+        for warning in warnings:
+            text = str(warning or "").strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            looks_raw_provider = any(marker in lowered for marker in raw_provider_markers)
+            if safe_provider_warning and looks_raw_provider:
+                if not provider_warning_added:
+                    projected.append(safe_provider_warning)
+                    provider_warning_added = True
+                continue
+            projected.append(text)
+        return list(dict.fromkeys(projected))
 
     def _provider_failure_retry_summary_from_exception(self, exc: Exception) -> dict[str, Any]:
         summary = getattr(exc, "provider_failure_retry", None)
@@ -6591,7 +6679,10 @@ class V3ProductApiService:
                 sorted(eligible_output_ids) if final_delivery["automatic_delivery_available"] else []
             )
             public_review["hidden_output_ids"] = []
-        public_warnings = list(record.warnings + asset_pack.manifest.get("warnings", []))
+        public_warnings = self._public_job_warnings(
+            list(record.warnings + asset_pack.manifest.get("warnings", [])),
+            dict(record.request.metadata or {}),
+        )
         if public_visual_retry.get("manual_confirmation_required"):
             public_warnings.append(
                 "The image was generated, but the automatic refinement did not complete; manual confirmation is required."
