@@ -103,8 +103,39 @@ BodyCandidateGenerationFailureFamily = Literal[
     "remote_brain",
     "mcp_materialization",
     "candidate_generation",
+    "candidate_planning",
+    "candidate_review",
 ]
 BodyCandidateGenerationFailureCode = Literal[
+    "image_edit_invalid_request_unattributed",
+    "remote_brain_unavailable",
+    "remote_brain_unauthorized",
+    "remote_creative_brain_prompt_signoff_unavailable",
+    "mcp_materialization_pending",
+    "mcp_materialization_failed",
+    "mcp_review_pending",
+    "character_card_candidate_generation_failed",
+    "candidate_pre_durable_planning_blocked",
+    "candidate_generation_blocked",
+    "candidate_review_blocked",
+    "unknown_candidate_generation_failure",
+]
+CharacterCardCandidateLifecyclePhase = Literal["planning", "generation", "review", "formal_receipt"]
+CharacterCardCandidateLifecycleStatus = Literal["blocked"]
+CharacterCardCandidateLifecycleFailureFamily = Literal[
+    "candidate_planning",
+    "candidate_generation",
+    "candidate_review",
+    "formal_receipt",
+    "provider_no_pixel",
+    "remote_brain",
+    "mcp_materialization",
+]
+CharacterCardCandidateLifecycleFailureCode = Literal[
+    "candidate_pre_durable_planning_blocked",
+    "candidate_generation_blocked",
+    "candidate_review_blocked",
+    "candidate_formal_receipt_blocked",
     "image_edit_invalid_request_unattributed",
     "remote_brain_unavailable",
     "remote_brain_unauthorized",
@@ -1025,6 +1056,45 @@ class BodyFormalSlotCandidateGenerationFailureSummary(_CharacterCardModel):
     failure_code: BodyCandidateGenerationFailureCode
 
 
+class CharacterCardCandidateLifecycleProjection(_CharacterCardModel):
+    """Closed public-safe per-candidate lifecycle terminal projection.
+
+    This model is intentionally enum/strict-int only.  It never accepts raw
+    exception text, prompts, paths, URLs, provider payloads, asset IDs, output
+    IDs, job IDs, or candidate IDs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract: Literal["character_card_candidate_lifecycle_projection_v1"] = (
+        "character_card_candidate_lifecycle_projection_v1"
+    )
+    stage: Literal["expression_set", "body_silhouette"]
+    slot_key: CharacterCardSlotKey
+    candidate_index: StrictInt = Field(ge=1, le=3)
+    candidate_count: StrictInt = Field(ge=1, le=3)
+    lifecycle_phase: CharacterCardCandidateLifecyclePhase
+    status: CharacterCardCandidateLifecycleStatus
+    failure_family: CharacterCardCandidateLifecycleFailureFamily
+    failure_code: CharacterCardCandidateLifecycleFailureCode
+
+
+class CharacterCardCandidateLifecycleBoundaryError(RuntimeError):
+    """Internal adapter signal for closed candidate lifecycle terminal states."""
+
+    def __init__(
+        self,
+        *,
+        lifecycle_phase: CharacterCardCandidateLifecyclePhase,
+        failure_family: CharacterCardCandidateLifecycleFailureFamily,
+        failure_code: CharacterCardCandidateLifecycleFailureCode,
+    ) -> None:
+        super().__init__("character_card_candidate_lifecycle_boundary")
+        self.candidate_lifecycle_phase = lifecycle_phase
+        self.candidate_lifecycle_failure_family = failure_family
+        self.candidate_lifecycle_failure_code = failure_code
+
+
 class BodyFormalSlotFailureDetails(_CharacterCardModel):
     """Closed public-safe diagnostic for Body formal receipt rejection."""
 
@@ -1045,6 +1115,9 @@ class BodyFormalSlotFailureDetails(_CharacterCardModel):
     candidate_generation_blocked_count: StrictInt = Field(default=0, ge=0, le=3)
     candidate_generation_blocked_indexes: list[StrictInt] = Field(default_factory=list)
     candidate_generation_failures: list[BodyFormalSlotCandidateGenerationFailureSummary] = Field(default_factory=list)
+    candidate_lifecycle_blocked_count: StrictInt = Field(default=0, ge=0, le=3)
+    candidate_lifecycle_blocked_indexes: list[StrictInt] = Field(default_factory=list)
+    candidate_lifecycle_failures: list[CharacterCardCandidateLifecycleProjection] = Field(default_factory=list)
     candidate_summaries: list[BodyFormalSlotCandidateFailureSummary] = Field(default_factory=list)
 
     @field_validator("candidate_indexes")
@@ -1065,6 +1138,15 @@ class BodyFormalSlotFailureDetails(_CharacterCardModel):
             raise ValueError("Body candidate generation indexes must be unique")
         return value
 
+    @field_validator("candidate_lifecycle_blocked_indexes")
+    @classmethod
+    def validate_candidate_lifecycle_indexes(cls, value: list[StrictInt]) -> list[StrictInt]:
+        if any(index not in {1, 2, 3} for index in value):
+            raise ValueError("Body candidate lifecycle indexes must be closed to 1..3")
+        if len(value) != len(set(value)):
+            raise ValueError("Body candidate lifecycle indexes must be unique")
+        return value
+
     @model_validator(mode="after")
     def validate_counts(self) -> "BodyFormalSlotFailureDetails":
         if self.candidate_count != len(self.candidate_indexes):
@@ -1075,6 +1157,10 @@ class BodyFormalSlotFailureDetails(_CharacterCardModel):
             raise ValueError("Body candidate generation blocked count must equal indexes")
         if self.candidate_generation_blocked_count != len(self.candidate_generation_failures):
             raise ValueError("Body candidate generation blocked count must equal summaries")
+        if self.candidate_lifecycle_blocked_count != len(self.candidate_lifecycle_blocked_indexes):
+            raise ValueError("Body candidate lifecycle blocked count must equal indexes")
+        if self.candidate_lifecycle_blocked_count != len(self.candidate_lifecycle_failures):
+            raise ValueError("Body candidate lifecycle blocked count must equal summaries")
         if self.candidate_count + self.candidate_generation_blocked_count > 3:
             raise ValueError("Body reviewed and blocked candidate counts must not exceed three")
         for count in (
@@ -1089,6 +1175,8 @@ class BodyFormalSlotFailureDetails(_CharacterCardModel):
                 raise ValueError("Body formal failure counts must not exceed candidate_count")
         if set(self.candidate_indexes).intersection(self.candidate_generation_blocked_indexes):
             raise ValueError("Body candidate cannot be both reviewed and generation-blocked")
+        if set(self.candidate_indexes).intersection(self.candidate_lifecycle_blocked_indexes):
+            raise ValueError("Body candidate cannot be both reviewed and lifecycle-blocked")
         return self
 
 
@@ -1103,6 +1191,7 @@ class CharacterCardFailureEvent(_CharacterCardModel):
     mcp_handoff_id: str | None = None
     review_repair_context: dict[str, Any] | None = None
     failure_details: BodyFormalSlotFailureDetails | None = None
+    candidate_lifecycle: CharacterCardCandidateLifecycleProjection | None = None
 
 
 class CharacterCardStageResult(_CharacterCardModel):
@@ -1598,6 +1687,153 @@ class CharacterCardPreparationService:
     ) -> None:
         self.generator = generator
         self.reviewer = reviewer
+
+    @classmethod
+    def _candidate_lifecycle_projection(
+        cls,
+        *,
+        module: Literal["expression_set", "body_silhouette"],
+        slot_key: str,
+        candidate_index: int,
+        lifecycle_phase: CharacterCardCandidateLifecyclePhase,
+        failure_family: CharacterCardCandidateLifecycleFailureFamily,
+        failure_code: CharacterCardCandidateLifecycleFailureCode,
+    ) -> CharacterCardCandidateLifecycleProjection:
+        return CharacterCardCandidateLifecycleProjection(
+            stage=module,
+            slot_key=slot_key,  # type: ignore[arg-type]
+            candidate_index=min(cls.CANDIDATE_COUNT, max(1, int(candidate_index or 1))),
+            candidate_count=cls.CANDIDATE_COUNT,
+            lifecycle_phase=lifecycle_phase,
+            status="blocked",
+            failure_family=failure_family,
+            failure_code=failure_code,
+        )
+
+    @classmethod
+    def _candidate_lifecycle_projection_from_exception(
+        cls,
+        exc: BaseException,
+        *,
+        module: Literal["expression_set", "body_silhouette"],
+        slot_key: str,
+        candidate_index: int,
+        default_phase: CharacterCardCandidateLifecyclePhase,
+        default_family: CharacterCardCandidateLifecycleFailureFamily,
+        default_code: CharacterCardCandidateLifecycleFailureCode,
+    ) -> CharacterCardCandidateLifecycleProjection:
+        """Convert an adapter seam exception into a closed public projection.
+
+        Only explicit closed attributes are honored.  Raw exception text is not
+        copied and cannot influence public codes.
+        """
+
+        phase = getattr(exc, "candidate_lifecycle_phase", None)
+        if phase not in {"planning", "generation", "review", "formal_receipt"}:
+            phase = default_phase
+        family = getattr(exc, "candidate_lifecycle_failure_family", None)
+        if family not in {
+            "candidate_planning",
+            "candidate_generation",
+            "candidate_review",
+            "formal_receipt",
+            "provider_no_pixel",
+            "remote_brain",
+            "mcp_materialization",
+        }:
+            family = default_family
+        code = getattr(exc, "candidate_lifecycle_failure_code", None)
+        if code not in {
+            "candidate_pre_durable_planning_blocked",
+            "candidate_generation_blocked",
+            "candidate_review_blocked",
+            "candidate_formal_receipt_blocked",
+            "image_edit_invalid_request_unattributed",
+            "remote_brain_unavailable",
+            "remote_brain_unauthorized",
+            "remote_creative_brain_prompt_signoff_unavailable",
+            "mcp_materialization_pending",
+            "mcp_materialization_failed",
+            "mcp_review_pending",
+            "character_card_candidate_generation_failed",
+            "unknown_candidate_generation_failure",
+        }:
+            code = default_code
+        return cls._candidate_lifecycle_projection(
+            module=module,
+            slot_key=slot_key,
+            candidate_index=candidate_index,
+            lifecycle_phase=phase,  # type: ignore[arg-type]
+            failure_family=family,  # type: ignore[arg-type]
+            failure_code=code,  # type: ignore[arg-type]
+        )
+
+    @classmethod
+    def _anchor_candidate_lifecycle_projection(
+        cls,
+        *,
+        module: Literal["expression_set", "body_silhouette"],
+        slot_key: str,
+        candidate_index: int,
+        failure_code: str,
+    ) -> CharacterCardCandidateLifecycleProjection:
+        raw_code = str(failure_code or "").strip()
+        if raw_code == "image_edit_invalid_request_unattributed":
+            return cls._candidate_lifecycle_projection(
+                module=module,
+                slot_key=slot_key,
+                candidate_index=candidate_index,
+                lifecycle_phase="generation",
+                failure_family="provider_no_pixel",
+                failure_code="image_edit_invalid_request_unattributed",
+            )
+        if raw_code in {"character_card_candidate_planning_blocked", "professional_anchor_candidate_planning_blocked"}:
+            return cls._candidate_lifecycle_projection(
+                module=module,
+                slot_key=slot_key,
+                candidate_index=candidate_index,
+                lifecycle_phase="planning",
+                failure_family="candidate_planning",
+                failure_code="candidate_pre_durable_planning_blocked",
+            )
+        if raw_code in {
+            "remote_brain_unavailable",
+            "remote_brain_unauthorized",
+            "remote_creative_brain_prompt_signoff_unavailable",
+        }:
+            return cls._candidate_lifecycle_projection(
+                module=module,
+                slot_key=slot_key,
+                candidate_index=candidate_index,
+                lifecycle_phase="planning",
+                failure_family="remote_brain",
+                failure_code=raw_code,  # type: ignore[arg-type]
+            )
+        if raw_code in {
+            "mcp_materialization_pending",
+            "mcp_materialization_failed",
+            "mcp_review_pending",
+        }:
+            return cls._candidate_lifecycle_projection(
+                module=module,
+                slot_key=slot_key,
+                candidate_index=candidate_index,
+                lifecycle_phase="generation",
+                failure_family="mcp_materialization",
+                failure_code=raw_code,  # type: ignore[arg-type]
+            )
+        return cls._candidate_lifecycle_projection(
+            module=module,
+            slot_key=slot_key,
+            candidate_index=candidate_index,
+            lifecycle_phase="generation",
+            failure_family="candidate_generation",
+            failure_code=(
+                "character_card_candidate_generation_failed"
+                if raw_code == "character_card_candidate_generation_failed"
+                else "unknown_candidate_generation_failure"
+            ),
+        )
 
     @staticmethod
     def prepare_face_identity_extension(
@@ -2285,6 +2521,12 @@ class CharacterCardPreparationService:
                         attempt_round=attempt_round,
                         failure_code=exc.failure_code,
                         mcp_handoff_id=exc.mcp_handoff_id,
+                        candidate_lifecycle=self._anchor_candidate_lifecycle_projection(
+                            module=module,
+                            slot_key=slot_key,
+                            candidate_index=candidate_index,
+                            failure_code=exc.failure_code,
+                        ),
                     )
                 )
                 if generation_channel == "mcp" and exc.failure_code in {
@@ -2296,7 +2538,80 @@ class CharacterCardPreparationService:
                 }:
                     return None, slot_attempts, slot_failures, None
                 continue
-            review = self.reviewer.review(candidate)
+            except CharacterCardCandidateLifecycleBoundaryError as exc:
+                lifecycle = self._candidate_lifecycle_projection_from_exception(
+                    exc,
+                    module=module,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                    default_phase="generation",
+                    default_family="candidate_generation",
+                    default_code="unknown_candidate_generation_failure",
+                )
+                slot_failures.append(
+                    CharacterCardFailureEvent(
+                        module=module,
+                        slot_key=slot_key,  # type: ignore[arg-type]
+                        candidate_index=candidate_index,
+                        attempt_round=attempt_round,
+                        failure_code="character_card_candidate_generation_failed",
+                        candidate_lifecycle=lifecycle,
+                    )
+                )
+                if module == "body_silhouette" and _is_body_delivery_slot(slot_key):
+                    slot_failures.append(
+                        CharacterCardFailureEvent(
+                            module=module,
+                            slot_key=slot_key,  # type: ignore[arg-type]
+                            candidate_index=candidate_index,
+                            attempt_round=attempt_round,
+                            failure_code="character_card_formal_slot_receipt_invalid",
+                            failure_details=self._formal_body_slot_failure_projection(
+                                slot_key=slot_key,
+                                attempts=slot_attempts,
+                                candidate_generation_failures=slot_failures,
+                            ),
+                        )
+                    )
+                return None, slot_attempts, slot_failures, None
+            try:
+                review = self.reviewer.review(candidate)
+            except CharacterCardCandidateLifecycleBoundaryError as exc:
+                lifecycle = self._candidate_lifecycle_projection_from_exception(
+                    exc,
+                    module=module,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                    default_phase="review",
+                    default_family="candidate_review",
+                    default_code="candidate_review_blocked",
+                )
+                slot_failures.append(
+                    CharacterCardFailureEvent(
+                        module=module,
+                        slot_key=slot_key,  # type: ignore[arg-type]
+                        candidate_index=candidate_index,
+                        attempt_round=attempt_round,
+                        failure_code="character_card_shared_review_failed",
+                        candidate_lifecycle=lifecycle,
+                    )
+                )
+                if module == "body_silhouette" and _is_body_delivery_slot(slot_key):
+                    slot_failures.append(
+                        CharacterCardFailureEvent(
+                            module=module,
+                            slot_key=slot_key,  # type: ignore[arg-type]
+                            candidate_index=candidate_index,
+                            attempt_round=attempt_round,
+                            failure_code="character_card_formal_slot_receipt_invalid",
+                            failure_details=self._formal_body_slot_failure_projection(
+                                slot_key=slot_key,
+                                attempts=slot_attempts,
+                                candidate_generation_failures=slot_failures,
+                            ),
+                        )
+                    )
+                return None, slot_attempts, slot_failures, None
             attempt = CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
             slot_attempts.append(attempt)
             if acceptance_core.accepts_review(review):
@@ -2381,6 +2696,18 @@ class CharacterCardPreparationService:
                         attempt_round=attempt_round,
                         failure_code="character_card_formal_slot_receipt_invalid",
                         failure_details=failure_details,
+                        candidate_lifecycle=(
+                            self._candidate_lifecycle_projection(
+                                module=module,
+                                slot_key=slot_key,
+                                candidate_index=min(self.CANDIDATE_COUNT, max(1, len(slot_attempts) or 1)),
+                                lifecycle_phase="formal_receipt",
+                                failure_family="formal_receipt",
+                                failure_code="candidate_formal_receipt_blocked",
+                            )
+                            if module == "body_silhouette"
+                            else None
+                        ),
                     )
                 )
                 return None, slot_attempts, slot_failures, None
@@ -2771,6 +3098,10 @@ class CharacterCardPreparationService:
             slot_key=slot_key,
             failures=candidate_generation_failures or [],
         )
+        lifecycle_failure_summaries = cls._formal_body_candidate_lifecycle_failures(
+            slot_key=slot_key,
+            failures=candidate_generation_failures or [],
+        )
         fatal_issue_codes = {
             "body_candidate_module_mismatch",
             "body_candidate_slot_mismatch",
@@ -2869,6 +3200,11 @@ class CharacterCardPreparationService:
                 summary.candidate_index for summary in generation_failure_summaries
             ],
             candidate_generation_failures=generation_failure_summaries,
+            candidate_lifecycle_blocked_count=len(lifecycle_failure_summaries),
+            candidate_lifecycle_blocked_indexes=[
+                summary.candidate_index for summary in lifecycle_failure_summaries
+            ],
+            candidate_lifecycle_failures=lifecycle_failure_summaries,
             candidate_summaries=candidate_summaries,
         )
 
@@ -2922,6 +3258,24 @@ class CharacterCardPreparationService:
         deduped: dict[int, BodyFormalSlotCandidateGenerationFailureSummary] = {}
         for summary in summaries:
             deduped.setdefault(summary.candidate_index, summary)
+        return [deduped[index] for index in sorted(deduped)]
+
+    @staticmethod
+    def _formal_body_candidate_lifecycle_failures(
+        *,
+        slot_key: str,
+        failures: list[CharacterCardFailureEvent],
+    ) -> list[CharacterCardCandidateLifecycleProjection]:
+        deduped: dict[int, CharacterCardCandidateLifecycleProjection] = {}
+        for failure in failures:
+            lifecycle = failure.candidate_lifecycle
+            if lifecycle is None:
+                continue
+            if lifecycle.stage != "body_silhouette" or lifecycle.slot_key != slot_key:
+                continue
+            if lifecycle.status != "blocked":
+                continue
+            deduped.setdefault(lifecycle.candidate_index, lifecycle)
         return [deduped[index] for index in sorted(deduped)]
 
     @staticmethod

@@ -230,6 +230,19 @@ source is bound to the current refresh/card request only as Body-only
 proportion evidence; it is not current-person identity truth and cannot replace
 the Character Card Face Identity references.
 
+### Body Refresh Candidate Lifecycle Projection Handoff
+
+`PROFESSIONAL_MODE_BODY_REFRESH_CANDIDATE_LIFECYCLE_PROJECTION_HANDOFF.md`
+
+Feature-gate handoff for a narrow public-safe lifecycle projection gap in
+controlled Body Silhouette refresh. It records that candidate-level planning,
+generation, review, and formal-receipt failures must be projected with closed
+typed fields before slot acceptance, especially when a candidate blocks before
+a durable ProductApi job record exists. It does not authorize refresh,
+generation, retry, prompt changes, provider changes, activation, downstream
+product images, or any relaxation of the three-candidate formal Body slot
+contract.
+
 ### M5 Real-Pixel Acceptance Record
 
 `PROFESSIONAL_MODE_M5_REAL_PIXEL_ACCEPTANCE_BLOCKED_20260717.md`

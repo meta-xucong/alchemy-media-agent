@@ -46,7 +46,9 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BODY_FORMAL_SLOT_CANDIDATE_CONTRACT_MISMATCH_CODE,
     BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE,
     BODY_FORMAL_SLOT_SHARED_REVIEW_RECEIPT_MISSING_CODE,
+    CharacterCardCandidateLifecycleBoundaryError,
     BodyFormalSlotFailureDetails,
+    CharacterCardCandidateLifecycleProjection,
     CharacterCardCandidateRequest,
     CharacterCardCandidateResult,
     CharacterCardPreparationService,
@@ -1416,6 +1418,286 @@ def test_doc245_body_formal_failure_preserves_candidate_generation_blocked_evide
     assert "D:\\" not in serialized
 
 
+def test_doc245_body_candidate_lifecycle_projects_pre_durable_plan_block_without_raw_leak() -> None:
+    raw_secret = (
+        "raw prompt http://provider.invalid/path C:\\secret\\prompt.txt "
+        "provider_payload asset_private_123 output_private_456"
+    )
+
+    class _ThirdCandidatePreDurablePlanBlockedGenerator(_BodyGenerator):
+        def generate(self, request: CharacterCardCandidateRequest) -> CharacterCardCandidateResult:
+            self.requests.append(request)
+            if request.slot_key == "body.front_full" and request.candidate_index == 3:
+                error = CharacterCardCandidateLifecycleBoundaryError(
+                    lifecycle_phase="planning",
+                    failure_family="candidate_planning",
+                    failure_code="candidate_pre_durable_planning_blocked",
+                )
+                error.raw_secret = raw_secret
+                raise error
+            return CharacterCardCandidateResult(
+                candidate_id=f"candidate_{request.slot_key}_{request.candidate_index}",
+                output_id=f"output_{request.slot_key}_{request.candidate_index}",
+                module=request.module,
+                slot_key=request.slot_key,
+                candidate_index=request.candidate_index,
+                source_candidate_ids=[f"source_{request.slot_key}_{request.candidate_index}"],
+                source_output_ids=list(request.reference_output_ids),
+                canonical_prompt_hash=f"prompt_hash_{request.slot_key}_{request.candidate_index}",
+                prompt_compilation_id=f"prompt_compilation_{request.slot_key}_{request.candidate_index}",
+                prompt_reference_parity_verified=True,
+            )
+
+    original = _active_body_card()
+    generator = _ThirdCandidatePreDurablePlanBlockedGenerator()
+    service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+
+    result = service.refresh_body_silhouette(
+        original,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="scene-neutral inference-first body silhouette profile",
+    )
+
+    assert [request.slot_key for request in generator.requests] == [
+        "body.front_full",
+        "body.front_full",
+        "body.front_full",
+    ]
+    assert [request.candidate_index for request in generator.requests] == [1, 2, 3]
+    assert result.status == "blocked"
+    assert result.winner_output_ids == {}
+    assert result.formal_slot_receipts == {}
+    assert result.card.body_slots == original.body_slots
+    assert result.card.body_silhouette_refresh_slots == {}
+
+    lifecycle_events = [
+        failure.candidate_lifecycle
+        for failure in result.failures
+        if failure.candidate_lifecycle is not None
+    ]
+    assert len(lifecycle_events) == 1
+    lifecycle = lifecycle_events[0]
+    assert lifecycle.stage == "body_silhouette"
+    assert lifecycle.slot_key == "body.front_full"
+    assert lifecycle.candidate_index == 3
+    assert lifecycle.candidate_count == 3
+    assert lifecycle.lifecycle_phase == "planning"
+    assert lifecycle.status == "blocked"
+    assert lifecycle.failure_family == "candidate_planning"
+    assert lifecycle.failure_code == "candidate_pre_durable_planning_blocked"
+
+    details = result.card.last_failure_details
+    assert details is not None
+    assert details.failure_code == BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE
+    assert details.candidate_count == 2
+    assert details.candidate_indexes == [1, 2]
+    assert details.candidate_generation_blocked_count == 1
+    assert details.candidate_generation_blocked_indexes == [3]
+    assert details.candidate_lifecycle_blocked_count == 1
+    assert details.candidate_lifecycle_blocked_indexes == [3]
+    assert details.candidate_lifecycle_failures[0].failure_family == "candidate_planning"
+    assert details.candidate_lifecycle_failures[0].failure_code == "candidate_pre_durable_planning_blocked"
+
+    serialized = result.card.model_dump_json()
+    for forbidden in (
+        "raw prompt",
+        "http://provider.invalid",
+        "C:\\secret",
+        "provider_payload",
+        "asset_private_123",
+        "output_private_456",
+    ):
+        assert forbidden not in serialized
+
+
+def test_doc245_body_candidate_lifecycle_projects_review_block_without_accepting_artifact() -> None:
+    class _SecondCandidateReviewBlockedReviewer(_BodyReviewer):
+        def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
+            if candidate.slot_key == "body.front_full" and candidate.candidate_index == 2:
+                error = CharacterCardCandidateLifecycleBoundaryError(
+                    lifecycle_phase="review",
+                    failure_family="candidate_review",
+                    failure_code="candidate_review_blocked",
+                )
+                error.raw_secret = (
+                    "review raw response https://review.invalid C:\\review\\payload.json output_secret_789"
+                )
+                raise error
+            return super().review(candidate)
+
+    original = _active_body_card()
+    generator = _BodyGenerator()
+    service = CharacterCardPreparationService(
+        generator=generator,
+        reviewer=_SecondCandidateReviewBlockedReviewer(),
+    )
+
+    result = service.refresh_body_silhouette(
+        original,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="scene-neutral inference-first body silhouette profile",
+    )
+
+    assert [request.slot_key for request in generator.requests] == [
+        "body.front_full",
+        "body.front_full",
+    ]
+    assert [request.candidate_index for request in generator.requests] == [1, 2]
+    assert result.status == "blocked"
+    assert result.winner_output_ids == {}
+    assert result.formal_slot_receipts == {}
+    assert result.card.body_slots == original.body_slots
+    assert result.card.body_silhouette_refresh_slots == {}
+
+    lifecycle_events = [
+        failure.candidate_lifecycle
+        for failure in result.failures
+        if failure.candidate_lifecycle is not None
+    ]
+    assert len(lifecycle_events) == 1
+    lifecycle = lifecycle_events[0]
+    assert lifecycle.slot_key == "body.front_full"
+    assert lifecycle.candidate_index == 2
+    assert lifecycle.lifecycle_phase == "review"
+    assert lifecycle.status == "blocked"
+    assert lifecycle.failure_family == "candidate_review"
+    assert lifecycle.failure_code == "candidate_review_blocked"
+
+    details = result.card.last_failure_details
+    assert details is not None
+    assert details.failure_code == BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE
+    assert details.candidate_count == 1
+    assert details.candidate_indexes == [1]
+    assert details.candidate_lifecycle_blocked_count == 1
+    assert details.candidate_lifecycle_blocked_indexes == [2]
+    assert details.candidate_lifecycle_failures[0].failure_family == "candidate_review"
+    assert details.candidate_lifecycle_failures[0].failure_code == "candidate_review_blocked"
+
+    serialized = result.card.model_dump_json()
+    for forbidden in (
+        "review raw response",
+        "https://review.invalid",
+        "C:\\review",
+        "payload.json",
+        "output_secret_789",
+    ):
+        assert forbidden not in serialized
+
+
+def test_doc245_body_candidate_lifecycle_projection_rejects_unclosed_or_wrong_typed_payload() -> None:
+    valid = {
+        "contract": "character_card_candidate_lifecycle_projection_v1",
+        "stage": "body_silhouette",
+        "slot_key": "body.front_full",
+        "candidate_index": 3,
+        "candidate_count": 3,
+        "lifecycle_phase": "planning",
+        "status": "blocked",
+        "failure_family": "candidate_planning",
+        "failure_code": "candidate_pre_durable_planning_blocked",
+    }
+    assert CharacterCardCandidateLifecycleProjection.model_validate(valid).candidate_index == 3
+    for bad in (
+        {**valid, "candidate_index": "3"},
+        {**valid, "candidate_count": True},
+        {**valid, "lifecycle_phase": "http://provider.invalid/path"},
+        {**valid, "raw_prompt": "do not leak"},
+        {**valid, "failure_code": "provider_payload_secret"},
+        {**valid, "status": "completed", "failure_family": "candidate_planning"},
+    ):
+        with pytest.raises(ValueError):
+            CharacterCardCandidateLifecycleProjection.model_validate(bad)
+
+
+def test_doc245_body_candidate_lifecycle_does_not_swallow_unknown_programming_errors() -> None:
+    class _UnknownRuntimeGenerator(_BodyGenerator):
+        def generate(self, request: CharacterCardCandidateRequest) -> CharacterCardCandidateResult:
+            self.requests.append(request)
+            raise RuntimeError("programming bug http://provider.invalid C:\\raw\\payload")
+
+    service = CharacterCardPreparationService(
+        generator=_UnknownRuntimeGenerator(),
+        reviewer=_BodyReviewer(),
+    )
+
+    with pytest.raises(RuntimeError, match="programming bug"):
+        service.refresh_body_silhouette(
+            _active_body_card(),
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+            source_class="brain_inferred",
+            user_intent="scene-neutral inference-first body silhouette profile",
+        )
+
+
+def test_doc245_body_candidate_lifecycle_does_not_swallow_keyboard_interrupt() -> None:
+    class _InterruptingReviewer(_BodyReviewer):
+        def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
+            raise KeyboardInterrupt()
+
+    service = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_InterruptingReviewer(),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        service.refresh_body_silhouette(
+            _active_body_card(),
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+            source_class="brain_inferred",
+            user_intent="scene-neutral inference-first body silhouette profile",
+        )
+
+
+def test_doc245_anchor_host_propagates_closed_pre_durable_candidate_lifecycle_boundary() -> None:
+    class _PreDurableBoundaryProductService:
+        visual_asset_catalog = object()
+
+        def __init__(self) -> None:
+            self.create_calls = 0
+
+        def create_professional_character_card_stage_job(self, *args: object, **kwargs: object) -> object:
+            self.create_calls += 1
+            error = CharacterCardCandidateLifecycleBoundaryError(
+                lifecycle_phase="planning",
+                failure_family="candidate_planning",
+                failure_code="candidate_pre_durable_planning_blocked",
+            )
+            error.raw_secret = "http://provider.invalid C:\\raw\\provider_payload asset_private output_private"
+            raise error
+
+    service = _PreDurableBoundaryProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    request = _body_attempt(3).request
+
+    with pytest.raises(CharacterCardCandidateLifecycleBoundaryError) as raised:
+        host.generate(request)
+
+    assert service.create_calls == 1
+    assert raised.value.candidate_lifecycle_phase == "planning"
+    assert raised.value.candidate_lifecycle_failure_family == "candidate_planning"
+    assert raised.value.candidate_lifecycle_failure_code == "candidate_pre_durable_planning_blocked"
+    public = CharacterCardPreparationService._candidate_lifecycle_projection_from_exception(  # noqa: SLF001
+        raised.value,
+        module="body_silhouette",
+        slot_key="body.front_full",
+        candidate_index=3,
+        default_phase="generation",
+        default_family="candidate_generation",
+        default_code="unknown_candidate_generation_failure",
+    )
+    serialized = public.model_dump_json()
+    for forbidden in (
+        "http://provider.invalid",
+        "C:\\raw",
+        "provider_payload",
+        "asset_private",
+        "output_private",
+    ):
+        assert forbidden not in serialized
+
+
 def test_doc245_body_formal_failure_projection_classifies_source_standard_missing_separately() -> None:
     class _MissingSourceStandardReviewer(_BodyReviewer):
         def review(self, candidate: CharacterCardCandidateResult) -> AnchorReviewDecision:
@@ -1447,6 +1729,16 @@ def test_doc245_body_formal_failure_projection_classifies_source_standard_missin
     assert details.shared_review_receipt_missing_count == 0
     assert details.candidate_contract_mismatch_count == 0
     assert details.failure_code != BODY_FORMAL_SLOT_NO_PASSING_SHARED_REVIEW_CODE
+    lifecycle = result.failures[-1].candidate_lifecycle
+    assert lifecycle is not None
+    assert lifecycle.stage == "body_silhouette"
+    assert lifecycle.slot_key == "body.front_full"
+    assert lifecycle.candidate_index == 3
+    assert lifecycle.candidate_count == 3
+    assert lifecycle.lifecycle_phase == "formal_receipt"
+    assert lifecycle.status == "blocked"
+    assert lifecycle.failure_family == "formal_receipt"
+    assert lifecycle.failure_code == "candidate_formal_receipt_blocked"
 
 
 def test_doc245_body_formal_failure_details_reject_raw_unknown_or_wrong_typed_readback() -> None:
