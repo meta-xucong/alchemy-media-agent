@@ -215,6 +215,18 @@ Character Card generation changes, Body Silhouette slot/review/activation or
 storage changes, runtime fields, grades, planning, Host/MCP/ImageGen, or
 formal delivery writes.
 
+The Gate C handoff now narrows the earlier observed-only strict refresh
+wording into a two-mode Body refresh source contract:
+`reference_assisted` and `inference_first`. `reference_assisted` requires a
+server-resolved ready `body_proportion_reference` /
+`body_proportion_truth` with consent or rights provenance; `inference_first`
+remains a valid scene-neutral Body Silhouette modeling path when no observed
+Body reference exists. The source mode is server-owned and cannot be forged by
+client metadata, raw `body_facts`, paths, URLs, asset/output ids, provider
+payloads, or free prompt prose. Historical brain-inferred active Body slots
+remain readable and are not relabelled observed; pending refresh and explicit
+activation remain separate gates.
+
 ### M5 Real-Pixel Acceptance Record
 
 `PROFESSIONAL_MODE_M5_REAL_PIXEL_ACCEPTANCE_BLOCKED_20260717.md`

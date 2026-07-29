@@ -218,43 +218,110 @@ regeneration, slot activation, Host/MCP/ImageGen, business record, or
 downstream runtime behavior is authorized by this handoff or by the append-only
 refresh entry alone.
 
-## 9. Strict refresh source-admission closure
+## 9. Body refresh source-mode closure
 
 The first body-source admission implementation (`caea911`) separated Face
-Identity references from Body-owner evidence, but its strict refresh path still
-accepted `user_described` provenance.  That wording and behavior are narrowed
-by the follow-up `strict_body_source_repair` source-admission closure
-(`05908f5`): a strict body-proportion repair refresh may certify only a
-server-resolved `observed` source that is ready and projected as
-`body_proportion_reference` with `body_proportion_truth`.
+Identity references from Body-owner evidence, and the follow-up
+`strict_body_source_repair` closure (`05908f5`) correctly prevented
+`user_described` or face-only inference from masquerading as observed Body
+truth.  That observed-only wording is now narrowed: it applies to the
+`reference_assisted` source mode only.  It must not be interpreted as a global
+precondition that blocks Alchemy from generating Body Silhouette candidates
+when no observed body reference is available.
 
-This is a source-authority rule, not a prompt recipe:
+New Body Silhouette refresh work must use a server-owned, closed source-mode
+contract:
 
-1. `brain_inferred` and `user_described` remain readable historical/public
-   provenance classes and may still be used by ordinary non-certifying
-   `prepare_body_silhouette` flows where existing compatibility allows them.
-   They do not provide approved body truth for strict body-proportion repair.
-2. `user_described` body facts are direction/provenance only.  Raw body facts,
-   prompt prose, paths, URLs, provider payloads, asset ids, or biometric
-   vectors must not become Provider-facing body evidence and must not be used
-   to form an activation-certifiable strict refresh.
-3. A strict refresh without a server-resolved ready Body-only source must
-   fail closed before generation/review.  It must not create body candidates,
-   pending refresh winners, formal activation eligibility, or downstream
-   product-image body certification.
-4. Observed strict refresh input must keep Body and Face ownership separate:
-   the Body source may enter only as `body_proportion_reference` /
-   `body_proportion_truth`, while Face Identity references remain identity
-   references.  A legacy or generic `full_body_reference`, `body_reference`, or
-   `body_full_reference` is not enough for strict body-proportion repair unless
-   it is first resolved by the server into the closed Body-only truth role.
-5. Existing active Body slots, historical receipts, and old readback records
-   are not invalidated, migrated, recomputed, or rewritten by this stricter
-   rule.  The new fail-closed behavior applies to new strict refresh attempts
-   and their candidate/winner formation only.
+```text
+body_refresh_source_mode:
+  reference_assisted
+  inference_first
+```
 
-Any older handoff wording that implied a broad refresh could be certified from
-`user_described` or face-only inference is superseded by this section.  The
-section does not add runtime grade, commercial certification, scene-specific
-age/wardrobe/poolside/E-Commerce rules, Provider cap changes, downstream
-projection changes, or activation authority.
+The mode is resolved by the Character Card / Visual Asset Library owning
+layer.  It is never accepted from client metadata, raw `body_facts`, a file
+path, a filename, an output id, provider payload, or free prompt prose.
+
+### 9.1 `reference_assisted`
+
+`reference_assisted` is used only when the server resolver admits a ready
+Body-only source for the current person.  Its reference admission must be
+computed by the server and must prove all of the following:
+
+- source class is `observed`;
+- role is `body_proportion_reference`;
+- `metadata.reference_truth_layer` is `body_proportion_truth`;
+- consent or rights provenance is present;
+- the source is bound to the current Professional Character Card subject.
+
+The admitted Body reference may be projected only as Body-owner evidence for
+body scale, neck/shoulder transition, torso/limb proportion,
+developmental-stage coherence, stance/ground contact, and cross-view support.
+It is not Face Identity truth and must not lock wardrobe, pose, lighting,
+camera, expression, background, scene, product identity, swimwear, poolside,
+kidswear, E-Commerce, Photography, or General deliverable semantics.
+
+Client-provided `body_reference_admission`, raw metadata, user-described body
+facts, paths, URLs, provider payloads, asset ids, or output ids cannot make a
+request `reference_assisted` and cannot create observed Body truth.
+
+### 9.2 `inference_first`
+
+`inference_first` is the valid Body Silhouette modeling path when no admitted
+Body reference is available.  It allows Alchemy to generate
+`body.front_full`, `body.side_full`, and `body.rear_full` candidates from Face
+Identity continuity plus server-owned body-model context and the universal Body
+Silhouette source standard.
+
+The minimum closed context for `inference_first` is:
+
+- active Face Identity continuity references;
+- the current Character Card subject boundary;
+- server-owned age-stage/body-context if such typed context exists;
+- otherwise a scene-neutral `system_inferred_body_model` context that does not
+  claim a specific observed age, body measurement, body vector, or body truth.
+
+`inference_first` must not carry `body_evidence_ids`,
+`body_proportion_reference`, `body_proportion_truth`, observed source claims,
+biometric vectors, raw user text, paths, URLs, provider payloads, asset ids, or
+output ids as Body truth.  User-described body facts may remain ordinary
+provenance/direction where older public contracts allow them, but they cannot
+be injected into Provider prompts or elevated to certified Body evidence.
+
+The success condition for `inference_first` is review proof, not source proof:
+three-slot candidates may be generated, but a pending refresh may form only
+after shared review, Body source-standard positive evidence, formal slot
+receipts, and card-level cross-view parity all pass.  A generated image is not
+an accepted Body slot by itself, and absence of an observed reference is not an
+entry blocker for this mode.
+
+### 9.3 Shared acceptance and compatibility rules
+
+Both source modes must preserve:
+
+1. Face Identity and Body Silhouette ownership separation.  Face references are
+   identity continuity evidence, not body truth.
+2. Existing active Body slots, historical receipts, and old readback records.
+   They remain append-only readable and are not invalidated, migrated,
+   recomputed, relabelled as observed, or overwritten by source-mode changes.
+3. Append-only pending refresh state and explicit activation.  No source mode
+   may replace active Body slots without a later activation gate.
+4. Downstream General, Photography, and E-Commerce isolation.  Runtime
+   body-only projection consumes active Body slots after activation; it does
+   not choose the refresh source mode.
+5. Provider cap and Provider role isolation.  `reference_assisted` may add one
+   Body-only reference; `inference_first` may not fabricate one.
+6. Scene-neutral source standards.  No six-year-old, swimwear, poolside,
+   kidswear, E-Commerce, wardrobe, pose, lighting, camera, expression, or fixed
+   head/body-ratio recipe is introduced.
+
+`source_standard_evidence_missing` is a candidate-review proof failure.  It is
+not the same as “observed Body reference missing.”  A candidate can fail
+because shared review did not produce required Body source-standard evidence;
+that failure must remain distinguishable from a `reference_assisted` source
+admission failure.
+
+Any older handoff wording that implied all strict Body Silhouette refreshes
+require observed `body_proportion_reference` / `body_proportion_truth` is
+superseded by this section.  Observed Body-only admission is required for
+`reference_assisted`; it is not required for `inference_first`.
