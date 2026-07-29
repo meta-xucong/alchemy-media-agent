@@ -1516,6 +1516,7 @@ class ProductApiAnchorPackPreparationHost:
                 source_class=request.source_class,
                 body_refresh_source_mode=request.body_refresh_source_mode,
                 body_model_context=request.body_model_context,
+                body_refresh_contract_required=request.body_refresh_contract_required,
                 body_source_admission=(
                     request.body_source_admission.model_dump(mode="json")
                     if request.body_source_admission is not None

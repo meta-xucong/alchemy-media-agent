@@ -828,6 +828,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     body_source_admission: BodySourceAdmission | None = None
     body_refresh_source_mode: BodyRefreshSourceMode | None = None
     body_model_context: BodyRefreshBodyModelContext | None = None
+    body_refresh_contract_required: bool = False
     generation_channel: Literal["provider", "mcp"] = "provider"
     mcp_handoff_id: str | None = None
     prior_review_repair: dict[str, Any] | None = None
@@ -870,11 +871,14 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("Body Silhouette request requires a source class")
             if self.source_class == "observed" and not str(self.consent_provenance_id or "").strip():
                 raise ValueError("observed Body Silhouette request requires consent provenance")
+            source_mode_present = self.body_refresh_source_mode is not None or self.body_model_context is not None
+            strict_refresh_contract = self.body_refresh_contract_required or source_mode_present
             if self.source_class == "observed":
-                if self.body_refresh_source_mode != "reference_assisted":
-                    raise ValueError("Body Silhouette reference-assisted source mode required")
-                if self.body_model_context != "similar_person_body_reference_assisted_v1":
-                    raise ValueError("Body Silhouette reference-assisted context required")
+                if strict_refresh_contract:
+                    if self.body_refresh_source_mode != "reference_assisted":
+                        raise ValueError("Body Silhouette reference-assisted source mode required")
+                    if self.body_model_context != "similar_person_body_reference_assisted_v1":
+                        raise ValueError("Body Silhouette reference-assisted context required")
                 if self.body_source_admission is None:
                     raise ValueError("Body Silhouette strict source admission is required")
                 if self.body_source_admission.source_class != self.source_class:
@@ -884,12 +888,13 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
             elif self.source_class == "brain_inferred":
                 if self.body_source_admission is not None:
                     raise ValueError("brain_inferred Body Silhouette cannot carry body source admission")
-                if self.body_refresh_source_mode != "inference_first":
-                    raise ValueError("Body Silhouette inference-first source mode required")
-                if self.body_model_context != "system_inferred_body_model_scene_neutral_v1":
-                    raise ValueError("Body Silhouette inference-first context required")
+                if strict_refresh_contract:
+                    if self.body_refresh_source_mode != "inference_first":
+                        raise ValueError("Body Silhouette inference-first source mode required")
+                    if self.body_model_context != "system_inferred_body_model_scene_neutral_v1":
+                        raise ValueError("Body Silhouette inference-first context required")
             elif self.source_class == "user_described":
-                if self.body_refresh_source_mode is not None or self.body_model_context is not None:
+                if self.body_refresh_contract_required or source_mode_present:
                     raise ValueError("user_described Body Silhouette cannot carry strict refresh source mode")
                 if self.body_source_admission is None:
                     raise ValueError("Body Silhouette strict source admission is required")
@@ -1885,8 +1890,9 @@ class CharacterCardPreparationService:
                 user_intent=user_intent,
                 source_class=source_class,
                 body_source_admission=request.source_admission(),
-                body_refresh_source_mode=request.body_refresh_source_mode,
-                body_model_context=request.body_model_context,
+                body_refresh_source_mode=None,
+                body_model_context=None,
+                body_refresh_contract_required=False,
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 attempts=attempts,
@@ -2032,6 +2038,7 @@ class CharacterCardPreparationService:
                 body_source_admission=body_source_admission,
                 body_refresh_source_mode=request.body_refresh_source_mode,
                 body_model_context=request.body_model_context,
+                body_refresh_contract_required=True,
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 attempts=attempts,
@@ -2145,6 +2152,7 @@ class CharacterCardPreparationService:
         body_source_admission: BodySourceAdmission | None = None,
         body_refresh_source_mode: BodyRefreshSourceMode | None = None,
         body_model_context: BodyRefreshBodyModelContext | None = None,
+        body_refresh_contract_required: bool = False,
         consent_provenance_id: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         review_only_resume: bool = False,
@@ -2206,6 +2214,7 @@ class CharacterCardPreparationService:
                 body_source_admission=body_source_admission,
                 body_refresh_source_mode=body_refresh_source_mode,
                 body_model_context=body_model_context,
+                body_refresh_contract_required=body_refresh_contract_required,
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 mcp_handoff_id=self._resumable_mcp_handoff_id(

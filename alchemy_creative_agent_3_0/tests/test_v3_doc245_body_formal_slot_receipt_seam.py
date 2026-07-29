@@ -1729,6 +1729,7 @@ def test_doc245_inference_first_strict_body_refresh_allows_generation_without_bo
         assert request.source_class == "brain_inferred"
         assert request.body_refresh_source_mode == "inference_first"
         assert request.body_model_context == "system_inferred_body_model_scene_neutral_v1"
+        assert request.body_refresh_contract_required is True
         assert request.body_source_admission is None
         assert request.reference_output_ids == [
             "face_front_output",
@@ -1757,6 +1758,58 @@ def test_doc245_user_described_strict_body_refresh_remains_non_certifying() -> N
     assert generator.requests == []
 
 
+def test_doc245_legacy_brain_inferred_body_candidate_remains_readable_without_source_mode() -> None:
+    request = CharacterCardCandidateRequest(
+        project_id="project_doc245_legacy_body",
+        people_asset_id="people_doc245_legacy_body",
+        card_version_id="card_doc245_legacy_body",
+        module="body_silhouette",
+        slot_key="body.rear_full",
+        candidate_index=2,
+        reference_output_ids=["front_winner", "side_winner", "rear_prior"],
+        source_class="brain_inferred",
+        user_intent="scene neutral historical Body Silhouette candidate",
+    )
+
+    assert request.source_class == "brain_inferred"
+    assert request.body_refresh_source_mode is None
+    assert request.body_model_context is None
+    assert request.body_refresh_contract_required is False
+    assert request.body_source_admission is None
+
+
+def test_doc245_refresh_body_candidate_missing_or_wrong_source_mode_blocks() -> None:
+    with pytest.raises(ValueError, match="inference-first source mode required"):
+        CharacterCardCandidateRequest(
+            project_id="project_doc245_refresh_body",
+            people_asset_id="people_doc245_refresh_body",
+            card_version_id="card_doc245_refresh_body",
+            module="body_silhouette",
+            slot_key="body.rear_full",
+            candidate_index=1,
+            reference_output_ids=["front_winner", "side_winner", "rear_prior"],
+            source_class="brain_inferred",
+            user_intent="scene neutral strict Body Silhouette refresh candidate",
+            body_refresh_contract_required=True,
+        )
+
+    with pytest.raises(ValueError, match="inference-first source mode required"):
+        CharacterCardCandidateRequest(
+            project_id="project_doc245_refresh_body",
+            people_asset_id="people_doc245_refresh_body",
+            card_version_id="card_doc245_refresh_body",
+            module="body_silhouette",
+            slot_key="body.rear_full",
+            candidate_index=1,
+            reference_output_ids=["front_winner", "side_winner", "rear_prior"],
+            source_class="brain_inferred",
+            user_intent="scene neutral strict Body Silhouette refresh candidate",
+            body_refresh_contract_required=True,
+            body_refresh_source_mode="reference_assisted",
+            body_model_context="similar_person_body_reference_assisted_v1",
+        )
+
+
 def test_doc245_body_refresh_candidate_receipt_separates_body_source_from_face_identity() -> None:
     active_card = _active_body_card()
     generator = _BodyGenerator()
@@ -1777,6 +1830,7 @@ def test_doc245_body_refresh_candidate_receipt_separates_body_source_from_face_i
         assert request.source_class == "observed"
         assert request.body_refresh_source_mode == "reference_assisted"
         assert request.body_model_context == "similar_person_body_reference_assisted_v1"
+        assert request.body_refresh_contract_required is True
         assert request.body_source_admission is not None
         assert request.body_source_admission.source_class == "observed"
         assert request.body_source_admission.body_evidence_ids == ["body_source_asset"]
@@ -1984,6 +2038,7 @@ def test_doc245_public_metadata_cannot_forge_body_refresh_source_mode() -> None:
             {
                 "professional_character_card_body_refresh_source_mode": "inference_first",
                 "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+                "professional_character_card_body_refresh_contract_required": True,
                 "body_reference_asset_id": "D:/unsafe/body.png",
                 "raw_body_facts": "raw_prompt provider_payload https://example.invalid",
             },
@@ -2026,6 +2081,7 @@ def test_doc245_product_api_body_stage_rejects_missing_or_forbidden_source_admis
             source_class="brain_inferred",
             body_refresh_source_mode="inference_first",
             body_model_context="system_inferred_body_model_scene_neutral_v1",
+            body_refresh_contract_required=True,
             body_source_admission={
                 "contract_version": "professional_body_source_admission_v1",
                 "source_class": "observed",
@@ -2079,6 +2135,7 @@ def test_doc245_product_api_body_stage_inference_first_has_no_body_reference_or_
         source_class="brain_inferred",
         body_refresh_source_mode="inference_first",
         body_model_context="system_inferred_body_model_scene_neutral_v1",
+        body_refresh_contract_required=True,
     )
 
     record = service.job_store.get(status.job_id)
@@ -2094,6 +2151,92 @@ def test_doc245_product_api_body_stage_inference_first_has_no_body_reference_or_
     assert "body_proportion_reference" not in serialized
     for forbidden in ("raw_prompt", "provider_payload", "https://example.invalid", "D:/unsafe"):
         assert forbidden not in serialized
+
+
+def test_doc245_product_api_ordinary_body_stage_keeps_legacy_brain_inferred_without_mode(tmp_path) -> None:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = V3ProductApiService(output_store=output_store)
+    encoded = _tiny_png_b64()
+    face_outputs = [
+        output_store.save_base64_output(
+            job_id=f"job_legacy_{name}",
+            candidate_id=f"candidate_legacy_{name}",
+            asset_id=f"asset_legacy_{name}",
+            provider="test",
+            model="test",
+            encoded_image=encoded,
+            mime_type="image/png",
+        ).output_id
+        for name in ("front", "profile", "rear")
+    ]
+
+    status = service.create_professional_character_card_stage_job(
+        {
+            "user_input": "legacy scene-neutral inferred Body Silhouette model",
+            "scenario_selection": {"scenario_id": "general_creative"},
+        },
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        reference_output_ids=face_outputs,
+        source_class="brain_inferred",
+    )
+
+    metadata = dict(service.job_store.get(status.job_id).request.metadata or {})
+    assert "professional_character_card_body_refresh_source_mode" not in metadata
+    assert "professional_character_card_body_model_context" not in metadata
+    assert "professional_character_card_body_source_admission" not in metadata
+    assert {ref["role"] for ref in metadata["professional_anchor_reference_assets"]} == {"face_reference"}
+
+
+def test_doc245_product_api_strict_refresh_missing_or_invalid_source_mode_blocks() -> None:
+    service = V3ProductApiService()
+
+    with pytest.raises(ValueError, match="professional_character_card_body_refresh_source_mode_invalid"):
+        service.create_professional_character_card_stage_job(
+            {
+                "user_input": "strict inferred Body Silhouette refresh",
+                "scenario_selection": {"scenario_id": "general_creative"},
+            },
+            stage="body_silhouette",
+            slot_key="body.front_full",
+            reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+            source_class="brain_inferred",
+            body_refresh_contract_required=True,
+        )
+
+    with pytest.raises(ValueError, match="professional_character_card_body_refresh_source_mode_forbidden"):
+        service.create_professional_character_card_stage_job(
+            {
+                "user_input": "strict user-described Body Silhouette refresh",
+                "scenario_selection": {"scenario_id": "general_creative"},
+            },
+            stage="body_silhouette",
+            slot_key="body.front_full",
+            reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+            source_class="user_described",
+            body_refresh_contract_required=True,
+            body_source_admission={
+                "contract_version": "professional_body_source_admission_v1",
+                "source_class": "user_described",
+                "body_evidence_ids": [],
+                "body_reference_role": None,
+                "body_reference_truth_layer": None,
+                "face_reference_output_ids": [
+                    "face_front_output",
+                    "face_profile_output",
+                    "face_rear_output",
+                ],
+                "body_owned_channels": [
+                    "body_proportion",
+                    "body_scale",
+                    "neck_shoulder_transition",
+                    "torso_limb_proportion",
+                    "developmental_stage_coherence",
+                    "stance_ground_contact",
+                    "cross_view_body_parity",
+                ],
+            },
+        )
 
 
 def test_doc245_body_refresh_fail_closed_without_cross_view_positive_evidence() -> None:
@@ -2283,6 +2426,7 @@ def test_doc245_visual_asset_library_body_refresh_inference_first_uses_no_body_t
     for request in generator.requests:
         assert request.body_refresh_source_mode == "inference_first"
         assert request.body_model_context == "system_inferred_body_model_scene_neutral_v1"
+        assert request.body_refresh_contract_required is True
         assert request.body_source_admission is None
         serialized = str(request.model_dump(mode="json"))
         assert "body_proportion_truth" not in serialized
