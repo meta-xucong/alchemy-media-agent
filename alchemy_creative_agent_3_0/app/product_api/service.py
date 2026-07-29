@@ -1494,8 +1494,10 @@ class V3ProductApiService:
         source_class: str | None,
         body_source_admission: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        if type(contract_required) is not bool:
+            raise ValueError("professional_character_card_body_refresh_contract_required_invalid")
         source_mode_present = source_mode is not None or body_model_context is not None
-        strict_source_mode = bool(contract_required or source_mode_present)
+        strict_source_mode = contract_required or source_mode_present
         if source_class == "observed":
             if body_source_admission is None:
                 raise ValueError("professional_character_card_body_source_admission_required")

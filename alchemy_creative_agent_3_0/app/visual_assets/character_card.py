@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Callable, Literal, Protocol
 from uuid import uuid4
 
-from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic import ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from ..shared_capabilities.visual_cluster.expression_review import laugh_expression_receipt_allows_slot
@@ -828,7 +828,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     body_source_admission: BodySourceAdmission | None = None
     body_refresh_source_mode: BodyRefreshSourceMode | None = None
     body_model_context: BodyRefreshBodyModelContext | None = None
-    body_refresh_contract_required: bool = False
+    body_refresh_contract_required: StrictBool = False
     generation_channel: Literal["provider", "mcp"] = "provider"
     mcp_handoff_id: str | None = None
     prior_review_repair: dict[str, Any] | None = None

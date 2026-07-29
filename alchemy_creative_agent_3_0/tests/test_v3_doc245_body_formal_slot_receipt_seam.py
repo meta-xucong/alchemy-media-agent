@@ -1778,6 +1778,39 @@ def test_doc245_legacy_brain_inferred_body_candidate_remains_readable_without_so
     assert request.body_source_admission is None
 
 
+def test_doc245_body_refresh_contract_required_marker_rejects_truthy_coercion() -> None:
+    base_payload = {
+        "project_id": "project_doc245_refresh_marker",
+        "people_asset_id": "people_doc245_refresh_marker",
+        "card_version_id": "card_doc245_refresh_marker",
+        "module": "body_silhouette",
+        "slot_key": "body.rear_full",
+        "candidate_index": 1,
+        "reference_output_ids": ["front_winner", "side_winner", "rear_prior"],
+        "source_class": "brain_inferred",
+        "user_intent": "scene neutral strict Body Silhouette refresh candidate",
+    }
+
+    legacy = CharacterCardCandidateRequest(**base_payload)
+    assert legacy.body_refresh_contract_required is False
+    strict = CharacterCardCandidateRequest(
+        **base_payload,
+        body_refresh_contract_required=True,
+        body_refresh_source_mode="inference_first",
+        body_model_context="system_inferred_body_model_scene_neutral_v1",
+    )
+    assert strict.body_refresh_contract_required is True
+
+    for marker in (1, 0, "true", "false", None, [], {}):
+        with pytest.raises(Exception, match="bool|Boolean|valid boolean"):
+            CharacterCardCandidateRequest(
+                **base_payload,
+                body_refresh_contract_required=marker,
+                body_refresh_source_mode="inference_first",
+                body_model_context="system_inferred_body_model_scene_neutral_v1",
+            )
+
+
 def test_doc245_refresh_body_candidate_missing_or_wrong_source_mode_blocks() -> None:
     with pytest.raises(ValueError, match="inference-first source mode required"):
         CharacterCardCandidateRequest(
@@ -2237,6 +2270,51 @@ def test_doc245_product_api_strict_refresh_missing_or_invalid_source_mode_blocks
                 ],
             },
         )
+
+
+def test_doc245_product_api_body_refresh_contract_required_marker_is_strict_bool(tmp_path) -> None:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = V3ProductApiService(output_store=output_store)
+    encoded = _tiny_png_b64()
+    face_outputs = [
+        output_store.save_base64_output(
+            job_id=f"job_marker_{name}",
+            candidate_id=f"candidate_marker_{name}",
+            asset_id=f"asset_marker_{name}",
+            provider="test",
+            model="test",
+            encoded_image=encoded,
+            mime_type="image/png",
+        ).output_id
+        for name in ("front", "profile", "rear")
+    ]
+
+    ok_status = service.create_professional_character_card_stage_job(
+        {
+            "user_input": "legacy inferred Body Silhouette candidate",
+            "scenario_selection": {"scenario_id": "general_creative"},
+        },
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        reference_output_ids=face_outputs,
+        source_class="brain_inferred",
+        body_refresh_contract_required=False,
+    )
+    assert ok_status.job_id
+
+    for marker in (1, 0, "true", "false", None, [], {}):
+        with pytest.raises(ValueError, match="professional_character_card_body_refresh_contract_required_invalid"):
+            service.create_professional_character_card_stage_job(
+                {
+                    "user_input": "strict inferred Body Silhouette candidate",
+                    "scenario_selection": {"scenario_id": "general_creative"},
+                },
+                stage="body_silhouette",
+                slot_key="body.front_full",
+                reference_output_ids=face_outputs,
+                source_class="brain_inferred",
+                body_refresh_contract_required=marker,
+            )
 
 
 def test_doc245_body_refresh_fail_closed_without_cross_view_positive_evidence() -> None:
