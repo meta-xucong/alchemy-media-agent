@@ -79,6 +79,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.library import (
     VisualAssetLibraryLifecycleService,
 )
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.visual_assets import character_card as character_card_module
 from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 
 
@@ -1727,6 +1728,197 @@ def test_doc245_anchor_host_sends_server_owned_candidate_index_to_product_api_bo
     assert service.captured_kwargs["candidate_index"] == 2
 
 
+def _checkpoint_value(checkpoint: object, key: str) -> object:
+    if isinstance(checkpoint, dict):
+        return checkpoint.get(key)
+    if hasattr(checkpoint, "model_dump"):
+        dumped = checkpoint.model_dump()  # type: ignore[attr-defined]
+        if isinstance(dumped, dict):
+            return dumped.get(key)
+    return getattr(checkpoint, key, None)
+
+
+def test_doc245_candidate_lifecycle_checkpoint_contract_is_closed_typed_and_no_leak() -> None:
+    checkpoint_model = getattr(character_card_module, "CharacterCardCandidateLifecycleCheckpoint", None)
+    assert checkpoint_model is not None, "CharacterCardCandidateLifecycleCheckpoint missing"
+
+    valid = {
+        "contract": "character_card_candidate_lifecycle_checkpoint_v1",
+        "stage": "body_silhouette",
+        "slot_key": "body.rear_full",
+        "candidate_index": 1,
+        "candidate_count": 3,
+        "lifecycle_phase": "review_extraction",
+        "status": "blocked",
+        "failure_family": "candidate_review",
+        "failure_code": "candidate_review_extraction_unbound",
+    }
+    checkpoint = checkpoint_model.model_validate(valid)
+    assert _checkpoint_value(checkpoint, "candidate_index") == 1
+    for bad in (
+        {**valid, "candidate_index": "1"},
+        {**valid, "candidate_count": 1},
+        {**valid, "candidate_count": 2},
+        {**valid, "candidate_count": True},
+        {**valid, "candidate_count": "3"},
+        {**valid, "candidate_count": 3.0},
+        {**valid, "slot_key": "body.unknown"},
+        {**valid, "lifecycle_phase": "https://provider.invalid/review"},
+        {**valid, "raw_prompt": "raw prompt must not leak"},
+        {**valid, "provider_payload": {"secret": "do not persist"}},
+        {**valid, "asset_id": "asset_private_123"},
+        {**valid, "output_id": "v3_output_private_456"},
+    ):
+        with pytest.raises(ValueError):
+            checkpoint_model.model_validate(bad)
+
+
+def test_doc245_candidate_lifecycle_checkpoint_helper_does_not_clamp_invalid_candidate_index() -> None:
+    for value in (0, 4, True, False, "2", None):
+        with pytest.raises(ValueError):
+            CharacterCardPreparationService._candidate_lifecycle_checkpoint(  # noqa: SLF001[arg-type]
+                module="body_silhouette",
+                slot_key="body.front_full",
+                candidate_index=value,
+                lifecycle_phase="generation",
+                status="completed",
+            )
+
+
+def test_doc245_anchor_host_sends_server_owned_candidate_count_to_product_api_boundary() -> None:
+    class _CapturingBoundaryProductService:
+        visual_asset_catalog = object()
+
+        def __init__(self) -> None:
+            self.captured_kwargs: dict[str, object] | None = None
+
+        def create_professional_character_card_stage_job(self, *args: object, **kwargs: object) -> object:
+            self.captured_kwargs = dict(kwargs)
+            raise CharacterCardCandidateLifecycleBoundaryError(
+                lifecycle_phase="planning",
+                failure_family="candidate_planning",
+                failure_code="candidate_pre_durable_planning_blocked",
+            )
+
+    service = _CapturingBoundaryProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    request = _body_attempt(2, slot_key="body.rear_full").request
+
+    with pytest.raises(CharacterCardCandidateLifecycleBoundaryError):
+        host.generate(request)
+
+    assert service.captured_kwargs is not None
+    assert service.captured_kwargs["stage"] == "body_silhouette"
+    assert service.captured_kwargs["slot_key"] == "body.rear_full"
+    assert service.captured_kwargs["candidate_index"] == 2
+    assert service.captured_kwargs["candidate_count"] == 3
+
+
+def test_doc245_anchor_generated_job_records_review_extraction_checkpoints_before_boundary() -> None:
+    class _EmptyOutputStore:
+        def list_by_job(self, job_id: str) -> list[object]:
+            return []
+
+    class _GeneratedButUnboundProductService:
+        visual_asset_catalog = object()
+
+        def __init__(self) -> None:
+            self.output_store = _EmptyOutputStore()
+            self.candidate_lifecycle_checkpoints: list[object] = []
+
+        def create_professional_character_card_stage_job(self, *args: object, **kwargs: object) -> object:
+            return SimpleNamespace(job_id="safe_job_generated_unbound", status=ProductJobStatusValue.PLANNED)
+
+        def generate_job(self, job_id: str, payload: dict[str, object]) -> object:
+            return SimpleNamespace(job_id=job_id, status=ProductJobStatusValue.GENERATED, metadata={})
+
+        def get_job_record(self, job_id: str) -> object:
+            return SimpleNamespace(
+                generation_result=SimpleNamespace(
+                    metadata={
+                        "post_generation_review_package": {
+                            "inspections": [
+                                {
+                                    "output_id": "v3_output_private_should_not_project",
+                                    "raw_prompt": "raw prompt must not leak",
+                                    "provider_payload": "secret provider payload",
+                                    "source_url": "https://provider.invalid/private",
+                                    "path": "C:\\private\\artifact.png",
+                                }
+                            ]
+                        }
+                    }
+                ),
+                planning_result=None,
+                request=SimpleNamespace(metadata={}),
+            )
+
+        def record_character_card_candidate_lifecycle_checkpoint(
+            self,
+            *,
+            job_id: str,
+            checkpoint: object,
+        ) -> None:
+            self.candidate_lifecycle_checkpoints.append(checkpoint)
+
+    service = _GeneratedButUnboundProductService()
+    host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
+    request = _body_attempt(2, slot_key="body.rear_full").request
+
+    with pytest.raises(CharacterCardCandidateLifecycleBoundaryError):
+        host.generate(request)
+
+    phases = [
+        (
+            _checkpoint_value(item, "lifecycle_phase"),
+            _checkpoint_value(item, "status"),
+            _checkpoint_value(item, "failure_code"),
+        )
+        for item in service.candidate_lifecycle_checkpoints
+    ]
+    assert ("generation", "completed", None) in phases
+    assert ("review_extraction", "started", None) in phases
+    assert ("review_extraction", "blocked", "candidate_review_extraction_unbound") in phases
+
+    serialized = str(service.candidate_lifecycle_checkpoints)
+    for forbidden in (
+        "raw prompt",
+        "provider_payload",
+        "https://provider.invalid",
+        "C:\\private",
+        "v3_output_private_should_not_project",
+    ):
+        assert forbidden not in serialized
+
+
+def test_doc245_body_prepare_slot_records_formal_receipt_before_after_checkpoints() -> None:
+    original = _active_body_card().model_copy(update={"body_activation_confirmed": False})
+    service = CharacterCardPreparationService(generator=_BodyGenerator(), reviewer=_BodyReviewer())
+
+    result = service.refresh_body_silhouette(
+        original,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="scene-neutral inference-first body silhouette profile",
+    )
+
+    checkpoints = list(getattr(result, "candidate_lifecycle_checkpoints", []) or [])
+    phases = [
+        (
+            _checkpoint_value(item, "slot_key"),
+            _checkpoint_value(item, "candidate_index"),
+            _checkpoint_value(item, "candidate_count"),
+            _checkpoint_value(item, "lifecycle_phase"),
+            _checkpoint_value(item, "status"),
+        )
+        for item in checkpoints
+    ]
+    assert ("body.front_full", 3, 3, "formal_receipt", "started") in phases
+    assert ("body.front_full", 3, 3, "formal_receipt", "completed") in phases
+    assert result.card.body_slots == original.body_slots
+    assert result.card.body_activation_confirmed is False
+
+
 def test_doc245_anchor_generated_review_extraction_gap_projects_closed_lifecycle_boundary() -> None:
     class _EmptyOutputStore:
         def list_by_job(self, job_id: str) -> list[object]:
@@ -2755,6 +2947,238 @@ def test_doc245_product_api_character_card_candidate_index_is_strict_server_owne
     for value in (0, 4, True, False, "1", "3", None, [], {}):
         with pytest.raises(ValueError, match="professional_character_card_candidate_index_invalid"):
             service._safe_professional_character_card_candidate_index(value)  # noqa: SLF001[arg-type]
+
+
+def test_doc245_product_api_character_card_candidate_count_is_exact_formal_count() -> None:
+    service = V3ProductApiService()
+
+    assert service._safe_professional_character_card_candidate_count(3) == 3  # noqa: SLF001
+    for value in (0, 1, 2, 4, True, False, "3", 3.0, None, [], {}):
+        with pytest.raises(ValueError, match="professional_character_card_candidate_count_invalid"):
+            service._safe_professional_character_card_candidate_count(value)  # noqa: SLF001[arg-type]
+
+
+def test_doc245_public_metadata_cannot_forge_candidate_count_or_lifecycle_checkpoints() -> None:
+    for metadata in (
+        {"professional_character_card_candidate_count": 3},
+        {
+            "professional_character_card_candidate_lifecycle_checkpoints": [
+                {
+                    "contract": "character_card_candidate_lifecycle_checkpoint_v1",
+                    "stage": "body_silhouette",
+                    "slot_key": "body.front_full",
+                    "candidate_index": 1,
+                    "candidate_count": 3,
+                    "lifecycle_phase": "generation",
+                    "status": "completed",
+                }
+            ]
+        },
+    ):
+        with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+            V3ProductApiService().create_job(
+                {
+                    "user_input": "ordinary public generation",
+                    "scenario_selection": {"scenario_id": "general_creative"},
+                    "metadata": metadata,
+                }
+            )
+
+
+def test_doc245_product_api_candidate_lifecycle_checkpoint_durable_public_readback_no_leak(tmp_path) -> None:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = V3ProductApiService(output_store=output_store)
+    encoded = _tiny_png_b64()
+    face_outputs = [
+        output_store.save_base64_output(
+            job_id=f"job_checkpoint_{name}",
+            candidate_id=f"candidate_checkpoint_{name}",
+            asset_id=f"asset_checkpoint_{name}",
+            provider="test",
+            model="test",
+            encoded_image=encoded,
+            mime_type="image/png",
+        ).output_id
+        for name in ("front", "profile", "rear")
+    ]
+    status = service.create_professional_character_card_stage_job(
+        {
+            "user_input": "body refresh",
+            "scenario_selection": {"scenario_id": "general_creative"},
+        },
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        reference_output_ids=face_outputs,
+        candidate_index=1,
+        candidate_count=3,
+        source_class="brain_inferred",
+        body_refresh_source_mode="inference_first",
+        body_model_context="system_inferred_body_model_scene_neutral_v1",
+        body_refresh_contract_required=True,
+    )
+
+    service.record_character_card_candidate_lifecycle_checkpoint(
+        job_id=status.job_id,
+        checkpoint={
+            "contract": "character_card_candidate_lifecycle_checkpoint_v1",
+            "stage": "body_silhouette",
+            "slot_key": "body.front_full",
+            "candidate_index": 1,
+            "candidate_count": 3,
+            "lifecycle_phase": "generation",
+            "status": "completed",
+        },
+    )
+    record = service.job_store.get(status.job_id)
+    assert record is not None
+    record.request.metadata["professional_character_card_candidate_lifecycle_checkpoints"].append(
+        {
+            "contract": "character_card_candidate_lifecycle_checkpoint_v1",
+            "stage": "body_silhouette",
+            "slot_key": "body.front_full",
+            "candidate_index": 1,
+            "candidate_count": 3,
+            "lifecycle_phase": "review_extraction",
+            "status": "blocked",
+            "failure_family": "candidate_review",
+            "failure_code": "candidate_review_extraction_unbound",
+            "raw_prompt": "raw prompt must not leak",
+            "source_url": "https://provider.invalid/private",
+            "path": "C:\\private\\artifact.png",
+            "provider_payload": {"secret": "do not persist"},
+            "output_id": "v3_output_private",
+        }
+    )
+    public = service.get_job(status.job_id)
+    checkpoints = public.metadata["professional_character_card_candidate_lifecycle_checkpoints"]
+    assert checkpoints == [
+        {
+            "contract": "character_card_candidate_lifecycle_checkpoint_v1",
+            "stage": "body_silhouette",
+            "slot_key": "body.front_full",
+            "candidate_index": 1,
+            "candidate_count": 3,
+            "lifecycle_phase": "generation",
+            "status": "completed",
+            "failure_family": None,
+            "failure_code": None,
+        }
+    ]
+    serialized = public.model_dump_json()
+    for forbidden in (
+        "raw prompt",
+        "https://provider.invalid",
+        "C:\\private",
+        "provider_payload",
+        "v3_output_private",
+    ):
+        assert forbidden not in serialized
+
+
+def test_doc245_character_card_stage_job_starts_with_empty_lifecycle_checkpoints(tmp_path) -> None:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = V3ProductApiService(output_store=output_store)
+    encoded = _tiny_png_b64()
+    face_outputs = [
+        output_store.save_base64_output(
+            job_id=f"job_empty_checkpoint_{name}",
+            candidate_id=f"candidate_empty_checkpoint_{name}",
+            asset_id=f"asset_empty_checkpoint_{name}",
+            provider="test",
+            model="test",
+            encoded_image=encoded,
+            mime_type="image/png",
+        ).output_id
+        for name in ("front", "profile", "rear")
+    ]
+
+    status = service.create_professional_character_card_stage_job(
+        {
+            "user_input": "body refresh",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {
+                "professional_character_card_candidate_lifecycle_checkpoints": [
+                    {
+                        "contract": "character_card_candidate_lifecycle_checkpoint_v1",
+                        "stage": "body_silhouette",
+                        "slot_key": "body.side_full",
+                        "candidate_index": 3,
+                        "candidate_count": 3,
+                        "lifecycle_phase": "review_extraction",
+                        "status": "blocked",
+                        "failure_family": "candidate_review",
+                        "failure_code": "candidate_review_extraction_unbound",
+                    }
+                ],
+            },
+        },
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        reference_output_ids=face_outputs,
+        candidate_index=1,
+        candidate_count=3,
+        source_class="brain_inferred",
+        body_refresh_source_mode="inference_first",
+        body_model_context="system_inferred_body_model_scene_neutral_v1",
+        body_refresh_contract_required=True,
+    )
+
+    record = service.job_store.get(status.job_id)
+    assert record is not None
+    assert record.request.metadata["professional_character_card_candidate_lifecycle_checkpoints"] == []
+    assert record.request.metadata["professional_character_card_candidate_count"] == 3
+    public = service.get_job(status.job_id)
+    assert "professional_character_card_candidate_lifecycle_checkpoints" not in public.metadata
+
+    service.record_character_card_candidate_lifecycle_checkpoint(
+        job_id=status.job_id,
+        checkpoint={
+            "contract": "character_card_candidate_lifecycle_checkpoint_v1",
+            "stage": "body_silhouette",
+            "slot_key": "body.front_full",
+            "candidate_index": 1,
+            "candidate_count": 3,
+            "lifecycle_phase": "generation",
+            "status": "completed",
+        },
+    )
+    public_after_checkpoint = service.get_job(status.job_id)
+    checkpoints = public_after_checkpoint.metadata[
+        "professional_character_card_candidate_lifecycle_checkpoints"
+    ]
+    assert len(checkpoints) == 1
+    assert checkpoints[0]["slot_key"] == "body.front_full"
+    assert checkpoints[0]["candidate_index"] == 1
+
+
+def test_doc245_anchor_stage_plan_reuse_does_not_copy_character_card_lifecycle_checkpoints() -> None:
+    source_metadata = {
+        "professional_mode": True,
+        "professional_anchor_pack_preparation": True,
+        "professional_reference_stage": "standard_front",
+        "professional_anchor_capture_scope": "anchor_pack",
+        "professional_character_card_candidate_count": 3,
+        "professional_character_card_candidate_lifecycle_checkpoints": [
+            {
+                "contract": "character_card_candidate_lifecycle_checkpoint_v1",
+                "stage": "body_silhouette",
+                "slot_key": "body.front_full",
+                "candidate_index": 1,
+                "candidate_count": 3,
+                "lifecycle_phase": "generation",
+                "status": "completed",
+            }
+        ],
+        "professional_anchor_rendering_contract": "size:1024x1536|quality:strict|reference_card",
+    }
+
+    reusable = V3ProductApiService._reusable_server_owned_runtime_metadata(source_metadata)  # noqa: SLF001
+
+    assert reusable["professional_mode"] is True
+    assert reusable["professional_anchor_pack_preparation"] is True
+    assert reusable["professional_reference_stage"] == "standard_front"
+    assert "professional_character_card_candidate_count" not in reusable
+    assert "professional_character_card_candidate_lifecycle_checkpoints" not in reusable
 
 
 def _safe_provider_no_pixel_retry_summary() -> dict[str, object]:

@@ -50,6 +50,7 @@ from ..visual_assets.character_card import (
     BodyPreparationRequest,
     CharacterCardCandidateAttempt,
     CharacterCardCandidateLifecycleBoundaryError,
+    CharacterCardCandidateLifecycleCheckpoint,
     CharacterCardCandidateRequest,
     CharacterCardCandidateResult,
     CharacterCardFailureEvent,
@@ -1518,6 +1519,7 @@ class ProductApiAnchorPackPreparationHost:
                 slot_key=request.slot_key,
                 reference_output_ids=request.reference_output_ids,
                 candidate_index=request.candidate_index,
+                candidate_count=CharacterCardPreparationService.CANDIDATE_COUNT,
                 source_class=request.source_class,
                 body_refresh_source_mode=request.body_refresh_source_mode,
                 body_model_context=request.body_model_context,
@@ -1648,9 +1650,77 @@ class ProductApiAnchorPackPreparationHost:
             if failure_code:
                 raise AnchorCandidateUnavailable(failure_code)
             raise AnchorCandidateUnavailable("character_card_candidate_generation_failed")
+        self._record_character_card_candidate_lifecycle_checkpoint(
+            job_id=status_job_id,
+            request=request,
+            lifecycle_phase="generation",
+            status="completed",
+        )
         candidate, review = self._character_card_candidate_and_review(status_job_id, request)
         self._character_card_reviews[candidate.candidate_id] = review
         return candidate
+
+    def _record_character_card_candidate_lifecycle_checkpoint(
+        self,
+        *,
+        job_id: str,
+        request: CharacterCardCandidateRequest,
+        lifecycle_phase: Literal[
+            "planning",
+            "generation",
+            "review_extraction",
+            "review",
+            "formal_receipt",
+        ],
+        status: Literal["started", "completed", "blocked"],
+        failure_family: Literal[
+            "candidate_planning",
+            "candidate_generation",
+            "candidate_review",
+            "formal_receipt",
+            "provider_no_pixel",
+            "remote_brain",
+            "mcp_materialization",
+        ]
+        | None = None,
+        failure_code: Literal[
+            "candidate_pre_durable_planning_blocked",
+            "candidate_generation_blocked",
+            "candidate_review_blocked",
+            "candidate_review_generation_result_missing",
+            "candidate_review_extraction_unbound",
+            "candidate_review_output_binding_missing",
+            "candidate_formal_receipt_blocked",
+            "image_edit_invalid_request_unattributed",
+            "remote_brain_unavailable",
+            "remote_brain_unauthorized",
+            "remote_creative_brain_prompt_signoff_unavailable",
+            "mcp_materialization_pending",
+            "mcp_materialization_failed",
+            "mcp_review_pending",
+            "character_card_candidate_generation_failed",
+            "unknown_candidate_generation_failure",
+        ]
+        | None = None,
+    ) -> None:
+        recorder = getattr(
+            self.product_service,
+            "record_character_card_candidate_lifecycle_checkpoint",
+            None,
+        )
+        if not callable(recorder):
+            return
+        checkpoint = CharacterCardCandidateLifecycleCheckpoint(
+            stage=request.module,
+            slot_key=request.slot_key,
+            candidate_index=request.candidate_index,
+            candidate_count=CharacterCardPreparationService.CANDIDATE_COUNT,
+            lifecycle_phase=lifecycle_phase,
+            status=status,
+            failure_family=failure_family,
+            failure_code=failure_code,
+        )
+        recorder(job_id=job_id, checkpoint=checkpoint.model_dump(mode="json"))
 
     @staticmethod
     def _candidate_failure_code_from_blocked_status(status: Any, record: Any | None = None) -> str:
@@ -2444,9 +2514,23 @@ class ProductApiAnchorPackPreparationHost:
         job_id: str,
         request: CharacterCardCandidateRequest,
     ) -> tuple[CharacterCardCandidateResult, AnchorReviewDecision]:
+        self._record_character_card_candidate_lifecycle_checkpoint(
+            job_id=job_id,
+            request=request,
+            lifecycle_phase="review_extraction",
+            status="started",
+        )
         record = self.product_service.get_job_record(job_id)
         result = record.generation_result if record is not None else None
         if result is None:
+            self._record_character_card_candidate_lifecycle_checkpoint(
+                job_id=job_id,
+                request=request,
+                lifecycle_phase="review_extraction",
+                status="blocked",
+                failure_family="candidate_review",
+                failure_code="candidate_review_generation_result_missing",
+            )
             raise self._character_card_candidate_review_boundary(
                 "candidate_review_generation_result_missing"
             )
@@ -2458,6 +2542,14 @@ class ProductApiAnchorPackPreparationHost:
         ]
         outputs = self.product_service.output_store.list_by_job(job_id)
         if not outputs or not inspections:
+            self._record_character_card_candidate_lifecycle_checkpoint(
+                job_id=job_id,
+                request=request,
+                lifecycle_phase="review_extraction",
+                status="blocked",
+                failure_family="candidate_review",
+                failure_code="candidate_review_extraction_unbound",
+            )
             raise self._character_card_candidate_review_boundary(
                 "candidate_review_extraction_unbound"
             )
@@ -2468,9 +2560,23 @@ class ProductApiAnchorPackPreparationHost:
         }
         reviewed = [item for item in outputs if item.output_id in by_output]
         if not reviewed:
+            self._record_character_card_candidate_lifecycle_checkpoint(
+                job_id=job_id,
+                request=request,
+                lifecycle_phase="review_extraction",
+                status="blocked",
+                failure_family="candidate_review",
+                failure_code="candidate_review_output_binding_missing",
+            )
             raise self._character_card_candidate_review_boundary(
                 "candidate_review_output_binding_missing"
             )
+        self._record_character_card_candidate_lifecycle_checkpoint(
+            job_id=job_id,
+            request=request,
+            lifecycle_phase="review_extraction",
+            status="completed",
+        )
         selected = max(reviewed, key=lambda item: self._review_rank(by_output[item.output_id]))
         inspection = by_output[selected.output_id]
         raw_status = _inspection_status(inspection)

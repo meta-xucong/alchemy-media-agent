@@ -80,6 +80,7 @@ BODY_FORMAL_SLOT_SOURCE_STANDARD_BLOCKED_CODE = "body_formal_slot_source_standar
 BODY_FORMAL_SLOT_SHARED_REVIEW_RECEIPT_MISSING_CODE = "body_formal_slot_shared_review_receipt_missing"
 BODY_FORMAL_SLOT_CANDIDATE_CONTRACT_MISMATCH_CODE = "body_formal_slot_candidate_contract_mismatch"
 BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE = "body_formal_slot_reviewed_candidate_count_invalid"
+CHARACTER_CARD_FORMAL_CANDIDATE_COUNT = 3
 BodyFormalSlotFailureCode = Literal[
     "body_formal_slot_receipt_invalid",
     "body_formal_slot_no_passing_shared_review_candidate",
@@ -121,7 +122,15 @@ BodyCandidateGenerationFailureCode = Literal[
     "unknown_candidate_generation_failure",
 ]
 CharacterCardCandidateLifecyclePhase = Literal["planning", "generation", "review", "formal_receipt"]
+CharacterCardCandidateLifecycleCheckpointPhase = Literal[
+    "planning",
+    "generation",
+    "review_extraction",
+    "review",
+    "formal_receipt",
+]
 CharacterCardCandidateLifecycleStatus = Literal["blocked"]
+CharacterCardCandidateLifecycleCheckpointStatus = Literal["started", "completed", "blocked"]
 CharacterCardCandidateLifecycleFailureFamily = Literal[
     "candidate_planning",
     "candidate_generation",
@@ -1082,6 +1091,40 @@ class CharacterCardCandidateLifecycleProjection(_CharacterCardModel):
     failure_code: CharacterCardCandidateLifecycleFailureCode
 
 
+class CharacterCardCandidateLifecycleCheckpoint(_CharacterCardModel):
+    """Closed public-safe per-candidate lifecycle progress checkpoint.
+
+    This is a progress/readback contract, not acceptance.  It intentionally
+    carries no job id, output id, candidate id, provider payload, prompt, URL or
+    filesystem path; those remain internal to their owning stores.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    contract: Literal["character_card_candidate_lifecycle_checkpoint_v1"] = (
+        "character_card_candidate_lifecycle_checkpoint_v1"
+    )
+    stage: Literal["expression_set", "body_silhouette"]
+    slot_key: CharacterCardSlotKey
+    candidate_index: StrictInt = Field(ge=1, le=3)
+    candidate_count: StrictInt = Field(ge=1, le=3)
+    lifecycle_phase: CharacterCardCandidateLifecycleCheckpointPhase
+    status: CharacterCardCandidateLifecycleCheckpointStatus
+    failure_family: CharacterCardCandidateLifecycleFailureFamily | None = None
+    failure_code: CharacterCardCandidateLifecycleFailureCode | None = None
+
+    @model_validator(mode="after")
+    def validate_checkpoint_contract(self) -> "CharacterCardCandidateLifecycleCheckpoint":
+        if type(self.candidate_count) is not int or self.candidate_count != CHARACTER_CARD_FORMAL_CANDIDATE_COUNT:
+            raise ValueError("Candidate lifecycle checkpoint candidate_count must equal formal count")
+        if self.status == "blocked":
+            if self.failure_family is None or self.failure_code is None:
+                raise ValueError("Candidate lifecycle blocked checkpoint requires closed failure")
+        elif self.failure_family is not None or self.failure_code is not None:
+            raise ValueError("Candidate lifecycle non-blocked checkpoint cannot carry failure")
+        return self
+
+
 class CharacterCardCandidateLifecycleBoundaryError(RuntimeError):
     """Internal adapter signal for closed candidate lifecycle terminal states."""
 
@@ -1204,6 +1247,7 @@ class CharacterCardStageResult(_CharacterCardModel):
     winner_output_ids: dict[str, str] = Field(default_factory=dict)
     failure_codes: list[str] = Field(default_factory=list)
     failures: list[CharacterCardFailureEvent] = Field(default_factory=list)
+    candidate_lifecycle_checkpoints: list[CharacterCardCandidateLifecycleCheckpoint] = Field(default_factory=list)
     # Production hosts must return a receipt proving that the existing shared
     # review/retry/final-winner path handled this stage.  The offline contract
     # service below intentionally leaves it empty and is never a route host.
@@ -1679,7 +1723,7 @@ class CharacterCardPreparationService:
     production_shared_runtime = False
     execution_mode = "offline_contract"
 
-    CANDIDATE_COUNT = 3
+    CANDIDATE_COUNT = CHARACTER_CARD_FORMAL_CANDIDATE_COUNT
     MAX_BOUNDED_REPAIR_COUNT = 1
 
     def __init__(
@@ -1709,6 +1753,29 @@ class CharacterCardPreparationService:
             candidate_count=cls.CANDIDATE_COUNT,
             lifecycle_phase=lifecycle_phase,
             status="blocked",
+            failure_family=failure_family,
+            failure_code=failure_code,
+        )
+
+    @classmethod
+    def _candidate_lifecycle_checkpoint(
+        cls,
+        *,
+        module: Literal["expression_set", "body_silhouette"],
+        slot_key: str,
+        candidate_index: int,
+        lifecycle_phase: CharacterCardCandidateLifecycleCheckpointPhase,
+        status: CharacterCardCandidateLifecycleCheckpointStatus,
+        failure_family: CharacterCardCandidateLifecycleFailureFamily | None = None,
+        failure_code: CharacterCardCandidateLifecycleFailureCode | None = None,
+    ) -> CharacterCardCandidateLifecycleCheckpoint:
+        return CharacterCardCandidateLifecycleCheckpoint(
+            stage=module,
+            slot_key=slot_key,  # type: ignore[arg-type]
+            candidate_index=candidate_index,
+            candidate_count=cls.CANDIDATE_COUNT,
+            lifecycle_phase=lifecycle_phase,
+            status=status,
             failure_family=failure_family,
             failure_code=failure_code,
         )
@@ -2313,6 +2380,7 @@ class CharacterCardPreparationService:
         winners: dict[str, str] = {}
         formal_slot_receipts: dict[str, FormalSlotReceipt] = {}
         failures: list[CharacterCardFailureEvent] = []
+        candidate_lifecycle_checkpoints: list[CharacterCardCandidateLifecycleCheckpoint] = []
         refresh_slots: dict[str, CharacterCardSlot] = {}
         for slot_key in BODY_SLOT_KEYS:
             winner, slot_attempts, slot_failures, formal_receipt = self._prepare_slot(
@@ -2331,6 +2399,7 @@ class CharacterCardPreparationService:
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 attempts=attempts,
+                candidate_lifecycle_checkpoints=candidate_lifecycle_checkpoints,
             )
             attempts.extend(slot_attempts)
             failures.extend(slot_failures)
@@ -2358,6 +2427,7 @@ class CharacterCardPreparationService:
                     winner_output_ids=winners,
                     failure_codes=list(dict.fromkeys([f"{slot_key}_no_reviewed_winner", *[item.failure_code for item in slot_failures]])),
                     failures=failures,
+                    candidate_lifecycle_checkpoints=candidate_lifecycle_checkpoints,
                     mcp_handoff_ids=self._mcp_handoff_ids(failures),
                 )
             refresh_slots[slot_key] = self._winner_slot(
@@ -2400,6 +2470,7 @@ class CharacterCardPreparationService:
                 winner_output_ids=winners,
                 failure_codes=[parity_failure_code],
                 failures=failures,
+                candidate_lifecycle_checkpoints=candidate_lifecycle_checkpoints,
             )
         updated = card.model_copy(
             update={
@@ -2425,6 +2496,7 @@ class CharacterCardPreparationService:
             winner_output_ids=winners,
             failures=failures,
             formal_slot_receipts=formal_slot_receipts,
+            candidate_lifecycle_checkpoints=candidate_lifecycle_checkpoints,
         )
 
     def _prepare_slot(
@@ -2446,6 +2518,7 @@ class CharacterCardPreparationService:
         generation_channel: Literal["provider", "mcp"] = "provider",
         review_only_resume: bool = False,
         attempts: list[CharacterCardCandidateAttempt],
+        candidate_lifecycle_checkpoints: list[CharacterCardCandidateLifecycleCheckpoint] | None = None,
     ) -> tuple[
         CharacterCardCandidateResult | None,
         list[CharacterCardCandidateAttempt],
@@ -2456,6 +2529,11 @@ class CharacterCardPreparationService:
 
         slot_attempts: list[CharacterCardCandidateAttempt] = []
         slot_failures: list[CharacterCardFailureEvent] = []
+        lifecycle_checkpoints = (
+            candidate_lifecycle_checkpoints
+            if candidate_lifecycle_checkpoints is not None
+            else []
+        )
         passing: list[tuple[CharacterCardCandidateResult, Any]] = []
         acceptance_core = SlotAcceptanceCore(quality_gate=self._quality_gate_for_slot(slot_key))
         attempt_round = int(card.slot_retry_rounds.get(slot_key, 1))
@@ -2578,8 +2656,17 @@ class CharacterCardPreparationService:
                                 candidate_generation_failures=slot_failures,
                             ),
                         )
-                    )
+                )
                 return None, slot_attempts, slot_failures, None
+            lifecycle_checkpoints.append(
+                self._candidate_lifecycle_checkpoint(
+                    module=module,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                    lifecycle_phase="review",
+                    status="started",
+                )
+            )
             try:
                 review = self.reviewer.review(candidate)
             except CharacterCardCandidateLifecycleBoundaryError as exc:
@@ -2602,6 +2689,17 @@ class CharacterCardPreparationService:
                         candidate_lifecycle=lifecycle,
                     )
                 )
+                lifecycle_checkpoints.append(
+                    self._candidate_lifecycle_checkpoint(
+                        module=module,
+                        slot_key=slot_key,
+                        candidate_index=candidate_index,
+                        lifecycle_phase="review",
+                        status="blocked",
+                        failure_family=lifecycle.failure_family,
+                        failure_code=lifecycle.failure_code,
+                    )
+                )
                 if module == "body_silhouette" and _is_body_delivery_slot(slot_key):
                     slot_failures.append(
                         CharacterCardFailureEvent(
@@ -2618,6 +2716,15 @@ class CharacterCardPreparationService:
                         )
                     )
                 return None, slot_attempts, slot_failures, None
+            lifecycle_checkpoints.append(
+                self._candidate_lifecycle_checkpoint(
+                    module=module,
+                    slot_key=slot_key,
+                    candidate_index=candidate_index,
+                    lifecycle_phase="review",
+                    status="completed",
+                )
+            )
             attempt = CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
             slot_attempts.append(attempt)
             if acceptance_core.accepts_review(review):
@@ -2673,6 +2780,16 @@ class CharacterCardPreparationService:
             module == "body_silhouette"
             and _is_body_delivery_slot(slot_key)
         ):
+            if module == "body_silhouette":
+                lifecycle_checkpoints.append(
+                    self._candidate_lifecycle_checkpoint(
+                        module=module,
+                        slot_key=slot_key,
+                        candidate_index=self.CANDIDATE_COUNT,
+                        lifecycle_phase="formal_receipt",
+                        status="started",
+                    )
+                )
             try:
                 if module == "expression_set":
                     formal_receipt = self._formal_expression_slot_receipt(
@@ -2685,6 +2802,18 @@ class CharacterCardPreparationService:
                         attempts=slot_attempts,
                     )
             except ValueError:
+                if module == "body_silhouette":
+                    lifecycle_checkpoints.append(
+                        self._candidate_lifecycle_checkpoint(
+                            module=module,
+                            slot_key=slot_key,
+                            candidate_index=min(self.CANDIDATE_COUNT, max(1, len(slot_attempts) or 1)),
+                            lifecycle_phase="formal_receipt",
+                            status="blocked",
+                            failure_family="formal_receipt",
+                            failure_code="candidate_formal_receipt_blocked",
+                        )
+                    )
                 failure_details = (
                     self._formal_body_slot_failure_projection(
                         slot_key=slot_key,
@@ -2717,6 +2846,16 @@ class CharacterCardPreparationService:
                     )
                 )
                 return None, slot_attempts, slot_failures, None
+            if module == "body_silhouette":
+                lifecycle_checkpoints.append(
+                    self._candidate_lifecycle_checkpoint(
+                        module=module,
+                        slot_key=slot_key,
+                        candidate_index=self.CANDIDATE_COUNT,
+                        lifecycle_phase="formal_receipt",
+                        status="completed",
+                    )
+                )
             selected = next(
                 (
                     attempt.candidate

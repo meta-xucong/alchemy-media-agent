@@ -942,6 +942,7 @@ class V3ProductApiService:
         professional_character_card_body_refresh_contract_required: bool = False,
         professional_character_card_body_source_admission: dict[str, Any] | None = None,
         professional_character_card_candidate_index: int | None = None,
+        professional_character_card_candidate_count: int | None = None,
         professional_character_card_attempt_round: int = 1,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
@@ -1027,6 +1028,9 @@ class V3ProductApiService:
             character_card_candidate_index = self._safe_professional_character_card_candidate_index(
                 professional_character_card_candidate_index
             )
+            character_card_candidate_count = self._safe_professional_character_card_candidate_count(
+                professional_character_card_candidate_count
+            )
             reference_ids = [
                 str(item or "").strip()
                 for item in (professional_character_card_reference_output_ids or [])
@@ -1067,6 +1071,8 @@ class V3ProductApiService:
                 "professional_character_card_stage": professional_character_card_stage,
                 "professional_character_card_slot": str(professional_character_card_slot),
                 "professional_character_card_candidate_index": character_card_candidate_index,
+                "professional_character_card_candidate_count": character_card_candidate_count,
+                "professional_character_card_candidate_lifecycle_checkpoints": [],
                 "professional_character_card_source_class": professional_character_card_source_class,
                 **source_mode_contract,
                 "professional_character_card_attempt_round": max(
@@ -1249,11 +1255,7 @@ class V3ProductApiService:
                 or source.request.user_input != create_request.user_input
             ):
                 raise ValueError("professional_anchor_stage_plan_source_mismatch")
-            reusable = {
-                key: source_metadata[key]
-                for key in self._SERVER_OWNED_RUNTIME_METADATA
-                if key in source_metadata
-            }
+            reusable = self._reusable_server_owned_runtime_metadata(source_metadata)
             create_request.metadata = {
                 **dict(create_request.metadata or {}),
                 **reusable,
@@ -1308,6 +1310,7 @@ class V3ProductApiService:
         slot_key: str,
         reference_output_ids: list[str],
         candidate_index: int,
+        candidate_count: int = 3,
         source_class: str | None = None,
         body_refresh_source_mode: str | None = None,
         body_model_context: str | None = None,
@@ -1327,6 +1330,7 @@ class V3ProductApiService:
             professional_character_card_slot=slot_key,
             professional_character_card_reference_output_ids=list(reference_output_ids),
             professional_character_card_candidate_index=candidate_index,
+            professional_character_card_candidate_count=candidate_count,
             professional_character_card_source_class=source_class,
             professional_character_card_body_refresh_source_mode=body_refresh_source_mode,
             professional_character_card_body_model_context=body_model_context,
@@ -1546,6 +1550,12 @@ class V3ProductApiService:
         return value
 
     @staticmethod
+    def _safe_professional_character_card_candidate_count(value: int | None) -> int:
+        if type(value) is not int or value != 3:
+            raise ValueError("professional_character_card_candidate_count_invalid")
+        return value
+
+    @staticmethod
     def _safe_professional_character_card_body_source_admission(
         raw: dict[str, Any] | None,
         *,
@@ -1729,6 +1739,34 @@ class V3ProductApiService:
         """Internal Project Mode lookup; no new public low-level API is exposed."""
 
         return self.job_store.get(job_id)
+
+    def record_character_card_candidate_lifecycle_checkpoint(
+        self,
+        *,
+        job_id: str,
+        checkpoint: dict[str, Any] | Any,
+    ) -> None:
+        """Append a public-safe Character Card candidate lifecycle checkpoint."""
+
+        record = self.job_store.get(job_id)
+        if record is None:
+            return
+        from ..visual_assets.character_card import CharacterCardCandidateLifecycleCheckpoint
+
+        safe_checkpoint = CharacterCardCandidateLifecycleCheckpoint.model_validate(
+            checkpoint
+        ).model_dump(mode="json")
+        metadata = dict(record.request.metadata or {})
+        existing = metadata.get("professional_character_card_candidate_lifecycle_checkpoints")
+        checkpoints = [
+            dict(item)
+            for item in (existing if isinstance(existing, list) else [])
+            if isinstance(item, dict)
+        ]
+        checkpoints.append(safe_checkpoint)
+        metadata["professional_character_card_candidate_lifecycle_checkpoints"] = checkpoints
+        record.request.metadata = metadata
+        self.job_store.save(record)
 
     def get_photographer_profiles(self) -> dict[str, Any]:
         """Return the public, read-only profile catalog for the Photography workspace."""
@@ -7041,6 +7079,24 @@ class V3ProductApiService:
         provenance = record.request.metadata.get("ecommerce_runtime_provenance")
         return {"ecommerce_runtime_provenance": dict(provenance)} if isinstance(provenance, dict) else {}
 
+    @staticmethod
+    def _public_character_card_candidate_lifecycle_checkpoints(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        from ..visual_assets.character_card import CharacterCardCandidateLifecycleCheckpoint
+
+        safe: list[dict[str, Any]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            try:
+                safe.append(
+                    CharacterCardCandidateLifecycleCheckpoint.model_validate(item).model_dump(mode="json")
+                )
+            except ValueError:
+                continue
+        return safe
+
     def _project_mode_status_metadata(self, record: ProductJobRecord) -> dict[str, Any]:
         request_metadata = dict(record.request.metadata or {})
         allowed_keys = {
@@ -7078,12 +7134,23 @@ class V3ProductApiService:
             "generation_lifecycle_timeout",
             "generation_lifecycle_failure",
             "background_generation_watchdog",
+            "professional_character_card_candidate_count",
+            "professional_character_card_candidate_lifecycle_checkpoints",
             "photographer_profile_binding",
             "specialized_scenario_plan_summary",
             "specialized_execution_summary",
             "review_certification",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
+        raw_checkpoints = status_metadata.get("professional_character_card_candidate_lifecycle_checkpoints")
+        if raw_checkpoints is not None:
+            projected_checkpoints = self._public_character_card_candidate_lifecycle_checkpoints(
+                raw_checkpoints
+            )
+            if projected_checkpoints:
+                status_metadata["professional_character_card_candidate_lifecycle_checkpoints"] = projected_checkpoints
+            else:
+                status_metadata.pop("professional_character_card_candidate_lifecycle_checkpoints", None)
         raw_provider_failure = status_metadata.get("provider_failure_retry")
         if isinstance(raw_provider_failure, dict):
             status_metadata["provider_failure_retry"] = self._public_provider_failure_retry(raw_provider_failure)
@@ -9162,6 +9229,8 @@ class V3ProductApiService:
             "professional_character_card_stage",
             "professional_character_card_slot",
             "professional_character_card_candidate_index",
+            "professional_character_card_candidate_count",
+            "professional_character_card_candidate_lifecycle_checkpoints",
             "professional_character_card_source_class",
             "professional_character_card_body_refresh_source_mode",
             "professional_character_card_body_model_context",
@@ -9175,6 +9244,21 @@ class V3ProductApiService:
             "visual_asset_library_execution",
         }
     )
+
+    _NON_REUSABLE_SERVER_OWNED_RUNTIME_METADATA = frozenset(
+        {
+            "professional_character_card_candidate_count",
+            "professional_character_card_candidate_lifecycle_checkpoints",
+        }
+    )
+
+    @classmethod
+    def _reusable_server_owned_runtime_metadata(cls, source_metadata: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: source_metadata[key]
+            for key in cls._SERVER_OWNED_RUNTIME_METADATA
+            if key in source_metadata and key not in cls._NON_REUSABLE_SERVER_OWNED_RUNTIME_METADATA
+        }
 
     _PROFESSIONAL_ANCHOR_VIEW_DECISION_REUSE_BINDING_FIELDS = (
         "project_id",
