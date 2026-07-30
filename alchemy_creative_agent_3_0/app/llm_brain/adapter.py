@@ -47,6 +47,9 @@ from ..scenario_packs.ecommerce import (
     validate_professional_ecommerce_pose_contract_payload,
 )
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapabilityPolicy, general_capability_policy
+from ..visual_assets.body_silhouette_source_standard import (
+    body_silhouette_mcp_materialization_prompt_findings,
+)
 
 
 GENERAL_SCENARIO_ID = "general_creative"
@@ -2641,6 +2644,17 @@ def _character_card_stage_prompt_scope_violations(
         return []
     stage = str(target.get("stage") or "").strip()
     slot_key = str(target.get("slot_key") or "").strip()
+    if stage == "body_silhouette" and slot_key.startswith("body."):
+        if not isinstance(candidate, list):
+            return []
+        violations: list[str] = []
+        for index, item in enumerate(candidate, start=1):
+            if not isinstance(item, dict):
+                continue
+            prompt = str(item.get("prompt") or "").strip()
+            if prompt and body_silhouette_mcp_materialization_prompt_findings(prompt):
+                violations.append(f"output_{index}:character_card_body_mcp_forbidden_channels")
+        return violations
     if stage != "expression_set" or not slot_key.startswith("expression."):
         return []
     expression = str(target.get("expression") or slot_key.split(".", 1)[1]).strip()

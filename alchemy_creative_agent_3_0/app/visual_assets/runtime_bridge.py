@@ -342,14 +342,7 @@ class ProfessionalModeRuntimeBridge:
                 ],
             }
         else:
-            quality_contract["body_silhouette_contract"] = "preserve_identity_scale_and_age_appropriate_body_proportion"
-            quality_contract["body_silhouette_source_standard_contract"] = (
-                body_silhouette_source_standard_contract()
-            )
-            quality_contract["body_silhouette_mcp_materialization_channel_contract"] = (
-                body_silhouette_mcp_materialization_channel_contract()
-            )
-            quality_contract["body_silhouette_hair_continuity_contract"] = {
+            hair_continuity_contract = {
                 "contract_version": "professional_body_silhouette_hair_continuity_v1",
                 "applies": True,
                 "source": "current_project_confirmed_face_identity_references",
@@ -369,7 +362,19 @@ class ProfessionalModeRuntimeBridge:
                 "fixed_hairstyle_text": None,
                 "scope": "body_silhouette_only",
             }
-        return {
+            body_source_contract = {
+                "contract_version": "professional_body_silhouette_source_contract_v1",
+                "owner": "professional_character_card_body_silhouette",
+                "scope": "character_card_body_silhouette_only",
+                "source_standard_contract": body_silhouette_source_standard_contract(),
+                "mcp_materialization_channel_contract": (
+                    body_silhouette_mcp_materialization_channel_contract()
+                ),
+                "hair_continuity_contract": hair_continuity_contract,
+                "face_identity_reference_scope": "identity_continuity_only",
+                "non_body_channels": "unspecified",
+            }
+        metadata = {
             "contract_version": "professional_character_card_stage_v1",
             "stage": stage,
             "slot_key": slot_key.strip(),
@@ -377,13 +382,17 @@ class ProfessionalModeRuntimeBridge:
             "creative_direction_owner": "remote_v3_llm_brain",
             "reference_channel_owner": "shared_v3_reference_policy",
             "review_owner": "v3_shared_vision",
-            "professional_face_identity_quality_contract": quality_contract,
             "reference_led_slot_delta_contract": (
                 ProfessionalModeRuntimeBridge._reference_led_slot_delta_contract(
                     slot_delta_type="expression" if stage == "expression_set" else "body_pose"
                 )
             ),
         }
+        if stage == "body_silhouette":
+            metadata["professional_body_silhouette_source_contract"] = body_source_contract
+        else:
+            metadata["professional_face_identity_quality_contract"] = quality_contract
+        return metadata
 
     @staticmethod
     def planning_metadata(

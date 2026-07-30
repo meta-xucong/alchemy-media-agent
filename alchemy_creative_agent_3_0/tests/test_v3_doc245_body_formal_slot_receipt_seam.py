@@ -10,6 +10,9 @@ import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
+from alchemy_creative_agent_3_0.app.llm_brain.adapter import (
+    _character_card_stage_prompt_scope_violations,
+)
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_required_result
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import (
     _canonical_provider_prompt_finalization_payload,
@@ -63,6 +66,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BODY_FORMAL_SLOT_CANDIDATE_CONTRACT_MISMATCH_CODE,
     BODY_FORMAL_SLOT_REVIEWED_COUNT_INVALID_CODE,
     BODY_FORMAL_SLOT_SHARED_REVIEW_RECEIPT_MISSING_CODE,
+    BodyRefreshAttemptIdentity,
     CharacterCardCandidateLifecycleBoundaryError,
     BodyFormalSlotFailureDetails,
     CharacterCardCandidateLifecycleProjection,
@@ -302,9 +306,6 @@ def _doc245_slot_delta_finalizer_context(*, stage: str, slot_key: str) -> dict[s
             "envelope_id": "opaque_doc245_envelope",
             "ledger_id": "opaque_doc245_ledger",
         },
-        "professional_face_identity_quality_contract": stage_metadata[
-            "professional_face_identity_quality_contract"
-        ],
         "reference_led_slot_delta_decision": slot_delta_contract,
         "provider_admission_decision": {
             "required": True,
@@ -320,12 +321,18 @@ def _doc245_slot_delta_finalizer_context(*, stage: str, slot_key: str) -> dict[s
         },
     }
     if stage == "body_silhouette":
+        context["professional_body_silhouette_source_contract"] = stage_metadata[
+            "professional_body_silhouette_source_contract"
+        ]
         context["character_card_slot_delta_target"] = {
             "stage": "body_silhouette",
             "slot_key": slot_key,
             "body_slot": slot_key.split(".", 1)[1],
         }
     if stage == "expression_set":
+        context["professional_face_identity_quality_contract"] = stage_metadata[
+            "professional_face_identity_quality_contract"
+        ]
         context["character_card_slot_delta_target"] = {
             "stage": "expression_set",
             "slot_key": slot_key,
@@ -335,7 +342,11 @@ def _doc245_slot_delta_finalizer_context(*, stage: str, slot_key: str) -> dict[s
 
 
 def _doc245_finalizer_response_contract(context: dict[str, object]) -> str:
-    payload = _canonical_provider_prompt_finalization_payload(
+    return str(_doc245_finalizer_payload(context)["remote_response_contract"])
+
+
+def _doc245_finalizer_payload(context: dict[str, object]) -> dict[str, object]:
+    return _canonical_provider_prompt_finalization_payload(
         BrainRunRequest(
             user_input="Finalize one Professional Character Card slot prompt.",
             stage="provider_prompt_finalize",
@@ -346,7 +357,60 @@ def _doc245_finalizer_response_contract(context: dict[str, object]) -> str:
             metadata={"canonical_prompt_context": context},
         )
     )
-    return str(payload["remote_response_contract"])
+
+
+def _doc245_canonical_runtime_context(
+    request: ScenarioRuntimeRequest,
+    *,
+    brain_result=None,
+) -> dict[str, object]:
+    return ScenarioRuntime._canonical_prompt_context(  # noqa: SLF001
+        request,
+        CapabilityActivationPlan(
+            plan_id="plan_doc245_body_context",
+            fingerprint="fingerprint_doc245_body_context",
+            job_id="job_doc245_body_context",
+            task_profile_id="profile_doc245_body_context",
+            template_id="general_template",
+            scenario_id="general_creative",
+            dependency_order=[],
+        ),
+        SimpleNamespace(
+            envelope_id="envelope_doc245_body_context",
+            execution_fingerprint="exec_doc245_body_context",
+        ),
+        SimpleNamespace(
+            ledger_id="ledger_doc245_body_context",
+            provider_projection={},
+        ),
+        brain_result or _remote_required_body_brain_result("body.front_full"),
+    )
+
+
+class _Doc245CaptureBrainAdapter:
+    def __init__(self) -> None:
+        self.last_request: BrainRunRequest | None = None
+
+    def build_request(self, **kwargs) -> BrainRunRequest:
+        kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        request = BrainRunRequest(**kwargs)
+        self.last_request = request
+        return request
+
+    def run(self, request: BrainRunRequest):
+        return build_remote_required_result(request, "doc245_fake_remote_brain_not_called")
+
+
+def _doc245_resolution():
+    return SimpleNamespace(
+        selected_mode_id="general",
+        selected_preset_id="default",
+        status=SimpleNamespace(value="active"),
+        manifest=SimpleNamespace(
+            scenario_id="general_creative",
+            display_name="General Creative",
+        ),
+    )
 
 
 def _generic_body_shared_receipt(
@@ -399,8 +463,8 @@ def _body_review_metadata_for_vision(slot_key: str = "body.front_full") -> dict[
                 "active_capability_ids": ["human_realism"],
                 "dependency_order": ["human_realism"],
                 "metadata": {
-                    "professional_face_identity_quality_contract": stage_metadata[
-                        "professional_face_identity_quality_contract"
+                    "professional_body_silhouette_source_contract": stage_metadata[
+                        "professional_body_silhouette_source_contract"
                     ],
                 },
             },
@@ -438,10 +502,11 @@ def test_doc245_body_review_contract_is_scene_neutral_without_fixed_wardrobe_con
         slot_key="body.front_full",
     )
 
-    quality_contract = stage_metadata["professional_face_identity_quality_contract"]
+    body_contract = stage_metadata["professional_body_silhouette_source_contract"]
 
-    serialized_quality = str(quality_contract).lower()
-    assert "body_silhouette_wardrobe_contract" not in quality_contract
+    serialized_quality = str(body_contract).lower()
+    assert "professional_face_identity_quality_contract" not in stage_metadata
+    assert "body_silhouette_wardrobe_contract" not in body_contract
     for forbidden in BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS:
         assert forbidden not in serialized_quality
 
@@ -459,8 +524,8 @@ def test_doc245_body_review_contract_carries_reference_driven_hair_continuity_wi
         slot_key="body.side_full",
     )
 
-    quality_contract = stage_metadata["professional_face_identity_quality_contract"]
-    hair_contract = quality_contract["body_silhouette_hair_continuity_contract"]
+    body_contract = stage_metadata["professional_body_silhouette_source_contract"]
+    hair_contract = body_contract["hair_continuity_contract"]
 
     assert hair_contract["scope"] == "body_silhouette_only"
     assert hair_contract["source"] == "current_project_confirmed_face_identity_references"
@@ -675,7 +740,21 @@ def test_doc245_body_slot_delta_recovery_rejects_superseded_wardrobe_contract() 
     request = _body_slot_delta_runtime_request("body.front_full")
     metadata = dict(request.metadata or {})
     planning_metadata = dict(metadata["professional_planning_metadata"])
-    quality_contract = dict(planning_metadata["professional_face_identity_quality_contract"])
+    planning_metadata.pop("professional_body_silhouette_source_contract", None)
+    quality_contract = {
+        "contract_version": "professional_face_identity_quality_v2",
+        "scope": "character_card_body_silhouette",
+        "body_silhouette_source_standard_contract": body_silhouette_source_standard_contract(),
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_silhouette_hair_continuity_contract": {
+            "contract_version": "professional_body_silhouette_hair_continuity_v1",
+            "applies": True,
+            "source": "current_project_confirmed_face_identity_references",
+            "scope": "body_silhouette_only",
+        },
+    }
     quality_contract["body_silhouette_wardrobe_contract"] = {
         "contract_version": "professional_body_silhouette_wardrobe_v1",
         "applies": True,
@@ -730,22 +809,168 @@ def test_doc245_body_stage_metadata_projects_mcp_body_owned_channel_contract() -
         stage="body_silhouette",
         slot_key="body.front_full",
     )
-    quality_contract = metadata["professional_face_identity_quality_contract"]
+    assert "professional_body_silhouette_source_contract" in metadata
+    assert "professional_face_identity_quality_contract" not in metadata
 
-    contract = quality_contract["body_silhouette_mcp_materialization_channel_contract"]
+    body_contract = metadata["professional_body_silhouette_source_contract"]
+    contract = body_contract["mcp_materialization_channel_contract"]
     expected = body_silhouette_mcp_materialization_channel_contract()
 
     assert contract == expected
     assert contract["allowed_body_owned_channels"] == list(BODY_SILHOUETTE_MCP_ALLOWED_BODY_CHANNELS)
     assert contract["forbidden_channel_findings"] == list(BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS)
     assert contract["face_identity_reference_scope"] == "identity_continuity_only"
+    assert body_contract["face_identity_reference_scope"] == "identity_continuity_only"
 
     expression_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="expression_set",
         slot_key="expression.smile",
     )
+    assert "professional_body_silhouette_source_contract" not in expression_metadata
     expression_quality = expression_metadata["professional_face_identity_quality_contract"]
     assert "body_silhouette_mcp_materialization_channel_contract" not in expression_quality
+
+
+def test_doc245_body_canonical_prompt_context_projects_body_source_contract_not_face_contract() -> None:
+    request = _body_slot_delta_runtime_request("body.front_full")
+
+    context = _doc245_canonical_runtime_context(request)
+
+    assert "professional_body_silhouette_source_contract" in context
+    assert "professional_face_identity_quality_contract" not in context
+    body_contract = context["professional_body_silhouette_source_contract"]
+    assert isinstance(body_contract, dict)
+    assert body_contract["owner"] == "professional_character_card_body_silhouette"
+    assert body_contract["scope"] == "character_card_body_silhouette_only"
+    assert body_contract["face_identity_reference_scope"] == "identity_continuity_only"
+
+    serialized = str(context).lower()
+    for forbidden in (
+        "professional face identity anchor-pack contract",
+        "mature photographer-shot model-card baseline",
+        "commercial photography",
+        "photography-quality boundary",
+        "model-card photography finish",
+    ):
+        assert forbidden not in serialized
+
+
+def test_doc245_body_canonical_prompt_context_legacy_readback_extracts_body_contract_only() -> None:
+    request = _body_slot_delta_runtime_request("body.side_full")
+    metadata = dict(request.metadata or {})
+    planning_metadata = dict(metadata["professional_planning_metadata"])
+    planning_metadata.pop("professional_body_silhouette_source_contract")
+    planning_metadata["professional_face_identity_quality_contract"] = {
+        "contract_version": "professional_face_identity_quality_v2",
+        "scope": "character_card_body_silhouette",
+        "body_silhouette_source_standard_contract": body_silhouette_source_standard_contract(),
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_silhouette_hair_continuity_contract": {
+            "contract_version": "professional_body_silhouette_hair_continuity_v1",
+            "applies": True,
+            "source": "current_project_confirmed_face_identity_references",
+            "scope": "body_silhouette_only",
+        },
+    }
+    metadata["professional_planning_metadata"] = planning_metadata
+    legacy_request = request.model_copy(update={"metadata": metadata})
+
+    context = _doc245_canonical_runtime_context(legacy_request)
+
+    assert "professional_body_silhouette_source_contract" in context
+    assert "professional_face_identity_quality_contract" not in context
+    assert context["professional_body_silhouette_source_contract"]["scope"] == (
+        "character_card_body_silhouette_only"
+    )
+
+
+def test_doc245_expression_canonical_prompt_context_keeps_face_contract_not_body_contract() -> None:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="expression_set",
+        slot_key="expression.smile",
+    )
+    request = ScenarioRuntimeRequest(
+        user_input="Prepare one Character Card expression slot.",
+        scenario_selection={"scenario_id": "general_creative"},
+        metadata={
+            "project_id": "project_doc245_expression_context",
+            "requested_image_count": 1,
+            "require_real_images": True,
+            "professional_mode": True,
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "expression_set",
+            "professional_character_card_slot": "expression.smile",
+            "professional_planning_metadata": stage_metadata,
+        },
+    )
+
+    context = _doc245_canonical_runtime_context(
+        request,
+        brain_result=build_remote_required_result(
+            BrainRunRequest(
+                user_input="Prepare one Character Card expression slot.",
+                stage="scenario_runtime",
+                scenario_id="general_creative",
+                template_id="general_template",
+                requested_image_count=1,
+                requested_image_size="1024x1536",
+                metadata=request.metadata,
+            ),
+            "Remote Brain timed out before expression slot prompt.",
+        ),
+    )
+
+    assert "professional_face_identity_quality_contract" in context
+    assert "professional_body_silhouette_source_contract" not in context
+
+
+def test_doc245_body_recovery_uses_body_owned_contract_key_not_face_contract_projection() -> None:
+    runtime = ScenarioRuntime()
+    request = _body_slot_delta_runtime_request("body.front_full")
+    metadata = dict(request.metadata or {})
+    planning_metadata = dict(metadata["professional_planning_metadata"])
+    planning_metadata["professional_face_identity_quality_contract"] = {
+        "contract_version": "professional_face_identity_quality_v2",
+        "scope": "character_card_face_identity",
+        "face_identity_binding": "must_use_active_face_identity_module",
+    }
+    metadata["professional_planning_metadata"] = planning_metadata
+    body_owned_request = request.model_copy(update={"metadata": metadata})
+    brain_result = _remote_required_body_brain_result("body.front_full")
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        body_owned_request,
+        brain_result,
+    )
+
+    assert recovered.canonical_provider_prompts
+    assert recovered.audit["character_card_slot_delta_recovery_scope"] == (
+        "professional_character_card_body_silhouette"
+    )
+
+
+def test_doc245_body_brain_request_metadata_projects_body_contract_not_face_contract() -> None:
+    adapter = _Doc245CaptureBrainAdapter()
+    runtime = ScenarioRuntime(llm_brain_adapter=adapter)
+    request = _body_slot_delta_runtime_request("body.rear_full")
+
+    runtime._run_llm_brain(  # noqa: SLF001
+        request,
+        _doc245_resolution(),
+        None,
+        stage="plan",
+    )
+
+    assert adapter.last_request is not None
+    metadata = adapter.last_request.metadata
+    assert "professional_body_silhouette_source_contract" in metadata
+    assert "professional_face_identity_quality_contract" not in metadata
+    assert "professional_planning_metadata" not in metadata
+    assert metadata["professional_body_silhouette_source_contract"]["owner"] == (
+        "professional_character_card_body_silhouette"
+    )
 
 
 def test_doc245_body_canonical_finalizer_uses_body_owned_contract_not_face_anchor_pack() -> None:
@@ -758,7 +983,7 @@ def test_doc245_body_canonical_finalizer_uses_body_owned_contract_not_face_ancho
     normalized = contract.lower()
 
     for required in (
-        "body-owned source-standard materialization",
+        "body-owned source-standard scope",
         "body proportion",
         "body scale",
         "neck-shoulder continuity",
@@ -766,8 +991,8 @@ def test_doc245_body_canonical_finalizer_uses_body_owned_contract_not_face_ancho
         "developmental-stage body context",
         "stance-ground contact",
         "cross-view parity",
-        "approved face identity references only for identity continuity",
-        "non-body-owned channels unspecified",
+        "face identity references only as identity-continuity evidence",
+        "non-body-owned visual channel unspecified",
     ):
         assert required in normalized
 
@@ -782,6 +1007,95 @@ def test_doc245_body_canonical_finalizer_uses_body_owned_contract_not_face_ancho
         assert forbidden not in normalized
 
     assert body_silhouette_mcp_materialization_prompt_findings(contract) == ()
+
+
+def test_doc245_body_canonical_finalizer_human_naturalness_receipt_stays_body_only() -> None:
+    context = _doc245_slot_delta_finalizer_context(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    context["human_naturalness_decision"] = {
+        "required": True,
+        "contract_version": "v3_human_naturalness_decision_v1",
+        "owner": "remote_v3_llm_brain",
+        "frozen_binding": dict(context["frozen_binding"]),
+    }
+
+    payload = _doc245_finalizer_payload(context)
+    contract = str(payload["remote_response_contract"]).lower()
+
+    assert "human_expression_authenticity_instructions" not in payload
+    assert "body naturalness receipt" in contract
+    assert "whole-body plausibility" in contract
+    for forbidden in (
+        "human_expression",
+        "expression slot",
+        "generic friendly camera-presentational smile",
+        "smile may remain",
+        "scene-observed",
+        "studio capture",
+        "attire",
+        "wardrobe",
+    ):
+        assert forbidden not in contract
+
+
+def test_doc245_body_canonical_prompt_scope_rejects_normal_brain_non_body_channels() -> None:
+    request = BrainRunRequest(
+        user_input="Prepare a Body Silhouette candidate.",
+        stage="provider_prompt_finalize",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={
+            "canonical_prompt_context": _doc245_slot_delta_finalizer_context(
+                stage="body_silhouette",
+                slot_key="body.front_full",
+            )
+        },
+    )
+    prompts = [
+        {
+            "output_index": 1,
+            "prompt": (
+                "Create a full-body Body Silhouette candidate in a clean white studio "
+                "with a pleasant expression and professional pose."
+            ),
+        }
+    ]
+
+    assert _character_card_stage_prompt_scope_violations(prompts, request=request) == [
+        "output_1:character_card_body_mcp_forbidden_channels"
+    ]
+
+
+def test_doc245_body_canonical_prompt_scope_ignores_face_contract_metadata_when_prompt_body_owned() -> None:
+    request = BrainRunRequest(
+        user_input="Prepare a Body Silhouette candidate.",
+        stage="provider_prompt_finalize",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={
+            "canonical_prompt_context": _doc245_slot_delta_finalizer_context(
+                stage="body_silhouette",
+                slot_key="body.side_full",
+            )
+        },
+    )
+    prompts = [
+        {
+            "output_index": 1,
+            "prompt": (
+                "Full-body side-view Body Silhouette source-standard materialization. "
+                "Use Face Identity references only for identity continuity. Resolve body scale, "
+                "neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+                "and cross-view parity. Keep non-body visual channels unspecified."
+            ),
+        }
+    ]
+
+    assert _character_card_stage_prompt_scope_violations(prompts, request=request) == []
 
 
 def test_doc245_face_and_expression_canonical_finalizers_keep_face_contract() -> None:
@@ -976,6 +1290,159 @@ def test_doc245_body_mcp_channel_contract_isolated_from_expression_and_non_body_
         },
         "A product-on-person prompt may keep product styling in the E-Commerce owner path.",
     )
+
+
+def _doc245_body_candidate_request_base() -> dict[str, object]:
+    return {
+        "project_id": "project_doc245",
+        "people_asset_id": "asset_doc245",
+        "card_version_id": "card_doc245",
+        "module": "body_silhouette",
+        "slot_key": "body.front_full",
+        "candidate_index": 1,
+        "candidate_count": 3,
+        "reference_output_ids": ["face_front_output", "face_left_output", "face_right_output"],
+        "user_intent": "Prepare Body Silhouette front view.",
+        "source_class": "brain_inferred",
+        "body_refresh_source_mode": "inference_first",
+        "body_model_context": "system_inferred_body_model_scene_neutral_v1",
+        "body_refresh_contract_required": True,
+        "generation_channel": "mcp",
+    }
+
+
+def test_doc245_body_refresh_attempt_identity_rejects_client_or_raw_shapes() -> None:
+    base = _doc245_body_candidate_request_base()
+    server_identity = BodyRefreshAttemptIdentity.create(append_only_revision=7)
+
+    valid = CharacterCardCandidateRequest(
+        **base,
+        body_refresh_attempt_identity=server_identity,
+    )
+    assert valid.body_refresh_attempt_identity == server_identity
+
+    for invalid in (
+        "body_refresh_attempt_doc245_safe",
+        {"attempt_id": "body_refresh_attempt_doc245_safe"},
+        {"contract_version": "professional_body_refresh_attempt_identity_v1"},
+        1,
+        True,
+    ):
+        with pytest.raises(ValueError):
+            CharacterCardCandidateRequest(
+                **base,
+                body_refresh_attempt_identity=invalid,  # type: ignore[arg-type]
+            )
+    for raw_attempt_id in (
+        "client_nonce_doc245",
+        "body_refresh_attempt_",
+        "body_refresh_attempt_http://example.invalid",
+        "body_refresh_attempt_raw/path",
+        "body_refresh_attempt_asset:output",
+        "body_refresh_attempt_doc245_safe",
+    ):
+        with pytest.raises(ValueError):
+            BodyRefreshAttemptIdentity(
+                attempt_id=raw_attempt_id,
+                append_only_revision=1,
+            )
+
+
+def test_doc245_body_refresh_mcp_operation_identity_distinguishes_fresh_lifecycles() -> None:
+    base = _doc245_body_candidate_request_base()
+    first_identity = BodyRefreshAttemptIdentity.create(append_only_revision=7)
+    second_identity = BodyRefreshAttemptIdentity.create(append_only_revision=8)
+    first = CharacterCardCandidateRequest(
+        **base,
+        body_refresh_attempt_identity=first_identity,
+    )
+    second = CharacterCardCandidateRequest(
+        **base,
+        body_refresh_attempt_identity=second_identity,
+    )
+    same_lifecycle_resume = CharacterCardCandidateRequest(
+        **base,
+        body_refresh_attempt_identity=first_identity,
+        mcp_handoff_id="opaque_existing_handoff",
+        review_only_resume=True,
+    )
+    legacy = CharacterCardCandidateRequest(**base)
+
+    first_operation = ProductApiAnchorPackPreparationHost._character_card_candidate_mcp_operation_id(  # noqa: SLF001
+        first
+    )
+    second_operation = ProductApiAnchorPackPreparationHost._character_card_candidate_mcp_operation_id(  # noqa: SLF001
+        second
+    )
+    legacy_operation = ProductApiAnchorPackPreparationHost._character_card_candidate_mcp_operation_id(  # noqa: SLF001
+        legacy
+    )
+
+    assert first_operation != second_operation
+    assert first_operation != legacy_operation
+    assert ProductApiAnchorPackPreparationHost._character_card_candidate_mcp_operation_id(  # noqa: SLF001
+        same_lifecycle_resume
+    ) == first_operation
+    assert legacy_operation == "asset_doc245:body_silhouette:body.front_full:1"
+    assert "opaque_existing_handoff" not in repr(first_operation)
+    assert first_identity.attempt_id not in first_operation
+
+
+def test_doc245_body_refresh_service_assigns_server_owned_attempt_identity_per_lifecycle() -> None:
+    first_generator = _BodyGenerator()
+    second_generator = _BodyGenerator()
+    service = CharacterCardPreparationService(generator=first_generator, reviewer=_BodyReviewer())
+    active = _active_body_card().model_copy(update={"body_activation_confirmed": False})
+
+    first_result = service.refresh_body_silhouette(
+        active,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+        generation_channel="mcp",
+    )
+
+    service = CharacterCardPreparationService(generator=second_generator, reviewer=_BodyReviewer())
+    second_result = service.refresh_body_silhouette(
+        active,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+        generation_channel="mcp",
+    )
+
+    first_attempts = {
+        (
+            request.body_refresh_attempt_identity.attempt_id,
+            request.body_refresh_attempt_identity.authority,
+            request.body_refresh_attempt_identity.append_only_revision,
+        )
+        for request in first_generator.requests
+        if request.body_refresh_attempt_identity is not None
+    }
+    second_attempts = {
+        (
+            request.body_refresh_attempt_identity.attempt_id,
+            request.body_refresh_attempt_identity.authority,
+            request.body_refresh_attempt_identity.append_only_revision,
+        )
+        for request in second_generator.requests
+        if request.body_refresh_attempt_identity is not None
+    }
+
+    assert len(first_attempts) == 1
+    assert len(second_attempts) == 1
+    first_attempt_id, first_authority, first_revision = next(iter(first_attempts))
+    second_attempt_id, second_authority, second_revision = next(iter(second_attempts))
+    assert first_authority == "character_card_refresh_lifecycle_service"
+    assert second_authority == "character_card_refresh_lifecycle_service"
+    assert first_attempt_id.startswith("body_refresh_attempt_")
+    assert second_attempt_id.startswith("body_refresh_attempt_")
+    assert first_revision == active.append_only_revision + 1
+    assert second_revision == active.append_only_revision + 1
+    assert first_attempt_id != second_attempt_id
+    assert first_result.card.body_silhouette_refresh_version_id == first_attempt_id
+    assert second_result.card.body_silhouette_refresh_version_id == second_attempt_id
 
 
 def test_doc245_generic_projector_preserves_body_source_standard_dimensions_only_when_allowed() -> None:

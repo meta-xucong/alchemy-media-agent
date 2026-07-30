@@ -8,6 +8,7 @@ second candidate/delivery lifecycle.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from pathlib import Path
 from statistics import median
@@ -1456,9 +1457,7 @@ class ProductApiAnchorPackPreparationHost:
         request: CharacterCardCandidateRequest,
     ) -> CharacterCardCandidateResult:
         stage_key = (request.people_asset_id, request.module, request.slot_key)
-        operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
-        if request.attempt_round > 1:
-            operation_id = f"{operation_id}:round{request.attempt_round}"
+        operation_id = self._character_card_candidate_mcp_operation_id(request)
         if request.generation_channel == "mcp" and not request.review_only_resume:
             orphan_handoff_id = self._recover_unconsumed_character_card_mcp_handoff_id(
                 request,
@@ -1660,6 +1659,18 @@ class ProductApiAnchorPackPreparationHost:
         candidate, review = self._character_card_candidate_and_review(status_job_id, request)
         self._character_card_reviews[candidate.candidate_id] = review
         return candidate
+
+    @staticmethod
+    def _character_card_candidate_mcp_operation_id(request: CharacterCardCandidateRequest) -> str:
+        operation_id = f"{request.people_asset_id}:{request.module}:{request.slot_key}:{request.candidate_index}"
+        attempt_identity = getattr(request, "body_refresh_attempt_identity", None)
+        attempt_id = str(getattr(attempt_identity, "attempt_id", "") or "").strip()
+        if request.module == "body_silhouette" and attempt_id:
+            attempt_digest = hashlib.sha256(attempt_id.encode("utf-8")).hexdigest()[:16]
+            operation_id = f"{operation_id}:refresh_attempt_{attempt_digest}"
+        if request.attempt_round > 1:
+            operation_id = f"{operation_id}:round{request.attempt_round}"
+        return operation_id
 
     def _record_character_card_candidate_lifecycle_checkpoint(
         self,

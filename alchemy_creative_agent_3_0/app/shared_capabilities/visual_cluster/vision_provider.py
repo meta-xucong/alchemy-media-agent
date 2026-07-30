@@ -843,12 +843,17 @@ def _professional_identity_quality_contract(
         envelope = _execution_envelope(metadata)
         raw_plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
         plan_metadata = raw_plan.get("metadata") if isinstance(raw_plan, dict) else None
+    body_source_contract = (
+        plan_metadata.get("professional_body_silhouette_source_contract")
+        if isinstance(plan_metadata, dict)
+        else None
+    )
     contract = (
         plan_metadata.get("professional_face_identity_quality_contract")
         if isinstance(plan_metadata, dict)
         else None
     )
-    if not isinstance(contract, dict) and _execution_envelope(metadata):
+    if (not isinstance(contract, dict) or not isinstance(body_source_contract, dict)) and _execution_envelope(metadata):
         # Anchor preparation has no active pack yet, so its exact server-owned
         # preparation contract is retained beside the frozen envelope rather
         # than inside a normal Professional binding.  It is still immutable:
@@ -856,18 +861,45 @@ def _professional_identity_quality_contract(
         # Runtime validates the complete preparation metadata for equality.
         preparation = metadata.get("professional_planning_metadata")
         if isinstance(preparation, dict):
-            contract = preparation.get("professional_face_identity_quality_contract")
+            if not isinstance(contract, dict):
+                contract = preparation.get("professional_face_identity_quality_contract")
+            if not isinstance(body_source_contract, dict):
+                body_source_contract = preparation.get("professional_body_silhouette_source_contract")
     if not isinstance(contract, dict):
         contract = {}
+    if not isinstance(body_source_contract, dict):
+        legacy_source = contract.get("body_silhouette_source_standard_contract")
+        legacy_mcp = contract.get("body_silhouette_mcp_materialization_channel_contract")
+        legacy_hair = contract.get("body_silhouette_hair_continuity_contract")
+        if any(isinstance(item, dict) for item in (legacy_source, legacy_mcp, legacy_hair)):
+            body_source_contract = {
+                "contract_version": "professional_body_silhouette_source_contract_v1",
+                "owner": "professional_character_card_body_silhouette",
+                "scope": "character_card_body_silhouette_only",
+                "face_identity_reference_scope": "identity_continuity_only",
+                "non_body_channels": "unspecified",
+            }
+            if isinstance(legacy_source, dict):
+                body_source_contract["source_standard_contract"] = dict(legacy_source)
+            if isinstance(legacy_mcp, dict):
+                body_source_contract["mcp_materialization_channel_contract"] = dict(legacy_mcp)
+            if isinstance(legacy_hair, dict):
+                body_source_contract["hair_continuity_contract"] = dict(legacy_hair)
+    if not isinstance(body_source_contract, dict):
+        body_source_contract = {}
     scope = str(contract.get("scope") or "").strip()
     expression_review_applies = bool(
         scope == "character_card_expression_set"
         and isinstance(contract.get("laugh_intent_contract"), dict)
     )
+    source_standard_contract = validated_body_silhouette_source_standard_contract(
+        body_source_contract.get("source_standard_contract")
+    )
     body_silhouette_review_applies = bool(
-        scope == "character_card_body_silhouette"
-        and str(contract.get("body_silhouette_contract") or "").strip()
-        == "preserve_identity_scale_and_age_appropriate_body_proportion"
+        body_source_contract.get("contract_version") == "professional_body_silhouette_source_contract_v1"
+        and body_source_contract.get("owner") == "professional_character_card_body_silhouette"
+        and body_source_contract.get("scope") == "character_card_body_silhouette_only"
+        and bool(source_standard_contract)
     )
     absolute_portrait_realism_applies = bool(
         metadata.get("professional_absolute_portrait_realism_required") is True
@@ -886,7 +918,7 @@ def _professional_identity_quality_contract(
         and scope == "character_card_face_identity"
     )
     capture_presentation = contract.get("capture_presentation")
-    applies = bool(
+    face_contract_applies = bool(
         isinstance(contract, dict)
         and contract.get("contract_version") == "professional_face_identity_quality_v2"
         and contract.get("developmental_age_coherence") == "whole_person_when_age_owned"
@@ -897,6 +929,7 @@ def _professional_identity_quality_contract(
         and contract.get("owner") == "remote_v3_llm_brain"
         and contract.get("review_owner") == "v3_shared_vision"
     )
+    applies = bool(face_contract_applies or body_silhouette_review_applies)
     base_score_dimensions = [
         "same_person_readability",
         "distinctive_feature_readability",
@@ -941,9 +974,6 @@ def _professional_identity_quality_contract(
         "shared_affective_expression_framing_drift",
         "shared_affective_expression_framing_receipt_missing",
     ]
-    source_standard_contract = validated_body_silhouette_source_standard_contract(
-        contract.get("body_silhouette_source_standard_contract")
-    )
     body_source_standard_dimensions = [
         str(item).strip()
         for item in source_standard_contract.get("required_dimensions", [])
@@ -999,8 +1029,20 @@ def _professional_identity_quality_contract(
     ]
     return {
         "applies": applies,
-        "contract_version": contract.get("contract_version") if applies else None,
-        "capture_scope": scope if applies else None,
+        "contract_version": (
+            contract.get("contract_version")
+            if face_contract_applies
+            else body_source_contract.get("contract_version")
+            if body_silhouette_review_applies
+            else None
+        ),
+        "capture_scope": (
+            scope
+            if face_contract_applies
+            else body_source_contract.get("scope")
+            if body_silhouette_review_applies
+            else None
+        ),
         "commercial_refinement_policy": (
             (
                 contract.get("face_card_image_clarity_contract", {})
@@ -1134,14 +1176,14 @@ def _professional_identity_quality_contract(
         "body_silhouette_review": (
             {
                 "applies": True,
-                "source": "professional_face_identity_quality_contract.body_silhouette_contract",
+                "source": "professional_body_silhouette_source_contract",
                 "score_dimensions": list(dict.fromkeys(body_silhouette_score_dimensions)),
                 "issue_codes": list(dict.fromkeys(body_silhouette_issue_codes)),
                 "framing_baseline": "body.slot",
                 "framing_delta_dimensions": list(BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS),
                 "source_standard_dimensions": list(body_source_standard_dimensions),
                 "source_standard_contract": source_standard_contract,
-                "hair_continuity_contract": contract.get("body_silhouette_hair_continuity_contract"),
+                "hair_continuity_contract": body_source_contract.get("hair_continuity_contract"),
             }
             if applies and body_silhouette_review_applies
             else {"applies": False}

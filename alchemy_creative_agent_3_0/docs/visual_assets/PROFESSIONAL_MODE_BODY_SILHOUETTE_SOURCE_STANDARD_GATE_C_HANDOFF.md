@@ -397,3 +397,66 @@ review, Body source-standard positive evidence, formal slot receipt,
 card-level cross-view parity, pending refresh, explicit activation, downstream
 General/Photography/E-Commerce projection, provider cap, or any real
 Host/MCP/ImageGen authorization.  It authorizes no real generation by itself.
+
+## 11. MCP stale-pending and Brain normal-prompt correction note
+
+This note records a narrow correction model for the Body Silhouette MCP route.
+It does not add a new Body source standard, prompt recipe, quality threshold, or
+activation rule.
+
+Observed mismatch:
+
+1. A fresh `inference_first` Body Silhouette MCP refresh can fail before MCP
+   handoff creation because the normal Brain canonical prompt still carries
+   non-Body-owned channels such as scene/studio styling or expression/professional
+   pose language.
+2. A fresh Body refresh lifecycle can share the same MCP operation identity as a
+   historical pending handoff for the same slot and candidate.  That makes the
+   public evidence ambiguous: a stale pending handoff can look like the current
+   lifecycle unless the refresh attempt/revision identity is server-owned and
+   explicit.
+
+Owning-layer correction boundaries:
+
+- Brain normal planning metadata, canonical prompt context, bounded Body
+  recovery, and provider-prompt finalization must all use the same Body-owner
+  key: `professional_body_silhouette_source_contract`.  Body stages must not
+  project the broad `professional_face_identity_quality_contract` into the
+  frozen render context or Brain request metadata.  Historical Body records
+  that stored Body-owned subcontracts under the Face key remain readable only
+  by extracting those Body fields into the Body-owner contract shape.
+- Body finalizer human-realism/naturalness receipts are audit receipts for
+  whole-body plausibility and real-person material coherence inside the
+  Body-owned source-standard scope.  They must not reintroduce expression,
+  scene, studio, wardrobe/attire, camera, lighting, or style channel ownership
+  into Body prompts.
+- Brain normal canonical prompt finalization must use the same Body-owner
+  channel contract as Body recovery and MCP materialization.  Body prompts may
+  own body proportion, body scale, neck/shoulder continuity, torso/limb
+  relationship, developmental-stage body context, stance/ground contact, and
+  cross-view body parity.  Face references remain identity-continuity evidence
+  only.  Non-Body channels remain unspecified.
+- Face Identity and Expression Set prompt finalization keep the existing Face
+  quality contract.  The Body correction must not remove or weaken Face-owned
+  model-card/identity capabilities where those stages own them.
+- MCP operation identity for Body refresh must include a server-owned refresh
+  attempt/revision identity.  Two distinct refresh lifecycles for the same
+  card/slot/candidate must not collide.  Within one server-issued attempt, the
+  candidate request and any exact-current candidate resume request must produce
+  a stable operation identity.  A new `refresh_body_silhouette()` invocation
+  produces a new server-owned attempt identity; this note does not claim that a
+  complete Body refresh-resume entry exists.  Historical exact-current resume
+  behavior remains readable and compatible.
+- Public evidence may record closed equality/hash/phase facts only.  It must
+  not expose raw prompts, paths, URLs, provider payloads, asset IDs, output IDs,
+  or raw MCP operation IDs.
+- Adapter prompt-scope validation and MCP materialization findings are
+  defense-in-depth boundaries.  They must catch stale non-Body channel drift
+  before handoff creation, but they are not the source authority and must not be
+  used to mask a Face/Body context projection defect.
+
+This correction keeps the existing standard three-candidate requirement, shared
+review, source-standard positive evidence, formal receipt, card-level
+cross-view parity, pending refresh, and explicit activation authority.  It does
+not authorize a real MCP/ImageGen run and does not permit clearing old pending
+handoffs as a substitute for identity separation.

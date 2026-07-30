@@ -1037,7 +1037,10 @@ def test_doc196_character_card_expression_context_carries_framing_and_laugh_cont
     assert "visible_eye_cheek_coupling" in laugh_contract["participation_channels"]
     assert "upper_cheek_lift" in laugh_contract["participation_channels"]
     assert laugh_contract["video_motion_hint"]
-    assert "laugh_intent_contract" not in body_metadata["professional_face_identity_quality_contract"]
+    assert "professional_face_identity_quality_contract" not in body_metadata
+    body_contract = body_metadata["professional_body_silhouette_source_contract"]
+    assert body_contract["owner"] == "professional_character_card_body_silhouette"
+    assert "laugh_intent_contract" not in body_contract
 
 
 def test_doc196_brain_prompt_contract_receives_laugh_and_framing_only_for_character_card() -> None:

@@ -1484,6 +1484,54 @@ class ScenarioRuntime:
         )
         record_stage_event("scenario_runtime", "creative_planning_returned", stage="plan")
 
+    @staticmethod
+    def _professional_character_card_stage(
+        metadata: dict[str, Any],
+        planning_metadata: dict[str, Any] | None,
+    ) -> str:
+        stage = str(metadata.get("professional_character_card_stage") or "").strip()
+        if not stage and isinstance(planning_metadata, dict):
+            stage = str(planning_metadata.get("stage") or "").strip()
+        return stage
+
+    @staticmethod
+    def _professional_body_silhouette_source_contract(
+        planning_metadata: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(planning_metadata, dict):
+            return None
+        contract = planning_metadata.get("professional_body_silhouette_source_contract")
+        if isinstance(contract, dict):
+            return dict(contract)
+
+        # Historical read compatibility: older Body metadata stored Body-owned
+        # source/review facts inside the broad Face quality key.  New Body
+        # prompts must not project that Face key, but persisted records remain
+        # readable by extracting only the Body-owned nested fields into the
+        # dedicated Body contract shape.
+        legacy_quality = planning_metadata.get("professional_face_identity_quality_contract")
+        if not isinstance(legacy_quality, dict):
+            return None
+        source_standard = legacy_quality.get("body_silhouette_source_standard_contract")
+        mcp_contract = legacy_quality.get("body_silhouette_mcp_materialization_channel_contract")
+        hair_contract = legacy_quality.get("body_silhouette_hair_continuity_contract")
+        if not any(isinstance(item, dict) for item in (source_standard, mcp_contract, hair_contract)):
+            return None
+        compatible: dict[str, Any] = {
+            "contract_version": "professional_body_silhouette_source_contract_v1",
+            "owner": "professional_character_card_body_silhouette",
+            "scope": "character_card_body_silhouette_only",
+            "face_identity_reference_scope": "identity_continuity_only",
+            "non_body_channels": "unspecified",
+        }
+        if isinstance(source_standard, dict):
+            compatible["source_standard_contract"] = dict(source_standard)
+        if isinstance(mcp_contract, dict):
+            compatible["mcp_materialization_channel_contract"] = dict(mcp_contract)
+        if isinstance(hair_contract, dict):
+            compatible["hair_continuity_contract"] = dict(hair_contract)
+        return compatible
+
     def _recover_character_card_body_slot_delta_brain_result(
         self,
         request: ScenarioRuntimeRequest,
@@ -1515,12 +1563,14 @@ class ScenarioRuntime:
         slot_delta_contract = planning_metadata.get("reference_led_slot_delta_contract")
         if not isinstance(slot_delta_contract, dict) or slot_delta_contract.get("slot_delta_type") != "body_pose":
             return brain_result
-        quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
-        quality_contract = quality_contract if isinstance(quality_contract, dict) else {}
-        if "body_silhouette_wardrobe_contract" in quality_contract:
+        legacy_quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
+        legacy_quality_contract = legacy_quality_contract if isinstance(legacy_quality_contract, dict) else {}
+        if "body_silhouette_wardrobe_contract" in legacy_quality_contract:
             return brain_result
-        source_standard_contract = quality_contract.get("body_silhouette_source_standard_contract")
-        hair_contract = quality_contract.get("body_silhouette_hair_continuity_contract")
+        body_source_contract = self._professional_body_silhouette_source_contract(planning_metadata)
+        body_source_contract = body_source_contract if isinstance(body_source_contract, dict) else {}
+        source_standard_contract = body_source_contract.get("source_standard_contract")
+        hair_contract = body_source_contract.get("hair_continuity_contract")
         if not isinstance(source_standard_contract, dict) or source_standard_contract.get("scope") != "body_silhouette_only":
             return brain_result
         if not isinstance(hair_contract, dict) or hair_contract.get("scope") != "body_silhouette_only":
@@ -2383,6 +2433,7 @@ class ScenarioRuntime:
                 in {
                     "human_realism_semantic_contract_missing",
                     "professional_face_identity_quality_contract_missing",
+                    "professional_body_silhouette_source_contract_missing",
                     "professional_anchor_view_contract_missing",
                     "reference_channel_ownership_contract_missing",
                 }
@@ -2993,17 +3044,35 @@ class ScenarioRuntime:
             # Do not build a local prompt recipe here: the Remote Brain must
             # reconcile this contract with the selected view and user intent.
             planning_metadata = request.metadata.get("professional_planning_metadata")
+            planning_metadata = planning_metadata if isinstance(planning_metadata, dict) else None
+            character_card_stage = ScenarioRuntime._professional_character_card_stage(
+                request.metadata if isinstance(request.metadata, dict) else {},
+                planning_metadata,
+            )
+            body_silhouette_stage = character_card_stage == "body_silhouette"
             if isinstance(planning_metadata, dict):
-                quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
-                if isinstance(quality_contract, dict):
-                    context["professional_face_identity_quality_contract"] = dict(quality_contract)
+                if body_silhouette_stage:
+                    body_contract = ScenarioRuntime._professional_body_silhouette_source_contract(
+                        planning_metadata
+                    )
+                    if isinstance(body_contract, dict):
+                        context["professional_body_silhouette_source_contract"] = body_contract
+                else:
+                    quality_contract = planning_metadata.get("professional_face_identity_quality_contract")
+                    if isinstance(quality_contract, dict):
+                        context["professional_face_identity_quality_contract"] = dict(quality_contract)
                 slot_delta_contract = planning_metadata.get("reference_led_slot_delta_contract")
                 if isinstance(slot_delta_contract, dict):
                     context["reference_led_slot_delta_decision"] = {
                         **dict(slot_delta_contract),
                         "frozen_binding": dict(context.get("frozen_binding") or {}),
                     }
-            if not isinstance(context.get("professional_face_identity_quality_contract"), dict):
+            if body_silhouette_stage:
+                if not isinstance(context.get("professional_body_silhouette_source_contract"), dict):
+                    raise CapabilityActivationError(
+                        "professional_body_silhouette_source_contract_missing"
+                    )
+            elif not isinstance(context.get("professional_face_identity_quality_contract"), dict):
                 raise CapabilityActivationError("professional_face_identity_quality_contract_missing")
             if request.metadata.get("professional_anchor_pack_preparation") is True:
                 target_view_role = str(
@@ -3455,6 +3524,7 @@ class ScenarioRuntime:
             "reference_channel_ownership_decision_missing",
             "reference_channel_ownership_contract_missing",
             "professional_face_identity_quality_contract_missing",
+            "professional_body_silhouette_source_contract_missing",
             "professional_anchor_view_contract_missing",
             "professional_anchor_view_decision_missing",
             "provider_admission_decision_missing",
@@ -5481,15 +5551,28 @@ class ScenarioRuntime:
             context = professional.context
             metadata["professional_mode"] = True
             if context is not None:
-                quality_contract = context.planning_metadata.get(
-                    "professional_face_identity_quality_contract"
-                )
-                if isinstance(quality_contract, dict):
-                    # Persist only the small, typed semantic contract needed
-                    # to explain the frozen Professional quality objective.
-                    # Binding records and raw reference plans remain private
-                    # to the runtime and are not projected here.
-                    metadata["professional_face_identity_quality_contract"] = dict(quality_contract)
+                planning_metadata = context.planning_metadata
+                stage = self._professional_character_card_stage(metadata, planning_metadata)
+                if stage == "body_silhouette":
+                    body_contract = self._professional_body_silhouette_source_contract(
+                        planning_metadata
+                    )
+                    if isinstance(body_contract, dict):
+                        # Persist only the Body-owned source contract for Body
+                        # Silhouette.  Face Identity remains reference-channel
+                        # continuity and must not project model-card/photo
+                        # quality semantics into Body prompts.
+                        metadata["professional_body_silhouette_source_contract"] = body_contract
+                else:
+                    quality_contract = planning_metadata.get(
+                        "professional_face_identity_quality_contract"
+                    )
+                    if isinstance(quality_contract, dict):
+                        # Persist only the small, typed semantic contract needed
+                        # to explain the frozen Professional quality objective.
+                        # Binding records and raw reference plans remain private
+                        # to the runtime and are not projected here.
+                        metadata["professional_face_identity_quality_contract"] = dict(quality_contract)
             metadata["professional_mode_execution"] = {
                 "status": professional.status,
                 "binding": (
@@ -6001,12 +6084,22 @@ class ScenarioRuntime:
                     )
                     if key in safe_admission
                 }
-                quality_contract = safe_admission.get("professional_face_identity_quality_contract")
-                if isinstance(quality_contract, dict):
-                    # This is a typed semantic contract only.  Raw binding,
-                    # paths, and server-owned reference plans never cross the
-                    # Brain boundary.
-                    base_metadata["professional_face_identity_quality_contract"] = dict(quality_contract)
+                stage = self._professional_character_card_stage(base_metadata, safe_admission)
+                if stage == "body_silhouette":
+                    body_contract = self._professional_body_silhouette_source_contract(
+                        safe_admission
+                    )
+                    if isinstance(body_contract, dict):
+                        base_metadata["professional_body_silhouette_source_contract"] = (
+                            body_contract
+                        )
+                else:
+                    quality_contract = safe_admission.get("professional_face_identity_quality_contract")
+                    if isinstance(quality_contract, dict):
+                        # This is a typed semantic contract only.  Raw binding,
+                        # paths, and server-owned reference plans never cross the
+                        # Brain boundary.
+                        base_metadata["professional_face_identity_quality_contract"] = dict(quality_contract)
         if self._has_visual_asset_library_binding(request):
             # New jobs carry a generic library binding, never the historical
             # Professional-mode record. The Brain gets only authority facts;
