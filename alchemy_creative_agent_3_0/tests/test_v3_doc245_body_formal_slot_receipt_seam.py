@@ -17,18 +17,25 @@ from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_requi
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import (
     _canonical_provider_prompt_finalization_payload,
 )
+from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api import anchor_pack_host as anchor_pack_host_module
 from app.providers.base import ProviderRuntimeError
+from alchemy_creative_agent_3_0.app.generation_router.router import GenerationRouter
 from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import ScenarioRuntimeRequest
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
-from alchemy_creative_agent_3_0.app.generation_router.providers import GenerationRequest, McpMaterializationProvider
+from alchemy_creative_agent_3_0.app.generation_router.providers import (
+    GenerationRequest,
+    GenerationResponse,
+    McpMaterializationProvider,
+)
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
+    CandidateResult,
     ConditionPlan,
     GenerationPlan,
     LayoutPlan,
@@ -1489,6 +1496,97 @@ def test_doc245_body_refresh_presentation_intent_reaches_mcp_handoff_contract() 
     assert rendering_contract["body_refresh_presentation_intent"]["not_identity_truth"] is True
     assert rendering_contract["body_refresh_presentation_intent"]["not_age_truth"] is True
     assert "body_silhouette_wardrobe_contract" not in repr(rendering_contract)
+
+
+def test_doc245_body_mcp_central_brain_handoff_preserves_body_rendering_contract_inputs() -> None:
+    class _CapturingBodyMcpProvider(McpMaterializationProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.contexts: list[dict[str, object]] = []
+
+        def _assert_character_card_body_mcp_materialization_prompt_current(  # noqa: SLF001
+            self,
+            metadata: dict[str, object],
+            prompt: str,
+        ) -> None:
+            # Existing Doc245 tests cover the prompt validator.  This seam is
+            # about whether trusted ProductApi/Anchor Body metadata survives
+            # the Central Brain generation-plan projection into the MCP
+            # rendering contract.
+            return None
+
+        def generate(self, request: GenerationRequest) -> GenerationResponse:
+            app_request, _, _ = self._build_app_request(request)  # noqa: SLF001
+            self.contexts.append(
+                dict(app_request.prompt_plan.variables["mcp_materialization_context"])
+            )
+            return GenerationResponse(
+                candidates=[
+                    CandidateResult(
+                        candidate_id="candidate_doc245_body_mcp_contract_projection",
+                        asset_id=request.generation_plan.asset_id,
+                        provider="doc245_fake_mcp_capture",
+                        prompt_compilation_id=request.prompt_compilation.prompt_compilation_id,
+                        condition_plan_id=request.condition_plan.condition_plan_id,
+                        is_mock=True,
+                        metadata={"runtime_mode": "doc245_capture_only"},
+                    )
+                ],
+                provider_metadata={"provider_name": "doc245_fake_mcp_capture"},
+                warnings=[],
+            )
+
+    provider = _CapturingBodyMcpProvider()
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+
+    brain.run_generation_loop(
+        "body refresh",
+        provider_strategy=ProviderStrategy.MCP_MATERIALIZATION,
+        runtime_metadata={
+            "generation_channel": "mcp",
+            "mcp_operation_id": "body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+            "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+            "professional_reference_stage": "character_card_body_silhouette",
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": "body.front_full",
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_body_refresh_contract_required": True,
+            "professional_character_card_body_refresh_presentation_intent": (
+                _doc245_body_refresh_presentation_intent()
+            ),
+        },
+    )
+
+    assert provider.contexts
+    for context in provider.contexts:
+        rendering_contract = dict(context["rendering_contract"])
+        assert rendering_contract["body_silhouette_mcp_materialization_channel_contract"] == (
+            body_silhouette_mcp_materialization_channel_contract()
+        )
+        assert rendering_contract["body_refresh_presentation_intent"] == (
+            _doc245_body_refresh_presentation_intent()
+        )
+        assert rendering_contract["body_refresh_presentation_intent"]["not_body_proportion_truth"] is True
+        assert rendering_contract["body_refresh_presentation_intent"]["not_identity_truth"] is True
+        assert rendering_contract["body_refresh_presentation_intent"]["not_age_truth"] is True
+        serialized = repr(rendering_contract).lower()
+        for forbidden in (
+            "body_silhouette_wardrobe_contract",
+            "body_reference_truth_layer",
+            "'identity_truth':",
+            "'age_truth':",
+            "raw_prompt",
+            "source_url",
+            "provider_payload",
+            "asset_secret",
+            "v3_output",
+        ):
+            assert forbidden not in serialized
 
 
 def test_doc245_body_refresh_presentation_intent_unspecified_when_not_declared() -> None:

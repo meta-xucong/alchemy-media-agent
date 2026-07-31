@@ -172,6 +172,24 @@ class CentralCreativeBrain:
                 "professional_character_card_source_class": context.metadata.get(
                     "professional_character_card_source_class"
                 ),
+                "professional_character_card_candidate_index": context.metadata.get(
+                    "professional_character_card_candidate_index"
+                ),
+                "professional_character_card_candidate_count": context.metadata.get(
+                    "professional_character_card_candidate_count"
+                ),
+                "professional_character_card_body_refresh_source_mode": context.metadata.get(
+                    "professional_character_card_body_refresh_source_mode"
+                ),
+                "professional_character_card_body_model_context": context.metadata.get(
+                    "professional_character_card_body_model_context"
+                ),
+                "professional_character_card_body_refresh_contract_required": context.metadata.get(
+                    "professional_character_card_body_refresh_contract_required"
+                ),
+                "professional_character_card_body_refresh_presentation_intent": context.metadata.get(
+                    "professional_character_card_body_refresh_presentation_intent"
+                ),
                 "professional_character_card_attempt_round": context.metadata.get(
                     "professional_character_card_attempt_round"
                 ),
@@ -383,6 +401,24 @@ class CentralCreativeBrain:
                 ),
                 "professional_character_card_source_class": context.metadata.get(
                     "professional_character_card_source_class"
+                ),
+                "professional_character_card_candidate_index": context.metadata.get(
+                    "professional_character_card_candidate_index"
+                ),
+                "professional_character_card_candidate_count": context.metadata.get(
+                    "professional_character_card_candidate_count"
+                ),
+                "professional_character_card_body_refresh_source_mode": context.metadata.get(
+                    "professional_character_card_body_refresh_source_mode"
+                ),
+                "professional_character_card_body_model_context": context.metadata.get(
+                    "professional_character_card_body_model_context"
+                ),
+                "professional_character_card_body_refresh_contract_required": context.metadata.get(
+                    "professional_character_card_body_refresh_contract_required"
+                ),
+                "professional_character_card_body_refresh_presentation_intent": context.metadata.get(
+                    "professional_character_card_body_refresh_presentation_intent"
                 ),
                 "professional_character_card_attempt_round": context.metadata.get(
                     "professional_character_card_attempt_round"

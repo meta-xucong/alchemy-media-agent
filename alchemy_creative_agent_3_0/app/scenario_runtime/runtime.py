@@ -5991,6 +5991,21 @@ class ScenarioRuntime:
             source_class = plan_metadata.get("professional_character_card_source_class")
             if source_class is not None:
                 frozen["professional_character_card_source_class"] = source_class
+            candidate_index = plan_metadata.get("professional_character_card_candidate_index")
+            if candidate_index is not None:
+                frozen["professional_character_card_candidate_index"] = candidate_index
+            candidate_count = plan_metadata.get("professional_character_card_candidate_count")
+            if candidate_count is not None:
+                frozen["professional_character_card_candidate_count"] = candidate_count
+            if stage == "body_silhouette":
+                for key in (
+                    "professional_character_card_body_refresh_source_mode",
+                    "professional_character_card_body_model_context",
+                    "professional_character_card_body_refresh_contract_required",
+                    "professional_character_card_body_refresh_presentation_intent",
+                ):
+                    if key in plan_metadata:
+                        frozen[key] = plan_metadata.get(key)
             attempt_round = plan_metadata.get("professional_character_card_attempt_round")
             if attempt_round is not None:
                 frozen["professional_character_card_attempt_round"] = attempt_round

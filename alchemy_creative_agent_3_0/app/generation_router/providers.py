@@ -181,7 +181,21 @@ def build_provider_generation_request(
             "professional_character_card_preparation": metadata.get("professional_character_card_preparation"),
             "professional_character_card_stage": metadata.get("professional_character_card_stage"),
             "professional_character_card_slot": metadata.get("professional_character_card_slot"),
+            "professional_character_card_candidate_index": metadata.get("professional_character_card_candidate_index"),
+            "professional_character_card_candidate_count": metadata.get("professional_character_card_candidate_count"),
             "professional_character_card_source_class": metadata.get("professional_character_card_source_class"),
+            "professional_character_card_body_refresh_source_mode": metadata.get(
+                "professional_character_card_body_refresh_source_mode"
+            ),
+            "professional_character_card_body_model_context": metadata.get(
+                "professional_character_card_body_model_context"
+            ),
+            "professional_character_card_body_refresh_contract_required": metadata.get(
+                "professional_character_card_body_refresh_contract_required"
+            ),
+            "professional_character_card_body_refresh_presentation_intent": metadata.get(
+                "professional_character_card_body_refresh_presentation_intent"
+            ),
             "professional_character_card_attempt_round": metadata.get("professional_character_card_attempt_round"),
             "professional_character_card_reference_output_ids": metadata.get(
                 "professional_character_card_reference_output_ids"
