@@ -37,6 +37,7 @@ from alchemy_creative_agent_3_0.app.schemas import (
     ProviderStrategy,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
+    CapabilityActivationError,
     CapabilityActivationPlan,
     TemplateCapabilityPolicy,
 )
@@ -226,6 +227,22 @@ def _remote_required_body_brain_result(slot_key: str = "body.front_full"):
             metadata=_body_slot_delta_runtime_request(slot_key).metadata,
         ),
         "Remote Brain timed out before the Character Card body slot prompt.",
+    )
+
+
+def _image_set_invalid_body_brain_result(slot_key: str = "body.front_full"):
+    base = _remote_required_body_brain_result(slot_key)
+    return base.model_copy(
+        update={
+            "llm_used": True,
+            "fallback_used": False,
+            "provider": "deepseek",
+            "audit": {
+                **dict(base.audit or {}),
+                "remote_contract_rejected_sections": ["image_set_plan"],
+            },
+            "warnings": ["remote creative brain returned an invalid General image_set_plan"],
+        }
     )
 
 
@@ -712,6 +729,166 @@ def test_doc245_body_brain_timeout_uses_bounded_body_slot_delta_recovery() -> No
             scenario_id="general_creative",
         ),
     )
+
+
+def test_doc245_body_mcp_image_set_plan_invalid_uses_body_slot_delta_recovery() -> None:
+    runtime = ScenarioRuntime()
+    request = _body_slot_delta_runtime_request("body.front_full")
+    metadata = dict(request.metadata or {})
+    metadata.update(
+        {
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_body_refresh_presentation_intent": (
+                _doc245_body_refresh_presentation_intent()
+            ),
+        }
+    )
+    request = request.model_copy(update={"metadata": metadata})
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _image_set_invalid_body_brain_result("body.front_full"),
+    )
+
+    assert recovered.llm_used is True
+    assert recovered.fallback_used is False
+    assert recovered.audit["character_card_slot_delta_recovery_prompts_received"] is True
+    assert recovered.audit["character_card_slot_delta_recovery_scope"] == (
+        "professional_character_card_body_silhouette"
+    )
+    assert recovered.audit["character_card_slot_delta_recovery_slot_key"] == "body.front_full"
+    assert recovered.image_set_plan.image_count == 1
+    assert len(recovered.image_set_plan.shot_plan) == 1
+    assert recovered.canonical_provider_prompts
+    assert _character_card_stage_mcp_prompt_current(
+        "body.front_full",
+        recovered.canonical_provider_prompts[0].prompt,
+    )
+    assert (
+        request.metadata["professional_character_card_body_refresh_presentation_intent"]
+        == _doc245_body_refresh_presentation_intent()
+    )
+
+    runtime._require_remote_creative_brain(  # noqa: SLF001
+        request,
+        TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+        recovered,
+    )
+
+
+def test_doc245_body_image_set_plan_invalid_without_body_source_standard_still_blocks() -> None:
+    runtime = ScenarioRuntime()
+    request = _body_slot_delta_runtime_request("body.front_full")
+    metadata = dict(request.metadata or {})
+    planning_metadata = dict(metadata["professional_planning_metadata"])
+    planning_metadata.pop("professional_body_silhouette_source_contract", None)
+    metadata["professional_planning_metadata"] = planning_metadata
+    request = request.model_copy(update={"metadata": metadata})
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _image_set_invalid_body_brain_result("body.front_full"),
+    )
+
+    assert "character_card_slot_delta_recovery_prompts_received" not in recovered.audit
+    with pytest.raises(CapabilityActivationError, match="remote_creative_brain_image_set_plan_invalid"):
+        runtime._require_remote_creative_brain(  # noqa: SLF001
+            request,
+            TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+            recovered,
+        )
+
+
+def test_doc245_body_image_set_plan_invalid_requires_body_pose_slot_delta_type() -> None:
+    runtime = ScenarioRuntime()
+    request = _body_slot_delta_runtime_request("body.front_full")
+    metadata = dict(request.metadata or {})
+    planning_metadata = dict(metadata["professional_planning_metadata"])
+    slot_delta_contract = dict(planning_metadata["reference_led_slot_delta_contract"])
+    slot_delta_contract["slot_delta_type"] = "expression_variation"
+    planning_metadata["reference_led_slot_delta_contract"] = slot_delta_contract
+    metadata["professional_planning_metadata"] = planning_metadata
+    request = request.model_copy(update={"metadata": metadata})
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _image_set_invalid_body_brain_result("body.front_full"),
+    )
+
+    assert "character_card_slot_delta_recovery_prompts_received" not in recovered.audit
+    with pytest.raises(CapabilityActivationError, match="remote_creative_brain_image_set_plan_invalid"):
+        runtime._require_remote_creative_brain(  # noqa: SLF001
+            request,
+            TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+            recovered,
+        )
+
+
+def test_doc245_expression_set_image_set_plan_invalid_does_not_use_body_recovery() -> None:
+    runtime = ScenarioRuntime()
+    request = _body_slot_delta_runtime_request("body.front_full")
+    metadata = dict(request.metadata or {})
+    metadata["professional_character_card_stage"] = "expression_set"
+    metadata["professional_character_card_slot"] = "expression.smile"
+    metadata["professional_planning_metadata"] = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="expression_set",
+        slot_key="expression.smile",
+    )
+    request = request.model_copy(update={"metadata": metadata})
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _image_set_invalid_body_brain_result("body.front_full"),
+    )
+
+    assert "character_card_slot_delta_recovery_scope" not in recovered.audit
+    with pytest.raises(CapabilityActivationError, match="remote_creative_brain_image_set_plan_invalid"):
+        runtime._require_remote_creative_brain(  # noqa: SLF001
+            request,
+            TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+            recovered,
+        )
+
+
+def test_doc245_non_professional_image_set_plan_invalid_does_not_use_body_recovery() -> None:
+    runtime = ScenarioRuntime()
+    request = ScenarioRuntimeRequest(
+        user_input="Create one plain General image.",
+        scenario_selection={"scenario_id": "general_creative"},
+        metadata={"requested_image_count": 1, "require_real_images": True},
+    )
+
+    recovered = runtime._recover_character_card_slot_delta_brain_result(  # noqa: SLF001
+        request,
+        _image_set_invalid_body_brain_result("body.front_full"),
+    )
+
+    assert "character_card_slot_delta_recovery_scope" not in recovered.audit
+    with pytest.raises(CapabilityActivationError, match="remote_creative_brain_image_set_plan_invalid"):
+        runtime._require_remote_creative_brain(  # noqa: SLF001
+            request,
+            TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+            recovered,
+        )
+
+
+def test_doc245_ordinary_general_image_set_plan_invalid_still_blocks() -> None:
+    runtime = ScenarioRuntime()
+    ordinary_request = ScenarioRuntimeRequest(
+        user_input="Create one ordinary general visual.",
+        scenario_selection={"scenario_id": "general_creative"},
+        metadata={"requested_image_count": 1, "require_real_images": True},
+    )
+
+    with pytest.raises(CapabilityActivationError, match="remote_creative_brain_image_set_plan_invalid"):
+        runtime._require_remote_creative_brain(  # noqa: SLF001
+            ordinary_request,
+            TemplateCapabilityPolicy(requires_remote_creative_brain=True),
+            _image_set_invalid_body_brain_result("body.front_full"),
+        )
 
 
 def test_doc245_body_slot_delta_recovery_rejects_body_slot_contract_mismatch() -> None:

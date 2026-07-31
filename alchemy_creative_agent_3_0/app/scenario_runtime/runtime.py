@@ -1179,15 +1179,31 @@ class ScenarioRuntime:
         Provider/MCP output store and shared Vision gates.
         """
 
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        expression_slot = self._character_card_expression_slot_delta_target(metadata)
+        body_slot = self._character_card_body_slot_delta_target(metadata)
+        rejected_sections = (
+            brain_result.audit.get("remote_contract_rejected_sections")
+            if isinstance(brain_result.audit, dict)
+            else None
+        )
+        body_image_set_plan_rejected = bool(
+            body_slot is not None
+            and isinstance(rejected_sections, list)
+            and "image_set_plan" in rejected_sections
+        )
         if (
             not force_after_finalizer_failure
+            and not body_image_set_plan_rejected
             and (brain_result.llm_used or not brain_result.fallback_used)
         ):
             return brain_result
-        if not force_after_finalizer_failure and str(brain_result.provider or "") != "remote_required":
+        if (
+            not force_after_finalizer_failure
+            and not body_image_set_plan_rejected
+            and str(brain_result.provider or "") != "remote_required"
+        ):
             return brain_result
-        metadata = request.metadata if isinstance(request.metadata, dict) else {}
-        expression_slot = self._character_card_expression_slot_delta_target(metadata)
         if expression_slot is not None:
             return self._recover_character_card_expression_slot_delta_brain_result(
                 request,
@@ -1196,8 +1212,9 @@ class ScenarioRuntime:
                 expression=expression_slot[1],
                 recovery_reason=recovery_reason,
             )
-        body_slot = self._character_card_body_slot_delta_target(metadata)
         if body_slot is not None:
+            if body_image_set_plan_rejected and recovery_reason == "remote_brain_timeout_or_unavailable":
+                recovery_reason = "remote_creative_brain_image_set_plan_invalid"
             return self._recover_character_card_body_slot_delta_brain_result(
                 request,
                 brain_result,
