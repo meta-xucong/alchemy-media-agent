@@ -1268,6 +1268,292 @@ def test_doc245_body_mcp_build_app_request_blocks_stale_prompt_before_handoff_cr
     ) == []
 
 
+def _doc245_body_refresh_presentation_intent() -> dict[str, object]:
+    return {
+        "contract_version": "professional_body_refresh_presentation_intent_v1",
+        "owner": "professional_character_card_body_silhouette_refresh_request",
+        "scope": "modeling_card_presentation_only",
+        "top_presentation": "short_sleeve_top",
+        "bottom_presentation": "shorts",
+        "footwear_presentation": "barefoot",
+        "not_body_proportion_truth": True,
+        "not_identity_truth": True,
+        "not_age_truth": True,
+    }
+
+
+def test_doc245_body_refresh_presentation_intent_reaches_mcp_handoff_contract() -> None:
+    prompt = (
+        "Full-body front-view Body Silhouette source-standard materialization. "
+        "Use Face Identity references only for identity continuity. Resolve body scale, body chain, "
+        "stage-aware proportion, neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+        "and cross-view parity. Keep non-body visual channels unspecified."
+    )
+    request = _mcp_body_generation_request(prompt, source_mode="inference_first")
+    metadata = dict(request.metadata)
+    metadata["professional_character_card_body_refresh_presentation_intent"] = (
+        _doc245_body_refresh_presentation_intent()
+    )
+    provider = McpMaterializationProvider()
+
+    app_request, _, _ = provider._build_app_request(  # noqa: SLF001
+        request.model_copy(update={"metadata": metadata})
+    )
+
+    context = app_request.prompt_plan.variables["mcp_materialization_context"]
+    rendering_contract = context["rendering_contract"]
+    assert rendering_contract["body_refresh_presentation_intent"] == (
+        _doc245_body_refresh_presentation_intent()
+    )
+    assert rendering_contract["body_refresh_presentation_intent"]["not_body_proportion_truth"] is True
+    assert rendering_contract["body_refresh_presentation_intent"]["not_identity_truth"] is True
+    assert rendering_contract["body_refresh_presentation_intent"]["not_age_truth"] is True
+    assert "body_silhouette_wardrobe_contract" not in repr(rendering_contract)
+
+
+def test_doc245_body_refresh_presentation_intent_unspecified_when_not_declared() -> None:
+    prompt = (
+        "Full-body side-view Body Silhouette source-standard materialization. "
+        "Resolve body scale, neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+        "and cross-view parity. Keep non-body visual channels unspecified."
+    )
+    provider = McpMaterializationProvider()
+
+    app_request, _, _ = provider._build_app_request(  # noqa: SLF001
+        _mcp_body_generation_request(prompt, slot_key="body.side_full", source_mode="inference_first")
+    )
+
+    context = app_request.prompt_plan.variables["mcp_materialization_context"]
+    rendering_contract = context["rendering_contract"]
+    assert rendering_contract["body_refresh_presentation_intent"] == {
+        "contract_version": "professional_body_refresh_presentation_intent_v1",
+        "owner": "professional_character_card_body_silhouette_refresh_request",
+        "scope": "modeling_card_presentation_only",
+        "status": "unspecified",
+    }
+    serialized = repr(rendering_contract).lower()
+    for fixed_value in ("short_sleeve_top", "shorts", "barefoot"):
+        assert fixed_value not in serialized
+
+
+def test_doc245_body_refresh_rejects_superseded_wardrobe_payload_in_handoff_metadata() -> None:
+    prompt = (
+        "Full-body front-view Body Silhouette source-standard materialization. "
+        "Use Face Identity references only for identity continuity. Resolve body scale, body chain, "
+        "stage-aware proportion, neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+        "and cross-view parity. Keep non-body visual channels unspecified."
+    )
+    request = _mcp_body_generation_request(prompt, source_mode="inference_first")
+    metadata = dict(request.metadata)
+    metadata["body_silhouette_wardrobe_contract"] = {
+        "contract_version": "professional_body_silhouette_wardrobe_v1",
+        "top": "simple_white_short_sleeve_top",
+        "bottom": "plain_solid_shorts",
+        "feet": "barefoot",
+    }
+    provider = McpMaterializationProvider()
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider._build_app_request(  # noqa: SLF001
+            request.model_copy(update={"metadata": metadata})
+        )
+
+    detail = getattr(exc_info.value, "detail", {})
+    assert detail["failure_code"] == "character_card_body_refresh_superseded_wardrobe_payload"
+    serialized = repr(detail).lower()
+    for raw in ("simple_white_short_sleeve_top", "plain_solid_shorts", "barefoot"):
+        assert raw not in serialized
+
+
+def test_doc245_body_refresh_presentation_intent_does_not_leak_to_expression_or_other_mcp_paths() -> None:
+    expression_prompt = (
+        "Same face in the front card, smiling naturally with white studio card framing and upper shoulders."
+    )
+    request = _mcp_body_generation_request(
+        expression_prompt,
+        stage="expression_set",
+        slot_key="expression.smile",
+        source_mode="inference_first",
+    )
+    metadata = dict(request.metadata)
+    metadata["professional_character_card_body_refresh_presentation_intent"] = (
+        _doc245_body_refresh_presentation_intent()
+    )
+    provider = McpMaterializationProvider()
+
+    app_request, _, _ = provider._build_app_request(  # noqa: SLF001
+        request.model_copy(update={"metadata": metadata})
+    )
+
+    context = app_request.prompt_plan.variables["mcp_materialization_context"]
+    assert "body_refresh_presentation_intent" not in context["rendering_contract"]
+    provider._assert_character_card_body_mcp_materialization_prompt_current(  # noqa: SLF001
+        {
+            "professional_template": "ecommerce_template",
+            "generation_channel": "mcp",
+            "professional_character_card_body_refresh_presentation_intent": (
+                _doc245_body_refresh_presentation_intent()
+            ),
+        },
+        "A product-on-person prompt may keep product styling in the E-Commerce owner path.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("contract_version", "professional_body_refresh_presentation_intent_v2"),
+        ("owner", "client_supplied_owner"),
+        ("scope", "body_source_truth"),
+        ("top_presentation", "white_t_shirt"),
+        ("bottom_presentation", "jeans"),
+        ("footwear_presentation", "sneakers"),
+        ("not_body_proportion_truth", False),
+        ("not_identity_truth", False),
+        ("not_age_truth", False),
+    ],
+)
+def test_doc245_body_refresh_presentation_intent_rejects_wrong_closed_values(
+    field: str,
+    value: object,
+) -> None:
+    prompt = (
+        "Full-body front-view Body Silhouette source-standard materialization. "
+        "Resolve body scale, neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+        "and cross-view parity. Keep non-body visual channels unspecified."
+    )
+    request = _mcp_body_generation_request(prompt, source_mode="inference_first")
+    forged_intent = _doc245_body_refresh_presentation_intent()
+    forged_intent[field] = value
+    metadata = dict(request.metadata)
+    metadata["professional_character_card_body_refresh_presentation_intent"] = forged_intent
+    provider = McpMaterializationProvider()
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider._build_app_request(  # noqa: SLF001
+            request.model_copy(update={"metadata": metadata})
+        )
+
+    detail = getattr(exc_info.value, "detail", {})
+    assert detail["failure_code"] == "character_card_body_refresh_presentation_intent_invalid"
+    serialized = repr(detail).lower()
+    for raw in ("white_t_shirt", "jeans", "sneakers", "client_supplied_owner", "body_source_truth"):
+        assert raw not in serialized
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "short_sleeve_top/shorts/barefoot",
+        ["short_sleeve_top", "shorts", "barefoot"],
+        {
+            "contract_version": "professional_body_refresh_presentation_intent_v1",
+            "owner": "professional_character_card_body_silhouette_refresh_request",
+            "scope": "modeling_card_presentation_only",
+            "top_presentation": "short_sleeve_top",
+            "bottom_presentation": "shorts",
+            "footwear_presentation": "barefoot",
+            "not_body_proportion_truth": True,
+            "not_identity_truth": True,
+            "not_age_truth": True,
+            "raw_prompt": "secret wardrobe prompt",
+        },
+        {
+            "contract_version": "professional_body_refresh_presentation_intent_v1",
+            "owner": "professional_character_card_body_silhouette_refresh_request",
+            "scope": "modeling_card_presentation_only",
+            "top_presentation": "short_sleeve_top",
+            "bottom_presentation": "shorts",
+            "footwear_presentation": "barefoot",
+            "not_body_proportion_truth": True,
+            "not_identity_truth": True,
+            "not_age_truth": True,
+            "asset_id": "asset_secret_body_reference",
+        },
+    ],
+)
+def test_doc245_body_refresh_presentation_intent_rejects_wrong_types_and_unknown_fields(
+    payload: object,
+) -> None:
+    prompt = (
+        "Full-body rear-view Body Silhouette source-standard materialization. "
+        "Resolve body chain, torso-limb relationship, stance-ground contact, and cross-view parity. "
+        "Keep non-body visual channels unspecified."
+    )
+    request = _mcp_body_generation_request(prompt, slot_key="body.rear_full", source_mode="inference_first")
+    metadata = dict(request.metadata)
+    metadata["professional_character_card_body_refresh_presentation_intent"] = payload
+    provider = McpMaterializationProvider()
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider._build_app_request(  # noqa: SLF001
+            request.model_copy(update={"metadata": metadata})
+        )
+
+    detail = getattr(exc_info.value, "detail", {})
+    assert detail["failure_code"] == "character_card_body_refresh_presentation_intent_invalid"
+    serialized = repr(detail).lower()
+    for raw in ("secret wardrobe prompt", "asset_secret_body_reference"):
+        assert raw not in serialized
+
+
+def test_doc245_body_refresh_presentation_intent_requires_strict_refresh_contract() -> None:
+    prompt = (
+        "Full-body front-view Body Silhouette source-standard materialization. "
+        "Resolve body scale and cross-view parity. Keep non-body visual channels unspecified."
+    )
+    request = _mcp_body_generation_request(prompt, source_mode="inference_first")
+    metadata = dict(request.metadata)
+    metadata.pop("professional_character_card_body_refresh_source_mode", None)
+    metadata["professional_character_card_body_refresh_presentation_intent"] = (
+        _doc245_body_refresh_presentation_intent()
+    )
+    provider = McpMaterializationProvider()
+
+    app_request, _, _ = provider._build_app_request(  # noqa: SLF001
+        request.model_copy(update={"metadata": metadata})
+    )
+
+    context = app_request.prompt_plan.variables["mcp_materialization_context"]
+    assert "body_refresh_presentation_intent" not in context["rendering_contract"]
+
+
+def test_doc245_body_refresh_presentation_intent_not_body_truth_or_receipt_authority() -> None:
+    prompt = (
+        "Full-body side-view Body Silhouette source-standard materialization. "
+        "Resolve body scale, neck-shoulder continuity, torso-limb relationship, stance-ground contact, "
+        "and cross-view parity. Keep non-body visual channels unspecified."
+    )
+    request = _mcp_body_generation_request(prompt, slot_key="body.side_full", source_mode="inference_first")
+    metadata = dict(request.metadata)
+    metadata["professional_character_card_body_refresh_presentation_intent"] = (
+        _doc245_body_refresh_presentation_intent()
+    )
+    provider = McpMaterializationProvider()
+
+    app_request, _, _ = provider._build_app_request(  # noqa: SLF001
+        request.model_copy(update={"metadata": metadata})
+    )
+
+    context = app_request.prompt_plan.variables["mcp_materialization_context"]
+    rendering_contract = context["rendering_contract"]
+    intent = rendering_contract["body_refresh_presentation_intent"]
+    assert intent["scope"] == "modeling_card_presentation_only"
+    assert intent["not_body_proportion_truth"] is True
+    assert intent["not_identity_truth"] is True
+    assert intent["not_age_truth"] is True
+    for forbidden_key in (
+        "body_reference_truth_layer",
+        "formal_receipt",
+        "source_standard_score",
+        "source_standard_verified",
+        "identity_truth",
+        "age_truth",
+    ):
+        assert forbidden_key not in intent
+        assert forbidden_key not in rendering_contract
+
+
 def test_doc245_body_mcp_channel_contract_isolated_from_expression_and_non_body_paths() -> None:
     expression_prompt = (
         "Same face in the front card, smiling naturally with white studio card framing and upper shoulders."
@@ -3623,6 +3909,22 @@ def test_doc245_public_metadata_cannot_forge_body_refresh_source_mode() -> None:
                 )
 
 
+def test_doc245_public_metadata_cannot_forge_body_refresh_presentation_intent() -> None:
+    for scenario_id in ("general_creative", "ecommerce_template", "photographer_template"):
+        with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+            V3ProductApiService().create_job(
+                {
+                    "user_input": "ordinary public generation",
+                    "scenario_selection": {"scenario_id": scenario_id},
+                    "metadata": {
+                        "professional_character_card_body_refresh_presentation_intent": (
+                            _doc245_body_refresh_presentation_intent()
+                        )
+                    },
+                }
+            )
+
+
 def test_doc245_product_api_body_stage_rejects_missing_or_forbidden_source_admission() -> None:
     service = V3ProductApiService()
     with pytest.raises(ValueError, match="professional_character_card_body_source_admission_required"):
@@ -4061,6 +4363,9 @@ def test_doc245_anchor_stage_plan_reuse_does_not_copy_character_card_lifecycle_c
                 "status": "completed",
             }
         ],
+        "professional_character_card_body_refresh_presentation_intent": (
+            _doc245_body_refresh_presentation_intent()
+        ),
         "professional_anchor_rendering_contract": "size:1024x1536|quality:strict|reference_card",
     }
 
@@ -4071,6 +4376,7 @@ def test_doc245_anchor_stage_plan_reuse_does_not_copy_character_card_lifecycle_c
     assert reusable["professional_reference_stage"] == "standard_front"
     assert "professional_character_card_candidate_count" not in reusable
     assert "professional_character_card_candidate_lifecycle_checkpoints" not in reusable
+    assert "professional_character_card_body_refresh_presentation_intent" not in reusable
 
 
 def _safe_provider_no_pixel_retry_summary() -> dict[str, object]:

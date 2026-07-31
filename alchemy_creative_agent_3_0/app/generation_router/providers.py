@@ -13,7 +13,7 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ..creative_core.prompt_language import (
     product_language_allowed,
@@ -27,6 +27,10 @@ from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target
 from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
+)
+from ..visual_assets.character_card import (
+    BodyRefreshPresentationIntent,
+    unspecified_body_refresh_presentation_intent,
 )
 from app.providers.base import ProviderRuntimeError
 from .mcp_materialization import McpMaterializationError, McpMaterializationHandoffStore
@@ -5469,6 +5473,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return max(0.0, min(float(value), 30.0))
 
 
+_BODY_REFRESH_PRESENTATION_INTENT_KEY = "professional_character_card_body_refresh_presentation_intent"
+_BODY_REFRESH_SOURCE_MODE_KEY = "professional_character_card_body_refresh_source_mode"
+_BODY_REFRESH_CONTRACT_REQUIRED_KEY = "professional_character_card_body_refresh_contract_required"
+_SUPERSEDED_BODY_WARDROBE_CONTRACT_VERSION = "professional_body_silhouette_wardrobe_v1"
+
+
 class McpMaterializationProvider(ProductionImageGenerationProvider):
     """Codex/MCP transport adapter over the ordinary V3 Provider pipeline.
 
@@ -5505,9 +5515,14 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "size_normalization": "white_matte_contain_to_contract_size",
         }
         if self._is_character_card_body_mcp_materialization(metadata):
+            self._reject_superseded_body_wardrobe_payload(metadata)
             contract["body_silhouette_mcp_materialization_channel_contract"] = (
                 body_silhouette_mcp_materialization_channel_contract()
             )
+            if self._is_strict_character_card_body_refresh(metadata):
+                contract["body_refresh_presentation_intent"] = (
+                    self._safe_body_refresh_presentation_intent(metadata)
+                )
         context = {
             "operation_id": str(
                 metadata.get("mcp_operation_id")
@@ -5563,6 +5578,63 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             str(metadata.get("professional_character_card_stage") or "").strip() == "body_silhouette"
             and str(metadata.get("professional_character_card_slot") or "").strip().startswith("body.")
         )
+
+    @staticmethod
+    def _is_strict_character_card_body_refresh(metadata: dict[str, Any]) -> bool:
+        if metadata.get(_BODY_REFRESH_CONTRACT_REQUIRED_KEY) is True:
+            return True
+        return str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip() in {
+            "inference_first",
+            "reference_assisted",
+        }
+
+    def _safe_body_refresh_presentation_intent(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        raw = metadata.get(_BODY_REFRESH_PRESENTATION_INTENT_KEY)
+        if raw is None:
+            return unspecified_body_refresh_presentation_intent()
+        try:
+            parsed = BodyRefreshPresentationIntent.model_validate(raw)
+        except ValidationError as exc:
+            raise ProviderRuntimeError(
+                "MCP Body Silhouette refresh presentation intent is invalid.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "character_card_body_refresh_presentation_intent_invalid",
+                    "stage": "body_silhouette",
+                    "fallback": "blocked",
+                },
+            ) from exc
+        return parsed.model_dump(mode="json")
+
+    def _reject_superseded_body_wardrobe_payload(self, metadata: dict[str, Any]) -> None:
+        if not self._contains_superseded_body_wardrobe_payload(metadata):
+            return
+        raise ProviderRuntimeError(
+            "MCP Body Silhouette refresh received a superseded wardrobe payload.",
+            provider=self.provider_name,
+            detail={
+                "failure_code": "character_card_body_refresh_superseded_wardrobe_payload",
+                "stage": "body_silhouette",
+                "fallback": "blocked",
+            },
+        )
+
+    def _contains_superseded_body_wardrobe_payload(self, value: Any) -> bool:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key) == "body_silhouette_wardrobe_contract":
+                    return True
+                if (
+                    str(key) == "contract_version"
+                    and str(item) == _SUPERSEDED_BODY_WARDROBE_CONTRACT_VERSION
+                ):
+                    return True
+                if self._contains_superseded_body_wardrobe_payload(item):
+                    return True
+            return False
+        if isinstance(value, list):
+            return any(self._contains_superseded_body_wardrobe_payload(item) for item in value)
+        return False
 
     def _assert_character_card_body_mcp_materialization_prompt_current(
         self,

@@ -19,6 +19,8 @@ from time import sleep
 from typing import Any, Callable, Literal
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from ..app_shell.navigation import get_navigation_entry
 from ..app_shell.routes import API_NAMESPACE, get_route_contracts
 from ..brand_memory.profile_service import BrandProfileService
@@ -43,6 +45,7 @@ from ..visual_assets import (
     ProjectVisualAssetBindingService,
     bind_professional_mode,
 )
+from ..visual_assets.character_card import BodyRefreshPresentationIntent
 from ..shared_capabilities import CapabilityRunResult
 from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from ..shared_capabilities.visual_cluster import (
@@ -941,6 +944,7 @@ class V3ProductApiService:
         professional_character_card_body_model_context: str | None = None,
         professional_character_card_body_refresh_contract_required: bool = False,
         professional_character_card_body_source_admission: dict[str, Any] | None = None,
+        professional_character_card_body_refresh_presentation_intent: dict[str, Any] | None = None,
         professional_character_card_candidate_index: int | None = None,
         professional_character_card_candidate_count: int | None = None,
         professional_character_card_attempt_round: int = 1,
@@ -1054,8 +1058,15 @@ class V3ProductApiService:
                     source_class=professional_character_card_source_class,
                     body_source_admission=professional_character_card_body_source_admission,
                 )
+                presentation_intent_contract = (
+                    self._safe_professional_character_card_body_refresh_presentation_intent(
+                        professional_character_card_body_refresh_presentation_intent,
+                        strict_refresh=bool(source_mode_contract),
+                    )
+                )
             else:
                 source_mode_contract = {}
+                presentation_intent_contract = {}
             planning_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
                 stage=professional_character_card_stage,
                 slot_key=str(professional_character_card_slot),
@@ -1075,6 +1086,7 @@ class V3ProductApiService:
                 "professional_character_card_candidate_lifecycle_checkpoints": [],
                 "professional_character_card_source_class": professional_character_card_source_class,
                 **source_mode_contract,
+                **presentation_intent_contract,
                 "professional_character_card_attempt_round": max(
                     1, int(professional_character_card_attempt_round)
                 ),
@@ -1316,6 +1328,7 @@ class V3ProductApiService:
         body_model_context: str | None = None,
         body_refresh_contract_required: bool = False,
         body_source_admission: dict[str, Any] | None = None,
+        body_refresh_presentation_intent: dict[str, Any] | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
         attempt_round: int = 1,
@@ -1336,6 +1349,7 @@ class V3ProductApiService:
             professional_character_card_body_model_context=body_model_context,
             professional_character_card_body_refresh_contract_required=body_refresh_contract_required,
             professional_character_card_body_source_admission=body_source_admission,
+            professional_character_card_body_refresh_presentation_intent=body_refresh_presentation_intent,
             professional_character_card_attempt_round=attempt_round,
             generation_channel=generation_channel,
             mcp_operation_id=mcp_operation_id,
@@ -1542,6 +1556,24 @@ class V3ProductApiService:
         if strict_source_mode:
             raise ValueError("professional_character_card_body_refresh_source_mode_forbidden")
         return {}
+
+    @staticmethod
+    def _safe_professional_character_card_body_refresh_presentation_intent(
+        intent: dict[str, Any] | None,
+        *,
+        strict_refresh: bool,
+    ) -> dict[str, Any]:
+        if intent is None:
+            return {}
+        if not strict_refresh:
+            raise ValueError("professional_character_card_body_refresh_presentation_intent_forbidden")
+        try:
+            parsed = BodyRefreshPresentationIntent.model_validate(intent)
+        except ValidationError as exc:
+            raise ValueError("professional_character_card_body_refresh_presentation_intent_invalid") from exc
+        return {
+            "professional_character_card_body_refresh_presentation_intent": parsed.model_dump(mode="json")
+        }
 
     @staticmethod
     def _safe_professional_character_card_candidate_index(value: int | None) -> int:
@@ -9235,6 +9267,7 @@ class V3ProductApiService:
             "professional_character_card_body_refresh_source_mode",
             "professional_character_card_body_model_context",
             "professional_character_card_body_refresh_contract_required",
+            "professional_character_card_body_refresh_presentation_intent",
             "professional_character_card_reference_output_ids",
             "professional_character_card_body_source_admission",
             "generation_channel",
@@ -9249,6 +9282,7 @@ class V3ProductApiService:
         {
             "professional_character_card_candidate_count",
             "professional_character_card_candidate_lifecycle_checkpoints",
+            "professional_character_card_body_refresh_presentation_intent",
         }
     )
 

@@ -253,6 +253,9 @@ BodyRefreshBodyModelContext = Literal[
     "similar_person_body_reference_assisted_v1",
     "system_inferred_body_model_scene_neutral_v1",
 ]
+BODY_REFRESH_PRESENTATION_INTENT_CONTRACT_VERSION = "professional_body_refresh_presentation_intent_v1"
+BODY_REFRESH_PRESENTATION_INTENT_OWNER = "professional_character_card_body_silhouette_refresh_request"
+BODY_REFRESH_PRESENTATION_INTENT_SCOPE = "modeling_card_presentation_only"
 ExpressionKey = Literal["laugh", "smile", "anger", "sad"]
 BodySlotKey = Literal["body.front_full", "body.side_full", "body.rear_full"]
 BODY_SOURCE_ADMISSION_CONTRACT_VERSION = "professional_body_source_admission_v1"
@@ -275,6 +278,43 @@ class CharacterCardRuntimeUnavailable(RuntimeError):
     """A safe, non-provider error for an unconfigured shared stage host."""
 
     code = "character_card_shared_runtime_unavailable"
+
+
+class BodyRefreshPresentationIntent(_CharacterCardModel):
+    """Request-scoped modeling-card presentation intent for Body refresh.
+
+    This is not Body source truth, Face Identity truth, age truth, review proof,
+    or activation authority.  It only lets the owning Body refresh request
+    constrain the neutral modeling-card clothing/footwear presentation without
+    reviving the superseded global wardrobe contract.
+    """
+
+    contract_version: Literal["professional_body_refresh_presentation_intent_v1"] = (
+        BODY_REFRESH_PRESENTATION_INTENT_CONTRACT_VERSION
+    )
+    owner: Literal["professional_character_card_body_silhouette_refresh_request"] = (
+        BODY_REFRESH_PRESENTATION_INTENT_OWNER
+    )
+    scope: Literal["modeling_card_presentation_only"] = BODY_REFRESH_PRESENTATION_INTENT_SCOPE
+    top_presentation: Literal["short_sleeve_top"] = "short_sleeve_top"
+    bottom_presentation: Literal["shorts"] = "shorts"
+    footwear_presentation: Literal["barefoot"] = "barefoot"
+    not_body_proportion_truth: Literal[True] = True
+    not_identity_truth: Literal[True] = True
+    not_age_truth: Literal[True] = True
+
+
+def default_body_refresh_presentation_intent() -> BodyRefreshPresentationIntent:
+    return BodyRefreshPresentationIntent()
+
+
+def unspecified_body_refresh_presentation_intent() -> dict[str, str]:
+    return {
+        "contract_version": BODY_REFRESH_PRESENTATION_INTENT_CONTRACT_VERSION,
+        "owner": BODY_REFRESH_PRESENTATION_INTENT_OWNER,
+        "scope": BODY_REFRESH_PRESENTATION_INTENT_SCOPE,
+        "status": "unspecified",
+    }
 
 
 class BodySilhouettePublicRequest(_CharacterCardModel):
@@ -921,6 +961,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     body_refresh_source_mode: BodyRefreshSourceMode | None = None
     body_model_context: BodyRefreshBodyModelContext | None = None
     body_refresh_contract_required: StrictBool = False
+    body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None
     generation_channel: Literal["provider", "mcp"] = "provider"
     body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None
     mcp_handoff_id: str | None = None
@@ -957,6 +998,8 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("Expression Set does not accept body source admission")
             if self.body_refresh_attempt_identity is not None:
                 raise ValueError("Expression Set does not accept body refresh attempt identity")
+            if self.body_refresh_presentation_intent is not None:
+                raise ValueError("Expression Set does not accept body refresh presentation intent")
         else:
             if not self.slot_key.startswith("body."):
                 raise ValueError("Body Silhouette request has an invalid slot")
@@ -968,6 +1011,8 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("observed Body Silhouette request requires consent provenance")
             source_mode_present = self.body_refresh_source_mode is not None or self.body_model_context is not None
             strict_refresh_contract = self.body_refresh_contract_required or source_mode_present
+            if self.body_refresh_presentation_intent is not None and not strict_refresh_contract:
+                raise ValueError("Body Silhouette presentation intent requires strict refresh source mode")
             if self.source_class == "observed":
                 if strict_refresh_contract:
                     if self.body_refresh_source_mode != "reference_assisted":
@@ -2239,6 +2284,7 @@ class CharacterCardPreparationService:
         consent_provenance_id: str | None = None,
         user_intent: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
+        body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
     ) -> CharacterCardStageResult:
         if card.face_identity_status != "active":
             raise ValueError("Body Silhouette requires an active Face Identity module")
@@ -2388,6 +2434,7 @@ class CharacterCardPreparationService:
         consent_provenance_id: str | None = None,
         user_intent: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
+        body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
     ) -> CharacterCardStageResult:
         """Append a pending Body Silhouette refresh without replacing active slots."""
 
@@ -2434,6 +2481,7 @@ class CharacterCardPreparationService:
                 body_refresh_source_mode=request.body_refresh_source_mode,
                 body_model_context=request.body_model_context,
                 body_refresh_contract_required=True,
+                body_refresh_presentation_intent=body_refresh_presentation_intent,
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 body_refresh_attempt_identity=body_refresh_attempt_identity,
@@ -2555,6 +2603,7 @@ class CharacterCardPreparationService:
         body_refresh_source_mode: BodyRefreshSourceMode | None = None,
         body_model_context: BodyRefreshBodyModelContext | None = None,
         body_refresh_contract_required: bool = False,
+        body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
         consent_provenance_id: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
@@ -2624,6 +2673,7 @@ class CharacterCardPreparationService:
                 body_refresh_source_mode=body_refresh_source_mode,
                 body_model_context=body_model_context,
                 body_refresh_contract_required=body_refresh_contract_required,
+                body_refresh_presentation_intent=body_refresh_presentation_intent,
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 body_refresh_attempt_identity=body_refresh_attempt_identity,

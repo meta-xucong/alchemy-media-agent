@@ -1529,6 +1529,11 @@ class ProductApiAnchorPackPreparationHost:
                     if request.body_source_admission is not None
                     else None
                 ),
+                body_refresh_presentation_intent=(
+                    request.body_refresh_presentation_intent.model_dump(mode="json")
+                    if request.body_refresh_presentation_intent is not None
+                    else None
+                ),
                 generation_channel=request.generation_channel,
                 mcp_operation_id=operation_id,
                 attempt_round=request.attempt_round,
