@@ -260,3 +260,56 @@ def test_mcp_body_materialization_channel_contract_is_documented_without_generat
     assert "downstream General/Photography/E-Commerce projection" in squashed
     assert "provider cap" in mcp
     assert "It authorizes no real generation by itself" in mcp
+
+
+def test_body_refresh_presentation_intent_is_request_scoped_not_body_truth() -> None:
+    intent = _section(_handoff_text(), "12. Request-scoped Body refresh presentation intent")
+    squashed = _squash(intent)
+
+    assert "body_refresh_presentation_intent" in intent
+    assert "professional_body_refresh_presentation_intent_v1" in intent
+    assert "server-owned" in intent
+    assert "strict Professional Body Silhouette refresh request/lifecycle" in squashed
+    for value in ("short_sleeve_top", "shorts", "barefoot"):
+        assert value in intent
+
+    assert "status=unspecified" in intent
+    assert "must not infer a fixed top, bottom, or footwear presentation from unspecified state" in squashed
+    assert "must not revive the old wardrobe contract" in squashed
+    assert "professional_body_silhouette_wardrobe_v1" in intent
+    assert "superseded" in intent
+
+    for non_authority in (
+        "not Body proportion truth",
+        "not Face Identity truth",
+        "not age truth",
+        "not observed source evidence",
+        "not Body source-standard proof",
+        "not formal receipt evidence",
+        "not activation authority",
+    ):
+        assert non_authority in squashed
+
+    for isolated in (
+        "Face Identity and Expression Set keep their own stage contracts",
+        "General, Photography, and E-Commerce must not read or require",
+        "shared Human Realism",
+        "downstream body-only projection",
+        "business delivery records",
+    ):
+        assert isolated in squashed
+
+    for unchanged_gate in (
+        "standard three-candidate requirement",
+        "shared review",
+        "Body source-standard positive evidence",
+        "formal slot receipt",
+        "card-level cross-view parity",
+        "pending refresh",
+        "explicit activation",
+        "provider cap",
+    ):
+        assert unchanged_gate in squashed
+
+    assert "does not change" in intent
+    assert "real generation authorization" in intent

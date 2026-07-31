@@ -460,3 +460,54 @@ review, source-standard positive evidence, formal receipt, card-level
 cross-view parity, pending refresh, and explicit activation authority.  It does
 not authorize a real MCP/ImageGen run and does not permit clearing old pending
 handoffs as a substitute for identity separation.
+
+## 12. Request-scoped Body refresh presentation intent
+
+This note records a narrow request-owned presentation contract for Professional
+Character Card Body Silhouette refresh.  It exists because the Body source
+standard correctly leaves non-Body-owned channels unspecified, while the
+modeling-card presentation still needs a stable neutral display convention when
+the user is reviewing front/side/rear body structure.
+
+The closed contract is `body_refresh_presentation_intent` with
+`contract_version=professional_body_refresh_presentation_intent_v1`.  It is
+server-owned and may only be injected by the strict Professional Body
+Silhouette refresh request/lifecycle.  Client metadata, raw body facts,
+arbitrary dictionaries, unknown fields, wrong types, or the superseded
+`professional_body_silhouette_wardrobe_v1` payload cannot create or override
+this intent.
+
+The only currently allowed declared values are:
+
+- `top_presentation=short_sleeve_top`;
+- `bottom_presentation=shorts`;
+- `footwear_presentation=barefoot`.
+
+These values are modeling-card presentation controls only.  They are not Body
+proportion truth, not Face Identity truth, not age truth, not observed source
+evidence, not Body source-standard proof, not formal receipt evidence, and not
+activation authority.  They must not be copied into Character Card Body source
+contracts, Body source admission, Face Identity evidence, shared Human Realism,
+General, Photography, E-Commerce, ordinary MCP handoff, downstream body-only
+projection, or business delivery records.
+
+If the strict Body refresh request does not declare
+`body_refresh_presentation_intent`, the MCP rendering contract must carry the
+closed sentinel `status=unspecified`.  The system must not infer a fixed top,
+bottom, or footwear presentation from unspecified state, and it must not revive
+the old wardrobe contract to fill the gap.
+
+This contract is compatible with both `inference_first` and
+`reference_assisted` Body refresh source modes.  In `reference_assisted`, any
+similar-person Body reference remains body-only proportion evidence and still
+does not become current-person identity or presentation truth.  In
+`inference_first`, the intent remains a request-scoped display constraint and
+does not fabricate body truth.
+
+All non-Body modules remain isolated.  Face Identity and Expression Set keep
+their own stage contracts; General, Photography, and E-Commerce must not read
+or require `body_refresh_presentation_intent`.  This note does not change the
+standard three-candidate requirement, shared review, Body source-standard
+positive evidence, formal slot receipt, card-level cross-view parity, pending
+refresh, explicit activation, provider cap, Brain route, MCP route, or any
+real generation authorization.
