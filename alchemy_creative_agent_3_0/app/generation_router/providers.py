@@ -5537,6 +5537,10 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 contract["body_refresh_presentation_intent"] = (
                     self._safe_body_refresh_presentation_intent(metadata)
                 )
+        require_body_rendering_contract = (
+            self._is_character_card_body_mcp_materialization(metadata)
+            and self._is_strict_character_card_body_refresh(metadata)
+        )
         context = {
             "operation_id": str(
                 metadata.get("mcp_operation_id")
@@ -5552,6 +5556,7 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "prompt_sha256": str(variables.get("provider_prompt_sha256") or ""),
             "reference_assets": [dict(item or {}) for item in reference_assets],
             "rendering_contract": contract,
+            "require_body_rendering_contract": require_body_rendering_contract,
         }
         context["expected_checkpoint"] = self._mcp_expected_checkpoint_context(
             request,
@@ -5578,6 +5583,7 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 reference_assets=reference_assets,
                 rendering_contract=dict(context.get("rendering_contract") or contract),
             )
+            context["require_body_rendering_contract"] = require_body_rendering_contract
         variables["mcp_materialization_context"] = context
         self._assert_character_card_body_mcp_materialization_prompt_current(
             metadata,
@@ -5822,6 +5828,9 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                     prompt_sha256=str(context.get("prompt_sha256") or ""),
                     reference_assets=list(context.get("reference_assets") or []),
                     rendering_contract=dict(context.get("rendering_contract") or {}),
+                    require_body_rendering_contract=(
+                        context.get("require_body_rendering_contract") is True
+                    ),
                 )
             expected_checkpoint = (
                 dict(context.get("expected_checkpoint"))

@@ -1609,6 +1609,9 @@ def _doc245_generic_mcp_rendering_contract() -> dict[str, object]:
     }
 
 
+DOC245_REAL_BODY_MCP_OPERATION_ID = "visual_asset_doc245:body_silhouette:body.front_full:1"
+
+
 def test_doc245_mcp_handoff_store_persists_body_rendering_contract_and_intent(
     tmp_path,
 ) -> None:
@@ -1627,11 +1630,12 @@ def test_doc245_mcp_handoff_store_persists_body_rendering_contract_and_intent(
     }
 
     handoff = store.ensure_pending(
-        operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+        operation_id=DOC245_REAL_BODY_MCP_OPERATION_ID,
         prompt="closed Body MCP renderer prompt",
         prompt_sha256="a" * 64,
         reference_assets=[],
         rendering_contract=rendering_contract,
+        require_body_rendering_contract=True,
     )
     public = store.public_view(handoff["handoff_id"])
 
@@ -1679,25 +1683,28 @@ def test_doc245_mcp_handoff_store_rendering_fingerprint_includes_body_intent(
     }
 
     first = store.ensure_pending(
-        operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+        operation_id=DOC245_REAL_BODY_MCP_OPERATION_ID,
         prompt="same Body MCP renderer prompt",
         prompt_sha256="b" * 64,
         reference_assets=[],
         rendering_contract=first_contract,
+        require_body_rendering_contract=True,
     )
     resumed = store.ensure_pending(
-        operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+        operation_id=DOC245_REAL_BODY_MCP_OPERATION_ID,
         prompt="same Body MCP renderer prompt",
         prompt_sha256="b" * 64,
         reference_assets=[],
         rendering_contract=first_contract,
+        require_body_rendering_contract=True,
     )
     changed = store.ensure_pending(
-        operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+        operation_id=DOC245_REAL_BODY_MCP_OPERATION_ID,
         prompt="same Body MCP renderer prompt",
         prompt_sha256="b" * 64,
         reference_assets=[],
         rendering_contract=second_contract,
+        require_body_rendering_contract=True,
     )
 
     assert resumed["handoff_id"] == first["handoff_id"]
@@ -1744,17 +1751,18 @@ def test_doc245_mcp_handoff_store_fails_closed_for_body_contract_without_valid_i
 
     with pytest.raises(McpMaterializationError) as exc_info:
         store.ensure_pending(
-            operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+            operation_id=DOC245_REAL_BODY_MCP_OPERATION_ID,
             prompt="closed Body MCP renderer prompt",
             prompt_sha256="d" * 64,
             reference_assets=[],
             rendering_contract=rendering_contract,
+            require_body_rendering_contract=True,
         )
 
     assert exc_info.value.code == "mcp_materialization_body_rendering_contract_invalid"
     assert exc_info.value.detail["failure_code"] == failure_code
     assert store.list_unconsumed_by_operation(
-        "body_refresh_attempt_doc245:body_silhouette:body.front_full:1"
+        DOC245_REAL_BODY_MCP_OPERATION_ID
     ) == []
     assert "secret prompt" not in repr(exc_info.value.detail).lower()
 
@@ -1772,17 +1780,18 @@ def test_doc245_mcp_handoff_store_fails_closed_for_strict_body_operation_missing
 
     with pytest.raises(McpMaterializationError) as exc_info:
         store.ensure_pending(
-            operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+            operation_id=DOC245_REAL_BODY_MCP_OPERATION_ID,
             prompt="closed Body MCP renderer prompt",
             prompt_sha256="f" * 64,
             reference_assets=[],
             rendering_contract=rendering_contract,
+            require_body_rendering_contract=True,
         )
 
     assert exc_info.value.code == "mcp_materialization_body_rendering_contract_invalid"
     assert exc_info.value.detail["failure_code"] == "body_channel_missing"
     assert store.list_unconsumed_by_operation(
-        "body_refresh_attempt_doc245:body_silhouette:body.front_full:1"
+        DOC245_REAL_BODY_MCP_OPERATION_ID
     ) == []
     assert "secret prompt" not in repr(exc_info.value.detail).lower()
     assert "example.invalid" not in repr(exc_info.value.detail).lower()
@@ -1792,7 +1801,7 @@ def test_doc245_mcp_handoff_store_does_not_reuse_old_handoff_missing_body_fields
     tmp_path,
 ) -> None:
     store = McpMaterializationHandoffStore(tmp_path / "handoffs")
-    operation_id = "body_refresh_attempt_doc245:body_silhouette:body.front_full:1"
+    operation_id = DOC245_REAL_BODY_MCP_OPERATION_ID
     prompt_hash = "e" * 64
     reference_fingerprint = store._reference_semantic_fingerprint([], [])  # noqa: SLF001
     old_handoff_id = stable_id(
@@ -1838,6 +1847,7 @@ def test_doc245_mcp_handoff_store_does_not_reuse_old_handoff_missing_body_fields
             ),
             "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         },
+        require_body_rendering_contract=True,
     )
 
     assert current["handoff_id"] != old_handoff_id

@@ -191,6 +191,7 @@ class McpMaterializationHandoffStore:
         prompt_sha256: str,
         reference_assets: list[dict[str, Any]],
         rendering_contract: dict[str, Any],
+        require_body_rendering_contract: bool = False,
     ) -> dict[str, Any]:
         operation = str(operation_id or "").strip()
         prompt_hash = str(prompt_sha256 or "").strip().lower()
@@ -200,7 +201,7 @@ class McpMaterializationHandoffStore:
         reference_fingerprint = self._reference_semantic_fingerprint(reference_assets, hashes)
         safe_rendering_contract = self._safe_rendering_contract(
             rendering_contract,
-            require_body_presentation_intent=self._requires_body_presentation_intent(operation),
+            require_body_rendering_contract=require_body_rendering_contract,
         )
         rendering_fingerprint = self._rendering_contract_fingerprint(safe_rendering_contract)
         with self._transaction_lock():
@@ -834,14 +835,10 @@ class McpMaterializationHandoffStore:
             return ""
 
     @staticmethod
-    def _requires_body_presentation_intent(operation_id: str) -> bool:
-        return str(operation_id or "").strip().startswith("body_refresh_attempt_")
-
-    @staticmethod
     def _safe_rendering_contract(
         contract: dict[str, Any],
         *,
-        require_body_presentation_intent: bool = False,
+        require_body_rendering_contract: bool = False,
     ) -> dict[str, Any]:
         raw = dict(contract or {})
         allowed = {
@@ -859,7 +856,7 @@ class McpMaterializationHandoffStore:
         safe = {key: value for key, value in raw.items() if key in allowed}
         expected_body_contract = body_silhouette_mcp_materialization_channel_contract()
         if raw.get("body_silhouette_mcp_materialization_channel_contract") != expected_body_contract:
-            if require_body_presentation_intent:
+            if require_body_rendering_contract:
                 raise McpMaterializationError(
                     "mcp_materialization_body_rendering_contract_invalid",
                     detail={"failure_code": "body_channel_missing"},
@@ -868,7 +865,7 @@ class McpMaterializationHandoffStore:
         safe["body_silhouette_mcp_materialization_channel_contract"] = expected_body_contract
         raw_intent = raw.get("body_refresh_presentation_intent")
         if raw_intent is None:
-            if not require_body_presentation_intent:
+            if not require_body_rendering_contract:
                 return safe
             raise McpMaterializationError(
                 "mcp_materialization_body_rendering_contract_invalid",
