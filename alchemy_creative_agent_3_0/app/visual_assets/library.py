@@ -23,6 +23,7 @@ from ..schemas.models import V3BaseModel
 from .anchor_pack import AnchorPackPreparationResult
 from .character_card import (
     BODY_SLOT_KEYS,
+    BodyRefreshPresentationIntent,
     BodySilhouettePublicRequest,
     CharacterCardPreparationService,
     CharacterCardRuntimeUnavailable,
@@ -1094,9 +1095,15 @@ class VisualAssetLibraryLifecycleService:
         visual_asset_id: str,
         body_request: BodySilhouettePublicRequest,
         generation_channel: Literal["provider", "mcp"] = "provider",
+        body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
     ) -> VisualAsset:
         """Append a pending Body Silhouette refresh through the owning lifecycle."""
 
+        if (
+            body_refresh_presentation_intent is not None
+            and not isinstance(body_refresh_presentation_intent, BodyRefreshPresentationIntent)
+        ):
+            raise ValueError("character_card_body_refresh_presentation_intent_invalid")
         if self.character_card_stage_host is None:
             raise CharacterCardRuntimeUnavailable("character_card_body_refresh_unavailable")
         if getattr(self.character_card_stage_host, "production_shared_runtime", False) is not True:
@@ -1119,6 +1126,8 @@ class VisualAssetLibraryLifecycleService:
         method_kwargs = {"asset": asset, "card": card, "request": body_request}
         if generation_channel == "mcp":
             method_kwargs["generation_channel"] = "mcp"
+        if body_refresh_presentation_intent is not None:
+            method_kwargs["body_refresh_presentation_intent"] = body_refresh_presentation_intent
         result = method(**method_kwargs)
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")

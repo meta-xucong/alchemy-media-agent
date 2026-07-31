@@ -50,6 +50,7 @@ from ..visual_assets.anchor_pack import (
 )
 from ..visual_assets.character_card import (
     BodyPreparationRequest,
+    BodyRefreshPresentationIntent,
     CharacterCardCandidateAttempt,
     CharacterCardCandidateLifecycleBoundaryError,
     CharacterCardCandidateLifecycleCheckpoint,
@@ -1255,9 +1256,15 @@ class ProductApiAnchorPackPreparationHost:
         card: CharacterCardState,
         request: Any = None,
         generation_channel: str = "provider",
+        body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
     ) -> CharacterCardStageResult:
         if request is None:
             raise ValueError("character_card_body_source_required")
+        if (
+            body_refresh_presentation_intent is not None
+            and not isinstance(body_refresh_presentation_intent, BodyRefreshPresentationIntent)
+        ):
+            raise ValueError("character_card_body_refresh_presentation_intent_invalid")
         face_reference_output_ids = [
             str(card.face_slots[key].output_id or "").strip()
             for key in ("face.front", "face.profile", "face.rear_head")
@@ -1283,6 +1290,7 @@ class ProductApiAnchorPackPreparationHost:
             consent_provenance_id=getattr(asset.root_source_provenance, "consent_reference", None),
             user_intent=user_intent,
             generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
+            body_refresh_presentation_intent=body_refresh_presentation_intent,
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
 

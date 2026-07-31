@@ -1787,6 +1787,7 @@ class CharacterCardStageHost(Protocol):
         self, *, asset: Any, card: CharacterCardState,
         request: BodySilhouettePublicRequest | None = None,
         generation_channel: str = "provider",
+        body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
     ) -> CharacterCardStageResult:
         ...
 
