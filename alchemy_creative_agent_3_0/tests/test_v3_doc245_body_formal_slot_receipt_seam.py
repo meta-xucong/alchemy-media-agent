@@ -32,6 +32,10 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
     GenerationResponse,
     McpMaterializationProvider,
 )
+from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
+    McpMaterializationError,
+    McpMaterializationHandoffStore,
+)
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -1587,6 +1591,237 @@ def test_doc245_body_mcp_central_brain_handoff_preserves_body_rendering_contract
             "v3_output",
         ):
             assert forbidden not in serialized
+
+
+def _doc245_generic_mcp_rendering_contract() -> dict[str, object]:
+    return {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+        "input_fidelity": "high",
+        "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
+    }
+
+
+def test_doc245_mcp_handoff_store_persists_body_rendering_contract_and_intent(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    rendering_contract = {
+        **_doc245_generic_mcp_rendering_contract(),
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "raw_prompt": "secret prompt must not persist",
+        "source_url": "https://example.invalid/private.png",
+        "provider_payload": {"raw": "payload must not persist"},
+        "asset_id": "asset_secret",
+        "output_id": "v3_output_secret",
+    }
+
+    handoff = store.ensure_pending(
+        operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+        prompt="closed Body MCP renderer prompt",
+        prompt_sha256="a" * 64,
+        reference_assets=[],
+        rendering_contract=rendering_contract,
+    )
+    public = store.public_view(handoff["handoff_id"])
+
+    persisted = public["rendering_contract"]
+    assert persisted["body_silhouette_mcp_materialization_channel_contract"] == (
+        body_silhouette_mcp_materialization_channel_contract()
+    )
+    assert persisted["body_refresh_presentation_intent"] == (
+        _doc245_body_refresh_presentation_intent()
+    )
+    serialized = repr(persisted).lower()
+    for forbidden in (
+        "secret prompt",
+        "example.invalid",
+        "provider_payload",
+        "asset_secret",
+        "v3_output_secret",
+    ):
+        assert forbidden not in serialized
+
+
+def test_doc245_mcp_handoff_store_rendering_fingerprint_includes_body_intent(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    first_contract = {
+        **_doc245_generic_mcp_rendering_contract(),
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+    }
+    second_intent = {
+        "contract_version": "professional_body_refresh_presentation_intent_v1",
+        "owner": "professional_character_card_body_silhouette_refresh_request",
+        "scope": "modeling_card_presentation_only",
+        "status": "unspecified",
+    }
+    second_contract = {
+        **_doc245_generic_mcp_rendering_contract(),
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": second_intent,
+    }
+
+    first = store.ensure_pending(
+        operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+        prompt="same Body MCP renderer prompt",
+        prompt_sha256="b" * 64,
+        reference_assets=[],
+        rendering_contract=first_contract,
+    )
+    resumed = store.ensure_pending(
+        operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+        prompt="same Body MCP renderer prompt",
+        prompt_sha256="b" * 64,
+        reference_assets=[],
+        rendering_contract=first_contract,
+    )
+    changed = store.ensure_pending(
+        operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+        prompt="same Body MCP renderer prompt",
+        prompt_sha256="b" * 64,
+        reference_assets=[],
+        rendering_contract=second_contract,
+    )
+
+    assert resumed["handoff_id"] == first["handoff_id"]
+    assert changed["handoff_id"] != first["handoff_id"]
+    assert changed["revision"] == 2
+    assert changed["rendering_contract"]["body_refresh_presentation_intent"] == second_intent
+
+
+@pytest.mark.parametrize(
+    ("intent_payload", "failure_code"),
+    [
+        (None, "body_refresh_presentation_intent_missing"),
+        (
+            {
+                "contract_version": "professional_body_refresh_presentation_intent_v1",
+                "owner": "professional_character_card_body_silhouette_refresh_request",
+                "scope": "modeling_card_presentation_only",
+                "top_presentation": "short_sleeve_top",
+                "bottom_presentation": "shorts",
+                "footwear_presentation": "barefoot",
+                "not_body_proportion_truth": True,
+                "not_identity_truth": True,
+                "not_age_truth": True,
+                "raw_prompt": "secret prompt must not persist",
+            },
+            "body_refresh_presentation_intent_invalid",
+        ),
+    ],
+)
+def test_doc245_mcp_handoff_store_fails_closed_for_body_contract_without_valid_intent(
+    tmp_path,
+    intent_payload: object,
+    failure_code: str,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    rendering_contract = {
+        **_doc245_generic_mcp_rendering_contract(),
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+    }
+    if intent_payload is not None:
+        rendering_contract["body_refresh_presentation_intent"] = intent_payload
+
+    with pytest.raises(McpMaterializationError) as exc_info:
+        store.ensure_pending(
+            operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+            prompt="closed Body MCP renderer prompt",
+            prompt_sha256="d" * 64,
+            reference_assets=[],
+            rendering_contract=rendering_contract,
+        )
+
+    assert exc_info.value.code == "mcp_materialization_body_rendering_contract_invalid"
+    assert exc_info.value.detail["failure_code"] == failure_code
+    assert store.list_unconsumed_by_operation(
+        "body_refresh_attempt_doc245:body_silhouette:body.front_full:1"
+    ) == []
+    assert "secret prompt" not in repr(exc_info.value.detail).lower()
+
+
+def test_doc245_mcp_handoff_store_does_not_reuse_old_handoff_missing_body_fields(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    operation_id = "body_refresh_attempt_doc245:body_silhouette:body.front_full:1"
+    old = store.ensure_pending(
+        operation_id=operation_id,
+        prompt="same Body MCP renderer prompt",
+        prompt_sha256="e" * 64,
+        reference_assets=[],
+        rendering_contract=_doc245_generic_mcp_rendering_contract(),
+    )
+    current = store.ensure_pending(
+        operation_id=operation_id,
+        prompt="same Body MCP renderer prompt",
+        prompt_sha256="e" * 64,
+        reference_assets=[],
+        rendering_contract={
+            **_doc245_generic_mcp_rendering_contract(),
+            "body_silhouette_mcp_materialization_channel_contract": (
+                body_silhouette_mcp_materialization_channel_contract()
+            ),
+            "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        },
+    )
+
+    assert current["handoff_id"] != old["handoff_id"]
+    assert current["revision"] == 2
+    assert "body_silhouette_mcp_materialization_channel_contract" not in old["rendering_contract"]
+    assert current["rendering_contract"]["body_refresh_presentation_intent"] == (
+        _doc245_body_refresh_presentation_intent()
+    )
+
+
+def test_doc245_mcp_handoff_store_keeps_generic_contract_for_non_body_paths(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    rendering_contract = {
+        **_doc245_generic_mcp_rendering_contract(),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "raw_prompt": "secret prompt must not persist",
+        "source_url": "https://example.invalid/private.png",
+        "provider_payload": {"raw": "payload must not persist"},
+    }
+
+    handoff = store.ensure_pending(
+        operation_id="ordinary_general_mcp_operation",
+        prompt="ordinary MCP renderer prompt",
+        prompt_sha256="c" * 64,
+        reference_assets=[],
+        rendering_contract=rendering_contract,
+    )
+
+    persisted = handoff["rendering_contract"]
+    assert persisted == _doc245_generic_mcp_rendering_contract()
+    serialized = repr(persisted).lower()
+    for forbidden in (
+        "body_refresh_presentation_intent",
+        "secret prompt",
+        "example.invalid",
+        "provider_payload",
+    ):
+        assert forbidden not in serialized
 
 
 def test_doc245_body_refresh_presentation_intent_unspecified_when_not_declared() -> None:

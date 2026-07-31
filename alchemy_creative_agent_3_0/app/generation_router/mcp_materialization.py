@@ -23,6 +23,13 @@ import time
 from typing import Any
 
 from ..creative_core.rules import stable_id
+from ..visual_assets.body_silhouette_source_standard import (
+    body_silhouette_mcp_materialization_channel_contract,
+)
+from ..visual_assets.character_card import (
+    BodyRefreshPresentationIntent,
+    unspecified_body_refresh_presentation_intent,
+)
 
 
 def _now_iso() -> str:
@@ -191,7 +198,10 @@ class McpMaterializationHandoffStore:
             raise McpMaterializationError("mcp_materialization_contract_incomplete")
         hashes = self._reference_hashes(reference_assets)
         reference_fingerprint = self._reference_semantic_fingerprint(reference_assets, hashes)
-        safe_rendering_contract = self._safe_rendering_contract(rendering_contract)
+        safe_rendering_contract = self._safe_rendering_contract(
+            rendering_contract,
+            require_body_presentation_intent=self._requires_body_presentation_intent(operation),
+        )
         rendering_fingerprint = self._rendering_contract_fingerprint(safe_rendering_contract)
         with self._transaction_lock():
             for revision in range(1, 1000):
@@ -824,7 +834,16 @@ class McpMaterializationHandoffStore:
             return ""
 
     @staticmethod
-    def _safe_rendering_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    def _requires_body_presentation_intent(operation_id: str) -> bool:
+        return str(operation_id or "").strip().startswith("body_refresh_attempt_")
+
+    @staticmethod
+    def _safe_rendering_contract(
+        contract: dict[str, Any],
+        *,
+        require_body_presentation_intent: bool = False,
+    ) -> dict[str, Any]:
+        raw = dict(contract or {})
         allowed = {
             "renderer",
             "model",
@@ -837,7 +856,33 @@ class McpMaterializationHandoffStore:
             "input_fidelity_required",
             "size_normalization",
         }
-        return {key: value for key, value in dict(contract or {}).items() if key in allowed}
+        safe = {key: value for key, value in raw.items() if key in allowed}
+        expected_body_contract = body_silhouette_mcp_materialization_channel_contract()
+        if raw.get("body_silhouette_mcp_materialization_channel_contract") != expected_body_contract:
+            return safe
+        safe["body_silhouette_mcp_materialization_channel_contract"] = expected_body_contract
+        raw_intent = raw.get("body_refresh_presentation_intent")
+        if raw_intent is None:
+            if not require_body_presentation_intent:
+                return safe
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_refresh_presentation_intent_missing"},
+            )
+        unspecified = unspecified_body_refresh_presentation_intent()
+        if raw_intent == unspecified:
+            safe["body_refresh_presentation_intent"] = unspecified
+            return safe
+        try:
+            safe["body_refresh_presentation_intent"] = BodyRefreshPresentationIntent.model_validate(
+                raw_intent
+            ).model_dump(mode="json")
+        except Exception:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_refresh_presentation_intent_invalid"},
+            ) from None
+        return safe
 
     @classmethod
     def _rendering_contract_fingerprint(cls, contract: dict[str, Any]) -> str:
