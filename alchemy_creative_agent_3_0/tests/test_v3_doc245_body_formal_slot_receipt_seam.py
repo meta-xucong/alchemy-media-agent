@@ -1890,6 +1890,219 @@ def test_doc245_mcp_handoff_store_keeps_generic_contract_for_non_body_paths(
         assert forbidden not in serialized
 
 
+def test_doc245_submitted_body_handoff_resume_uses_frozen_rendering_contract(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(handoff_store=store)
+    operation_id = DOC245_REAL_BODY_MCP_OPERATION_ID
+    prompt_sha = "1" * 64
+    frozen_contract = {
+        **_doc245_generic_mcp_rendering_contract(),
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+    }
+    handoff = store.ensure_pending(
+        operation_id=operation_id,
+        prompt="closed Body MCP renderer prompt",
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract=frozen_contract,
+        require_body_rendering_contract=True,
+    )
+    store.submit(
+        handoff["handoff_id"],
+        nonce=handoff["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=base64.b64decode(_tiny_png_b64()),
+    )
+    request = _mcp_body_generation_request(
+        "Full-body front-view Body Silhouette source-standard materialization.",
+        source_mode="inference_first",
+    )
+    metadata = {
+        **dict(request.metadata),
+        "mcp_operation_id": operation_id,
+        "mcp_materialization": {
+            "handoff_id": handoff["handoff_id"],
+            "status": "submitted",
+            "generation_channel": "mcp",
+        },
+        "professional_character_card_body_refresh_presentation_intent": (
+            _doc245_body_refresh_presentation_intent()
+        ),
+    }
+    # Real retry evidence showed the submitted handoff was frozen with
+    # renderer-level high/high fields, while the resume app request can be
+    # rebuilt from the ProductApi strict job envelope with those fields
+    # drifting.  The current resume must consume the frozen handoff contract
+    # instead of treating this as a stale handoff mismatch.
+    rebuilt_contract = {
+        **frozen_contract,
+        "quality": "strict",
+        "input_fidelity": None,
+    }
+
+    context = provider._existing_mcp_handoff_context(  # noqa: SLF001
+        request.model_copy(update={"metadata": metadata}),
+        current_context={"operation_id": operation_id},
+        current_reference_assets=[],
+        current_rendering_contract=rebuilt_contract,
+    )
+
+    assert context is not None
+    assert context["handoff_id"] == handoff["handoff_id"]
+    assert context["rendering_contract"] == frozen_contract
+    assert context["rendering_contract"]["body_refresh_presentation_intent"] == (
+        _doc245_body_refresh_presentation_intent()
+    )
+
+
+@pytest.mark.parametrize(
+    "contract_patch",
+    [
+        {"size": "1024x1024"},
+        {
+            "body_silhouette_mcp_materialization_channel_contract": {
+                **body_silhouette_mcp_materialization_channel_contract(),
+                "scope": "tampered_body_scope",
+            }
+        },
+        {
+            "body_refresh_presentation_intent": {
+                **_doc245_body_refresh_presentation_intent(),
+                "footwear_presentation": "shoes",
+            }
+        },
+    ],
+)
+def test_doc245_submitted_body_handoff_resume_rejects_non_envelope_contract_drift(
+    tmp_path,
+    contract_patch: dict[str, object],
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(handoff_store=store)
+    operation_id = DOC245_REAL_BODY_MCP_OPERATION_ID
+    prompt_sha = "3" * 64
+    frozen_contract = {
+        **_doc245_generic_mcp_rendering_contract(),
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+    }
+    handoff = store.ensure_pending(
+        operation_id=operation_id,
+        prompt="closed Body MCP renderer prompt",
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract=frozen_contract,
+        require_body_rendering_contract=True,
+    )
+    store.submit(
+        handoff["handoff_id"],
+        nonce=handoff["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=base64.b64decode(_tiny_png_b64()),
+    )
+    request = _mcp_body_generation_request(
+        "Full-body front-view Body Silhouette source-standard materialization.",
+        source_mode="inference_first",
+    )
+    metadata = {
+        **dict(request.metadata),
+        "mcp_operation_id": operation_id,
+        "mcp_materialization": {
+            "handoff_id": handoff["handoff_id"],
+            "status": "submitted",
+            "generation_channel": "mcp",
+        },
+        "professional_character_card_body_refresh_presentation_intent": (
+            _doc245_body_refresh_presentation_intent()
+        ),
+    }
+    rebuilt_contract = {
+        **frozen_contract,
+        "quality": "strict",
+        "input_fidelity": None,
+        **contract_patch,
+    }
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider._existing_mcp_handoff_context(  # noqa: SLF001
+            request.model_copy(update={"metadata": metadata}),
+            current_context={"operation_id": operation_id},
+            current_reference_assets=[],
+            current_rendering_contract=rebuilt_contract,
+        )
+
+    assert exc_info.value.detail["failure_code"] == (
+        "mcp_materialization_rendering_contract_mismatch"
+    )
+
+
+def test_doc245_submitted_generic_handoff_still_blocks_rendering_contract_mismatch(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(handoff_store=store)
+    operation_id = "ordinary_general_mcp_operation"
+    prompt_sha = "2" * 64
+    frozen_contract = _doc245_generic_mcp_rendering_contract()
+    handoff = store.ensure_pending(
+        operation_id=operation_id,
+        prompt="ordinary MCP renderer prompt",
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract=frozen_contract,
+    )
+    store.submit(
+        handoff["handoff_id"],
+        nonce=handoff["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=base64.b64decode(_tiny_png_b64()),
+    )
+    request = _mcp_body_generation_request(
+        "Ordinary MCP materialization.",
+        stage="general",
+        slot_key="general.output",
+        source_mode="",
+    )
+    metadata = {
+        **dict(request.metadata),
+        "mcp_operation_id": operation_id,
+        "professional_character_card_stage": "general",
+        "professional_character_card_slot": "general.output",
+        "mcp_materialization": {
+            "handoff_id": handoff["handoff_id"],
+            "status": "submitted",
+            "generation_channel": "mcp",
+        },
+    }
+    rebuilt_contract = {
+        **frozen_contract,
+        "quality": "strict",
+        "input_fidelity": None,
+    }
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider._existing_mcp_handoff_context(  # noqa: SLF001
+            request.model_copy(update={"metadata": metadata}),
+            current_context={"operation_id": operation_id},
+            current_reference_assets=[],
+            current_rendering_contract=rebuilt_contract,
+        )
+
+    assert exc_info.value.detail["failure_code"] == (
+        "mcp_materialization_rendering_contract_mismatch"
+    )
+
+
 def test_doc245_body_refresh_presentation_intent_unspecified_when_not_declared() -> None:
     prompt = (
         "Full-body side-view Body Silhouette source-standard materialization. "

@@ -5781,16 +5781,40 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 detail={"failure_code": "mcp_materialization_reference_semantic_mismatch", "handoff_id": handoff_id},
             )
         handoff_contract = dict(handoff.get("rendering_contract") or {})
-        if self.handoff_store._rendering_contract_fingerprint(
-            handoff_contract
-        ) != self.handoff_store._rendering_contract_fingerprint(current_rendering_contract):
+        try:
+            handoff_rendering_fingerprint = self.handoff_store._rendering_contract_fingerprint(
+                handoff_contract
+            )
+            current_rendering_fingerprint = self.handoff_store._rendering_contract_fingerprint(
+                current_rendering_contract
+            )
+        except McpMaterializationError as exc:
             if handoff_status == "pending":
                 return None
             raise ProviderRuntimeError(
                 "MCP materialization rendering contract does not match the current stage.",
                 provider=self.provider_name,
-                detail={"failure_code": "mcp_materialization_rendering_contract_mismatch", "handoff_id": handoff_id},
-            )
+                detail={
+                    "failure_code": "mcp_materialization_rendering_contract_mismatch",
+                    "handoff_id": handoff_id,
+                },
+            ) from exc
+        if handoff_rendering_fingerprint != current_rendering_fingerprint:
+            if handoff_status == "pending":
+                return None
+            if not self._strict_body_handoff_resume_contract_compatible(
+                metadata,
+                frozen_rendering_contract=handoff_contract,
+                current_rendering_contract=current_rendering_contract,
+            ):
+                raise ProviderRuntimeError(
+                    "MCP materialization rendering contract does not match the current stage.",
+                    provider=self.provider_name,
+                    detail={
+                        "failure_code": "mcp_materialization_rendering_contract_mismatch",
+                        "handoff_id": handoff_id,
+                    },
+                )
         return {
             "operation_id": handoff["operation_id"],
             "canonical_prompt": handoff["canonical_prompt"],
@@ -5801,6 +5825,76 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "handoff_id": handoff_id,
             "resume_from_handoff": True,
         }
+
+    def _strict_body_handoff_resume_contract_compatible(
+        self,
+        metadata: dict[str, Any],
+        *,
+        frozen_rendering_contract: dict[str, Any],
+        current_rendering_contract: dict[str, Any],
+    ) -> bool:
+        """Permit only the known ProductApi strict/body resume envelope drift.
+
+        The submitted handoff's rendering contract is the frozen server-owned
+        authority once nonce, operation id, prompt hash and references have
+        matched.  A ProductApi resume can rebuild the current app request from
+        the strict job envelope, which may surface ``quality=strict`` and omit
+        ``input_fidelity`` even though the original MCP renderer handoff was
+        frozen as ``quality=high`` with high input fidelity.  This exception is
+        deliberately limited to strict Body Silhouette handoffs whose Body
+        channel contract and request-scoped presentation intent still match.
+        """
+
+        if not (
+            self._is_character_card_body_mcp_materialization(metadata)
+            and self._is_strict_character_card_body_refresh(metadata)
+        ):
+            return False
+        try:
+            frozen = self.handoff_store._safe_rendering_contract(
+                frozen_rendering_contract,
+                require_body_rendering_contract=True,
+            )
+            current = self.handoff_store._safe_rendering_contract(
+                current_rendering_contract,
+                require_body_rendering_contract=True,
+            )
+        except McpMaterializationError:
+            return False
+        body_keys = {
+            "body_silhouette_mcp_materialization_channel_contract",
+            "body_refresh_presentation_intent",
+        }
+        for key in body_keys:
+            if frozen.get(key) != current.get(key):
+                return False
+        ignored_resume_envelope_keys = {"quality", "input_fidelity"}
+        frozen_stable = {
+            key: value
+            for key, value in frozen.items()
+            if key not in ignored_resume_envelope_keys
+        }
+        current_stable = {
+            key: value
+            for key, value in current.items()
+            if key not in ignored_resume_envelope_keys
+        }
+        if frozen_stable != current_stable:
+            return False
+        frozen_quality = str(frozen.get("quality") or "").strip()
+        current_quality = str(current.get("quality") or "").strip()
+        if frozen_quality != current_quality and (frozen_quality, current_quality) != (
+            "high",
+            "strict",
+        ):
+            return False
+        frozen_input_fidelity = frozen.get("input_fidelity")
+        current_input_fidelity = current.get("input_fidelity")
+        if frozen_input_fidelity != current_input_fidelity and not (
+            frozen_input_fidelity == "high" and current_input_fidelity is None
+        ):
+            return False
+        return True
 
     def _run_app_provider_with_timeout_retry(
         self,
