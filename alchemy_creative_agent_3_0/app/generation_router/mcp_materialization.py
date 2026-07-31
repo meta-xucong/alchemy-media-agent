@@ -859,6 +859,11 @@ class McpMaterializationHandoffStore:
         safe = {key: value for key, value in raw.items() if key in allowed}
         expected_body_contract = body_silhouette_mcp_materialization_channel_contract()
         if raw.get("body_silhouette_mcp_materialization_channel_contract") != expected_body_contract:
+            if require_body_presentation_intent:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_channel_missing"},
+                )
             return safe
         safe["body_silhouette_mcp_materialization_channel_contract"] = expected_body_contract
         raw_intent = raw.get("body_refresh_presentation_intent")

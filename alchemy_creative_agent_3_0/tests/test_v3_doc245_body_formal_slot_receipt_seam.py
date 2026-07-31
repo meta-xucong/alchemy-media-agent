@@ -17,6 +17,7 @@ from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_remote_requi
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import (
     _canonical_provider_prompt_finalization_payload,
 )
+from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
 from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
@@ -1758,22 +1759,77 @@ def test_doc245_mcp_handoff_store_fails_closed_for_body_contract_without_valid_i
     assert "secret prompt" not in repr(exc_info.value.detail).lower()
 
 
+def test_doc245_mcp_handoff_store_fails_closed_for_strict_body_operation_missing_channel(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    rendering_contract = {
+        **_doc245_generic_mcp_rendering_contract(),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "raw_prompt": "secret prompt must not persist",
+        "source_url": "https://example.invalid/private.png",
+    }
+
+    with pytest.raises(McpMaterializationError) as exc_info:
+        store.ensure_pending(
+            operation_id="body_refresh_attempt_doc245:body_silhouette:body.front_full:1",
+            prompt="closed Body MCP renderer prompt",
+            prompt_sha256="f" * 64,
+            reference_assets=[],
+            rendering_contract=rendering_contract,
+        )
+
+    assert exc_info.value.code == "mcp_materialization_body_rendering_contract_invalid"
+    assert exc_info.value.detail["failure_code"] == "body_channel_missing"
+    assert store.list_unconsumed_by_operation(
+        "body_refresh_attempt_doc245:body_silhouette:body.front_full:1"
+    ) == []
+    assert "secret prompt" not in repr(exc_info.value.detail).lower()
+    assert "example.invalid" not in repr(exc_info.value.detail).lower()
+
+
 def test_doc245_mcp_handoff_store_does_not_reuse_old_handoff_missing_body_fields(
     tmp_path,
 ) -> None:
     store = McpMaterializationHandoffStore(tmp_path / "handoffs")
     operation_id = "body_refresh_attempt_doc245:body_silhouette:body.front_full:1"
-    old = store.ensure_pending(
-        operation_id=operation_id,
-        prompt="same Body MCP renderer prompt",
-        prompt_sha256="e" * 64,
-        reference_assets=[],
-        rendering_contract=_doc245_generic_mcp_rendering_contract(),
+    prompt_hash = "e" * 64
+    reference_fingerprint = store._reference_semantic_fingerprint([], [])  # noqa: SLF001
+    old_handoff_id = stable_id(
+        "mcp_handoff",
+        operation_id,
+        prompt_hash,
+        reference_fingerprint,
     )
+    old = {
+        "schema_version": store.schema_version,
+        "handoff_id": old_handoff_id,
+        "operation_id": operation_id,
+        "revision": 1,
+        "status": "pending",
+        "created_at": "2026-07-31T00:00:00Z",
+        "updated_at": "2026-07-31T00:00:00Z",
+        "nonce": "legacy_nonce",
+        "canonical_prompt": "same Body MCP renderer prompt",
+        "prompt_sha256": prompt_hash,
+        "reference_assets": [],
+        "reference_asset_hashes": [],
+        "reference_semantic_fingerprint": reference_fingerprint,
+        "rendering_contract": _doc245_generic_mcp_rendering_contract(),
+        "rendering_contract_fingerprint": store._rendering_contract_fingerprint(  # noqa: SLF001
+            _doc245_generic_mcp_rendering_contract()
+        ),
+        "artifact_file": None,
+        "artifact_sha256": None,
+        "artifact_format": None,
+        "artifact_mime_type": None,
+        "consumed_at": None,
+    }
+    store._write(store._record_path(old_handoff_id), old)  # noqa: SLF001
     current = store.ensure_pending(
         operation_id=operation_id,
         prompt="same Body MCP renderer prompt",
-        prompt_sha256="e" * 64,
+        prompt_sha256=prompt_hash,
         reference_assets=[],
         rendering_contract={
             **_doc245_generic_mcp_rendering_contract(),
@@ -1784,7 +1840,7 @@ def test_doc245_mcp_handoff_store_does_not_reuse_old_handoff_missing_body_fields
         },
     )
 
-    assert current["handoff_id"] != old["handoff_id"]
+    assert current["handoff_id"] != old_handoff_id
     assert current["revision"] == 2
     assert "body_silhouette_mcp_materialization_channel_contract" not in old["rendering_contract"]
     assert current["rendering_contract"]["body_refresh_presentation_intent"] == (
