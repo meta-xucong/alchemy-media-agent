@@ -2144,7 +2144,7 @@ class V3ProductApiService:
             ):
                 return self._status_from_record(record)
             record.request.metadata = {
-                **dict(record.request.metadata),
+                **self._without_transient_generation_failure_metadata(record.request.metadata),
                 "mcp_materialization_recovery": {
                     "status": "reentered",
                     "reason_code": "interrupted_before_handoff",
@@ -2167,6 +2167,7 @@ class V3ProductApiService:
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
         if generate_request.metadata:
             record.request.metadata = {**dict(record.request.metadata), **dict(generate_request.metadata)}
+        record.request.metadata = self._without_transient_generation_failure_metadata(record.request.metadata)
         record.status = ProductJobStatusValue.GENERATING
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
@@ -2183,11 +2184,17 @@ class V3ProductApiService:
                 return self._status_from_record(record)
             record.status = ProductJobStatusValue.BLOCKED
             provider_failure_retry = self._provider_failure_retry_summary_from_exception(exc)
+            record.request.metadata = self._without_transient_generation_failure_metadata(record.request.metadata)
             if provider_failure_retry:
                 record.request.metadata = {
                     **dict(record.request.metadata),
                     "provider_failure_retry": provider_failure_retry,
                     "provider_failure_retry_exhausted": provider_failure_retry.get("final_status") == "failed",
+                }
+            else:
+                record.request.metadata = {
+                    **dict(record.request.metadata),
+                    "generation_lifecycle_failure": self._product_api_runtime_failure_from_exception(exc),
                 }
             detail = getattr(exc, "detail", None)
             handoff_id = str(detail.get("handoff_id") or "").strip() if isinstance(detail, dict) else ""
@@ -3253,64 +3260,38 @@ class V3ProductApiService:
             projected.append(text)
         return list(dict.fromkeys(projected))
 
-    def _provider_failure_retry_summary_from_exception(self, exc: Exception) -> dict[str, Any]:
+    def _provider_failure_retry_summary_from_exception(self, exc: Exception) -> dict[str, Any] | None:
         summary = getattr(exc, "provider_failure_retry", None)
         if isinstance(summary, dict):
             return dict(summary)
         detail = getattr(exc, "detail", None)
         if isinstance(detail, dict) and isinstance(detail.get("provider_failure_retry"), dict):
             return dict(detail["provider_failure_retry"])
-        message = self._generation_failure_message(exc, ProviderStrategy.DEFAULT_IMAGE_PROVIDER)
-        lowered = message.lower()
-        retryable_markers = (
-            "timeout",
-            "timed out",
-            "gateway",
-            "bad_response_status_code",
-            "could not be downloaded",
-            "image reference generation failed",
-            "image generation failed",
-            "provider returned no image",
-            "no image outputs",
-            "502",
-            "503",
-            "504",
-            "500",
-        )
-        non_retryable_markers = (
-            "not configured",
-            "api key",
-            "insufficient",
-            "policy",
-            "safety",
-            "invalid uploaded asset",
-            "source file was not found",
-        )
-        if any(marker in lowered for marker in non_retryable_markers):
-            classification = "non_retryable_provider_failure"
-            retryable = False
-        elif any(marker in lowered for marker in retryable_markers):
-            classification = "retryable_provider_failure"
-            retryable = True
-        else:
-            classification = "unknown_retryable_failure"
-            retryable = True
+        return None
+
+    @staticmethod
+    def _without_transient_generation_failure_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+        cleaned = dict(metadata or {})
+        for key in (
+            "generation_lifecycle_failure",
+            "remote_creative_brain_outcome",
+            "provider_failure_retry",
+            "provider_failure_retry_exhausted",
+        ):
+            cleaned.pop(key, None)
+        return cleaned
+
+    @staticmethod
+    def _product_api_runtime_failure_from_exception(exc: Exception) -> dict[str, Any]:
+        failure_code = "runtime_error" if isinstance(exc, RuntimeError) else "worker_error"
         return {
-            "executed_count": 0,
-            "max_attempts": 1,
-            "fresh_upstream_requests": 1,
-            "final_status": "failed",
-            "final_classification": classification,
-            "attempts": [
-                {
-                    "attempt": 1,
-                    "status": "failed",
-                    "classification": classification,
-                    "error_type": exc.__class__.__name__,
-                    "message": message[:500],
-                    "retryable": retryable,
-                }
-            ],
+            "schema_version": "v3_generation_lifecycle_failure_v1",
+            "status": "blocked",
+            "owner": "v3_product_api_runtime",
+            "failure_family": "product_api_runtime",
+            "failure_code": failure_code,
+            "reason_code": failure_code,
+            "provider_request_started": False,
         }
 
     def _attach_post_generation_review(

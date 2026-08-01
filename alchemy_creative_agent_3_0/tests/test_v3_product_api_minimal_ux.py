@@ -266,6 +266,170 @@ class _RemoteFinalizerTimeoutRuntime:
         )
 
 
+class _ProductApiRuntimeError:
+    def __init__(self, base_runtime: object, on_call=None) -> None:  # noqa: ANN001
+        self.scenario_registry = base_runtime.scenario_registry
+        self._on_call = on_call
+
+    def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+        if self._on_call is not None:
+            self._on_call()
+        raise RuntimeError("runtime boundary detail must not enter public state")
+
+
+class _KeyboardInterruptRuntime:
+    def __init__(self, base_runtime: object) -> None:
+        self.scenario_registry = base_runtime.scenario_registry
+
+    def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+        raise KeyboardInterrupt()
+
+
+def test_interrupted_body_resume_runtime_failure_clears_stale_remote_readback() -> None:
+    service, _, _ = _service("candidate1_resume_boundary_projection")
+    created = service.create_job({"user_input": "Create one neutral Character Card body view."})
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    assert record.planning_result is not None
+    record.status = ProductJobStatusValue.GENERATING
+    record.request.metadata.update(
+        {
+            "generation_channel": "mcp",
+            "mcp_operation_id": "visual_asset_hash:body_silhouette:body.front_full:1",
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": "body.front_full",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_candidate_lifecycle_checkpoints": [],
+            "generation_lifecycle_failure": {
+                "schema_version": "v3_generation_lifecycle_failure_v1",
+                "status": "blocked",
+                "owner": "v3_product_api_runtime",
+                "failure_family": "remote_creative_brain",
+                "failure_code": "remote_creative_brain_prompt_signoff_unavailable",
+                "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+                "provider_request_started": False,
+            },
+            "remote_creative_brain_outcome": _remote_finalizer_timeout_outcome(),
+        }
+    )
+    service.job_store.save(record)
+    service.scenario_runtime = _ProductApiRuntimeError(service.scenario_runtime)
+
+    resumed = service.generate_job(
+        created.job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_interrupted_mcp_materialization": True}},
+    )
+    durable = service.job_store.get(created.job_id)
+    assert durable is not None
+
+    assert resumed.status == ProductJobStatusValue.BLOCKED
+    assert durable.request.metadata.get("professional_character_card_candidate_lifecycle_checkpoints") == []
+    assert "remote_creative_brain_outcome" not in durable.request.metadata
+    assert durable.request.metadata["generation_lifecycle_failure"]["failure_family"] == "product_api_runtime"
+    assert durable.request.metadata["generation_lifecycle_failure"]["failure_code"] == "runtime_error"
+    assert durable.request.metadata["generation_lifecycle_failure"]["provider_request_started"] is False
+    assert durable.generation_result is None
+
+
+def test_interrupted_body_resume_runtime_failure_does_not_change_acceptance_semantics() -> None:
+    service, _, _ = _service("candidate1_resume_boundary_no_acceptance")
+    created = service.create_job({"user_input": "Create one neutral Character Card body view."})
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    assert record.planning_result is not None
+    record.status = ProductJobStatusValue.GENERATING
+    record.request.metadata.update(
+        {
+            "generation_channel": "mcp",
+            "mcp_operation_id": "visual_asset_hash:body_silhouette:body.front_full:1",
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": "body.front_full",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_candidate_lifecycle_checkpoints": [],
+        }
+    )
+    service.job_store.save(record)
+    service.scenario_runtime = _ProductApiRuntimeError(service.scenario_runtime)
+
+    resumed = service.generate_job(
+        created.job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_interrupted_mcp_materialization": True}},
+    )
+
+    assert resumed.status == ProductJobStatusValue.BLOCKED
+    assert resumed.metadata.get("pending_refresh_slots") is None
+    assert resumed.metadata.get("activation") is None
+    assert resumed.metadata.get("provider_failure_retry") is None
+    assert service.job_store.get(created.job_id).generation_result is None
+
+
+def test_blocked_body_new_attempt_clears_stale_failure_before_generating_persistence() -> None:
+    service, _, _ = _service("blocked_body_new_attempt_projection")
+    created = service.create_job({"user_input": "Create one neutral Character Card body view."})
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    assert record.planning_result is not None
+    record.status = ProductJobStatusValue.BLOCKED
+    record.request.metadata.update(
+        {
+            "generation_channel": "mcp",
+            "mcp_operation_id": "visual_asset_hash:body_silhouette:body.front_full:1",
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": "body.front_full",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "generation_lifecycle_failure": {
+                "status": "blocked",
+                "failure_family": "remote_creative_brain",
+                "failure_code": "remote_brain_prompt_signoff_unavailable",
+            },
+            "remote_creative_brain_outcome": _remote_finalizer_timeout_outcome(),
+            "provider_failure_retry": {"fresh_upstream_requests": 1},
+            "provider_failure_retry_exhausted": True,
+        }
+    )
+    service.job_store.save(record)
+    observed: list[dict[str, object]] = []
+
+    def observe_inflight_record() -> None:
+        current = service.job_store.get(created.job_id)
+        assert current is not None
+        observed.append(dict(current.request.metadata))
+        assert current.status == ProductJobStatusValue.GENERATING
+
+    service.scenario_runtime = _ProductApiRuntimeError(service.scenario_runtime, observe_inflight_record)
+
+    resumed = service.generate_job(
+        created.job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_interrupted_mcp_materialization": True}},
+    )
+
+    assert resumed.status == ProductJobStatusValue.BLOCKED
+    assert observed
+    inflight = observed[0]
+    assert "generation_lifecycle_failure" not in inflight
+    assert "remote_creative_brain_outcome" not in inflight
+    assert "provider_failure_retry" not in inflight
+    assert "provider_failure_retry_exhausted" not in inflight
+    durable = service.job_store.get(created.job_id)
+    assert durable is not None
+    assert durable.request.metadata["generation_lifecycle_failure"]["failure_code"] == "runtime_error"
+
+
+def test_direct_sync_generation_does_not_swallow_keyboard_interrupt() -> None:
+    service, _, _ = _service("candidate1_resume_boundary_keyboard_interrupt")
+    created = service.create_job({"user_input": "Create one neutral Character Card body view."})
+    service.scenario_runtime = _KeyboardInterruptRuntime(service.scenario_runtime)
+
+    with pytest.raises(KeyboardInterrupt):
+        service.generate_job(created.job_id, {"quality_mode": "strict"})
+
+
 def test_v3_product_api_creates_and_retrieves_creative_job_status() -> None:
     service, _, balance = _service("create_job")
 
