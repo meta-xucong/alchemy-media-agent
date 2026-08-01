@@ -21,6 +21,11 @@ from .context_digest import (
 )
 from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
+from .finalizer_lifecycle import (
+    REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES,
+    build_remote_brain_finalizer_lifecycle,
+    safe_remote_brain_finalizer_lifecycle,
+)
 from .providers import (
     BrainDevelopmentalAgeDecisionMissing,
     BrainDevelopmentalPresenceDecisionMissing,
@@ -95,9 +100,22 @@ class V3LLMBrainAdapter:
         execution_budget = self.execution_budget_receipt()
         http_status_code = _remote_provider_http_status_code(exc)
         transport_kind = _remote_provider_transport_kind(exc)
+        finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
+            getattr(exc, "_remote_brain_finalizer_lifecycle", None)
+        )
         return {
             "remote_provider_error_class": _remote_provider_error_class(exc),
             "remote_brain_stage": _safe_remote_brain_stage(stage),
+            **(
+                {"remote_brain_request_started": finalizer_lifecycle["remote_brain_request_started"]}
+                if finalizer_lifecycle
+                else {}
+            ),
+            **(
+                {"remote_brain_finalizer_lifecycle": finalizer_lifecycle}
+                if finalizer_lifecycle
+                else {}
+            ),
             **(
                 {"remote_provider_http_status_code": http_status_code}
                 if http_status_code is not None
@@ -348,11 +366,38 @@ class V3LLMBrainAdapter:
         """
 
         if not _enabled():
-            raise BrainProviderUnavailable("V3 LLM Brain is disabled by configuration.")
+            exc = BrainProviderUnavailable("V3 LLM Brain is disabled by configuration.")
+            _attach_remote_brain_finalizer_lifecycle(
+                exc,
+                stage=request.stage,
+                provider_available=False,
+                remote_brain_request_started=False,
+                response_started=False,
+                failure_code="provider_unavailable",
+            )
+            raise exc
         if not self._activation_scope_enabled(request):
-            raise BrainProviderUnavailable("No trusted capability policy is active for canonical prompt signing.")
+            exc = BrainProviderUnavailable("No trusted capability policy is active for canonical prompt signing.")
+            _attach_remote_brain_finalizer_lifecycle(
+                exc,
+                stage=request.stage,
+                provider_available=False,
+                remote_brain_request_started=False,
+                response_started=False,
+                failure_code="provider_unavailable",
+            )
+            raise exc
         if not self.provider.available(force=True):
-            raise BrainProviderUnavailable("Remote Brain is unavailable for canonical prompt signing.")
+            exc = BrainProviderUnavailable("Remote Brain is unavailable for canonical prompt signing.")
+            _attach_remote_brain_finalizer_lifecycle(
+                exc,
+                stage=request.stage,
+                provider_available=False,
+                remote_brain_request_started=False,
+                response_started=False,
+                failure_code="provider_unavailable",
+            )
+            raise exc
         started = time.perf_counter()
         try:
             record_stage_event(
@@ -364,6 +409,14 @@ class V3LLMBrainAdapter:
             data = self.provider.run(request)
             record_stage_event("brain_adapter", "canonical_finalizer_provider_returned", stage=request.stage)
         except (BrainProviderError, BrainProviderUnavailable) as exc:
+            _attach_remote_brain_finalizer_lifecycle(
+                exc,
+                stage=request.stage,
+                provider_available=True,
+                remote_brain_request_started=True,
+                response_started=_remote_brain_finalizer_response_started(exc),
+                failure_code=_remote_brain_finalizer_failure_code(exc),
+            )
             failure_audit = self.provider_failure_audit(exc, stage=request.stage)
             execution_budget = failure_audit.get("remote_brain_execution_budget")
             execution_budget = execution_budget if isinstance(execution_budget, dict) else {}
@@ -782,11 +835,12 @@ class V3LLMBrainAdapter:
         return isinstance(metadata.get("professional_mode_binding_record"), dict)
 
     def _activation_scope_enabled(self, request: BrainRunRequest) -> bool:
-        if not request.template_capability_policy.brain_activation_enabled:
+        policy = request.template_capability_policy
+        if not policy.brain_activation_enabled:
             return False
         if request.scenario_id == GENERAL_SCENARIO_ID or request.template_id == GENERAL_TEMPLATE_ID:
             return True
-        return request.template_capability_policy.policy_id != "general_template_capabilities"
+        return policy.policy_id != "general_template_capabilities"
 
     def _merge_remote_result(
         self,
@@ -1388,6 +1442,47 @@ def _safe_remote_brain_stage(stage: Any) -> str:
     if value in _SAFE_REMOTE_BRAIN_STAGES:
         return value
     return "unknown"
+
+
+def _attach_remote_brain_finalizer_lifecycle(
+    exc: Exception,
+    *,
+    stage: str,
+    provider_available: bool,
+    remote_brain_request_started: bool,
+    response_started: bool,
+    failure_code: str,
+) -> None:
+    lifecycle = build_remote_brain_finalizer_lifecycle(
+        stage=stage,
+        provider_available=provider_available,
+        remote_brain_request_started=remote_brain_request_started,
+        response_started=response_started,
+        failure_code=failure_code,
+    )
+    if lifecycle:
+        setattr(exc, "_remote_brain_finalizer_lifecycle", lifecycle)
+
+
+def _remote_brain_finalizer_failure_code(exc: Exception) -> str:
+    if isinstance(exc, BrainProviderUnavailable):
+        return "provider_unavailable"
+    error_class = _remote_provider_error_class(exc)
+    return (
+        error_class
+        if error_class in REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES
+        else "provider_error"
+    )
+
+
+def _remote_brain_finalizer_response_started(exc: Exception) -> bool:
+    transport = _remote_brain_transport_failure(exc)
+    if isinstance(transport.get("response_started"), bool):
+        return bool(transport["response_started"])
+    serialization = _remote_brain_finalizer_serialization_failure(exc)
+    if serialization:
+        return True
+    return False
 
 
 def _with_elapsed_transport_receipt(

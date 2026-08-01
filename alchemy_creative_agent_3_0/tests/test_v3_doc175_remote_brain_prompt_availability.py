@@ -522,3 +522,248 @@ def test_doc175_finalizer_chained_transport_failure_reaches_trace_and_outcome_sa
     serialized = json.dumps({"outcome": outcome, "events": events}, sort_keys=True)
     assert "D:/unsafe" not in serialized
     assert "provider_payload" not in serialized
+
+
+def test_doc175_finalizer_generic_error_after_successful_plan_needs_stage_scoped_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FinalizerGenericProviderFailure(EcommerceRemoteBrainTestProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.finalizer_requests = 0
+
+        def execution_budget_receipt(self) -> dict[str, object]:
+            return {
+                "logical_budget_seconds": 520.0,
+                "remaining_ms": 309892,
+                "state": "within_budget",
+                "raw_provider_payload": "must-not-leak",
+            }
+
+        def run(self, request):  # noqa: ANN001
+            if request.stage == "provider_prompt_finalize":
+                self.finalizer_requests += 1
+                raise BrainProviderError(
+                    "generic finalizer provider error D:/unsafe/raw_prompt provider_payload"
+                )
+            return super().run(request)
+
+    provider = FinalizerGenericProviderFailure()
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one real-camera product image.",
+            "scenario_selection": {"scenario_id": "ecommerce"},
+            "metadata": {
+                "template_id": "ecommerce_template",
+                "requested_image_count": 1,
+                "require_real_images": True,
+            },
+        }
+    )
+
+    assert result.status.value == "blocked"
+    assert provider.finalizer_requests == 1
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["remote_brain_stage"] == "provider_prompt_finalize"
+    assert outcome["remote_error_class"] == "provider_error"
+    assert outcome["llm_used"] is True
+    assert outcome["fallback_used"] is False
+    assert outcome["remote_provider_available"] is True
+    assert outcome["remote_brain_finalizer_lifecycle"] == {
+        "schema_version": "v3_remote_brain_finalizer_lifecycle_v1",
+        "stage": "provider_prompt_finalize",
+        "provider_available": True,
+        "remote_brain_request_started": True,
+        "response_started": False,
+        "status": "blocked",
+        "failure_family": "remote_brain_signoff",
+        "failure_code": "provider_error",
+    }
+    serialized = json.dumps(outcome, sort_keys=True)
+    assert "D:/unsafe" not in serialized
+    assert "raw_prompt" not in serialized
+    assert "provider_payload" not in serialized
+
+
+def test_doc175_finalizer_preflight_availability_is_separate_from_planning_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FinalizerUnavailableAfterPlan(EcommerceRemoteBrainTestProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.available_calls = 0
+
+        def available(self, *, force: bool = False) -> bool:  # noqa: ARG002
+            self.available_calls += 1
+            return self.available_calls == 1
+
+    provider = FinalizerUnavailableAfterPlan()
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one real-camera product image.",
+            "scenario_selection": {"scenario_id": "ecommerce"},
+            "metadata": {
+                "template_id": "ecommerce_template",
+                "requested_image_count": 1,
+                "require_real_images": True,
+            },
+        }
+    )
+
+    assert result.status.value == "blocked"
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["remote_provider_available"] is True
+    assert outcome["remote_brain_finalizer_lifecycle"] == {
+        "schema_version": "v3_remote_brain_finalizer_lifecycle_v1",
+        "stage": "provider_prompt_finalize",
+        "provider_available": False,
+        "remote_brain_request_started": False,
+        "response_started": False,
+        "status": "blocked",
+        "failure_family": "remote_brain_signoff",
+        "failure_code": "provider_unavailable",
+    }
+
+
+def test_doc175_finalizer_configuration_preflight_failures_carry_closed_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Provider:
+        provider = "fixture"
+        model = "fixture"
+
+        def available(self, *, force: bool = False) -> bool:  # noqa: ARG002
+            return True
+
+    request = _finalizer_request()
+    adapter = V3LLMBrainAdapter(provider=Provider())  # type: ignore[arg-type]
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
+    with pytest.raises(BrainProviderUnavailable) as disabled:
+        adapter.finalize_canonical_provider_prompts(request)
+    disabled_audit = adapter.provider_failure_audit(disabled.value, stage="provider_prompt_finalize")
+    assert disabled_audit["remote_brain_finalizer_lifecycle"] == {
+        "schema_version": "v3_remote_brain_finalizer_lifecycle_v1",
+        "stage": "provider_prompt_finalize",
+        "provider_available": False,
+        "remote_brain_request_started": False,
+        "response_started": False,
+        "status": "blocked",
+        "failure_family": "remote_brain_signoff",
+        "failure_code": "provider_unavailable",
+    }
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    no_scope_request = request.model_copy(
+        update={
+            "template_capability_policy": ecommerce_capability_policy().model_copy(
+                update={"brain_activation_enabled": False}
+            )
+        }
+    )
+    with pytest.raises(BrainProviderUnavailable) as no_scope:
+        adapter.finalize_canonical_provider_prompts(no_scope_request)
+    no_scope_audit = adapter.provider_failure_audit(no_scope.value, stage="provider_prompt_finalize")
+    assert no_scope_audit["remote_brain_finalizer_lifecycle"] == disabled_audit[
+        "remote_brain_finalizer_lifecycle"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_lifecycle"),
+    [
+        (
+            BrainTransportTimeoutError(
+                stage="provider_prompt_finalize",
+                timeout_seconds=210.0,
+                elapsed_ms=210016,
+                timeout_phase="read_timeout",
+                response_started=True,
+                first_content_observed=False,
+                complete_response_observed=False,
+                json_parse_started=False,
+                json_parse_completed=False,
+            ),
+            {
+                "remote_brain_request_started": True,
+                "response_started": True,
+                "failure_code": "timeout",
+            },
+        ),
+        (
+            BrainInvalidJsonResponse(
+                "invalid finalizer JSON D:/unsafe/provider_payload",
+                stage="provider_prompt_finalize",
+                attempts=2,
+                json_recovery_attempted=True,
+                json_recovery_succeeded=False,
+                json_failure_kind="malformed_json",
+            ),
+            {
+                "remote_brain_request_started": True,
+                "response_started": True,
+                "failure_code": "invalid_response",
+            },
+        ),
+    ],
+)
+def test_doc175_finalizer_transport_or_serialization_receipt_keeps_stage_scoped_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    expected_lifecycle: dict[str, object],
+) -> None:
+    class FinalizerTypedFailure(EcommerceRemoteBrainTestProvider):
+        def execution_budget_receipt(self) -> dict[str, object]:
+            return {
+                "logical_budget_seconds": 520.0,
+                "remaining_ms": 114371,
+                "state": "within_budget",
+            }
+
+        def run(self, request):  # noqa: ANN001
+            if request.stage == "provider_prompt_finalize":
+                raise failure
+            return super().run(request)
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=FinalizerTypedFailure()))
+
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one real-camera product image.",
+            "scenario_selection": {"scenario_id": "ecommerce"},
+            "metadata": {
+                "template_id": "ecommerce_template",
+                "requested_image_count": 1,
+                "require_real_images": True,
+            },
+        }
+    )
+
+    assert result.status.value == "blocked"
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    lifecycle = outcome["remote_brain_finalizer_lifecycle"]
+    assert lifecycle["schema_version"] == "v3_remote_brain_finalizer_lifecycle_v1"
+    assert lifecycle["stage"] == "provider_prompt_finalize"
+    assert lifecycle["provider_available"] is True
+    assert lifecycle["status"] == "blocked"
+    for key, value in expected_lifecycle.items():
+        assert lifecycle[key] == value
+    assert outcome["remote_brain_execution_budget"] == {
+        "logical_budget_seconds": 520.0,
+        "remaining_ms": 114371,
+        "state": "within_budget",
+    }
+    if isinstance(failure, BrainTransportTimeoutError):
+        assert outcome["remote_brain_transport_failure"]["timeout_phase"] == "read_timeout"
+    else:
+        assert outcome["remote_brain_serialization_failure"]["json_failure_kind"] == "malformed_json"
+    serialized = json.dumps(outcome, sort_keys=True)
+    assert "D:/unsafe" not in serialized
+    assert "provider_payload" not in serialized

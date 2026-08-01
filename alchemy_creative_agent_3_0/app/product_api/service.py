@@ -28,6 +28,7 @@ from ..creative_core.rules import RULE_VERSION, stable_id
 from ..generation_router import GenerationRouter, ProductionImageGenerationProvider, safe_runtime_execution_budget
 from ..generation_router.providers import McpMaterializationProvider
 from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
+from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
 from ..photography_profiles import (
     PhotographerProfileBinding,
@@ -7253,6 +7254,11 @@ class V3ProductApiService:
             "failure_code": reason_code,
             "reason_code": reason_code,
             "provider_request_started": False,
+            **(
+                {"remote_brain_request_started": safe_remote_outcome["remote_brain_request_started"]}
+                if isinstance(safe_remote_outcome.get("remote_brain_request_started"), bool)
+                else {}
+            ),
             "remote_creative_brain_outcome": safe_remote_outcome,
         }
 
@@ -7306,6 +7312,13 @@ class V3ProductApiService:
         for key in ("llm_used", "fallback_used", "remote_provider_available"):
             if isinstance(outcome.get(key), bool):
                 projected[key] = outcome[key]
+        if isinstance(outcome.get("remote_brain_request_started"), bool):
+            projected["remote_brain_request_started"] = outcome["remote_brain_request_started"]
+        finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
+            outcome.get("remote_brain_finalizer_lifecycle")
+        )
+        if finalizer_lifecycle:
+            projected["remote_brain_finalizer_lifecycle"] = finalizer_lifecycle
         return projected
 
     @classmethod

@@ -12,6 +12,7 @@ from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
 from ..llm_brain.fallback import build_remote_required_result
+from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
 from ..llm_brain.stage_trace import record_stage_event
 from ..llm_brain.providers import (
     BrainDevelopmentalPresenceDecisionMissing,
@@ -3569,6 +3570,22 @@ class ScenarioRuntime:
             "fallback_used": bool(brain_result.fallback_used),
             "remote_provider_available": audit.get("remote_provider_available"),
             "remote_contract_rejected_sections": rejected_sections,
+            **(
+                {"remote_brain_request_started": audit["remote_brain_request_started"]}
+                if isinstance(audit.get("remote_brain_request_started"), bool)
+                else {}
+            ),
+            **(
+                {
+                    "remote_brain_finalizer_lifecycle": safe_remote_brain_finalizer_lifecycle(
+                        audit["remote_brain_finalizer_lifecycle"]
+                    )
+                }
+                if safe_remote_brain_finalizer_lifecycle(
+                    audit.get("remote_brain_finalizer_lifecycle")
+                )
+                else {}
+            ),
             **(
                 {"remote_error_class": str(audit["remote_provider_error_class"])}
                 if audit.get("remote_provider_error_class")

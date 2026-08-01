@@ -116,6 +116,68 @@ def _remote_finalizer_timeout_outcome() -> dict[str, object]:
     }
 
 
+def _remote_finalizer_request_started_outcome() -> dict[str, object]:
+    return {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+        "outcome_class": "remote_prompt_signoff_unavailable",
+        "llm_used": True,
+        "fallback_used": False,
+        "remote_provider_available": True,
+        "remote_error_class": "provider_error",
+        "remote_brain_stage": "provider_prompt_finalize",
+        "remote_brain_request_started": True,
+        "remote_brain_finalizer_lifecycle": {
+            "schema_version": "v3_remote_brain_finalizer_lifecycle_v1",
+            "stage": "provider_prompt_finalize",
+            "provider_available": True,
+            "remote_brain_request_started": True,
+            "response_started": False,
+            "status": "blocked",
+            "failure_family": "remote_brain_signoff",
+            "failure_code": "provider_error",
+            "raw_prompt": "private prompt must not leak",
+            "provider_url": "https://provider.invalid/private",
+            "provider_payload": {"secret": True},
+        },
+        "remote_brain_execution_budget": {
+            "logical_budget_seconds": 520.0,
+            "remaining_ms": 309892,
+            "state": "within_budget",
+        },
+        "raw_prompt": "private prompt must not leak",
+        "provider_payload": {"secret": True},
+    }
+
+
+def _remote_finalizer_preflight_unavailable_outcome() -> dict[str, object]:
+    return {
+        "schema_version": "v3_remote_creative_brain_outcome_v1",
+        "state": "blocked",
+        "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+        "outcome_class": "remote_prompt_signoff_unavailable",
+        "llm_used": True,
+        "fallback_used": False,
+        "remote_provider_available": True,
+        "remote_error_class": "provider_error",
+        "remote_brain_stage": "provider_prompt_finalize",
+        "remote_brain_request_started": False,
+        "remote_brain_finalizer_lifecycle": {
+            "schema_version": "v3_remote_brain_finalizer_lifecycle_v1",
+            "stage": "provider_prompt_finalize",
+            "provider_available": False,
+            "remote_brain_request_started": False,
+            "response_started": False,
+            "status": "blocked",
+            "failure_family": "remote_brain_signoff",
+            "failure_code": "provider_unavailable",
+            "raw_prompt": "private prompt must not leak",
+            "provider_payload": {"secret": True},
+        },
+    }
+
+
 def _malformed_remote_outcome() -> dict[str, object]:
     return {
         "schema_version": "v3_remote_creative_brain_outcome_v1",
@@ -653,6 +715,62 @@ def test_remote_finalizer_timeout_block_has_closed_lifecycle_failure_on_create_a
         assert "provider.invalid" not in durable_payload
         assert "D:/unsafe" not in durable_payload
         assert "asset_internal_must_not_leak" not in durable_payload
+
+
+def test_remote_finalizer_lifecycle_distinguishes_brain_request_from_image_provider_start() -> None:
+    service, _, _ = _service("remote_finalizer_request_started_projection")
+    service.scenario_runtime = _RemoteFinalizerTimeoutRuntime(
+        service.scenario_runtime,
+        block_stage="plan",
+        outcome=_remote_finalizer_request_started_outcome(),
+    )
+
+    blocked = service.create_job({"user_input": "Create one neutral Character Card body view."})
+
+    assert blocked.status == ProductJobStatusValue.BLOCKED
+    failure = blocked.metadata["generation_lifecycle_failure"]
+    assert failure["provider_request_started"] is False
+    assert failure["remote_brain_request_started"] is True
+    outcome = failure["remote_creative_brain_outcome"]
+    assert outcome["remote_brain_request_started"] is True
+    assert outcome["remote_brain_finalizer_lifecycle"] == {
+        "schema_version": "v3_remote_brain_finalizer_lifecycle_v1",
+        "stage": "provider_prompt_finalize",
+        "provider_available": True,
+        "remote_brain_request_started": True,
+        "response_started": False,
+        "status": "blocked",
+        "failure_family": "remote_brain_signoff",
+        "failure_code": "provider_error",
+    }
+    assert "provider_failure_retry" not in blocked.metadata
+    payload = blocked.model_dump_json()
+    assert "private prompt" not in payload
+    assert "provider.invalid" not in payload
+    assert "provider_payload" not in payload
+
+
+def test_remote_finalizer_preflight_false_does_not_claim_brain_request_started() -> None:
+    service, _, _ = _service("remote_finalizer_preflight_projection")
+    service.scenario_runtime = _RemoteFinalizerTimeoutRuntime(
+        service.scenario_runtime,
+        block_stage="plan",
+        outcome=_remote_finalizer_preflight_unavailable_outcome(),
+    )
+
+    blocked = service.create_job({"user_input": "Create one neutral Character Card body view."})
+
+    assert blocked.status == ProductJobStatusValue.BLOCKED
+    failure = blocked.metadata["generation_lifecycle_failure"]
+    assert failure["provider_request_started"] is False
+    assert failure["remote_brain_request_started"] is False
+    lifecycle = failure["remote_creative_brain_outcome"]["remote_brain_finalizer_lifecycle"]
+    assert lifecycle["provider_available"] is False
+    assert lifecycle["remote_brain_request_started"] is False
+    assert lifecycle["failure_code"] == "provider_unavailable"
+    payload = blocked.model_dump_json()
+    assert "private prompt" not in payload
+    assert "provider_payload" not in payload
 
 
 def test_malformed_remote_outcome_is_not_persisted_when_runtime_blocks_without_result() -> None:
