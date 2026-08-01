@@ -69,7 +69,34 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardPreparationService,
     CharacterCardState,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.runtime_bridge import ProfessionalModeRuntimeBridge
 from app.providers.base import ProviderRuntimeError
+
+
+def _doc203_body_frozen_contract_fields() -> dict[str, object]:
+    from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+        body_silhouette_mcp_materialization_channel_contract,
+    )
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+        default_body_silhouette_backdrop_presentation_contract,
+        default_body_silhouette_hair_continuity_contract,
+    )
+
+    return {
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": (
+            default_body_refresh_presentation_intent().model_dump(mode="json")
+        ),
+        "body_silhouette_hair_continuity_contract": (
+            default_body_silhouette_hair_continuity_contract()
+        ),
+        "body_silhouette_backdrop_presentation_contract": (
+            default_body_silhouette_backdrop_presentation_contract()
+        ),
+    }
 
 
 class _LocalBrainProvider:
@@ -574,6 +601,14 @@ def _current_character_card_planning_metadata(
     }
     if handoff is not None:
         metadata["mcp_materialization"] = handoff
+    if stage == "body_silhouette":
+        stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+            stage=stage,
+            slot_key=slot_key,
+        )
+        metadata["professional_body_silhouette_source_contract"] = stage_metadata[
+            "professional_body_silhouette_source_contract"
+        ]
     return metadata
 
 
@@ -2550,6 +2585,7 @@ def test_doc228_exact_body_handoff_resume_reenters_runtime_despite_stale_failed_
         body_silhouette_mcp_materialization_channel_contract()
     )
     frozen_contract["body_refresh_presentation_intent"] = body_intent
+    frozen_contract.update(_doc203_body_frozen_contract_fields())
     pending = handoff_store.ensure_pending(
         operation_id=operation_id,
         prompt="closed Body Silhouette MCP prompt",
@@ -2707,10 +2743,7 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
         "input_fidelity": "high",
         "input_fidelity_required": False,
         "size_normalization": "white_matte_contain_to_contract_size",
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": body_intent,
+        **_doc203_body_frozen_contract_fields(),
     }
     pending = handoff_store.ensure_pending(
         operation_id=operation_id,
@@ -2881,10 +2914,7 @@ def test_doc263_generating_body_resume_reconciles_submitted_handoff_before_consu
         "input_fidelity": "high",
         "input_fidelity_required": False,
         "size_normalization": "white_matte_contain_to_contract_size",
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": body_intent,
+        **_doc203_body_frozen_contract_fields(),
     }
     pending = handoff_store.ensure_pending(
         operation_id=operation_id,
@@ -3164,10 +3194,7 @@ def test_doc263_submitted_body_resume_preserves_two_face_identity_reference_proj
         "input_fidelity": "high",
         "input_fidelity_required": False,
         "size_normalization": "white_matte_contain_to_contract_size",
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": body_intent,
+        **_doc203_body_frozen_contract_fields(),
     }
     pending = handoff_store.ensure_pending(
         operation_id=operation_id,
@@ -3401,8 +3428,7 @@ def test_doc263_submitted_body_resume_contract_mismatch_fails_closed(
         "input_fidelity": "high",
         "input_fidelity_required": False,
         "size_normalization": "white_matte_contain_to_contract_size",
-        "body_silhouette_mcp_materialization_channel_contract": body_silhouette_mcp_materialization_channel_contract(),
-        "body_refresh_presentation_intent": body_intent,
+        **_doc203_body_frozen_contract_fields(),
     }
 
     output_store = V3GeneratedOutputStore(tmp_path / "outputs")
@@ -3580,10 +3606,7 @@ def test_doc228_exact_body_handoff_resume_accepts_real_productapi_contract_envel
         "input_fidelity": "high",
         "input_fidelity_required": False,
         "size_normalization": "white_matte_contain_to_contract_size",
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": body_intent,
+        **_doc203_body_frozen_contract_fields(),
     }
     metadata = _current_character_card_planning_metadata(
         operation_id=operation_id,
@@ -5418,10 +5441,7 @@ def test_doc203_submitted_body_resume_without_durable_planning_does_not_remain_g
         "input_fidelity": "high",
         "input_fidelity_required": False,
         "size_normalization": "white_matte_contain_to_contract_size",
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": body_intent,
+        **_doc203_body_frozen_contract_fields(),
     }
     jobs = PersistentProductJobStore(tmp_path / "jobs")
     outputs = V3GeneratedOutputStore(tmp_path / "outputs")

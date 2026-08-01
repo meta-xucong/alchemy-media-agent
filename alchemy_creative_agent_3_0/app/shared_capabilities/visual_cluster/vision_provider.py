@@ -29,6 +29,7 @@ from .micro_real_human_fidelity import (
 from ...visual_assets.body_silhouette_source_standard import (
     validated_body_silhouette_source_standard_contract,
 )
+from ...visual_assets.character_card import BodySilhouetteBackdropPresentationContract
 
 
 _HUMAN_AUTHENTICITY_CONTRACT_KEYS = {
@@ -895,6 +896,17 @@ def _professional_identity_quality_contract(
     source_standard_contract = validated_body_silhouette_source_standard_contract(
         body_source_contract.get("source_standard_contract")
     )
+    backdrop_presentation_contract: dict[str, Any] = {}
+    raw_backdrop_contract = body_source_contract.get("backdrop_presentation_contract")
+    if isinstance(raw_backdrop_contract, dict):
+        try:
+            backdrop_presentation_contract = (
+                BodySilhouetteBackdropPresentationContract.model_validate(raw_backdrop_contract).model_dump(
+                    mode="json"
+                )
+            )
+        except Exception:
+            backdrop_presentation_contract = {}
     body_silhouette_review_applies = bool(
         body_source_contract.get("contract_version") == "professional_body_silhouette_source_contract_v1"
         and body_source_contract.get("owner") == "professional_character_card_body_silhouette"
@@ -997,6 +1009,7 @@ def _professional_identity_quality_contract(
         "body_silhouette_framing_drift",
         "body_silhouette_full_body_framing_missing",
         "body_silhouette_hair_continuity_drift",
+        "body_silhouette_backdrop_not_pure_white",
         *body_source_standard_issue_codes,
         *body_cross_view_issue_codes,
     ]
@@ -1184,6 +1197,12 @@ def _professional_identity_quality_contract(
                 "source_standard_dimensions": list(body_source_standard_dimensions),
                 "source_standard_contract": source_standard_contract,
                 "hair_continuity_contract": body_source_contract.get("hair_continuity_contract"),
+                "backdrop_presentation_contract": backdrop_presentation_contract,
+                "backdrop_evidence": {
+                    "status": "unknown",
+                    "source": "contract_only_until_pixel_inspection",
+                    "verified": False,
+                },
             }
             if applies and body_silhouette_review_applies
             else {"applies": False}

@@ -29,6 +29,8 @@ from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_prompt_findings,
 )
 from ..visual_assets.character_card import (
+    BodySilhouetteBackdropPresentationContract,
+    BodySilhouetteHairContinuityContract,
     BodyRefreshPresentationIntent,
     unspecified_body_refresh_presentation_intent,
 )
@@ -5537,6 +5539,12 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 contract["body_refresh_presentation_intent"] = (
                     self._safe_body_refresh_presentation_intent(metadata)
                 )
+                contract["body_silhouette_hair_continuity_contract"] = (
+                    self._safe_body_silhouette_hair_continuity_contract(metadata)
+                )
+                contract["body_silhouette_backdrop_presentation_contract"] = (
+                    self._safe_body_silhouette_backdrop_presentation_contract(metadata)
+                )
         require_body_rendering_contract = (
             self._is_character_card_body_mcp_materialization(metadata)
             and self._is_strict_character_card_body_refresh(metadata)
@@ -5625,6 +5633,72 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 },
             ) from exc
         return parsed.model_dump(mode="json")
+
+    def _safe_body_silhouette_hair_continuity_contract(
+        self,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        source = metadata.get("professional_body_silhouette_source_contract")
+        if not isinstance(source, dict):
+            planning_metadata = metadata.get("professional_planning_metadata")
+            if isinstance(planning_metadata, dict):
+                source = planning_metadata.get("professional_body_silhouette_source_contract")
+        raw = source.get("hair_continuity_contract") if isinstance(source, dict) else None
+        if raw is None:
+            raise ProviderRuntimeError(
+                "MCP Body Silhouette hair continuity contract is missing.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "character_card_body_hair_continuity_contract_missing",
+                    "stage": "body_silhouette",
+                    "fallback": "blocked",
+                },
+            )
+        try:
+            return BodySilhouetteHairContinuityContract.model_validate(raw).model_dump(mode="json")
+        except ValidationError as exc:
+            raise ProviderRuntimeError(
+                "MCP Body Silhouette hair continuity contract is invalid.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "character_card_body_hair_continuity_contract_invalid",
+                    "stage": "body_silhouette",
+                    "fallback": "blocked",
+                },
+            ) from exc
+
+    def _safe_body_silhouette_backdrop_presentation_contract(
+        self,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        source = metadata.get("professional_body_silhouette_source_contract")
+        if not isinstance(source, dict):
+            planning_metadata = metadata.get("professional_planning_metadata")
+            if isinstance(planning_metadata, dict):
+                source = planning_metadata.get("professional_body_silhouette_source_contract")
+        raw = source.get("backdrop_presentation_contract") if isinstance(source, dict) else None
+        if raw is None:
+            raise ProviderRuntimeError(
+                "MCP Body Silhouette backdrop presentation contract is missing.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "character_card_body_backdrop_presentation_contract_missing",
+                    "stage": "body_silhouette",
+                    "fallback": "blocked",
+                },
+            )
+        try:
+            return BodySilhouetteBackdropPresentationContract.model_validate(raw).model_dump(mode="json")
+        except ValidationError as exc:
+            raise ProviderRuntimeError(
+                "MCP Body Silhouette backdrop presentation contract is invalid.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "character_card_body_backdrop_presentation_contract_invalid",
+                    "stage": "body_silhouette",
+                    "fallback": "blocked",
+                },
+            ) from exc
 
     def _reject_superseded_body_wardrobe_payload(self, metadata: dict[str, Any]) -> None:
         if not self._contains_superseded_body_wardrobe_payload(metadata):

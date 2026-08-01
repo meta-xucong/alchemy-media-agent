@@ -24,6 +24,10 @@ from .body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_source_standard_contract,
 )
+from .character_card import (
+    default_body_silhouette_backdrop_presentation_contract,
+    default_body_silhouette_hair_continuity_contract,
+)
 from .contracts import ProfessionalModeBinding
 
 
@@ -342,26 +346,7 @@ class ProfessionalModeRuntimeBridge:
                 ],
             }
         else:
-            hair_continuity_contract = {
-                "contract_version": "professional_body_silhouette_hair_continuity_v1",
-                "applies": True,
-                "source": "current_project_confirmed_face_identity_references",
-                "required_continuity": [
-                    "same_hairstyle_category",
-                    "same_hair_length_tier",
-                    "same_bangs_or_parting_pattern",
-                    "same_overall_hair_outline",
-                ],
-                "allowed_variation": ["view_angle", "pose", "lighting", "natural_body_view_movement"],
-                "forbidden": [
-                    "unsupported_hairstyle_category_change",
-                    "obvious_hair_length_tier_change",
-                    "unsupported_bangs_or_parting_change",
-                    "unsupported_hair_outline_change",
-                ],
-                "fixed_hairstyle_text": None,
-                "scope": "body_silhouette_only",
-            }
+            hair_continuity_contract = default_body_silhouette_hair_continuity_contract()
             body_source_contract = {
                 "contract_version": "professional_body_silhouette_source_contract_v1",
                 "owner": "professional_character_card_body_silhouette",
@@ -371,6 +356,9 @@ class ProfessionalModeRuntimeBridge:
                     body_silhouette_mcp_materialization_channel_contract()
                 ),
                 "hair_continuity_contract": hair_continuity_contract,
+                "backdrop_presentation_contract": (
+                    default_body_silhouette_backdrop_presentation_contract()
+                ),
                 "face_identity_reference_scope": "identity_continuity_only",
                 "non_body_channels": "unspecified",
             }

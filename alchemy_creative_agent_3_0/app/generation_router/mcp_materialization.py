@@ -27,6 +27,8 @@ from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_channel_contract,
 )
 from ..visual_assets.character_card import (
+    BodySilhouetteBackdropPresentationContract,
+    BodySilhouetteHairContinuityContract,
     BodyRefreshPresentationIntent,
     unspecified_body_refresh_presentation_intent,
 )
@@ -874,16 +876,50 @@ class McpMaterializationHandoffStore:
         unspecified = unspecified_body_refresh_presentation_intent()
         if raw_intent == unspecified:
             safe["body_refresh_presentation_intent"] = unspecified
-            return safe
-        try:
-            safe["body_refresh_presentation_intent"] = BodyRefreshPresentationIntent.model_validate(
-                raw_intent
-            ).model_dump(mode="json")
-        except Exception:
+        else:
+            try:
+                safe["body_refresh_presentation_intent"] = BodyRefreshPresentationIntent.model_validate(
+                    raw_intent
+                ).model_dump(mode="json")
+            except Exception:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_refresh_presentation_intent_invalid"},
+                ) from None
+        raw_hair = raw.get("body_silhouette_hair_continuity_contract")
+        if raw_hair is None and require_body_rendering_contract:
             raise McpMaterializationError(
                 "mcp_materialization_body_rendering_contract_invalid",
-                detail={"failure_code": "body_refresh_presentation_intent_invalid"},
-            ) from None
+                detail={"failure_code": "body_hair_continuity_contract_missing"},
+            )
+        if raw_hair is not None:
+            try:
+                safe["body_silhouette_hair_continuity_contract"] = (
+                    BodySilhouetteHairContinuityContract.model_validate(raw_hair).model_dump(mode="json")
+                )
+            except Exception:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_hair_continuity_contract_invalid"},
+                ) from None
+        raw_backdrop = raw.get("body_silhouette_backdrop_presentation_contract")
+        if raw_backdrop is None and require_body_rendering_contract:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_backdrop_presentation_contract_missing"},
+            )
+        if raw_backdrop is not None:
+            try:
+                safe["body_silhouette_backdrop_presentation_contract"] = (
+                    BodySilhouetteBackdropPresentationContract.model_validate(raw_backdrop).model_dump(
+                        mode="json"
+                    )
+                )
+            except Exception:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_backdrop_presentation_contract_invalid"},
+                ) from None
         return safe
 
     @classmethod

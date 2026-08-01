@@ -91,6 +91,8 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardSlot,
     CharacterCardState,
     BodyRefreshPresentationIntent,
+    BodySilhouetteBackdropPresentationContract,
+    BodySilhouetteHairContinuityContract,
     BodySilhouettePublicRequest,
     character_card_formal_slot_receipt_public_summary,
     default_body_refresh_presentation_intent,
@@ -306,6 +308,14 @@ def _mcp_body_generation_request(
             ]
         },
     }
+    if stage == "body_silhouette":
+        stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+            stage=stage,
+            slot_key=slot_key,
+        )
+        metadata["professional_body_silhouette_source_contract"] = stage_metadata[
+            "professional_body_silhouette_source_contract"
+        ]
     return GenerationRequest(
         asset_spec=asset,
         layout_plan=layout,
@@ -1474,6 +1484,470 @@ def _doc245_body_refresh_presentation_intent() -> dict[str, object]:
     }
 
 
+def _doc245_body_backdrop_presentation_contract() -> dict[str, object]:
+    return {
+        "contract_version": "professional_body_silhouette_backdrop_presentation_v1",
+        "applies": True,
+        "owner": "professional_character_card_body_silhouette_refresh_request",
+        "scope": "professional_character_card_body_silhouette_mcp_materialization_only",
+        "backdrop": "solid_white",
+        "not_body_proportion_truth": True,
+        "not_identity_truth": True,
+        "not_age_truth": True,
+    }
+
+
+def test_doc245_body_stage_metadata_projects_executable_hair_and_backdrop_contracts() -> None:
+    metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+
+    body_contract = metadata["professional_body_silhouette_source_contract"]
+    hair_contract = body_contract["hair_continuity_contract"]
+
+    assert hair_contract["contract_version"] == "professional_body_silhouette_hair_continuity_v1"
+    assert hair_contract["scope"] == "body_silhouette_only"
+    assert hair_contract["fixed_hairstyle_text"] is None
+    assert body_contract["backdrop_presentation_contract"] == (
+        _doc245_body_backdrop_presentation_contract()
+    )
+    assert metadata.get("professional_face_identity_quality_contract") is None
+
+
+def test_doc245_body_mcp_handoff_projects_hair_backdrop_and_existing_presentation_contract() -> None:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    body_source_contract = dict(stage_metadata["professional_body_silhouette_source_contract"])
+    body_source_contract["backdrop_presentation_contract"] = (
+        _doc245_body_backdrop_presentation_contract()
+    )
+    request = _mcp_body_generation_request(
+        "Full-body front-view Body Silhouette source-standard materialization.",
+        source_mode="inference_first",
+    )
+    metadata = dict(request.metadata)
+    metadata["professional_body_silhouette_source_contract"] = body_source_contract
+    metadata["professional_character_card_body_refresh_presentation_intent"] = (
+        _doc245_body_refresh_presentation_intent()
+    )
+
+    app_request, _, _ = McpMaterializationProvider()._build_app_request(  # noqa: SLF001
+        request.model_copy(update={"metadata": metadata})
+    )
+
+    rendering_contract = app_request.prompt_plan.variables["mcp_materialization_context"][
+        "rendering_contract"
+    ]
+    assert rendering_contract["body_silhouette_hair_continuity_contract"] == (
+        body_source_contract["hair_continuity_contract"]
+    )
+    assert rendering_contract["body_silhouette_backdrop_presentation_contract"] == (
+        _doc245_body_backdrop_presentation_contract()
+    )
+    assert rendering_contract["body_refresh_presentation_intent"] == (
+        _doc245_body_refresh_presentation_intent()
+    )
+    assert "professional_face_identity_quality_contract" not in repr(rendering_contract)
+
+
+@pytest.mark.parametrize(
+    ("missing_field", "failure_code"),
+    [
+        ("hair_continuity_contract", "character_card_body_hair_continuity_contract_missing"),
+        ("backdrop_presentation_contract", "character_card_body_backdrop_presentation_contract_missing"),
+    ],
+)
+def test_doc245_strict_body_mcp_provider_rejects_frozen_source_contract_missing_typed_field(
+    missing_field: str,
+    failure_code: str,
+) -> None:
+    """A frozen strict Body contract must not be silently defaulted at the provider edge."""
+
+    request = _mcp_body_generation_request(
+        "Full-body front-view Body Silhouette source-standard materialization.",
+        source_mode="inference_first",
+    )
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    body_contract = dict(stage_metadata["professional_body_silhouette_source_contract"])
+    body_contract.pop(missing_field)
+    metadata = {
+        **dict(request.metadata),
+        "professional_body_silhouette_source_contract": body_contract,
+    }
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        McpMaterializationProvider()._build_app_request(  # noqa: SLF001
+            request.model_copy(update={"metadata": metadata})
+        )
+
+    assert exc_info.value.detail["failure_code"] == failure_code
+
+
+def test_doc245_body_mcp_materialization_consumer_receives_typed_hair_backdrop_contract(
+    tmp_path,
+) -> None:
+    """The actual MCP consume boundary must receive the closed typed fields."""
+
+    request = _mcp_body_generation_request(
+        "Full-body front-view Body Silhouette source-standard materialization.",
+        source_mode="inference_first",
+    )
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    metadata = {
+        **dict(request.metadata),
+        "professional_body_silhouette_source_contract": dict(
+            stage_metadata["professional_body_silhouette_source_contract"]
+        ),
+        "professional_character_card_body_refresh_presentation_intent": (
+            _doc245_body_refresh_presentation_intent()
+        ),
+    }
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(handoff_store=store)
+
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider.generate(request.model_copy(update={"metadata": metadata}))
+
+    assert exc_info.value.detail["failure_code"] == "mcp_materialization_pending"
+    handoffs = store.list_unconsumed_by_operation("asset_doc245:body_silhouette:body.front_full:1")
+    assert len(handoffs) == 1
+    persisted_contract = store.public_view(handoffs[0]["handoff_id"])["rendering_contract"]
+    assert persisted_contract["body_silhouette_hair_continuity_contract"] == (
+        stage_metadata["professional_body_silhouette_source_contract"]["hair_continuity_contract"]
+    )
+    assert persisted_contract["body_silhouette_backdrop_presentation_contract"] == (
+        stage_metadata["professional_body_silhouette_source_contract"]["backdrop_presentation_contract"]
+    )
+    assert persisted_contract["body_silhouette_mcp_materialization_channel_contract"] == (
+        body_silhouette_mcp_materialization_channel_contract()
+    )
+    assert persisted_contract["body_refresh_presentation_intent"] == (
+        _doc245_body_refresh_presentation_intent()
+    )
+    assert "professional_body_silhouette_wardrobe_v1" not in repr(persisted_contract)
+
+
+def test_doc245_body_hair_backdrop_contract_models_are_closed_and_typed() -> None:
+    hair = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )["professional_body_silhouette_source_contract"]["hair_continuity_contract"]
+    backdrop = _doc245_body_backdrop_presentation_contract()
+
+    assert BodySilhouetteHairContinuityContract.model_validate(hair).model_dump(mode="json") == hair
+    assert (
+        BodySilhouetteBackdropPresentationContract.model_validate(backdrop).model_dump(mode="json")
+        == backdrop
+    )
+
+    with pytest.raises(ValueError):
+        BodySilhouetteHairContinuityContract.model_validate({**hair, "untrusted_text": "long hair"})
+    with pytest.raises(ValueError):
+        BodySilhouetteHairContinuityContract.model_validate(
+            {**hair, "required_continuity": ["same_hair_length_tier"]}
+        )
+    with pytest.raises(ValueError):
+        BodySilhouetteBackdropPresentationContract.model_validate(
+            {**backdrop, "backdrop": "gray_gradient"}
+        )
+
+
+def test_doc245_body_hair_backdrop_contract_does_not_leak_to_expression_or_ordinary_mcp() -> None:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    metadata = {
+        **dict(
+            _mcp_body_generation_request(
+                "Expression-only face card materialization.",
+                stage="expression_set",
+                slot_key="expression.laugh",
+            ).metadata
+        ),
+        "professional_body_silhouette_source_contract": stage_metadata[
+            "professional_body_silhouette_source_contract"
+        ],
+        "professional_character_card_body_refresh_presentation_intent": (
+            _doc245_body_refresh_presentation_intent()
+        ),
+    }
+    request = _mcp_body_generation_request(
+        "Expression-only face card materialization.",
+        stage="expression_set",
+        slot_key="expression.laugh",
+    ).model_copy(update={"metadata": metadata})
+
+    app_request, _, _ = McpMaterializationProvider()._build_app_request(request)
+    rendering_contract = app_request.prompt_plan.variables["mcp_materialization_context"][
+        "rendering_contract"
+    ]
+    for body_owned_key in (
+        "body_silhouette_mcp_materialization_channel_contract",
+        "body_refresh_presentation_intent",
+        "body_silhouette_hair_continuity_contract",
+        "body_silhouette_backdrop_presentation_contract",
+    ):
+        assert body_owned_key not in rendering_contract
+
+
+def test_doc245_body_handoff_store_preserves_typed_hair_backdrop_and_fingerprints_them() -> None:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    body_source_contract = dict(stage_metadata["professional_body_silhouette_source_contract"])
+    backdrop_contract = _doc245_body_backdrop_presentation_contract()
+    contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+        "input_fidelity": "high",
+        "input_fidelity_required": True,
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "body_silhouette_hair_continuity_contract": body_source_contract[
+            "hair_continuity_contract"
+        ],
+        "body_silhouette_backdrop_presentation_contract": backdrop_contract,
+        "raw_prompt": "must not persist",
+        "provider_payload": {"secret": "must not persist"},
+        "asset_path": "must not persist",
+        "output_id": "must not persist",
+    }
+
+    safe = McpMaterializationHandoffStore._safe_rendering_contract(  # noqa: SLF001
+        contract,
+        require_body_rendering_contract=True,
+    )
+    assert safe["body_silhouette_hair_continuity_contract"] == (
+        body_source_contract["hair_continuity_contract"]
+    )
+    assert safe["body_silhouette_backdrop_presentation_contract"] == backdrop_contract
+    for forbidden_key in ("raw_prompt", "provider_payload", "asset_path", "output_id"):
+        assert forbidden_key not in safe
+
+    changed = dict(contract)
+    changed["body_silhouette_hair_continuity_contract"] = {
+        **body_source_contract["hair_continuity_contract"],
+        "required_continuity": ["same_hair_length_tier"],
+    }
+    with pytest.raises(McpMaterializationError):
+        McpMaterializationHandoffStore._rendering_contract_fingerprint(  # noqa: SLF001
+            changed
+        )
+    assert McpMaterializationHandoffStore._rendering_contract_fingerprint(  # noqa: SLF001
+        contract
+    )
+
+    ordinary_safe = McpMaterializationHandoffStore._safe_rendering_contract(
+        {
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "1024x1536",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_generate",
+            "body_silhouette_hair_continuity_contract": contract[
+                "body_silhouette_hair_continuity_contract"
+            ],
+            "body_silhouette_backdrop_presentation_contract": backdrop_contract,
+        }
+    )
+    assert "body_silhouette_hair_continuity_contract" not in ordinary_safe
+    assert "body_silhouette_backdrop_presentation_contract" not in ordinary_safe
+
+
+def test_doc245_body_handoff_store_rejects_old_strict_contract_without_hair_or_backdrop() -> None:
+    old_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+    }
+
+    with pytest.raises(McpMaterializationError) as exc_info:
+        McpMaterializationHandoffStore._safe_rendering_contract(  # noqa: SLF001
+            old_contract,
+            require_body_rendering_contract=True,
+        )
+
+    assert exc_info.value.detail["failure_code"] in {
+        "body_hair_continuity_contract_missing",
+        "body_backdrop_presentation_contract_missing",
+    }
+
+
+def test_doc245_body_materialization_public_view_exposes_structured_contract_not_prompt_recipe(
+    tmp_path,
+) -> None:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    body_source_contract = dict(stage_metadata["professional_body_silhouette_source_contract"])
+    contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "body_silhouette_hair_continuity_contract": body_source_contract[
+            "hair_continuity_contract"
+        ],
+        "body_silhouette_backdrop_presentation_contract": body_source_contract[
+            "backdrop_presentation_contract"
+        ],
+    }
+    store = McpMaterializationHandoffStore(storage_root=tmp_path)
+    handoff = store.ensure_pending(
+        operation_id="asset_doc245:body_silhouette:body.front_full:1",
+        prompt="Body proportion and stance only.",
+        prompt_sha256="prompt_hash_doc245_body",
+        reference_assets=[],
+        rendering_contract=contract,
+        require_body_rendering_contract=True,
+    )
+
+    public = store.public_view(handoff["handoff_id"])
+    assert public["canonical_prompt"] == "Body proportion and stance only."
+    public_contract = public["rendering_contract"]
+    assert public_contract["body_silhouette_hair_continuity_contract"] == (
+        body_source_contract["hair_continuity_contract"]
+    )
+    assert public_contract["body_silhouette_backdrop_presentation_contract"] == (
+        body_source_contract["backdrop_presentation_contract"]
+    )
+    assert public_contract["body_refresh_presentation_intent"] == (
+        _doc245_body_refresh_presentation_intent()
+    )
+    assert "hair" not in public["canonical_prompt"].lower()
+    assert "backdrop" not in public["canonical_prompt"].lower()
+
+
+def test_doc245_body_review_contract_projects_closed_backdrop_failure_finding() -> None:
+    metadata = _body_review_metadata_for_vision("body.front_full")
+    envelope = metadata["capability_execution_envelope"]
+    plan_metadata = envelope["activation_plan"]["metadata"]
+    body_source_contract = dict(plan_metadata["professional_body_silhouette_source_contract"])
+    body_source_contract["backdrop_presentation_contract"] = (
+        _doc245_body_backdrop_presentation_contract()
+    )
+    plan_metadata["professional_body_silhouette_source_contract"] = body_source_contract
+    metadata["professional_planning_metadata"] = {
+        "professional_body_silhouette_source_contract": body_source_contract,
+    }
+
+    review_contract = active_review_contract(metadata)
+    body_review = review_contract["professional_identity_quality"]["body_silhouette_review"]
+
+    assert body_review["backdrop_presentation_contract"] == (
+        _doc245_body_backdrop_presentation_contract()
+    )
+    assert "body_silhouette_backdrop_not_pure_white" in body_review["issue_codes"]
+
+
+def test_doc245_body_host_public_view_consumer_reads_typed_hair_backdrop_contract(
+    tmp_path,
+) -> None:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    body_source_contract = stage_metadata["professional_body_silhouette_source_contract"]
+    rendering_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_generate",
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "body_silhouette_hair_continuity_contract": body_source_contract[
+            "hair_continuity_contract"
+        ],
+        "body_silhouette_backdrop_presentation_contract": body_source_contract[
+            "backdrop_presentation_contract"
+        ],
+    }
+    store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
+    handoff = store.ensure_pending(
+        operation_id="asset_doc245:body_silhouette:body.front_full:1",
+        prompt="Body proportion and stance only.",
+        prompt_sha256="prompt_hash_doc245_host_view",
+        reference_assets=[],
+        rendering_contract=rendering_contract,
+        require_body_rendering_contract=True,
+    )
+
+    public_view = store.public_view(handoff["handoff_id"])
+
+    # This is the host-facing reader seam: the renderer receives the frozen
+    # structured contract from the public view, while canonical_prompt remains
+    # unchanged and contains no hair/backdrop recipe.
+    host_context = public_view["rendering_contract"]
+    assert host_context["body_silhouette_hair_continuity_contract"] == (
+        body_source_contract["hair_continuity_contract"]
+    )
+    assert host_context["body_silhouette_backdrop_presentation_contract"] == (
+        body_source_contract["backdrop_presentation_contract"]
+    )
+    assert host_context["body_refresh_presentation_intent"] == (
+        _doc245_body_refresh_presentation_intent()
+    )
+    assert "hair" not in public_view["canonical_prompt"].lower()
+    assert "backdrop" not in public_view["canonical_prompt"].lower()
+
+
+def test_doc245_body_backdrop_without_pixel_inspection_is_unknown_not_verified() -> None:
+    review_contract = active_review_contract(_body_review_metadata_for_vision("body.front_full"))
+    body_review = review_contract["professional_identity_quality"]["body_silhouette_review"]
+
+    assert body_review["backdrop_evidence"] == {
+        "status": "unknown",
+        "source": "contract_only_until_pixel_inspection",
+        "verified": False,
+    }
+    assert "body_silhouette_backdrop_not_pure_white" in body_review["issue_codes"]
+
+
 def test_doc245_body_refresh_presentation_intent_reaches_mcp_handoff_contract() -> None:
     prompt = (
         "Full-body front-view Body Silhouette source-standard materialization. "
@@ -1561,6 +2035,10 @@ def test_doc245_body_mcp_central_brain_handoff_preserves_body_rendering_contract
             "professional_character_card_body_refresh_source_mode": "inference_first",
             "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
             "professional_character_card_body_refresh_contract_required": True,
+            "professional_planning_metadata": ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+                stage="body_silhouette",
+                slot_key="body.front_full",
+            ),
             "professional_character_card_body_refresh_presentation_intent": (
                 _doc245_body_refresh_presentation_intent()
             ),
@@ -1609,6 +2087,26 @@ def _doc245_generic_mcp_rendering_contract() -> dict[str, object]:
     }
 
 
+def _doc245_body_frozen_contract_fields() -> dict[str, object]:
+    stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
+        stage="body_silhouette",
+        slot_key="body.front_full",
+    )
+    body_source_contract = stage_metadata["professional_body_silhouette_source_contract"]
+    return {
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "body_silhouette_hair_continuity_contract": body_source_contract[
+            "hair_continuity_contract"
+        ],
+        "body_silhouette_backdrop_presentation_contract": body_source_contract[
+            "backdrop_presentation_contract"
+        ],
+    }
+
+
 DOC245_REAL_BODY_MCP_OPERATION_ID = "visual_asset_doc245:body_silhouette:body.front_full:1"
 
 
@@ -1618,10 +2116,7 @@ def test_doc245_mcp_handoff_store_persists_body_rendering_contract_and_intent(
     store = McpMaterializationHandoffStore(tmp_path / "handoffs")
     rendering_contract = {
         **_doc245_generic_mcp_rendering_contract(),
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        **_doc245_body_frozen_contract_fields(),
         "raw_prompt": "secret prompt must not persist",
         "source_url": "https://example.invalid/private.png",
         "provider_payload": {"raw": "payload must not persist"},
@@ -1663,10 +2158,7 @@ def test_doc245_mcp_handoff_store_rendering_fingerprint_includes_body_intent(
     store = McpMaterializationHandoffStore(tmp_path / "handoffs")
     first_contract = {
         **_doc245_generic_mcp_rendering_contract(),
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        **_doc245_body_frozen_contract_fields(),
     }
     second_intent = {
         "contract_version": "professional_body_refresh_presentation_intent_v1",
@@ -1676,9 +2168,7 @@ def test_doc245_mcp_handoff_store_rendering_fingerprint_includes_body_intent(
     }
     second_contract = {
         **_doc245_generic_mcp_rendering_contract(),
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
+        **_doc245_body_frozen_contract_fields(),
         "body_refresh_presentation_intent": second_intent,
     }
 
@@ -1842,10 +2332,7 @@ def test_doc245_mcp_handoff_store_does_not_reuse_old_handoff_missing_body_fields
         reference_assets=[],
         rendering_contract={
             **_doc245_generic_mcp_rendering_contract(),
-            "body_silhouette_mcp_materialization_channel_contract": (
-                body_silhouette_mcp_materialization_channel_contract()
-            ),
-            "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+            **_doc245_body_frozen_contract_fields(),
         },
         require_body_rendering_contract=True,
     )
@@ -1899,10 +2386,7 @@ def test_doc245_submitted_body_handoff_resume_uses_frozen_rendering_contract(
     prompt_sha = "1" * 64
     frozen_contract = {
         **_doc245_generic_mcp_rendering_contract(),
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        **_doc245_body_frozen_contract_fields(),
     }
     handoff = store.ensure_pending(
         operation_id=operation_id,
@@ -1989,10 +2473,7 @@ def test_doc245_submitted_body_handoff_resume_rejects_non_envelope_contract_drif
     prompt_sha = "3" * 64
     frozen_contract = {
         **_doc245_generic_mcp_rendering_contract(),
-        "body_silhouette_mcp_materialization_channel_contract": (
-            body_silhouette_mcp_materialization_channel_contract()
-        ),
-        "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        **_doc245_body_frozen_contract_fields(),
     }
     handoff = store.ensure_pending(
         operation_id=operation_id,

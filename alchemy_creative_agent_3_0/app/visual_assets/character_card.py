@@ -256,6 +256,12 @@ BodyRefreshBodyModelContext = Literal[
 BODY_REFRESH_PRESENTATION_INTENT_CONTRACT_VERSION = "professional_body_refresh_presentation_intent_v1"
 BODY_REFRESH_PRESENTATION_INTENT_OWNER = "professional_character_card_body_silhouette_refresh_request"
 BODY_REFRESH_PRESENTATION_INTENT_SCOPE = "modeling_card_presentation_only"
+BODY_SILHOUETTE_HAIR_CONTINUITY_CONTRACT_VERSION = (
+    "professional_body_silhouette_hair_continuity_v1"
+)
+BODY_SILHOUETTE_BACKDROP_PRESENTATION_CONTRACT_VERSION = (
+    "professional_body_silhouette_backdrop_presentation_v1"
+)
 ExpressionKey = Literal["laugh", "smile", "anger", "sad"]
 BodySlotKey = Literal["body.front_full", "body.side_full", "body.rear_full"]
 BODY_SOURCE_ADMISSION_CONTRACT_VERSION = "professional_body_source_admission_v1"
@@ -302,6 +308,107 @@ class BodyRefreshPresentationIntent(_CharacterCardModel):
     not_body_proportion_truth: Literal[True] = True
     not_identity_truth: Literal[True] = True
     not_age_truth: Literal[True] = True
+
+
+class BodySilhouetteHairContinuityContract(_CharacterCardModel):
+    """Closed, executable hair continuity evidence for Body materialization."""
+
+    contract_version: Literal["professional_body_silhouette_hair_continuity_v1"] = (
+        BODY_SILHOUETTE_HAIR_CONTINUITY_CONTRACT_VERSION
+    )
+    applies: Literal[True] = True
+    source: Literal["current_project_confirmed_face_identity_references"] = (
+        "current_project_confirmed_face_identity_references"
+    )
+    required_continuity: list[
+        Literal[
+            "same_hairstyle_category",
+            "same_hair_length_tier",
+            "same_bangs_or_parting_pattern",
+            "same_overall_hair_outline",
+        ]
+    ] = Field(
+        default_factory=lambda: [
+            "same_hairstyle_category",
+            "same_hair_length_tier",
+            "same_bangs_or_parting_pattern",
+            "same_overall_hair_outline",
+        ]
+    )
+    allowed_variation: list[
+        Literal["view_angle", "pose", "lighting", "natural_body_view_movement"]
+    ] = Field(
+        default_factory=lambda: [
+            "view_angle",
+            "pose",
+            "lighting",
+            "natural_body_view_movement",
+        ]
+    )
+    forbidden: list[
+        Literal[
+            "unsupported_hairstyle_category_change",
+            "obvious_hair_length_tier_change",
+            "unsupported_bangs_or_parting_change",
+            "unsupported_hair_outline_change",
+        ]
+    ] = Field(
+        default_factory=lambda: [
+            "unsupported_hairstyle_category_change",
+            "obvious_hair_length_tier_change",
+            "unsupported_bangs_or_parting_change",
+            "unsupported_hair_outline_change",
+        ]
+    )
+    fixed_hairstyle_text: None = None
+    scope: Literal["body_silhouette_only"] = "body_silhouette_only"
+
+    @model_validator(mode="after")
+    def require_closed_lists(self) -> "BodySilhouetteHairContinuityContract":
+        if self.required_continuity != [
+            "same_hairstyle_category",
+            "same_hair_length_tier",
+            "same_bangs_or_parting_pattern",
+            "same_overall_hair_outline",
+        ]:
+            raise ValueError("Body hair continuity required fields are not closed")
+        if self.allowed_variation != ["view_angle", "pose", "lighting", "natural_body_view_movement"]:
+            raise ValueError("Body hair continuity variation fields are not closed")
+        if self.forbidden != [
+            "unsupported_hairstyle_category_change",
+            "obvious_hair_length_tier_change",
+            "unsupported_bangs_or_parting_change",
+            "unsupported_hair_outline_change",
+        ]:
+            raise ValueError("Body hair continuity forbidden fields are not closed")
+        return self
+
+
+class BodySilhouetteBackdropPresentationContract(_CharacterCardModel):
+    """Closed presentation backdrop intent, never Body or identity truth."""
+
+    contract_version: Literal["professional_body_silhouette_backdrop_presentation_v1"] = (
+        BODY_SILHOUETTE_BACKDROP_PRESENTATION_CONTRACT_VERSION
+    )
+    applies: Literal[True] = True
+    owner: Literal["professional_character_card_body_silhouette_refresh_request"] = (
+        BODY_REFRESH_PRESENTATION_INTENT_OWNER
+    )
+    scope: Literal["professional_character_card_body_silhouette_mcp_materialization_only"] = (
+        "professional_character_card_body_silhouette_mcp_materialization_only"
+    )
+    backdrop: Literal["solid_white"] = "solid_white"
+    not_body_proportion_truth: Literal[True] = True
+    not_identity_truth: Literal[True] = True
+    not_age_truth: Literal[True] = True
+
+
+def default_body_silhouette_hair_continuity_contract() -> dict[str, Any]:
+    return BodySilhouetteHairContinuityContract().model_dump(mode="json")
+
+
+def default_body_silhouette_backdrop_presentation_contract() -> dict[str, Any]:
+    return BodySilhouetteBackdropPresentationContract().model_dump(mode="json")
 
 
 def default_body_refresh_presentation_intent() -> BodyRefreshPresentationIntent:
