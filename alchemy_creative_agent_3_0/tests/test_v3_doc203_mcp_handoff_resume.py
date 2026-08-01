@@ -3547,9 +3547,12 @@ def test_doc263_submitted_body_resume_contract_mismatch_fails_closed(
     updated = job_store.get(job_id)
     assert updated is not None
     assert updated.generation_result is None
-    assert updated.request.metadata["generation_lifecycle_failure"]["failure_code"] == (
-        "mcp_materialization_submitted_resume_contract_invalid"
+    expected_failure_code = (
+        "submitted_resume_planning_result_missing"
+        if mismatch == "planning_result_missing"
+        else "mcp_materialization_submitted_resume_contract_invalid"
     )
+    assert updated.request.metadata["generation_lifecycle_failure"]["failure_code"] == expected_failure_code
 
 
 def test_doc228_exact_body_handoff_resume_accepts_real_productapi_contract_envelope(
@@ -5385,3 +5388,289 @@ def test_doc226_character_card_stale_planning_metadata_does_not_resume_old_opera
             },
         )
     ]
+
+
+def test_doc203_submitted_body_resume_without_durable_planning_does_not_remain_generating(
+    tmp_path: Path,
+) -> None:
+    """The observed missing-plan handoff must not stay indefinitely in-flight."""
+
+    from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+        body_silhouette_mcp_materialization_channel_contract,
+    )
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+    )
+
+    job_id = "job_doc203_planning_durability_missing"
+    operation_id = "visual_asset_doc203:body_silhouette:body.front_full:1:planning-missing"
+    prompt = "body silhouette submitted handoff planning diagnosis"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    body_intent = default_body_refresh_presentation_intent().model_dump(mode="json")
+    contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_generate",
+        "input_fidelity": "high",
+        "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": body_intent,
+    }
+    jobs = PersistentProductJobStore(tmp_path / "jobs")
+    outputs = V3GeneratedOutputStore(tmp_path / "outputs")
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    pending = handoffs.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract=contract,
+        require_body_rendering_contract=True,
+    )
+    submitted = handoffs.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=_png_bytes(),
+    )
+    assert submitted["status"] == "submitted"
+
+    metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "mcp_materialization": {
+                "handoff_id": pending["handoff_id"],
+                "status": "pending",
+                "generation_channel": "mcp",
+                "resume_required": True,
+                "nonce": pending["nonce"],
+            },
+        }
+    )
+    jobs.save(
+        ProductJobRecord(
+            request=CreateCreativeJobRequest(
+                user_input="submitted Body handoff with no durable planning result",
+                metadata=metadata,
+            ),
+            status=ProductJobStatusValue.GENERATING,
+            job_id_value=job_id,
+            planning_result=None,
+            generation_result=None,
+            balance_estimate={"credits_required": 0},
+        )
+    )
+
+    class _ProbeRuntime:
+        def __init__(self) -> None:
+            self.scenario_registry = ScenarioRuntime().scenario_registry
+            self.generate_job_calls = 0
+            self.generation_router = SimpleNamespace()
+
+        def generate_job(self, *_args, **_kwargs):  # noqa: ANN002, ANN003, ANN201
+            self.generate_job_calls += 1
+            raise AssertionError("missing-plan submitted resume must not re-enter planning")
+
+    runtime = _ProbeRuntime()
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=jobs,
+        output_store=outputs,
+        mcp_materialization_store=handoffs,
+    )
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert runtime.generate_job_calls == 0
+    assert getattr(handoffs, "consume_calls", []) == []
+    updated = jobs.get(job_id)
+    assert updated is not None
+    assert updated.planning_result is None
+    assert updated.generation_result is None
+    failure = updated.request.metadata.get("generation_lifecycle_failure")
+    assert isinstance(failure, dict)
+    assert failure["failure_code"] == "submitted_resume_planning_result_missing"
+    assert failure["failure_family"] == "mcp_materialization"
+
+
+def test_doc203_body_mcp_generation_without_planning_fails_closed_before_runtime(
+    tmp_path: Path,
+) -> None:
+    """A Body MCP job cannot enter generation or create a handoff without its plan."""
+
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+    )
+
+    job_id = "job_doc203_body_mcp_plan_required"
+    operation_id = "visual_asset_doc203:body_silhouette:body.front_full:1:plan-required"
+    metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        refs=["face_reference_front", "face_reference_side", "face_reference_rear"],
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        attempt_round=1,
+    )
+    metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": (
+                "system_inferred_body_model_scene_neutral_v1"
+            ),
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": (
+                default_body_refresh_presentation_intent().model_dump(mode="json")
+            ),
+            "mcp_materialization": {
+                "status": "pending",
+                "generation_channel": "mcp",
+                "resume_required": True,
+            },
+        }
+    )
+    jobs = PersistentProductJobStore(tmp_path / "jobs")
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    jobs.save(
+        ProductJobRecord(
+            request=CreateCreativeJobRequest(
+                user_input="Body MCP generation without durable planning",
+                metadata=metadata,
+            ),
+            status=ProductJobStatusValue.BLOCKED,
+            job_id_value=job_id,
+            planning_result=None,
+            generation_result=None,
+            balance_estimate={"credits_required": 0},
+        )
+    )
+
+    class _RuntimeProbe:
+        def __init__(self) -> None:
+            self.scenario_registry = ScenarioRuntime().scenario_registry
+            self.generate_job_calls = 0
+
+        def generate_job(self, *_args, **_kwargs):  # noqa: ANN002, ANN003, ANN201
+            self.generate_job_calls += 1
+            raise AssertionError("Body MCP without planning must not enter generation")
+
+    runtime = _RuntimeProbe()
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=jobs,
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs"),
+        mcp_materialization_store=handoffs,
+    )
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {}},
+    )
+
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert runtime.generate_job_calls == 0
+    updated = jobs.get(job_id)
+    assert updated is not None
+    assert updated.generation_result is None
+    failure = updated.request.metadata.get("generation_lifecycle_failure")
+    assert isinstance(failure, dict)
+    assert failure["failure_code"] == "mcp_materialization_planning_required"
+    assert failure["failure_family"] == "mcp_materialization"
+
+
+def test_doc203_character_card_plan_result_is_durable_at_stage_creation_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The normal planned stage saves its PlanningResult before later resume."""
+
+    from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import (
+        ScenarioRuntimeResult,
+        ScenarioRuntimeStatus,
+    )
+
+    job_id = "job_doc203_planning_durable_at_create"
+    planning = _minimal_planning_result(job_id)
+    base_runtime = ScenarioRuntime()
+    resolution = base_runtime.scenario_registry.resolve({"scenario_id": "general_creative"})
+
+    class _PlannedRuntime:
+        def __init__(self) -> None:
+            self.scenario_registry = base_runtime.scenario_registry
+            self.plan_calls = 0
+
+        def plan_job(self, _payload):  # noqa: ANN001, ANN201
+            self.plan_calls += 1
+            return ScenarioRuntimeResult(
+                status=ScenarioRuntimeStatus.PLANNED,
+                scenario_resolution=resolution,
+                planning_result=planning,
+            )
+
+    monkeypatch.setattr(
+        V3ProductApiService,
+        "_professional_character_card_reference_assets",
+        lambda _self, _ids: [{"asset_id": "face_reference_fixture", "role": "face_reference"}],
+    )
+    monkeypatch.setattr(
+        V3ProductApiService,
+        "_professional_character_card_body_reference_assets",
+        lambda _self, *_args, **_kwargs: [],
+    )
+    jobs = PersistentProductJobStore(tmp_path / "jobs")
+    runtime = _PlannedRuntime()
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=jobs,
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs"),
+        mcp_materialization_store=McpMaterializationHandoffStore(tmp_path / "handoffs"),
+    )
+
+    status = service.create_professional_character_card_stage_job(
+        {"user_input": "planned Body stage durability fixture", "metadata": {}},
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        reference_output_ids=[
+            "face_reference_front_fixture",
+            "face_reference_side_fixture",
+            "face_reference_rear_fixture",
+        ],
+        candidate_index=1,
+        candidate_count=3,
+        source_class="brain_inferred",
+        body_refresh_source_mode="inference_first",
+        body_model_context="system_inferred_body_model_scene_neutral_v1",
+        body_refresh_contract_required=True,
+        generation_channel="mcp",
+        mcp_operation_id="visual_asset_doc203:body_silhouette:body.front_full:1:planned",
+    )
+
+    assert runtime.plan_calls == 1
+    assert status.status == ProductJobStatusValue.PLANNED
+    durable = jobs.get(job_id)
+    assert durable is not None
+    assert durable.planning_result is not None
+    assert durable.generation_result is None

@@ -2138,6 +2138,15 @@ class V3ProductApiService:
                     review_only=True,
                 )
             return self._status_from_record(record)
+        if (
+            record.planning_result is None
+            and record.generation_result is None
+            and self._is_professional_character_card_body_mcp_generation(record)
+        ):
+            return self._blocked_body_mcp_planning_required(
+                record,
+                submitted_resume=resume_finalizing_review,
+            )
         submitted_body_resume_projection = False
         if (
             record.status == ProductJobStatusValue.GENERATING
@@ -2394,6 +2403,67 @@ class V3ProductApiService:
                 return self._status_from_record(record)
         record.status = ProductJobStatusValue.GENERATED
         record.balance_estimate = self._estimate_for_result(generation_result)
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return self._status_from_record(record)
+
+    @staticmethod
+    def _is_professional_character_card_body_mcp_generation(record: ProductJobRecord) -> bool:
+        metadata = dict(record.request.metadata or {})
+        if metadata.get("professional_character_card_preparation") is not True:
+            return False
+        if str(metadata.get("professional_character_card_stage") or "").strip() != "body_silhouette":
+            return False
+        if not str(metadata.get("professional_character_card_slot") or "").strip().startswith("body."):
+            return False
+        if str(metadata.get("generation_channel") or "").strip() != "mcp":
+            return False
+        if str(metadata.get("professional_character_card_body_refresh_source_mode") or "").strip() not in {
+            "inference_first",
+            "reference_assisted",
+        }:
+            return False
+        if metadata.get("professional_character_card_candidate_count") != 3:
+            return False
+        candidate_index = metadata.get("professional_character_card_candidate_index")
+        if type(candidate_index) is not int or not 1 <= candidate_index <= 3:
+            return False
+        return bool(str(metadata.get("mcp_operation_id") or "").strip())
+
+    def _blocked_body_mcp_planning_required(
+        self,
+        record: ProductJobRecord,
+        *,
+        submitted_resume: bool,
+    ) -> ProductJobStatus:
+        metadata = dict(record.request.metadata or {})
+        materialization = metadata.get("mcp_materialization")
+        submitted_marker = (
+            submitted_resume
+            and isinstance(materialization, dict)
+            and str(materialization.get("status") or "").strip() in {"pending", "submitted"}
+        )
+        failure_code = (
+            "submitted_resume_planning_result_missing"
+            if submitted_marker
+            else "mcp_materialization_planning_required"
+        )
+        record.status = ProductJobStatusValue.BLOCKED
+        record.request.metadata = {
+            **self._without_transient_generation_failure_metadata(metadata),
+            "generation_lifecycle_failure": {
+                "schema_version": "v3_generation_lifecycle_failure_v1",
+                "stage": "body_silhouette",
+                "status": "blocked",
+                "failure_family": "mcp_materialization",
+                "failure_code": failure_code,
+                "provider_request_started": False,
+                "remote_brain_request_started": False,
+            },
+        }
+        record.warnings.append(
+            "Professional Body MCP generation was withheld because no durable PlanningResult exists."
+        )
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)
