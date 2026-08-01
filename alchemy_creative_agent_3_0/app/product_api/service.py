@@ -2138,22 +2138,30 @@ class V3ProductApiService:
                     review_only=True,
                 )
             return self._status_from_record(record)
+        submitted_body_resume_projection = False
+        if (
+            record.status == ProductJobStatusValue.GENERATING
+            and not worker_claim
+            and resume_finalizing_review
+        ):
+            submitted_body_resume_projection = self._reconcile_submitted_body_mcp_projection(record)
         if record.status == ProductJobStatusValue.GENERATING and not worker_claim:
             if not (
                 resume_interrupted_mcp_materialization
                 and self._can_resume_interrupted_mcp_materialization(record)
-            ):
+            ) and not submitted_body_resume_projection:
                 return self._status_from_record(record)
-            record.request.metadata = {
-                **self._without_transient_generation_failure_metadata(record.request.metadata),
-                "mcp_materialization_recovery": {
-                    "status": "reentered",
-                    "reason_code": "interrupted_before_handoff",
-                    "generation_channel": "mcp",
-                    "automatic_replay": False,
-                },
-            }
-            self.job_store.save(record)
+            if resume_interrupted_mcp_materialization:
+                record.request.metadata = {
+                    **self._without_transient_generation_failure_metadata(record.request.metadata),
+                    "mcp_materialization_recovery": {
+                        "status": "reentered",
+                        "reason_code": "interrupted_before_handoff",
+                        "generation_channel": "mcp",
+                        "automatic_replay": False,
+                    },
+                }
+                self.job_store.save(record)
         if not self.balance_adapter.has_available_credits(record.balance_estimate.get("credits_required", 0)):
             record.status = ProductJobStatusValue.BLOCKED
             record.warnings.append("Insufficient V3 balance adapter credits for this operation.")
@@ -2407,6 +2415,104 @@ class V3ProductApiService:
             and str(materialization.get("status") or "").strip() == "submitted"
             and bool(str(materialization.get("handoff_id") or "").strip())
         )
+
+    def _reconcile_submitted_body_mcp_projection(self, record: ProductJobRecord) -> bool:
+        """Project one authoritative submitted Body handoff onto its job record.
+
+        A foreground materializer commits the handoff and artifact before the
+        ProductJobRecord necessarily receives its later status projection.  A
+        trusted server resume may reconcile that narrow pending->submitted gap
+        before the GENERATING early-return, but only when the durable handoff
+        independently proves the same Body operation and frozen contract.
+        Ordinary GENERATING jobs, missing plans, stale identities, and contract
+        mismatches remain on the existing guard path.
+        """
+
+        if record.status != ProductJobStatusValue.GENERATING:
+            return False
+        if record.generation_result is not None or record.planning_result is None:
+            return False
+        metadata = dict(record.request.metadata or {})
+        if metadata.get("professional_character_card_preparation") is not True:
+            return False
+        if str(metadata.get("professional_character_card_stage") or "").strip() != "body_silhouette":
+            return False
+        if not str(metadata.get("professional_character_card_slot") or "").strip().startswith("body."):
+            return False
+        if str(metadata.get("generation_channel") or "").strip() != "mcp":
+            return False
+        if str(metadata.get("professional_character_card_body_refresh_source_mode") or "").strip() not in {
+            "inference_first",
+            "reference_assisted",
+        }:
+            return False
+        if metadata.get("professional_character_card_candidate_count") != 3:
+            return False
+        candidate_index = metadata.get("professional_character_card_candidate_index")
+        if type(candidate_index) is not int or not 1 <= candidate_index <= 3:
+            return False
+        materialization = metadata.get("mcp_materialization")
+        if not isinstance(materialization, dict):
+            return False
+        if str(materialization.get("status") or "").strip() not in {"pending", "submitted"}:
+            return False
+        handoff_id = str(materialization.get("handoff_id") or "").strip()
+        operation_id = str(metadata.get("mcp_operation_id") or "").strip()
+        if not handoff_id or not operation_id:
+            return False
+        handoff = self.mcp_materialization_store.get(handoff_id)
+        if not isinstance(handoff, dict):
+            return False
+        if str(handoff.get("status") or "").strip() != "submitted":
+            return False
+        artifact_sha256 = str(handoff.get("artifact_sha256") or "").strip().lower()
+        artifact_file = Path(str(handoff.get("artifact_file") or ""))
+        if not artifact_sha256 or not artifact_file.is_file():
+            return False
+        try:
+            if hashlib.sha256(artifact_file.read_bytes()).hexdigest() != artifact_sha256:
+                return False
+        except (OSError, ValueError):
+            return False
+        if str(handoff.get("operation_id") or "").strip() != operation_id:
+            return False
+        contract = handoff.get("rendering_contract")
+        if not isinstance(contract, dict):
+            return False
+        if contract.get("body_silhouette_mcp_materialization_channel_contract") != (
+            body_silhouette_mcp_materialization_channel_contract()
+        ):
+            return False
+        try:
+            intent = BodyRefreshPresentationIntent.model_validate(
+                metadata.get("professional_character_card_body_refresh_presentation_intent")
+            )
+        except ValidationError:
+            return False
+        if contract.get("body_refresh_presentation_intent") != intent.model_dump(mode="json"):
+            return False
+        for metadata_key, handoff_key in (
+            ("nonce", "nonce"),
+            ("prompt_sha256", "prompt_sha256"),
+        ):
+            expected = str(materialization.get(metadata_key) or "").strip()
+            actual = str(handoff.get(handoff_key) or "").strip()
+            if expected and expected != actual:
+                return False
+        expected_refs = materialization.get("reference_asset_hashes")
+        if expected_refs is not None and list(expected_refs or []) != list(handoff.get("reference_asset_hashes") or []):
+            return False
+        record.request.metadata = {
+            **metadata,
+            "mcp_materialization": {
+                **materialization,
+                "status": "submitted",
+                "generation_channel": "mcp",
+                "resume_required": True,
+            },
+        }
+        self.job_store.save(record)
+        return True
 
     def _blocked_submitted_body_mcp_resume(self, record: ProductJobRecord) -> ProductJobStatus:
         record.status = ProductJobStatusValue.BLOCKED

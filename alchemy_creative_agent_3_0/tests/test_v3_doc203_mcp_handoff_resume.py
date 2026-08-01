@@ -2768,7 +2768,7 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
                 "project_id": "project_doc263_body",
                     "mcp_materialization": {
                     "handoff_id": pending["handoff_id"],
-                    "status": "submitted",
+                    "status": "pending",
                     "generation_channel": "mcp",
                         "resume_required": True,
                     },
@@ -2777,7 +2777,7 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
                     "provider_failure_retry": {"final_failure_code": "stale_provider_failure"},
                 },
         ),
-        status=ProductJobStatusValue.BLOCKED,
+        status=ProductJobStatusValue.GENERATING,
         job_id_value=job_id,
         planning_result=_minimal_planning_result(
             job_id,
@@ -2847,6 +2847,265 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
     assert resumed_handoff["reference_semantic_fingerprint"] == frozen_reference_fingerprint
     assert resumed_handoff["rendering_contract"]["body_refresh_presentation_intent"] == body_intent
     assert "body_silhouette_mcp_materialization_channel_contract" in resumed_handoff["rendering_contract"]
+
+
+def test_doc263_generating_body_resume_reconciles_submitted_handoff_before_consumer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A submitted handoff must reconcile the job projection before the GENERATING guard."""
+
+    job_id = "job_doc263_pending_projection"
+    operation_id = "visual_asset_doc263_pending_projection:body_silhouette:body.front_full:1"
+    prompt = "closed Body Silhouette MCP prompt for projection reconciliation"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+        body_silhouette_mcp_materialization_channel_contract,
+    )
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+    )
+
+    body_intent = default_body_refresh_presentation_intent().model_dump(mode="json")
+    rendering_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_generate",
+        "input_fidelity": "high",
+        "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": body_intent,
+    }
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract=rendering_contract,
+        require_body_rendering_contract=True,
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=_png_bytes(),
+    )
+    assert submitted["status"] == "submitted"
+
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        refs=["face_ref_front", "face_ref_side", "face_ref_rear"],
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "mcp_materialization": {
+                "handoff_id": pending["handoff_id"],
+                "status": "pending",
+                "generation_channel": "mcp",
+                "resume_required": True,
+                "nonce": pending["nonce"],
+                "prompt_sha256": prompt_sha,
+                "reference_asset_hashes": [],
+            },
+        }
+    )
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="pending submitted Body handoff projection",
+            metadata={**planning_metadata, "project_id": "project_doc263_pending_projection"},
+        ),
+        status=ProductJobStatusValue.GENERATING,
+        job_id_value=job_id,
+        planning_result=_minimal_planning_result(job_id, generation_metadata=planning_metadata),
+        generation_result=None,
+        balance_estimate={"credits_required": 0},
+    )
+    job_store.save(record)
+    initial_job_count = job_store.count()
+
+    class _RuntimeProbe:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.scenario_registry = ScenarioRuntime().scenario_registry
+
+        def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls.append(dict(payload.get("metadata") or {}))
+            raise AssertionError("pending submitted Body resume must not re-enter ScenarioRuntime.generate_job")
+
+    runtime = _RuntimeProbe()
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+    consume_calls: list[str] = []
+
+    def fake_consume(current: ProductJobRecord):
+        consume_calls.append(current.job_id)
+        return None
+
+    monkeypatch.setattr(service, "_consume_submitted_body_mcp_artifact", fake_consume)
+    monkeypatch.setattr(service, "_blocked_submitted_body_mcp_resume", lambda current: service._status_from_record(current))
+
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert runtime.calls == []
+    assert consume_calls == [job_id]
+    assert status.status == ProductJobStatusValue.GENERATING
+    assert job_store.count() == initial_job_count
+    updated = job_store.get(job_id)
+    assert updated is not None
+    assert updated.request.metadata["mcp_materialization"]["status"] == "submitted"
+    assert updated.request.metadata["mcp_materialization"]["handoff_id"] == pending["handoff_id"]
+
+
+def test_doc263_generating_body_resume_identity_conflict_stays_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """A missing authoritative handoff must not unlock the submitted consumer."""
+
+    job_id = "job_doc263_projection_conflict"
+    operation_id = "visual_asset_doc263_projection_conflict:body_silhouette:body.front_full:1"
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+    )
+
+    body_intent = default_body_refresh_presentation_intent().model_dump(mode="json")
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        refs=["face_ref_front", "face_ref_side", "face_ref_rear"],
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "mcp_materialization": {
+                "handoff_id": "mcp_handoff_missing_authority",
+                "status": "pending",
+                "generation_channel": "mcp",
+                "resume_required": True,
+            },
+        }
+    )
+    job_store.save(
+        ProductJobRecord(
+            request=CreateCreativeJobRequest(
+                user_input="projection identity conflict",
+                metadata=planning_metadata,
+            ),
+            status=ProductJobStatusValue.GENERATING,
+            job_id_value=job_id,
+            planning_result=_minimal_planning_result(job_id, generation_metadata=planning_metadata),
+            generation_result=None,
+            balance_estimate={"credits_required": 0},
+        )
+    )
+
+    class _RuntimeProbe:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.scenario_registry = ScenarioRuntime().scenario_registry
+
+        def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls.append(dict(payload.get("metadata") or {}))
+            raise AssertionError("identity-conflicted resume must not enter ScenarioRuntime")
+
+    runtime = _RuntimeProbe()
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert runtime.calls == []
+    assert status.status == ProductJobStatusValue.GENERATING
+    updated = job_store.get(job_id)
+    assert updated is not None
+    assert updated.request.metadata["mcp_materialization"]["status"] == "pending"
+
+
+def test_doc263_ordinary_generating_job_does_not_use_submitted_body_bypass(tmp_path: Path) -> None:
+    """The projection is not a general GENERATING-job resume escape hatch."""
+
+    job_id = "job_doc263_ordinary_generating"
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    job_store.save(
+        ProductJobRecord(
+            request=CreateCreativeJobRequest(user_input="ordinary generating job", metadata={}),
+            status=ProductJobStatusValue.GENERATING,
+            job_id_value=job_id,
+            planning_result=None,
+            generation_result=None,
+            balance_estimate={"credits_required": 0},
+        )
+    )
+
+    class _RuntimeProbe:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.scenario_registry = ScenarioRuntime().scenario_registry
+
+        def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls.append(dict(payload.get("metadata") or {}))
+            raise AssertionError("ordinary generating job must remain behind the existing guard")
+
+    runtime = _RuntimeProbe()
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert runtime.calls == []
+    assert status.status == ProductJobStatusValue.GENERATING
 
 
 def test_doc263_submitted_body_resume_preserves_two_face_identity_reference_projection(
