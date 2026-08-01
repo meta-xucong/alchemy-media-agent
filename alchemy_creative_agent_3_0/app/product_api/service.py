@@ -26,7 +26,7 @@ from ..app_shell.routes import API_NAMESPACE, get_route_contracts
 from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..generation_router import GenerationRouter, ProductionImageGenerationProvider, safe_runtime_execution_budget
-from ..generation_router.providers import McpMaterializationProvider
+from ..generation_router.providers import McpMaterializationProvider, build_provider_generation_request
 from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
 from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
@@ -46,6 +46,7 @@ from ..visual_assets import (
     ProjectVisualAssetBindingService,
     bind_professional_mode,
 )
+from ..visual_assets.body_silhouette_source_standard import body_silhouette_mcp_materialization_channel_contract
 from ..visual_assets.character_card import BodyRefreshPresentationIntent
 from ..shared_capabilities import CapabilityRunResult
 from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
@@ -2167,18 +2168,29 @@ class V3ProductApiService:
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
         if generate_request.metadata:
             record.request.metadata = {**dict(record.request.metadata), **dict(generate_request.metadata)}
-        record.request.metadata = self._without_transient_generation_failure_metadata(record.request.metadata)
-        record.status = ProductJobStatusValue.GENERATING
-        record.lifecycle = self._build_lifecycle(record)
-        self.job_store.save(record)
+        submitted_mcp_generation_result = None
+        submitted_mcp_contract_invalid = False
+        submitted_body_resume = self._is_submitted_body_mcp_resume(record)
         try:
-            generation_runtime_result = self.scenario_runtime.generate_job(
-                self._runtime_request_payload(record.request),
-                mock_profile=QUALITY_MODE_TO_MOCK_PROFILE[generate_request.quality_mode],
-                apply_memory_update=False,
-                provider_strategy=provider_strategy,
-                quality_mode=generate_request.quality_mode,
-            )
+            if submitted_body_resume:
+                record.request.metadata = self._without_transient_generation_failure_metadata(record.request.metadata)
+                record.status = ProductJobStatusValue.GENERATING
+                record.lifecycle = self._build_lifecycle(record)
+                self.job_store.save(record)
+                submitted_mcp_generation_result = self._consume_submitted_body_mcp_artifact(record)
+                submitted_mcp_contract_invalid = submitted_mcp_generation_result is None
+            else:
+                record.request.metadata = self._without_transient_generation_failure_metadata(record.request.metadata)
+                record.status = ProductJobStatusValue.GENERATING
+                record.lifecycle = self._build_lifecycle(record)
+                self.job_store.save(record)
+                generation_runtime_result = self.scenario_runtime.generate_job(
+                    self._runtime_request_payload(record.request),
+                    mock_profile=QUALITY_MODE_TO_MOCK_PROFILE[generate_request.quality_mode],
+                    apply_memory_update=False,
+                    provider_strategy=provider_strategy,
+                    quality_mode=generate_request.quality_mode,
+                )
         except Exception as exc:
             if not self._background_generation_attempt_is_current(record, background_attempt_id):
                 return self._status_from_record(record)
@@ -2220,6 +2232,22 @@ class V3ProductApiService:
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
             return self._status_from_record(record)
+        if submitted_mcp_contract_invalid:
+            return self._blocked_submitted_body_mcp_resume(record)
+        if submitted_mcp_generation_result is not None:
+            record.generation_result = submitted_mcp_generation_result
+            record.status = ProductJobStatusValue.FINALIZING
+            record.lifecycle = self._build_lifecycle(record)
+            self.job_store.save(record)
+            checkpoint_status = self._checkpoint_mcp_generation_result(record, submitted_mcp_generation_result)
+            if checkpoint_status is not None:
+                return checkpoint_status
+            return self._resume_finalizing_generation_review(
+                record,
+                generate_request,
+                background_attempt_id,
+                review_only=True,
+            )
         self._record_ecommerce_runtime_provenance(record.request, generation_runtime_result, stage="generation")
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
@@ -2361,6 +2389,251 @@ class V3ProductApiService:
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)
+
+    @staticmethod
+    def _is_submitted_body_mcp_resume(record: ProductJobRecord) -> bool:
+        if record.status not in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.GENERATING}:
+            return False
+        metadata = dict(record.request.metadata or {})
+        materialization = metadata.get("mcp_materialization")
+        return (
+            metadata.get("professional_character_card_preparation") is True
+            and str(metadata.get("professional_character_card_stage") or "").strip() == "body_silhouette"
+            and str(metadata.get("professional_character_card_slot") or "").strip().startswith("body.")
+            and str(metadata.get("generation_channel") or "").strip() == "mcp"
+            and str(metadata.get("professional_character_card_body_refresh_source_mode") or "").strip()
+            in {"inference_first", "reference_assisted"}
+            and isinstance(materialization, dict)
+            and str(materialization.get("status") or "").strip() == "submitted"
+            and bool(str(materialization.get("handoff_id") or "").strip())
+        )
+
+    def _blocked_submitted_body_mcp_resume(self, record: ProductJobRecord) -> ProductJobStatus:
+        record.status = ProductJobStatusValue.BLOCKED
+        record.request.metadata = {
+            **dict(record.request.metadata or {}),
+            "generation_lifecycle_failure": {
+                "schema_version": "v3_generation_lifecycle_failure_v1",
+                "stage": "submitted_mcp_resume",
+                "status": "blocked",
+                "failure_family": "mcp_materialization",
+                "failure_code": "mcp_materialization_submitted_resume_contract_invalid",
+                "provider_request_started": False,
+                "remote_brain_request_started": False,
+            },
+        }
+        record.warnings.append(
+            "Submitted MCP Body resume was withheld because its frozen handoff contract could not be verified."
+        )
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return self._status_from_record(record)
+
+    def _consume_submitted_body_mcp_artifact(self, record: ProductJobRecord) -> PlanningResult | None:
+        """Consume one trusted submitted Body artifact without re-entering generate-stage Brain.
+
+        A submitted MCP handoff already owns its prompt, references, and
+        rendering contract.  Re-entering ``ScenarioRuntime.generate_job``
+        would discard that authority and run capability preparation again.
+        This narrow consumer rebuilds only the provider request envelope from
+        the durable PlanningResult, then delegates artifact consumption and
+        output persistence to the existing MCP provider.
+        """
+
+        if record.status not in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.GENERATING}:
+            return None
+        if record.planning_result is None or record.generation_result is not None:
+            return None
+        metadata = dict(record.request.metadata or {})
+        if metadata.get("professional_character_card_preparation") is not True:
+            return None
+        if str(metadata.get("professional_character_card_stage") or "").strip() != "body_silhouette":
+            return None
+        if not str(metadata.get("professional_character_card_slot") or "").strip().startswith("body."):
+            return None
+        if str(metadata.get("generation_channel") or "").strip() != "mcp":
+            return None
+        if str(metadata.get("professional_character_card_body_refresh_source_mode") or "").strip() not in {
+            "inference_first",
+            "reference_assisted",
+        }:
+            return None
+        try:
+            BodyRefreshPresentationIntent.model_validate(
+                metadata.get("professional_character_card_body_refresh_presentation_intent")
+            )
+        except ValidationError:
+            return None
+        materialization = metadata.get("mcp_materialization")
+        if not isinstance(materialization, dict) or str(materialization.get("status") or "").strip() != "submitted":
+            return None
+        handoff_id = str(materialization.get("handoff_id") or "").strip()
+        if not handoff_id:
+            return None
+        handoff = self.mcp_materialization_store.get(handoff_id)
+        if not isinstance(handoff, dict) or str(handoff.get("status") or "").strip() != "submitted":
+            return None
+
+        planning_result = record.planning_result
+        asset = planning_result.series_plan.assets[0] if planning_result.series_plan.assets else None
+        if asset is None:
+            raise RuntimeError("submitted MCP Body resume has no frozen asset plan")
+        layout = next((item for item in planning_result.layout_plans if item.asset_id == asset.asset_id), None)
+        prompt = next((item for item in planning_result.prompt_compilations if item.asset_id == asset.asset_id), None)
+        condition = next((item for item in planning_result.condition_plans if item.asset_id == asset.asset_id), None)
+        generation_plan = next((item for item in planning_result.generation_plans if item.asset_id == asset.asset_id), None)
+        if layout is None or prompt is None or condition is None or generation_plan is None:
+            raise RuntimeError("submitted MCP Body resume has incomplete frozen planning result")
+
+        frozen_plan_metadata = dict(generation_plan.metadata or {})
+        for key in (
+            "mcp_operation_id",
+            "professional_character_card_stage",
+            "professional_character_card_slot",
+            "generation_channel",
+            "professional_character_card_body_refresh_source_mode",
+            "professional_character_card_body_refresh_presentation_intent",
+        ):
+            if key in frozen_plan_metadata and frozen_plan_metadata.get(key) != metadata.get(key):
+                return None
+        frozen_materialization = frozen_plan_metadata.get("mcp_materialization")
+        if isinstance(frozen_materialization, dict) and str(frozen_materialization.get("handoff_id") or "") != handoff_id:
+            return None
+        expected_nonce = str(materialization.get("nonce") or "").strip()
+        if expected_nonce and expected_nonce != str(handoff.get("nonce") or "").strip():
+            return None
+
+        # These fields are server-owned request context needed to reconnect the
+        # existing handoff.  The frozen prompt/plan objects are copied, never
+        # mutated, and no client-supplied prompt or rendering field is rebuilt.
+        plan_metadata = frozen_plan_metadata
+        for key in (
+            "job_id",
+            "project_id",
+            "template_id",
+            "scenario_id",
+            "generation_channel",
+            "mcp_operation_id",
+            "mcp_materialization",
+            "professional_character_card_preparation",
+            "professional_character_card_stage",
+            "professional_character_card_slot",
+            "professional_character_card_source_class",
+            "professional_character_card_body_refresh_source_mode",
+            "professional_character_card_body_model_context",
+            "professional_character_card_body_refresh_contract_required",
+            "professional_character_card_body_refresh_presentation_intent",
+            "professional_character_card_candidate_index",
+            "professional_character_card_candidate_count",
+            "professional_character_card_reference_output_ids",
+            "professional_identity_reference_strategy",
+            "professional_reference_stage",
+            "professional_anchor_reference_assets",
+            "professional_planning_metadata",
+        ):
+            if key in metadata:
+                plan_metadata[key] = metadata[key]
+        plan_metadata["job_id"] = record.job_id
+        plan_metadata["mcp_materialization"] = dict(materialization)
+        frozen_generation_plan = generation_plan.model_copy(update={"metadata": plan_metadata})
+        generation_request = build_provider_generation_request(
+            asset_spec=asset,
+            layout_plan=layout,
+            prompt_compilation=prompt,
+            condition_plan=condition,
+            generation_plan=frozen_generation_plan,
+            job_id=record.job_id,
+        )
+        handoff_contract = dict(handoff.get("rendering_contract") or {})
+        if handoff_contract.get("body_silhouette_mcp_materialization_channel_contract") != (
+            body_silhouette_mcp_materialization_channel_contract()
+        ):
+            return None
+        if handoff_contract.get("body_refresh_presentation_intent") != metadata.get(
+            "professional_character_card_body_refresh_presentation_intent"
+        ):
+            return None
+        expected_reference_hashes = self.mcp_materialization_store._reference_hashes(
+            list(generation_request.metadata.get("reference_assets") or [])
+        )
+        if list(handoff.get("reference_asset_hashes") or []) != expected_reference_hashes:
+            return None
+        frozen_llm_brain = plan_metadata.get("llm_brain")
+        frozen_prompts = frozen_llm_brain.get("canonical_provider_prompts") if isinstance(frozen_llm_brain, dict) else None
+        frozen_prompt = ""
+        if isinstance(frozen_prompts, list):
+            for item in frozen_prompts:
+                if (
+                    isinstance(item, dict)
+                    and item.get("output_index") == 1
+                    and str(item.get("review_status") or "") == "approved"
+                ):
+                    frozen_prompt = " ".join(str(item.get("prompt") or "").split())
+                    break
+        if frozen_prompt:
+            if " ".join(str(handoff.get("canonical_prompt") or "").split()) != frozen_prompt:
+                return None
+            if str(handoff.get("prompt_sha256") or "") != hashlib.sha256(frozen_prompt.encode("utf-8")).hexdigest():
+                return None
+        generation_router = getattr(self.scenario_runtime, "generation_router", None)
+        if generation_router is None:
+            raise RuntimeError("submitted MCP Body resume has no server-owned generation router")
+        provider_response = generation_router.generate(generation_request)
+        candidates = list(getattr(provider_response, "candidates", []) or [])
+        if not candidates:
+            raise RuntimeError("submitted MCP Body resume produced no persisted candidate")
+        candidate = candidates[0]
+        candidate_metadata = dict(candidate.metadata or {})
+        packaged = planning_result.asset_pack.assets[0] if planning_result.asset_pack.assets else None
+        if packaged is None:
+            raise RuntimeError("submitted MCP Body resume has no frozen packaged asset")
+        packaged_metadata = {
+            **dict(packaged.metadata or {}),
+            "planning_only": False,
+            "selected_candidate_id": candidate.candidate_id,
+            "selected_candidate_provider": candidate.provider,
+            "selected_candidate_is_mock": False,
+            "candidate_metadata": candidate_metadata,
+        }
+        generated_packaged = packaged.model_copy(
+            update={
+                "file_path": candidate.file_path,
+                "uri": candidate.uri,
+                "prompt_compilation_id": candidate.prompt_compilation_id or packaged.prompt_compilation_id,
+                "metadata": packaged_metadata,
+            }
+        )
+        generated_asset_pack = planning_result.asset_pack.model_copy(
+            update={
+                "assets": [generated_packaged],
+                "planning_only": False,
+                "manifest": {
+                    **dict(planning_result.asset_pack.manifest or {}),
+                    "planning_only": False,
+                    "selected_candidate_count": 1,
+                },
+            }
+        )
+        return planning_result.model_copy(
+            update={
+                "planning_result_id": stable_id(
+                    "generation_result",
+                    record.job_id,
+                    planning_result.planning_result_id,
+                    "submitted_mcp",
+                ),
+                "generation_plans": [frozen_generation_plan],
+                "asset_pack": generated_asset_pack,
+                "metadata": {
+                    **dict(planning_result.metadata or {}),
+                    "planning_only": False,
+                    "candidate_loop": True,
+                    "candidate_count": len(candidates),
+                    "submitted_mcp_consumer": "frozen_planning_result",
+                    "provider_metadata": dict(getattr(provider_response, "provider_metadata", {}) or {}),
+                },
+            }
+        )
 
     def _checkpoint_mcp_generation_result(
         self,

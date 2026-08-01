@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.generation_router import (
+    GenerationRouter,
     McpMaterializationProvider,
     build_provider_generation_request,
 )
@@ -2647,6 +2648,649 @@ def test_doc228_exact_body_handoff_resume_reenters_runtime_despite_stale_failed_
     assert metadata["professional_character_card_body_refresh_presentation_intent"] == body_intent
     assert metadata["mcp_materialization"]["handoff_id"] == pending["handoff_id"]
     assert status.status == ProductJobStatusValue.BLOCKED
+
+
+def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
+    tmp_path: Path,
+) -> None:
+    """A submitted Body handoff must not re-enter Brain/capability generation.
+
+    The fixture has a frozen plan, submitted typed pixels, and no
+    generation_result; the expected path is consume -> generation_result ->
+    post-generation review, while the fake runtime must remain untouched.
+    """
+
+    job_id = "job_doc263_body_submitted_consumer"
+    operation_id = "visual_asset_doc263_body:body_silhouette:body.front_full:1"
+    prompt = "closed Body Silhouette MCP prompt"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+
+    class _RecordingHandoffStore(McpMaterializationHandoffStore):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.consume_calls: list[dict] = []
+            self.observed_inflight_status: ProductJobStatusValue | None = None
+            self.observed_inflight_metadata: dict = {}
+
+        def consume(self, handoff_id: str, *, expected_checkpoint=None):  # noqa: ANN001, ANN201
+            observed = job_store.get(job_id)
+            if observed is not None:
+                self.observed_inflight_status = observed.status
+                self.observed_inflight_metadata = dict(observed.request.metadata)
+            self.consume_calls.append(
+                {
+                    "handoff_id_present": bool(str(handoff_id or "").strip()),
+                    "expected_checkpoint_keys": sorted(dict(expected_checkpoint or {}).keys()),
+                }
+            )
+            return super().consume(handoff_id, expected_checkpoint=expected_checkpoint)
+
+    handoff_store = _RecordingHandoffStore(tmp_path / "handoffs")
+    from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+        body_silhouette_mcp_materialization_channel_contract,
+    )
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+    )
+
+    body_intent = default_body_refresh_presentation_intent().model_dump(mode="json")
+    frozen_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_generate",
+        "input_fidelity": "high",
+        "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": body_intent,
+    }
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract=frozen_contract,
+        require_body_rendering_contract=True,
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=_png_bytes(),
+    )
+    assert submitted["status"] == "submitted"
+    frozen_handoff = handoff_store.get(pending["handoff_id"])
+    assert frozen_handoff is not None
+    frozen_rendering_fingerprint = frozen_handoff["rendering_contract_fingerprint"]
+    frozen_reference_fingerprint = frozen_handoff["reference_semantic_fingerprint"]
+
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "real_image_generation": True,
+            "llm_brain": {
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": prompt,
+                        "review_status": "approved",
+                    }
+                ]
+            },
+        }
+    )
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="body submitted consumer checkpoint",
+            metadata={
+                **planning_metadata,
+                "project_id": "project_doc263_body",
+                    "mcp_materialization": {
+                    "handoff_id": pending["handoff_id"],
+                    "status": "submitted",
+                    "generation_channel": "mcp",
+                        "resume_required": True,
+                    },
+                    "generation_lifecycle_failure": {"failure_code": "stale_generation_failure"},
+                    "remote_creative_brain_outcome": {"status": "stale"},
+                    "provider_failure_retry": {"final_failure_code": "stale_provider_failure"},
+                },
+        ),
+        status=ProductJobStatusValue.BLOCKED,
+        job_id_value=job_id,
+        planning_result=_minimal_planning_result(
+            job_id,
+            generation_metadata=planning_metadata,
+        ),
+        generation_result=None,
+        balance_estimate={"credits_required": 0},
+    )
+    job_store.save(record)
+    handoff_store.job_store = job_store
+    initial_job_count = job_store.count()
+    frozen_planning_result_id = record.planning_result.planning_result_id
+    frozen_prompt_compilation_id = record.planning_result.prompt_compilations[0].prompt_compilation_id
+
+    class _BrainAndCapabilityProbeRuntime:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+            self.scenario_registry = ScenarioRuntime().scenario_registry
+
+        def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.calls.append(dict(payload.get("metadata") or {}))
+            raise AssertionError("submitted Body resume must not re-enter ScenarioRuntime.generate_job")
+
+    runtime = _BrainAndCapabilityProbeRuntime()
+    runtime.generation_router = GenerationRouter(
+        mcp_provider=McpMaterializationProvider(
+            output_store=output_store,
+            handoff_store=handoff_store,
+        )
+    )
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+    status = service.generate_asset_series(
+        job_id,
+        {
+            "quality_mode": "strict",
+            "metadata": {"_v3_resume_finalizing_review": True},
+        },
+    )
+
+    assert runtime.calls == []
+    assert len(handoff_store.consume_calls) == 1
+    assert handoff_store.observed_inflight_status == ProductJobStatusValue.GENERATING
+    assert "generation_lifecycle_failure" not in handoff_store.observed_inflight_metadata
+    assert "remote_creative_brain_outcome" not in handoff_store.observed_inflight_metadata
+    assert "provider_failure_retry" not in handoff_store.observed_inflight_metadata
+    assert status.status == ProductJobStatusValue.GENERATED
+    assert job_store.count() == initial_job_count
+    assert len(output_store.list_by_job(job_id)) == 1
+    updated = job_store.get(job_id)
+    assert updated is not None
+    assert updated.generation_result is not None
+    assert updated.planning_result is not None
+    assert updated.planning_result.planning_result_id == frozen_planning_result_id
+    assert updated.planning_result.prompt_compilations[0].prompt_compilation_id == frozen_prompt_compilation_id
+    assert updated.request.metadata["mcp_materialization"]["status"] == "job_checkpointed"
+    assert updated.request.metadata["professional_character_card_body_refresh_source_mode"] == "inference_first"
+    assert updated.request.metadata["professional_character_card_body_refresh_presentation_intent"] == body_intent
+    assert "post_generation_review_package" in updated.generation_result.metadata
+    resumed_handoff = handoff_store.get(pending["handoff_id"])
+    assert resumed_handoff is not None
+    assert resumed_handoff["rendering_contract_fingerprint"] == frozen_rendering_fingerprint
+    assert resumed_handoff["reference_semantic_fingerprint"] == frozen_reference_fingerprint
+    assert resumed_handoff["rendering_contract"]["body_refresh_presentation_intent"] == body_intent
+    assert "body_silhouette_mcp_materialization_channel_contract" in resumed_handoff["rendering_contract"]
+
+
+def test_doc263_submitted_body_resume_preserves_two_face_identity_reference_projection(
+    tmp_path: Path,
+) -> None:
+    """The real two-face-reference Body envelope must reach the core consumer intact."""
+
+    job_id = "job_doc263_body_two_face_refs"
+    operation_id = "visual_asset_eab9d20_body:body_silhouette:body.front_full:1"
+    prompt = "closed Body Silhouette MCP prompt with face continuity refs"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    reference_assets = [
+        {
+            "asset_id": "face_ref_front::portrait_identity_crop",
+            "derivative_kind": "portrait_identity_crop",
+            "identity_evidence_scope": "feature_detail",
+            "sha256": "2" * 64,
+        },
+        {
+            "asset_id": "face_ref_front::portrait_identity_geometry_crop",
+            "derivative_kind": "portrait_identity_pose_geometry_crop",
+            "identity_evidence_scope": "pose_geometry",
+            "sha256": "3" * 64,
+        },
+    ]
+
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+
+    class _RecordingHandoffStore(McpMaterializationHandoffStore):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.consume_calls = 0
+
+        def consume(self, handoff_id: str, *, expected_checkpoint=None):  # noqa: ANN001, ANN201
+            self.consume_calls += 1
+            return super().consume(handoff_id, expected_checkpoint=expected_checkpoint)
+
+    handoff_store = _RecordingHandoffStore(tmp_path / "handoffs")
+    from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+        body_silhouette_mcp_materialization_channel_contract,
+    )
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+    )
+
+    body_intent = default_body_refresh_presentation_intent().model_dump(mode="json")
+    frozen_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+        "input_fidelity": "high",
+        "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": (
+            body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_refresh_presentation_intent": body_intent,
+    }
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=reference_assets,
+        rendering_contract=frozen_contract,
+        require_body_rendering_contract=True,
+    )
+    reference_hashes = handoff_store._reference_hashes(reference_assets)
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=reference_hashes,
+        artifact_bytes=_png_bytes(),
+    )
+    assert submitted["status"] == "submitted"
+    frozen_handoff = handoff_store.get(pending["handoff_id"])
+    assert frozen_handoff is not None
+    assert len(frozen_handoff["reference_assets"]) == 2
+    assert frozen_handoff["reference_asset_hashes"] == reference_hashes
+
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "professional_character_card_reference_output_ids": [
+                item["asset_id"] for item in reference_assets
+            ],
+            "reference_assets": reference_assets,
+            "real_image_generation": True,
+            "llm_brain": {
+                "canonical_provider_prompts": [
+                    {
+                        "output_index": 1,
+                        "prompt": prompt,
+                        "review_status": "approved",
+                    }
+                ]
+            },
+        }
+    )
+    materialization = {
+        "handoff_id": pending["handoff_id"],
+        "nonce": pending["nonce"],
+        "status": "submitted",
+        "generation_channel": "mcp",
+        "resume_required": True,
+    }
+    planning_metadata["mcp_materialization"] = materialization
+    planning = _minimal_planning_result(
+        job_id,
+        generation_metadata=planning_metadata,
+    )
+    frozen_generation_plan = planning.generation_plans[0].model_copy(
+        update={"candidate_count": 3, "metadata": planning_metadata}
+    )
+    planning = planning.model_copy(update={"generation_plans": [frozen_generation_plan]})
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="body submitted consumer with two face identity refs",
+            metadata={
+                **planning_metadata,
+                "project_id": "project_doc263_body_two_face_refs",
+            },
+        ),
+        status=ProductJobStatusValue.BLOCKED,
+        job_id_value=job_id,
+        planning_result=planning,
+        generation_result=None,
+        balance_estimate={"credits_required": 0},
+    )
+    job_store.save(record)
+    initial_job_count = job_store.count()
+
+    class _SubmittedMcpConsumer:
+        def __init__(self) -> None:
+            self.requests: list[dict] = []
+
+        def generate(self, request):  # noqa: ANN001, ANN201
+            self.requests.append(dict(request.metadata))
+            projected_refs = list(request.metadata.get("reference_assets") or [])
+            assert projected_refs == reference_assets
+            assert request.metadata["professional_character_card_candidate_count"] == 3
+            assert request.metadata["professional_character_card_candidate_index"] == 1
+            assert request.metadata["mcp_operation_id"] == operation_id
+            handoff_id = request.metadata["mcp_materialization"]["handoff_id"]
+            candidate_id = "candidate_doc263_body_two_face_refs"
+            output_id = "v3_output_2632face000000000001"
+            expected_checkpoint = {
+                "job_id": job_id,
+                "candidate_id": candidate_id,
+                "output_id": output_id,
+            }
+            artifact = handoff_store.consume(
+                handoff_id,
+                expected_checkpoint=expected_checkpoint,
+            )
+            output = output_store.save_base64_output(
+                job_id=job_id,
+                candidate_id=candidate_id,
+                asset_id=request.generation_plan.asset_id,
+                provider="codex_builtin_imagegen",
+                model="gpt-image-2",
+                encoded_image=artifact["artifact_base64"],
+                output_id=output_id,
+                mime_type=artifact["artifact_mime_type"],
+                output_format=artifact["artifact_format"],
+                metadata={"mcp_handoff_id": handoff_id},
+            )
+            handoff_store.mark_output_checkpoint(
+                handoff_id,
+                job_id=job_id,
+                candidate_id=candidate_id,
+                output_id=output.output_id,
+                artifact_sha256=artifact["artifact_sha256"],
+            )
+            return SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        candidate_id=candidate_id,
+                        file_path=output.file_path,
+                        uri=output.download_url,
+                        provider="codex_builtin_imagegen",
+                        prompt_compilation_id=request.prompt_compilation.prompt_compilation_id,
+                        metadata={
+                            "output_id": output.output_id,
+                            "mcp_materialization": {
+                                "handoff_id": handoff_id,
+                                "expected_checkpoint": expected_checkpoint,
+                            },
+                        },
+                    )
+                ],
+                provider_metadata={"generation_channel": "mcp"},
+            )
+
+    class _Runtime:
+        def __init__(self) -> None:
+            self.scenario_registry = ScenarioRuntime().scenario_registry
+            self.generation_router = _SubmittedMcpConsumer()
+            self.generate_job_calls = 0
+
+        def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+            self.generate_job_calls += 1
+            raise AssertionError("submitted Body resume must not re-enter ScenarioRuntime.generate_job")
+
+    runtime = _Runtime()
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert runtime.generate_job_calls == 0
+    assert len(runtime.generation_router.requests) == 1
+    assert handoff_store.consume_calls == 1
+    assert status.status == ProductJobStatusValue.GENERATED
+    assert job_store.count() == initial_job_count
+    assert len(output_store.list_by_job(job_id)) == 1
+    updated = job_store.get(job_id)
+    assert updated is not None
+    assert updated.request.metadata["professional_character_card_candidate_count"] == 3
+    assert updated.request.metadata["professional_character_card_candidate_index"] == 1
+    assert updated.request.metadata["mcp_operation_id"] == operation_id
+    assert updated.generation_result is not None
+    assert "post_generation_review_package" in updated.generation_result.metadata
+    resumed_handoff = handoff_store.get(pending["handoff_id"])
+    assert resumed_handoff is not None
+    assert resumed_handoff["status"] == "job_checkpointed"
+    assert resumed_handoff["reference_asset_hashes"] == reference_hashes
+    assert resumed_handoff["rendering_contract"]["body_refresh_presentation_intent"] == body_intent
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "planning_result_missing",
+        "handoff_status",
+        "handoff_nonce",
+        "handoff_prompt",
+        "handoff_reference",
+        "handoff_body_contract",
+        "handoff_presentation_intent",
+        "planning_identity",
+    ],
+)
+def test_doc263_submitted_body_resume_contract_mismatch_fails_closed(
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    """A malformed submitted Body resume never falls back into generation-stage Brain."""
+
+    job_id = f"job_doc263_contract_{mismatch}"
+    operation_id = f"visual_asset_doc263_contract:body_silhouette:body.front_full:1:{mismatch}"
+    prompt = "closed Body Silhouette MCP prompt"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+        body_silhouette_mcp_materialization_channel_contract,
+    )
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+    )
+    body_intent = default_body_refresh_presentation_intent().model_dump(mode="json")
+
+    frozen_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_generate",
+        "input_fidelity": "high",
+        "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
+        "body_silhouette_mcp_materialization_channel_contract": body_silhouette_mcp_materialization_channel_contract(),
+        "body_refresh_presentation_intent": body_intent,
+    }
+
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+
+    class _MismatchHandoffStore(McpMaterializationHandoffStore):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.consume_calls = 0
+
+        def get(self, handoff_id: str):  # noqa: ANN201
+            payload = super().get(handoff_id)
+            if not isinstance(payload, dict):
+                return payload
+            mutated = dict(payload)
+            if mismatch == "handoff_status":
+                mutated["status"] = "pending"
+            elif mismatch == "handoff_nonce":
+                mutated["nonce"] = "wrong_nonce"
+            elif mismatch == "handoff_prompt":
+                mutated["canonical_prompt"] = "different frozen prompt"
+            elif mismatch == "handoff_reference":
+                mutated["reference_asset_hashes"] = ["different_reference_hash"]
+            elif mismatch == "handoff_body_contract":
+                contract = dict(mutated.get("rendering_contract") or {})
+                contract.pop("body_silhouette_mcp_materialization_channel_contract", None)
+                mutated["rendering_contract"] = contract
+            elif mismatch == "handoff_presentation_intent":
+                contract = dict(mutated.get("rendering_contract") or {})
+                contract["body_refresh_presentation_intent"] = {
+                    "schema_version": "body_refresh_presentation_intent_v1",
+                    "top_presentation": "unspecified",
+                    "bottom_presentation": "unspecified",
+                    "footwear_presentation": "unspecified",
+                }
+                mutated["rendering_contract"] = contract
+            return mutated
+
+        def consume(self, handoff_id: str, *, expected_checkpoint=None):  # noqa: ANN001, ANN201
+            self.consume_calls += 1
+            return super().consume(handoff_id, expected_checkpoint=expected_checkpoint)
+
+    handoff_store = _MismatchHandoffStore(tmp_path / "handoffs")
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract=frozen_contract,
+        require_body_rendering_contract=True,
+    )
+    handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=_png_bytes(),
+    )
+
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "real_image_generation": True,
+            "llm_brain": {
+                "canonical_provider_prompts": [
+                    {"output_index": 1, "prompt": prompt, "review_status": "approved"}
+                ]
+            },
+        }
+    )
+    materialization = {
+        "handoff_id": pending["handoff_id"],
+        "status": "submitted",
+        "generation_channel": "mcp",
+        "resume_required": True,
+        "nonce": pending["nonce"],
+    }
+    planning_generation_metadata = dict(planning_metadata)
+    if mismatch == "planning_identity":
+        planning_generation_metadata["mcp_operation_id"] = "different-operation"
+    planning_result = (
+        None
+        if mismatch == "planning_result_missing"
+        else _minimal_planning_result(job_id, generation_metadata=planning_generation_metadata)
+    )
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="submitted Body contract mismatch",
+            metadata={**planning_metadata, "mcp_materialization": materialization},
+        ),
+        status=ProductJobStatusValue.BLOCKED,
+        job_id_value=job_id,
+        planning_result=planning_result,
+        generation_result=None,
+        balance_estimate={"credits_required": 0},
+    )
+    job_store.save(record)
+
+    class _ProbeRuntime:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.scenario_registry = ScenarioRuntime().scenario_registry
+            self.generation_router = GenerationRouter(
+                mcp_provider=McpMaterializationProvider(
+                    output_store=output_store,
+                    handoff_store=handoff_store,
+                )
+            )
+
+        def generate_job(self, *_args, **_kwargs):  # noqa: ANN002, ANN003, ANN201
+            self.calls += 1
+            raise AssertionError("invalid submitted Body resume must not fall back to generate-stage runtime")
+
+    runtime = _ProbeRuntime()
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert runtime.calls == 0
+    assert handoff_store.consume_calls == 0
+    assert job_store.count() == 1
+    updated = job_store.get(job_id)
+    assert updated is not None
+    assert updated.generation_result is None
+    assert updated.request.metadata["generation_lifecycle_failure"]["failure_code"] == (
+        "mcp_materialization_submitted_resume_contract_invalid"
+    )
 
 
 def test_doc228_exact_body_handoff_resume_accepts_real_productapi_contract_envelope(
