@@ -5838,11 +5838,12 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         The submitted handoff's rendering contract is the frozen server-owned
         authority once nonce, operation id, prompt hash and references have
         matched.  A ProductApi resume can rebuild the current app request from
-        the strict job envelope, which may surface ``quality=strict`` and omit
-        ``input_fidelity`` even though the original MCP renderer handoff was
-        frozen as ``quality=high`` with high input fidelity.  This exception is
-        deliberately limited to strict Body Silhouette handoffs whose Body
-        channel contract and request-scoped presentation intent still match.
+        the strict job envelope, which may surface ``quality=strict`` or
+        ``quality=medium`` and omit ``input_fidelity`` even though the original
+        MCP renderer handoff was frozen as ``quality=high`` with high input
+        fidelity.  This exception is deliberately limited to strict Body
+        Silhouette handoffs whose Body channel contract and request-scoped
+        presentation intent still match.
         """
 
         if not (
@@ -5883,10 +5884,8 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             return False
         frozen_quality = str(frozen.get("quality") or "").strip()
         current_quality = str(current.get("quality") or "").strip()
-        if frozen_quality != current_quality and (frozen_quality, current_quality) != (
-            "high",
-            "strict",
-        ):
+        allowed_quality_drifts = {("high", "strict"), ("high", "medium")}
+        if frozen_quality != current_quality and (frozen_quality, current_quality) not in allowed_quality_drifts:
             return False
         frozen_input_fidelity = frozen.get("input_fidelity")
         current_input_fidelity = current.get("input_fidelity")
