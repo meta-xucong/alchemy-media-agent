@@ -1438,7 +1438,7 @@ def test_doc245_body_mcp_build_app_request_freezes_body_owned_rendering_contract
     provider = McpMaterializationProvider()
 
     app_request, _, _ = provider._build_app_request(  # noqa: SLF001
-        _mcp_body_generation_request(prompt, source_mode="reference_assisted")
+        _mcp_body_generation_request(prompt, source_mode="inference_first")
     )
 
     variables = app_request.prompt_plan.variables
@@ -1715,6 +1715,7 @@ def test_doc245_body_handoff_store_preserves_typed_hair_backdrop_and_fingerprint
         "output_format": "png",
         "count": 1,
         "api_operation": "image_edit",
+        "body_refresh_source_mode": "inference_first",
         "input_fidelity": "high",
         "input_fidelity_required": True,
         "size_normalization": "white_matte_contain_to_contract_size",
@@ -1784,6 +1785,7 @@ def test_doc245_body_handoff_store_rejects_old_strict_contract_without_hair_or_b
         "output_format": "png",
         "count": 1,
         "api_operation": "image_edit",
+        "body_refresh_source_mode": "inference_first",
         "size_normalization": "white_matte_contain_to_contract_size",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
@@ -1819,6 +1821,7 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
         "output_format": "png",
         "count": 1,
         "api_operation": "image_edit",
+        "body_refresh_source_mode": "reference_assisted",
         "size_normalization": "white_matte_contain_to_contract_size",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
@@ -1830,6 +1833,22 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
         "body_silhouette_backdrop_presentation_contract": body_source_contract[
             "backdrop_presentation_contract"
         ],
+        "body_mcp_reference_partition": {
+            "contract_version": "body_mcp_reference_partition_v1",
+            "body_proportion_reference": {
+                "role": "body_proportion_reference",
+                "truth_layer": "body_proportion_truth",
+                "asset_count": 1,
+                "asset_hashes": ["doc245-body-fixture-hash"],
+            },
+            "face_identity_reference": {
+                "role": "face_identity_reference",
+                "truth_layer": "identity_continuity",
+                "identity_continuity_only": True,
+                "asset_count": 1,
+                "asset_hashes": ["doc245-face-fixture-hash"],
+            },
+        },
     }
     store = McpMaterializationHandoffStore(storage_root=tmp_path)
     handoff = store.ensure_pending(
@@ -1895,6 +1914,7 @@ def test_doc245_body_host_public_view_consumer_reads_typed_hair_backdrop_contrac
         "output_format": "png",
         "count": 1,
         "api_operation": "image_generate",
+        "body_refresh_source_mode": "inference_first",
         "size_normalization": "white_matte_contain_to_contract_size",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
@@ -2094,6 +2114,7 @@ def _doc245_body_frozen_contract_fields() -> dict[str, object]:
     )
     body_source_contract = stage_metadata["professional_body_silhouette_source_contract"]
     return {
+        "body_refresh_source_mode": "inference_first",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),
@@ -2232,6 +2253,7 @@ def test_doc245_mcp_handoff_store_fails_closed_for_body_contract_without_valid_i
     store = McpMaterializationHandoffStore(tmp_path / "handoffs")
     rendering_contract = {
         **_doc245_generic_mcp_rendering_contract(),
+        "body_refresh_source_mode": "inference_first",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),

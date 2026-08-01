@@ -22,6 +22,7 @@ import threading
 import time
 from typing import Any
 
+from ..creative_core.mcp_reference_partition import McpBodyReferencePartition
 from ..creative_core.rules import stable_id
 from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_channel_contract,
@@ -854,10 +855,14 @@ class McpMaterializationHandoffStore:
             "input_fidelity",
             "input_fidelity_required",
             "size_normalization",
+            "body_refresh_source_mode",
         }
         safe = {key: value for key, value in raw.items() if key in allowed}
         expected_body_contract = body_silhouette_mcp_materialization_channel_contract()
-        if raw.get("body_silhouette_mcp_materialization_channel_contract") != expected_body_contract:
+        body_channel_present = (
+            raw.get("body_silhouette_mcp_materialization_channel_contract") == expected_body_contract
+        )
+        if not body_channel_present:
             if require_body_rendering_contract:
                 raise McpMaterializationError(
                     "mcp_materialization_body_rendering_contract_invalid",
@@ -865,6 +870,39 @@ class McpMaterializationHandoffStore:
                 )
             return safe
         safe["body_silhouette_mcp_materialization_channel_contract"] = expected_body_contract
+        raw_source_mode = raw.get("body_refresh_source_mode")
+        if raw_source_mode not in {"inference_first", "reference_assisted"}:
+            if require_body_rendering_contract:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_refresh_source_mode_missing"},
+                )
+            # A body channel without a server-owned strict source mode is a
+            # legacy/generic projection: retain only the generic channel and
+            # do not emit intent, Body truth, or other strict fields.
+            return safe
+        safe["body_refresh_source_mode"] = raw_source_mode
+        raw_partition = raw.get("body_mcp_reference_partition")
+        if raw_source_mode == "reference_assisted":
+            if raw_partition is None:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_reference_partition_missing"},
+                )
+            try:
+                safe["body_mcp_reference_partition"] = McpBodyReferencePartition.model_validate(
+                    raw_partition
+                ).model_dump(mode="json")
+            except Exception:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_reference_partition_invalid"},
+                ) from None
+        elif raw_partition is not None:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_reference_partition_forbidden_for_inference"},
+            )
         raw_intent = raw.get("body_refresh_presentation_intent")
         if raw_intent is None:
             if not require_body_rendering_contract:

@@ -20,6 +20,10 @@ from ..creative_core.prompt_language import (
     split_positive_and_negative_prompt,
     strip_negated_product_phrases,
 )
+from ..creative_core.mcp_reference_partition import (
+    McpBodyReferencePartition,
+    build_mcp_body_reference_partition,
+)
 from ..creative_core.rules import stable_id
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
@@ -35,7 +39,10 @@ from ..visual_assets.character_card import (
     unspecified_body_refresh_presentation_intent,
 )
 from app.providers.base import ProviderRuntimeError
-from .mcp_materialization import McpMaterializationError, McpMaterializationHandoffStore
+from .mcp_materialization import (
+    McpMaterializationError,
+    McpMaterializationHandoffStore,
+)
 
 
 def safe_runtime_execution_budget(execution_audit: Any) -> dict[str, Any]:
@@ -2133,7 +2140,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "required_reference_count": len(required_unresolved),
                 },
             )
-        if len(assets) > self.max_provider_reference_images:
+        reference_limit = self._reference_capacity_limit(request, assets)
+        if reference_limit is not None and len(assets) > reference_limit:
             # Reference count is a technical admission fact, not creative
             # evidence that V3 may trim.  A required or optional image input
             # must either fit the declared GPT Image 2 contract or stop before
@@ -2141,7 +2149,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             # change the user-authorized reference truth.
             resolution_audit["capacity_exceeded"] = {
                 "reference_count": len(assets),
-                "maximum_reference_images": self.max_provider_reference_images,
+                "maximum_reference_images": reference_limit,
             }
             request.metadata["provider_reference_resolution_audit"] = resolution_audit
             raise ReferenceInputAdmissionError(
@@ -2150,10 +2158,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 detail={
                     "reference_input_failure_code": "reference_input_capability_mismatch",
                     "reference_count": len(assets),
-                    "maximum_reference_images": self.max_provider_reference_images,
+                    "maximum_reference_images": reference_limit,
                 },
             )
         return assets
+
+    def _reference_capacity_limit(
+        self,
+        request: GenerationRequest,
+        reference_assets: list[dict[str, Any]],
+    ) -> int | None:
+        """Return the route-specific input limit without changing the base cap."""
+
+        return self.max_provider_reference_images
 
     @staticmethod
     def _reference_technical_admission(file_path: Path) -> tuple[bool, str]:
@@ -5511,6 +5528,100 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         super().__init__(output_store=output_store)
         self.handoff_store = handoff_store or McpMaterializationHandoffStore()
 
+    def _reference_capacity_limit(
+        self,
+        request: GenerationRequest,
+        reference_assets: list[dict[str, Any]],
+    ) -> int | None:
+        metadata = self._generation_request_metadata(request)
+        if not (
+            self._is_character_card_body_mcp_materialization(metadata)
+            and self._is_strict_character_card_body_refresh(metadata)
+        ):
+            return super()._reference_capacity_limit(request, reference_assets)
+        source_mode = str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip()
+        if source_mode not in {"inference_first", "reference_assisted"}:
+            raise ReferenceInputAdmissionError(
+                "Strict Body MCP materialization requires a closed source mode.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "body_refresh_source_mode_invalid",
+                    "fallback": "blocked",
+                },
+            )
+        if source_mode == "inference_first":
+            if metadata.get("body_mcp_reference_partition") is not None:
+                raise ReferenceInputAdmissionError(
+                    "Inference-first Body MCP materialization cannot carry Body truth references.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "body_reference_partition_forbidden_for_inference",
+                        "fallback": "blocked",
+                    },
+                )
+            # Inference-first preserves the ordinary MCP/Face-reference cap;
+            # it does not manufacture or admit a Body truth partition.
+            return super()._reference_capacity_limit(request, reference_assets)
+        if not reference_assets:
+            # Exact submitted/resume requests may rebuild the provider request
+            # without replaying the original reference list.  Recover the
+            # partition only from the server-owned frozen handoff (or an
+            # already projected typed partition), never from a generic client
+            # reference field.  Missing/invalid strict fields remain closed.
+            partition_payload = metadata.get("body_mcp_reference_partition")
+            if not isinstance(partition_payload, dict):
+                materialization = metadata.get("mcp_materialization")
+                handoff_id = (
+                    str(materialization.get("handoff_id") or "").strip()
+                    if isinstance(materialization, dict)
+                    else ""
+                )
+                handoff = self.handoff_store.get(handoff_id) if handoff_id else None
+                frozen_contract = (
+                    handoff.get("rendering_contract")
+                    if isinstance(handoff, dict)
+                    else None
+                )
+                partition_payload = (
+                    frozen_contract.get("body_mcp_reference_partition")
+                    if isinstance(frozen_contract, dict)
+                    else None
+                )
+            try:
+                partition = McpBodyReferencePartition.model_validate(partition_payload)
+            except ValueError as exc:
+                raise ReferenceInputAdmissionError(
+                    "Strict Body MCP materialization requires a frozen reference partition.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": (
+                            "body_mcp_reference_partition_missing"
+                            if partition_payload is None
+                            else str(exc) or "body_mcp_reference_partition_invalid"
+                        ),
+                        "fallback": "blocked",
+                    },
+                ) from exc
+            request.metadata["body_mcp_reference_partition"] = partition.model_dump(mode="json")
+            return None
+        try:
+            partition = build_mcp_body_reference_partition(reference_assets).model_dump(mode="json")
+        except ValueError as exc:
+            raise ReferenceInputAdmissionError(
+                "Strict Body MCP materialization requires separate Body and Face reference partitions.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": str(exc) or "body_mcp_reference_partition_invalid",
+                    "fallback": "blocked",
+                },
+            ) from exc
+        request.metadata["body_mcp_reference_partition"] = partition
+        # MCP has no direct GPT image-edit reference-count contract.  The
+        # typed partition above is the admission boundary; retain every
+        # admitted Body and Face input rather than changing the base provider
+        # cap or silently trimming the request.
+        return None
+
     def _select_provider(self, reference_assets: list[dict[str, Any]]) -> str:
         return "codex_builtin_imagegen"
 
@@ -5536,6 +5647,30 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 body_silhouette_mcp_materialization_channel_contract()
             )
             if self._is_strict_character_card_body_refresh(metadata):
+                source_mode = str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip()
+                if source_mode not in {"inference_first", "reference_assisted"}:
+                    raise ReferenceInputAdmissionError(
+                        "Strict Body MCP materialization requires a closed source mode.",
+                        provider=self.provider_name,
+                        detail={
+                            "reference_input_failure_code": "body_refresh_source_mode_invalid",
+                            "fallback": "blocked",
+                        },
+                    )
+                contract["body_refresh_source_mode"] = source_mode
+                if source_mode == "reference_assisted":
+                    contract["body_mcp_reference_partition"] = McpBodyReferencePartition.model_validate(
+                        metadata.get("body_mcp_reference_partition")
+                    ).model_dump(mode="json")
+                elif metadata.get("body_mcp_reference_partition") is not None:
+                    raise ReferenceInputAdmissionError(
+                        "Inference-first Body MCP materialization cannot carry Body truth references.",
+                        provider=self.provider_name,
+                        detail={
+                            "reference_input_failure_code": "body_reference_partition_forbidden_for_inference",
+                            "fallback": "blocked",
+                        },
+                    )
                 contract["body_refresh_presentation_intent"] = (
                     self._safe_body_refresh_presentation_intent(metadata)
                 )

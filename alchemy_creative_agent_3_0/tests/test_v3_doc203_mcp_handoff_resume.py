@@ -84,6 +84,7 @@ def _doc203_body_frozen_contract_fields() -> dict[str, object]:
     )
 
     return {
+        "body_refresh_source_mode": "inference_first",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),

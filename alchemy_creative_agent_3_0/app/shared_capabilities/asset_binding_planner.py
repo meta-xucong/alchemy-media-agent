@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..creative_core.mcp_reference_partition import (
+    McpBodyReferencePartition,
+    build_mcp_body_reference_partition,
+)
 from .base import SharedCapabilityModule
 from .contracts import (
     AssetRole,
@@ -37,6 +41,32 @@ class AssetBindingPlanner(SharedCapabilityModule):
     order = 20
 
     def execute(self, capability_input: CapabilityInput) -> CapabilityResult:
+        try:
+            body_mcp_partition = self._body_mcp_partition(capability_input)
+        except Exception as exc:
+            if self._is_strict_body_mcp(capability_input):
+                failure_code = str(exc).strip() or "body_mcp_reference_partition_invalid"
+                return CapabilityResult(
+                    module_id=self.module_id,
+                    version=self.version,
+                    status=CapabilityStatus.ERROR,
+                    facts={
+                        "body_mcp_reference_partition_failure": {
+                            "failure_code": failure_code,
+                            "owner": "asset_binding_planner",
+                        }
+                    },
+                    warnings=[
+                        CapabilityWarning(
+                            code="body_mcp_reference_partition_invalid",
+                            message="Strict Body MCP reference partition admission failed.",
+                            severity="error",
+                            metadata={"failure_code": failure_code},
+                        )
+                    ],
+                    audit_trail=["strict Body MCP partition admission blocked"],
+                )
+            body_mcp_partition = None
         analyses = prior_fact(capability_input.prior_results, "asset_role_analyzer", "asset_analyses", [])
         if not analyses:
             analyses = [
@@ -57,7 +87,11 @@ class AssetBindingPlanner(SharedCapabilityModule):
             )
 
         bindings = sorted((self._binding_for(item) for item in analyses), key=lambda item: (-item["priority"], item["asset_id"]))
-        warnings = self._conflict_warnings(bindings)
+        if body_mcp_partition is not None:
+            capability_input.metadata["body_mcp_reference_partition"] = body_mcp_partition.model_dump(
+                mode="json"
+            )
+        warnings = self._conflict_warnings(bindings, body_mcp_partition=body_mcp_partition)
         constraints = [
             CapabilityConstraint(
                 target_stage=CapabilityTargetStage.PROMPT_COMPILATION,
@@ -136,7 +170,54 @@ class AssetBindingPlanner(SharedCapabilityModule):
             return "avoidance reference"
         return "soft reference"
 
-    def _conflict_warnings(self, bindings: list[dict[str, Any]]) -> list[CapabilityWarning]:
+    @staticmethod
+    def _is_strict_body_mcp(capability_input: CapabilityInput) -> bool:
+        metadata = capability_input.metadata if isinstance(capability_input.metadata, dict) else {}
+        return not (
+            str(metadata.get("generation_channel") or "").strip().lower() != "mcp"
+            or str(metadata.get("professional_character_card_stage") or "").strip() != "body_silhouette"
+            or not str(metadata.get("professional_character_card_slot") or "").strip().startswith("body.")
+            or not (
+                metadata.get("professional_character_card_body_refresh_contract_required") is True
+                or str(
+                    metadata.get("professional_character_card_body_refresh_source_mode") or ""
+                ).strip()
+                in {"inference_first", "reference_assisted"}
+            )
+        )
+
+    @classmethod
+    def _body_mcp_partition(cls, capability_input: CapabilityInput) -> McpBodyReferencePartition | None:
+        metadata = capability_input.metadata if isinstance(capability_input.metadata, dict) else {}
+        if not cls._is_strict_body_mcp(capability_input):
+            return None
+        source_mode = str(
+            metadata.get("professional_character_card_body_refresh_source_mode") or ""
+        ).strip()
+        raw = metadata.get("body_mcp_reference_partition")
+        if source_mode == "inference_first":
+            if raw is not None:
+                raise ValueError("body_reference_partition_forbidden_for_inference")
+            return None
+        if source_mode != "reference_assisted":
+            raise ValueError("body_refresh_source_mode_invalid")
+        if raw is not None:
+            if not isinstance(raw, dict):
+                raise ValueError("body_mcp_reference_partition_invalid")
+            return McpBodyReferencePartition.model_validate(raw)
+        source_assets = metadata.get("professional_anchor_reference_assets")
+        if not isinstance(source_assets, list):
+            source_assets = metadata.get("reference_assets")
+        if not isinstance(source_assets, list):
+            raise ValueError("body_mcp_reference_partition_missing")
+        return build_mcp_body_reference_partition(source_assets)
+
+    def _conflict_warnings(
+        self,
+        bindings: list[dict[str, Any]],
+        *,
+        body_mcp_partition: McpBodyReferencePartition | None = None,
+    ) -> list[CapabilityWarning]:
         warnings: list[CapabilityWarning] = []
         hard_roles = {AssetRole.PRODUCT_REFERENCE.value, AssetRole.LOGO_REFERENCE.value, AssetRole.FACE_REFERENCE.value, AssetRole.NONHUMAN_IDENTITY_REFERENCE.value}
         for role in hard_roles:
@@ -145,6 +226,9 @@ class AssetBindingPlanner(SharedCapabilityModule):
                 binding
                 for binding in role_bindings
                 if not (
+                    role == AssetRole.FACE_REFERENCE.value
+                    and body_mcp_partition is not None
+                ) and not (
                     role == AssetRole.FACE_REFERENCE.value
                     and binding.get("professional_anchor_lineage_evidence") is True
                     and binding.get("professional_anchor_lineage_role") == "prior_view_winner"
