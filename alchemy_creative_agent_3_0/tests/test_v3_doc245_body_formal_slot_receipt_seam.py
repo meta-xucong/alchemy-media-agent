@@ -2466,6 +2466,89 @@ def test_doc245_body_refresh_mcp_operation_identity_distinguishes_fresh_lifecycl
     assert first_identity.attempt_id not in first_operation
 
 
+def test_doc245_fresh_body_refresh_does_not_inherit_stale_mcp_resume_candidate_start() -> None:
+    generator = _BodyGenerator()
+    service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+    stale_pending_card = _active_body_card().model_copy(
+        update={
+            "body_activation_confirmed": False,
+            "body_silhouette_refresh_status": "blocked",
+            "last_failed_module": "body_silhouette",
+            "last_failed_slot_key": "body.front_full",
+            "last_failure_code": "mcp_materialization_pending",
+            "last_failure_details": None,
+            "last_failure_attempt_count": 2,
+            "last_review_repair_context": None,
+            "pending_mcp_handoff_ids": ["mcp_handoff_stale_pending"],
+            "resume_available": False,
+        }
+    )
+
+    result = service.refresh_body_silhouette(
+        stale_pending_card,
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        source_class="brain_inferred",
+        user_intent="neutral body silhouette profile",
+        generation_channel="mcp",
+    )
+
+    front_requests = [
+        request
+        for request in generator.requests
+        if request.slot_key == "body.front_full"
+    ]
+    assert [request.candidate_index for request in front_requests] == [1, 2, 3]
+    assert all(request.mcp_handoff_id is None for request in front_requests)
+    assert stale_pending_card.last_failure_code == "mcp_materialization_pending"
+    assert stale_pending_card.last_failure_attempt_count == 2
+    assert stale_pending_card.pending_mcp_handoff_ids == ["mcp_handoff_stale_pending"]
+    assert result.card.pending_mcp_handoff_ids == []
+    assert result.card.body_slots == stale_pending_card.body_slots
+
+
+def test_doc245_explicit_body_review_only_resume_preserves_exact_pending_handoff_boundary() -> None:
+    generator = _BodyGenerator()
+    service = CharacterCardPreparationService(generator=generator, reviewer=_BodyReviewer())
+    resume_card = _active_body_card().model_copy(
+        update={
+            "body_activation_confirmed": False,
+            "last_failed_module": "body_silhouette",
+            "last_failed_slot_key": "body.front_full",
+            "last_failure_code": "mcp_review_pending",
+            "last_failure_attempt_count": 2,
+            "pending_mcp_handoff_ids": ["mcp_handoff_exact_review_resume"],
+            "resume_available": True,
+        }
+    )
+
+    service._prepare_slot(  # noqa: SLF001
+        card=resume_card,
+        module="body_silhouette",
+        slot_key="body.front_full",
+        project_id="project_doc245",
+        people_asset_id="asset_doc245",
+        reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        user_intent="neutral body silhouette profile",
+        source_class="brain_inferred",
+        body_refresh_source_mode="inference_first",
+        body_model_context="system_inferred_body_model_scene_neutral_v1",
+        body_refresh_contract_required=True,
+        generation_channel="mcp",
+        review_only_resume=True,
+        attempts=[],
+        candidate_lifecycle_checkpoints=[],
+    )
+
+    front_requests = [
+        request
+        for request in generator.requests
+        if request.slot_key == "body.front_full"
+    ]
+    assert [request.candidate_index for request in front_requests] == [2, 3]
+    assert front_requests[0].mcp_handoff_id == "mcp_handoff_exact_review_resume"
+    assert front_requests[1].mcp_handoff_id is None
+
+
 def test_doc245_body_refresh_service_assigns_server_owned_attempt_identity_per_lifecycle() -> None:
     first_generator = _BodyGenerator()
     second_generator = _BodyGenerator()

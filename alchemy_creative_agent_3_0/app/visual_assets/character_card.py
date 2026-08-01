@@ -2464,13 +2464,25 @@ class CharacterCardPreparationService:
         formal_slot_receipts: dict[str, FormalSlotReceipt] = {}
         failures: list[CharacterCardFailureEvent] = []
         candidate_lifecycle_checkpoints: list[CharacterCardCandidateLifecycleCheckpoint] = []
+        generation_card = card.model_copy(
+            update={
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_details": None,
+                "last_failure_attempt_count": 0,
+                "last_review_repair_context": None,
+                "pending_mcp_handoff_ids": [],
+                "resume_available": False,
+            }
+        )
         body_refresh_attempt_identity = BodyRefreshAttemptIdentity.create(
             append_only_revision=card.append_only_revision + 1
         )
         refresh_slots: dict[str, CharacterCardSlot] = {}
         for slot_key in BODY_SLOT_KEYS:
             winner, slot_attempts, slot_failures, formal_receipt = self._prepare_slot(
-                card=card,
+                card=generation_card,
                 module="body_silhouette",
                 slot_key=slot_key,
                 project_id=project_id,
