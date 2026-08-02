@@ -31,7 +31,9 @@ planner's Body-stage partition handling, and the MCP handoff-store sanitizer.
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,10 +41,13 @@ from PIL import Image
 
 from alchemy_creative_agent_3_0.app.generation_router.providers import (
     GenerationRequest,
+    GenerationResponse,
     McpMaterializationProvider,
     ProductionImageGenerationProvider,
     ReferenceInputAdmissionError,
 )
+from alchemy_creative_agent_3_0.app.generation_router.router import GenerationRouter
+from alchemy_creative_agent_3_0.app.creative_core.central_brain import CentralCreativeBrain
 from alchemy_creative_agent_3_0.tests.test_v3_doc245_body_formal_slot_receipt_seam import (
     _mcp_body_generation_request,
 )
@@ -58,7 +63,11 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standar
 )
 from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profile import (
     BodyMorphologyEvidenceProfile,
+    BodyRefreshAnalysisContext,
+    BodySourceAnalysisAssetEnvelope,
 )
+from alchemy_creative_agent_3_0.app.schemas import CandidateResult, ProviderStrategy
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     default_body_refresh_presentation_intent,
     default_body_silhouette_backdrop_presentation_contract,
@@ -191,21 +200,40 @@ def _morphology_contract() -> dict[str, object]:
     }
 
 
-def _attach_current_body_context(request, face_assets: list[dict]) -> None:  # noqa: ANN001
+def _current_body_context(body_assets: list[dict]) -> BodyRefreshAnalysisContext:
     profile = _morphology_profile()
-    profile_digest = hashlib.sha256(
-        json.dumps(
-            profile.model_dump(mode="json"),
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    envelopes = [
+        BodySourceAnalysisAssetEnvelope(
+            asset_id=str(item["asset_id"]),
+            role="body_proportion_reference",
+            reference_truth_layer="body_proportion_truth",
+            file_path=str(item["file_path"]),
+            mime_type="image/png",
+            source_sha256=hashlib.sha256(Path(item["file_path"]).read_bytes()).hexdigest(),
+            source_provenance="user_provided_body_reference",
+            consent_reference="consent_body_reference",
+            rights_reference="rights_body_reference",
+        )
+        for item in body_assets
+    ]
+    return BodyRefreshAnalysisContext.from_analysis(
+        attempt_id="body_refresh_attempt_0123456789abcdef0123456789abcdef",
+        append_only_revision=1,
+        admitted_body_assets=envelopes,
+        profile=profile,
+    )
+
+
+def _attach_current_body_context(
+    request: GenerationRequest,
+    body_assets: list[dict],
+    face_assets: list[dict],
+) -> GenerationRequest:
+    context = _current_body_context(body_assets)
     request.metadata.update(
         {
             "professional_identity_reference_strategy": "character_card_shared_identity_v1",
-            "professional_body_proportion_analysis_receipt": profile,
-            "professional_body_refresh_analysis_context": {"profile_digest": profile_digest},
+            "professional_body_refresh_analysis_context": context.safe_metadata(),
             "professional_character_card_face_view_binding": {
                 "front_full": {
                     "face_slot": "face.front",
@@ -214,6 +242,7 @@ def _attach_current_body_context(request, face_assets: list[dict]) -> None:  # n
             },
         }
     )
+    return request.model_copy(update={"body_refresh_analysis_context": context})
 
 
 def test_direct_image_edit_route_keeps_over_five_reference_fail_closed(tmp_path) -> None:
@@ -367,16 +396,190 @@ def test_mcp_body_build_app_request_carries_partition_into_frozen_context(tmp_pa
             "reference_assets": [*body_assets, *face_assets],
         }
     )
-    _attach_current_body_context(request, face_assets)
+    request = _attach_current_body_context(request, body_assets, face_assets)
 
     app_request, _, retained = McpMaterializationProvider()._build_app_request(request)
 
     context = app_request.prompt_plan.variables["mcp_materialization_context"]
     partition = context["rendering_contract"]["body_mcp_reference_partition"]
+    assert request.body_refresh_analysis_context is not None
+    assert "professional_body_proportion_analysis_receipt" not in request.metadata
     assert len(retained) <= 5
     assert all(item.get("role") == "portrait_identity" for item in retained)
     assert partition["body_proportion_reference"]["asset_count"] == 5
     assert partition["face_identity_reference"]["asset_count"] == 2
+
+
+def test_central_generation_loop_preserves_ephemeral_profile_and_face_view_binding(tmp_path) -> None:
+    body_assets, _face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=0)
+    body_context = _current_body_context(body_assets)
+    face_view_binding = {
+        "front_full": {"face_slot": "face.front", "source_asset_id": "face-front"},
+        "side_full": {"face_slot": "face.profile", "source_asset_id": "face-profile"},
+        "rear_full": {"face_slot": "face.rear_head", "source_asset_id": "face-rear"},
+    }
+
+    class _CapturingProvider(McpMaterializationProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requests: list[GenerationRequest] = []
+
+        def generate(self, request: GenerationRequest) -> GenerationResponse:
+            self.requests.append(request)
+            return GenerationResponse(
+                candidates=[
+                    CandidateResult(
+                        candidate_id="candidate_ephemeral_body_context",
+                        asset_id=request.generation_plan.asset_id,
+                        provider="capture_only",
+                        prompt_compilation_id=request.prompt_compilation.prompt_compilation_id,
+                        condition_plan_id=request.condition_plan.condition_plan_id,
+                        is_mock=True,
+                    )
+                ],
+                provider_metadata={"provider_name": "capture_only"},
+                warnings=[],
+            )
+
+    provider = _CapturingProvider()
+    CentralCreativeBrain(generation_router=GenerationRouter(provider=provider)).run_generation_loop(
+        "strict reference-assisted Body candidate",
+        provider_strategy=ProviderStrategy.MCP_MATERIALIZATION,
+        body_refresh_analysis_context=body_context,
+        runtime_metadata={
+            "requested_image_count": 1,
+            "generation_channel": "mcp",
+            "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+            "professional_reference_stage": "character_card_body_silhouette",
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": "body.front_full",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_source_mode": "reference_assisted",
+            "professional_character_card_body_refresh_contract_required": True,
+            "professional_character_card_face_view_binding": face_view_binding,
+            "professional_body_refresh_analysis_context": body_context.safe_metadata(),
+        },
+    )
+
+    assert provider.requests
+    provider_request = provider.requests[0]
+    assert provider_request.body_refresh_analysis_context is body_context
+    assert "body_refresh_analysis_context" not in provider_request.model_dump(mode="json")
+    assert provider_request.metadata["professional_character_card_face_view_binding"] == face_view_binding
+    assert provider_request.generation_plan.metadata[
+        "professional_character_card_face_view_binding"
+    ] == face_view_binding
+    assert "professional_body_proportion_analysis_receipt" not in provider_request.metadata
+    assert "profile" not in provider_request.metadata["professional_body_refresh_analysis_context"]
+
+
+def test_runtime_frozen_body_metadata_keeps_safe_context_and_face_binding() -> None:
+    safe_context = {
+        "contract_version": "body_refresh_analysis_context_v2",
+        "schema_version": "body_morphology_evidence_profile_v2",
+        "source_mode": "reference_assisted",
+        "attempt_id": "body_refresh_attempt_0123456789abcdef0123456789abcdef",
+        "append_only_revision": 1,
+        "source_binding_digest": "1" * 64,
+        "source_evidence_id_digest": "2" * 64,
+        "profile_digest": "3" * 64,
+    }
+    face_view_binding = {
+        "front_full": {"face_slot": "face.front", "source_asset_id": "face-front"}
+    }
+    frozen = ScenarioRuntime._frozen_professional_provider_metadata(  # noqa: SLF001
+        SimpleNamespace(
+            activation_plan=SimpleNamespace(
+                metadata={
+                    "professional_character_card_preparation": True,
+                    "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+                    "professional_reference_stage": "character_card_body_silhouette",
+                    "professional_character_card_stage": "body_silhouette",
+                    "professional_character_card_slot": "body.front_full",
+                    "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                    "professional_character_card_face_view_binding": face_view_binding,
+                    "professional_body_refresh_analysis_context": safe_context,
+                }
+            )
+        )
+    )
+
+    assert frozen["professional_character_card_face_view_binding"] == face_view_binding
+    assert frozen["professional_body_refresh_analysis_context"] == safe_context
+    assert "profile" not in frozen["professional_body_refresh_analysis_context"]
+
+
+def test_submitted_reference_assisted_handoff_reuses_frozen_morphology_without_profile_rebuild(
+    tmp_path,
+) -> None:
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
+    store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(handoff_store=store)
+    request = _mcp_body_generation_request(
+        "Body proportion and stance only.",
+        source_mode="reference_assisted",
+    )
+    request.metadata.update(
+        {
+            "professional_character_card_body_refresh_contract_required": True,
+            "professional_character_card_body_refresh_presentation_intent": (
+                default_body_refresh_presentation_intent().model_dump(mode="json")
+            ),
+            "professional_anchor_reference_assets": [*body_assets, *face_assets],
+            "reference_assets": [*body_assets, *face_assets],
+        }
+    )
+    request = _attach_current_body_context(request, body_assets, face_assets)
+    app_request, _, retained = provider._build_app_request(request)  # noqa: SLF001
+    handoff_context = app_request.prompt_plan.variables["mcp_materialization_context"]
+    pending = store.ensure_pending(
+        operation_id=handoff_context["operation_id"],
+        prompt=handoff_context["canonical_prompt"],
+        prompt_sha256=handoff_context["prompt_sha256"],
+        reference_assets=retained,
+        rendering_contract=handoff_context["rendering_contract"],
+        require_body_rendering_contract=True,
+    )
+    renderer_request = store.public_renderer_request(pending["handoff_id"])
+    image = Image.new("RGB", (1024, 1536), (255, 255, 255))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=pending["prompt_sha256"],
+        reference_asset_hashes=pending["reference_asset_hashes"],
+        artifact_bytes=buffer.getvalue(),
+        renderer_prompt_sha256=renderer_request["renderer_prompt_sha256"],
+        renderer_execution_directive_sha256=renderer_request[
+            "renderer_execution_directive_sha256"
+        ],
+    )
+    resumed_metadata = {
+        **request.metadata,
+        "mcp_materialization": {
+            "handoff_id": pending["handoff_id"],
+            "status": "submitted",
+            "generation_channel": "mcp",
+            "resume_required": True,
+        },
+    }
+    resumed = request.model_copy(
+        update={
+            "metadata": resumed_metadata,
+            "body_refresh_analysis_context": None,
+        }
+    )
+
+    resumed_app_request, _, _ = provider._build_app_request(resumed)  # noqa: SLF001
+
+    resumed_context = resumed_app_request.prompt_plan.variables["mcp_materialization_context"]
+    assert resumed_context["resume_from_handoff"] is True
+    assert resumed_context["rendering_contract"]["body_morphology_profile"] == (
+        pending["rendering_contract"]["body_morphology_profile"]
+    )
 
 
 def test_reference_assisted_body_partition_stays_typed_but_provider_inputs_are_face_only(
@@ -396,7 +599,7 @@ def test_reference_assisted_body_partition_stays_typed_but_provider_inputs_are_f
             "reference_assets": [*body_assets, *face_assets],
         }
     )
-    _attach_current_body_context(request, face_assets)
+    request = _attach_current_body_context(request, body_assets, face_assets)
 
     app_request, _, provider_inputs = McpMaterializationProvider()._build_app_request(request)
 
@@ -458,7 +661,7 @@ def test_reference_assisted_view_owned_derivatives_are_face_only_before_handoff_
             "professional_character_card_body_refresh_contract_required": True,
         }
     )
-    _attach_current_body_context(request, face_assets)
+    request = _attach_current_body_context(request, body_assets, face_assets)
 
     app_request, _, provider_inputs = McpMaterializationProvider()._build_app_request(request)
     variables = app_request.prompt_plan.variables

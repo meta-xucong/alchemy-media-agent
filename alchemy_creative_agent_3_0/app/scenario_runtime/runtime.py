@@ -525,6 +525,7 @@ class ScenarioRuntime:
             provider_strategy=provider_strategy,
             runtime_metadata=generation_metadata,
             generation_router=self.generation_router,
+            body_refresh_analysis_context=runtime_request.body_refresh_analysis_context,
         )
         generation_result = self._enrich_result(generation_result, runtime_request, resolution, capability_run)
         generation_result = self._enrich_activation_result(generation_result, preparation)
@@ -6035,6 +6036,8 @@ class ScenarioRuntime:
                     "professional_character_card_body_model_context",
                     "professional_character_card_body_refresh_contract_required",
                     "professional_character_card_body_refresh_presentation_intent",
+                    "professional_character_card_face_view_binding",
+                    "professional_body_refresh_analysis_context",
                 ):
                     if key in plan_metadata:
                         frozen[key] = plan_metadata.get(key)

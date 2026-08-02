@@ -41,7 +41,11 @@ from ..visual_assets.character_card import (
     BodyRefreshPresentationIntent,
     unspecified_body_refresh_presentation_intent,
 )
-from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
+from ..visual_assets.body_proportion_evidence_profile import (
+    BodyMorphologyEvidenceProfile,
+    BodyRefreshAnalysisContext,
+    require_current_body_refresh_analysis_context,
+)
 from app.providers.base import ProviderRuntimeError
 from .mcp_materialization import (
     McpMaterializationError,
@@ -105,6 +109,11 @@ class GenerationRequest(BaseModel):
     condition_plan: ConditionPlan
     generation_plan: GenerationPlan
     metadata: dict = Field(default_factory=dict)
+    body_refresh_analysis_context: BodyRefreshAnalysisContext | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -139,6 +148,7 @@ def build_provider_generation_request(
     generation_plan: GenerationPlan,
     job_id: str | None = None,
     refine_round: int = 0,
+    body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
 ) -> GenerationRequest:
     """Build the frozen request shape consumed by the production provider.
 
@@ -154,6 +164,7 @@ def build_provider_generation_request(
         prompt_compilation=prompt_compilation,
         condition_plan=condition_plan,
         generation_plan=generation_plan,
+        body_refresh_analysis_context=body_refresh_analysis_context,
         metadata={
             "refine_round": refine_round,
             "mock_profile": metadata.get("mock_profile", "balanced"),
@@ -211,9 +222,6 @@ def build_provider_generation_request(
             ),
             "professional_character_card_face_view_binding": metadata.get(
                 "professional_character_card_face_view_binding"
-            ),
-            "professional_body_proportion_analysis_receipt": metadata.get(
-                "professional_body_proportion_analysis_receipt"
             ),
             "professional_body_refresh_analysis_context": metadata.get(
                 "professional_body_refresh_analysis_context"
@@ -6043,70 +6051,10 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                     self._safe_body_silhouette_backdrop_presentation_contract(metadata)
                 )
                 if source_mode == "reference_assisted":
-                    profile = metadata.get("professional_body_proportion_analysis_receipt")
-                    if not isinstance(profile, BodyMorphologyEvidenceProfile):
-                        raise ReferenceInputAdmissionError(
-                            "Strict reference-assisted Body MCP requires the frozen v2 morphology profile.",
-                            provider=self.provider_name,
-                            detail={
-                                "reference_input_failure_code": "body_proportion_analysis_context_missing",
-                                "fallback": "blocked",
-                            },
-                        )
-                    safe_context = metadata.get("professional_body_refresh_analysis_context")
-                    if not isinstance(safe_context, dict):
-                        raise ReferenceInputAdmissionError(
-                            "Strict reference-assisted Body MCP requires the frozen analysis context.",
-                            provider=self.provider_name,
-                            detail={
-                                "reference_input_failure_code": "body_proportion_analysis_context_missing",
-                                "fallback": "blocked",
-                            },
-                        )
-                    profile_digest = hashlib.sha256(
-                        json.dumps(
-                            profile.model_dump(mode="json"),
-                            ensure_ascii=True,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ).hexdigest()
-                    if profile_digest != str(safe_context.get("profile_digest") or "").strip().lower():
-                        raise ReferenceInputAdmissionError(
-                            "Strict reference-assisted Body MCP morphology context does not match its frozen digest.",
-                            provider=self.provider_name,
-                            detail={
-                                "reference_input_failure_code": "body_proportion_analysis_context_mismatch",
-                                "fallback": "blocked",
-                            },
-                        )
-                    morphology_bands = {
-                        field_name: getattr(profile, field_name)
-                        for field_name in (
-                            "relative_head_to_stature",
-                            "shoulder_to_head",
-                            "torso_to_leg",
-                            "arm_to_leg",
-                            "build",
-                            "neck_shoulder",
-                            "developmental_stage_context",
-                            "stance_ground",
-                            "cross_view_support",
-                        )
-                    }
-                    contract["body_morphology_profile"] = {
-                        "schema_version": "body_morphology_evidence_profile_v2",
-                        "profile_digest": profile_digest,
-                        "bands_digest": hashlib.sha256(
-                            json.dumps(
-                                morphology_bands,
-                                ensure_ascii=True,
-                                sort_keys=True,
-                                separators=(",", ":"),
-                            ).encode("utf-8")
-                        ).hexdigest(),
-                        "bands": morphology_bands,
-                    }
+                    contract["body_morphology_profile"] = self._body_morphology_rendering_contract(
+                        request,
+                        metadata,
+                    )
         require_body_rendering_contract = (
             self._is_character_card_body_mcp_materialization(metadata)
             and self._is_strict_character_card_body_refresh(metadata)
@@ -6161,6 +6109,124 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         )
         prompt_plan = app_request.prompt_plan.model_copy(update={"variables": variables})
         return app_request.model_copy(update={"prompt_plan": prompt_plan}), provider_name, reference_assets
+
+    def _body_morphology_rendering_contract(
+        self,
+        request: GenerationRequest,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build fresh morphology from the typed context or reuse a frozen submitted handoff.
+
+        The full profile is intentionally ephemeral and never reconstructed
+        from durable digest metadata.  A submitted handoff is the sole resume
+        exception because its rendering contract was already frozen and is
+        verified later by ``_existing_mcp_handoff_context``.
+        """
+
+        context = request.body_refresh_analysis_context
+        if context is None:
+            frozen = self._submitted_body_morphology_rendering_contract(metadata)
+            if frozen is not None:
+                return frozen
+            raise ReferenceInputAdmissionError(
+                "Strict reference-assisted Body MCP requires the typed refresh analysis context.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "body_proportion_analysis_context_missing",
+                    "fallback": "blocked",
+                },
+            )
+        try:
+            current_context = require_current_body_refresh_analysis_context(context)
+        except ValueError as exc:
+            raise ReferenceInputAdmissionError(
+                "Strict reference-assisted Body MCP requires the current morphology context.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "body_proportion_analysis_context_invalid",
+                    "fallback": "blocked",
+                },
+            ) from exc
+        safe_context = metadata.get("professional_body_refresh_analysis_context")
+        if not isinstance(safe_context, dict) or safe_context != current_context.safe_metadata():
+            raise ReferenceInputAdmissionError(
+                "Strict reference-assisted Body MCP morphology context does not match its safe projection.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "body_proportion_analysis_context_mismatch",
+                    "fallback": "blocked",
+                },
+            )
+        profile = current_context.profile
+        if not isinstance(profile, BodyMorphologyEvidenceProfile):
+            raise ReferenceInputAdmissionError(
+                "Strict reference-assisted Body MCP requires the frozen v2 morphology profile.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "body_proportion_analysis_context_invalid",
+                    "fallback": "blocked",
+                },
+            )
+        morphology_bands = {
+            field_name: getattr(profile, field_name)
+            for field_name in (
+                "relative_head_to_stature",
+                "shoulder_to_head",
+                "torso_to_leg",
+                "arm_to_leg",
+                "build",
+                "neck_shoulder",
+                "developmental_stage_context",
+                "stance_ground",
+                "cross_view_support",
+            )
+        }
+        return {
+            "schema_version": "body_morphology_evidence_profile_v2",
+            "profile_digest": current_context.profile_digest,
+            "bands_digest": hashlib.sha256(
+                json.dumps(
+                    morphology_bands,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            "bands": morphology_bands,
+        }
+
+    def _submitted_body_morphology_rendering_contract(
+        self,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        materialization = metadata.get("mcp_materialization")
+        if not isinstance(materialization, dict):
+            return None
+        handoff_id = str(materialization.get("handoff_id") or "").strip()
+        if not handoff_id:
+            return None
+        handoff = self.handoff_store.get(handoff_id)
+        if handoff is None or str(handoff.get("status") or "").strip().lower() not in {
+            "submitted",
+            "job_checkpointed",
+        }:
+            return None
+        try:
+            frozen_contract = self.handoff_store._safe_rendering_contract(
+                dict(handoff.get("rendering_contract") or {}),
+                require_body_rendering_contract=True,
+            )
+        except McpMaterializationError:
+            return None
+        morphology = frozen_contract.get("body_morphology_profile")
+        safe_context = metadata.get("professional_body_refresh_analysis_context")
+        if not isinstance(morphology, dict) or not isinstance(safe_context, dict):
+            return None
+        if str(morphology.get("profile_digest") or "") != str(
+            safe_context.get("profile_digest") or ""
+        ):
+            return None
+        return dict(morphology)
 
     @staticmethod
     def _is_character_card_body_mcp_materialization(metadata: dict[str, Any]) -> bool:

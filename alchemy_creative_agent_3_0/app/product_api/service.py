@@ -2931,6 +2931,7 @@ class V3ProductApiService:
             "professional_character_card_body_refresh_source_mode",
             "professional_character_card_body_refresh_presentation_intent",
             "professional_character_card_face_view_binding",
+            "professional_body_refresh_analysis_context",
         ):
             if key in frozen_plan_metadata and frozen_plan_metadata.get(key) != metadata.get(key):
                 return None
@@ -2962,6 +2963,7 @@ class V3ProductApiService:
             "professional_character_card_body_refresh_contract_required",
             "professional_character_card_body_refresh_presentation_intent",
             "professional_character_card_face_view_binding",
+            "professional_body_refresh_analysis_context",
             "professional_character_card_candidate_index",
             "professional_character_card_candidate_count",
             "professional_character_card_reference_output_ids",

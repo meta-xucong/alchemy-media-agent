@@ -26,6 +26,7 @@ from ..generation_router import (
     select_best_candidate,
 )
 from ..schemas import CandidateResult, EvaluationReport, PlanningResult, ProviderStrategy, Recommendation, ReferenceAsset
+from ..visual_assets.body_proportion_evidence_profile import BodyRefreshAnalysisContext
 from ..vertical_agents import VerticalAgentRegistry
 
 
@@ -279,6 +280,7 @@ class CentralCreativeBrain:
         apply_memory_update: bool = False,
         provider_strategy: ProviderStrategy = ProviderStrategy.MOCK_GENERATION,
         runtime_metadata: dict | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
     ) -> PlanningResult:
         context = self._create_base_context(
             user_input,
@@ -420,6 +422,12 @@ class CentralCreativeBrain:
                 "professional_character_card_body_refresh_presentation_intent": context.metadata.get(
                     "professional_character_card_body_refresh_presentation_intent"
                 ),
+                "professional_character_card_face_view_binding": context.metadata.get(
+                    "professional_character_card_face_view_binding"
+                ),
+                "professional_body_refresh_analysis_context": context.metadata.get(
+                    "professional_body_refresh_analysis_context"
+                ),
                 "professional_character_card_attempt_round": context.metadata.get(
                     "professional_character_card_attempt_round"
                 ),
@@ -467,6 +475,7 @@ class CentralCreativeBrain:
                     prompt,
                     condition_plan,
                     generation_plan,
+                    body_refresh_analysis_context=body_refresh_analysis_context,
                 )
             except Exception as exc:
                 if not require_independent_role_terminal_states:
@@ -1207,6 +1216,8 @@ class CentralCreativeBrain:
         prompt,
         condition_plan,
         generation_plan,
+        *,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
     ) -> tuple[CandidateResult | None, EvaluationReport | None, list[str]]:
         selected_candidate: CandidateResult | None = None
         selected_evaluation: EvaluationReport | None = None
@@ -1220,6 +1231,7 @@ class CentralCreativeBrain:
                 generation_plan=generation_plan,
                 job_id=context.creative_job.job_id if context.creative_job else None,
                 refine_round=refine_round,
+                body_refresh_analysis_context=body_refresh_analysis_context,
             )
             response = self.generation_router.generate(request)
             warnings.extend(response.warnings)

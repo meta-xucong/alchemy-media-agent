@@ -6,6 +6,7 @@ from .central_brain import CentralCreativeBrain
 from ..brand_memory.profile_service import BrandProfileService
 from ..generation_router import GenerationRouter
 from ..schemas import PlanningResult, ProviderStrategy
+from ..visual_assets.body_proportion_evidence_profile import BodyRefreshAnalysisContext
 
 
 def run_creative_planning(
@@ -42,6 +43,7 @@ def run_generation_loop(
     provider_strategy: ProviderStrategy = ProviderStrategy.MOCK_GENERATION,
     runtime_metadata: dict | None = None,
     generation_router: GenerationRouter | None = None,
+    body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
 ) -> PlanningResult:
     optional_template_id, brand_profile_service = _coerce_legacy_brand_service_arg(
         optional_template_id,
@@ -59,6 +61,7 @@ def run_generation_loop(
         apply_memory_update=apply_memory_update,
         provider_strategy=provider_strategy,
         runtime_metadata=runtime_metadata,
+        body_refresh_analysis_context=body_refresh_analysis_context,
     )
 
 
