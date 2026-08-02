@@ -55,6 +55,9 @@ from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapa
 from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_prompt_findings,
 )
+from ..visual_assets.body_proportion_evidence_profile import (
+    BodyProportionEvidenceProfile,
+)
 
 
 GENERAL_SCENARIO_ID = "general_creative"
@@ -764,6 +767,7 @@ class V3LLMBrainAdapter:
             request_metadata["professional_product_model_planning"] = bool(
                 metadata.get("professional_product_model_planning")
             )
+        body_proportion_profile = self._validated_body_proportion_profile(metadata)
         if self._professional_body_proportion_receipt_required(metadata):
             request_metadata["professional_body_proportion_receipt_required"] = True
             request_metadata["professional_body_proportion_server_context"] = {
@@ -774,6 +778,10 @@ class V3LLMBrainAdapter:
                     "server_owned_binding_resolver_validated": True,
                 },
             }
+            if body_proportion_profile is not None:
+                request_metadata["professional_body_proportion_server_context"][
+                    "body_proportion_evidence_profile"
+                ] = body_proportion_profile.model_dump(mode="json")
         if ecommerce_creative_context:
             # Deliberately absent from General and Photography requests.
             request_metadata["ecommerce_creative_context"] = ecommerce_creative_context
@@ -833,6 +841,41 @@ class V3LLMBrainAdapter:
         if metadata.get("professional_body_proportion_contract_source") != "server_owned_professional_binding_resolver":
             return False
         return isinstance(metadata.get("professional_mode_binding_record"), dict)
+
+    @staticmethod
+    def _validated_body_proportion_profile(
+        metadata: Mapping[str, Any],
+    ) -> BodyProportionEvidenceProfile | None:
+        """Consume only a typed, server-owned observed Body profile.
+
+        Raw public metadata, partitions, hashes, and counts are never promoted
+        here.  The in-memory Pydantic instance is the trusted handoff from the
+        Body source-analysis owner; ProductApi separately rejects the same key
+        at its public boundary unless its trusted preparation path is active.
+        """
+
+        if "professional_body_proportion_evidence_profile" in metadata:
+            raise ValueError("body_proportion_analysis_untrusted")
+        if not V3LLMBrainAdapter._professional_body_proportion_receipt_required(metadata):
+            return None
+        raw_mode = metadata.get("professional_character_card_body_refresh_source_mode")
+        source_mode = str(raw_mode or "").strip().lower()
+        raw_receipt = metadata.get("professional_body_proportion_analysis_receipt")
+        if source_mode == "inference_first":
+            if raw_receipt is not None:
+                raise ValueError("body_proportion_analysis_source_mode_invalid")
+            return None
+        if source_mode != "reference_assisted":
+            return None
+        if str(metadata.get("professional_character_card_stage") or "").strip().lower() != "body_silhouette":
+            if raw_receipt is not None:
+                raise ValueError("body_proportion_analysis_stage_invalid")
+            return None
+        if raw_receipt is None:
+            raise ValueError("body_proportion_analysis_missing")
+        if not isinstance(raw_receipt, BodyProportionEvidenceProfile):
+            raise ValueError("body_proportion_analysis_untrusted")
+        return raw_receipt
 
     def _activation_scope_enabled(self, request: BrainRunRequest) -> bool:
         policy = request.template_capability_policy

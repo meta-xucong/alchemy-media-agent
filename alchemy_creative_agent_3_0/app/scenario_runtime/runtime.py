@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import Any
+from typing import Any, Callable
 
 from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.pipeline import run_creative_planning, run_generation_loop
@@ -89,6 +89,12 @@ from ..visual_assets import (
     ProfessionalModeRuntimeBridge,
     ReferenceChannelPlan,
     VisualAssetBindingSet,
+)
+from ..visual_assets.body_proportion_evidence_profile import (
+    BodyProportionAnalysisError,
+    BodyProportionEvidenceProfile,
+    BodyProportionSourceAnalysisAdapter,
+    BodySourceAnalysisProvider,
 )
 from ..schemas import PlanningResult, ProviderStrategy
 from .contracts import (
@@ -331,6 +337,9 @@ class ScenarioRuntime:
         llm_brain_adapter: V3LLMBrainAdapter | None = None,
         generation_router: GenerationRouter | None = None,
         specialized_planning_adapters: list[SpecializedScenarioPlanningAdapter] | None = None,
+        body_proportion_source_analyzer: BodySourceAnalysisProvider
+        | Callable[[list[dict[str, Any]]], dict[str, Any]]
+        | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.scenario_registry = scenario_registry or ScenarioPackRegistry()
@@ -341,6 +350,8 @@ class ScenarioRuntime:
         self.visual_cluster_plugin_registry = VisualClusterPluginRegistry()
         self.llm_brain_adapter = llm_brain_adapter or V3LLMBrainAdapter()
         self.generation_router = generation_router
+        self.body_proportion_source_analyzer = body_proportion_source_analyzer
+        self.body_proportion_source_analysis_adapter = BodyProportionSourceAnalysisAdapter()
         self.professional_mode_execution_adapter = ProfessionalModeExecutionAdapter()
         self.professional_mode_runtime_bridge = ProfessionalModeRuntimeBridge()
         adapters = specialized_planning_adapters or [PhotographyScenarioPlanningAdapter()]
@@ -6087,6 +6098,74 @@ class ScenarioRuntime:
             metadata["llm_brain"] = brain_result.safe_metadata()
         return metadata
 
+    def _body_proportion_profile_for_brain(
+        self,
+        request: ScenarioRuntimeRequest,
+        *,
+        stage: str,
+    ) -> BodyProportionEvidenceProfile | None:
+        """Resolve the one trusted Body source-analysis seam before Brain.
+
+        Reference-assisted Professional Body requests must cross the
+        server-owned source-analysis boundary before the Brain sees Body
+        proportion context.  The default runtime has no analyzer configured,
+        so it fails closed instead of deriving bands from counts or hashes.
+        Existing inference-first, ordinary, Face, and legacy requests do not
+        inherit observed Body profiles.
+        """
+
+        metadata = request.metadata
+        raw_receipt = metadata.get("professional_body_proportion_analysis_receipt")
+        source_mode = str(
+            metadata.get("professional_character_card_body_refresh_source_mode") or ""
+        ).strip().lower()
+        character_stage = str(
+            metadata.get("professional_character_card_stage") or ""
+        ).strip().lower()
+        slot = str(metadata.get("professional_character_card_slot") or "").strip().lower()
+        body_stage = character_stage == "body_silhouette" and slot.startswith("body.")
+        professional = self._is_professional_mode_selected(request)
+
+        if not professional or not body_stage:
+            # A typed observed receipt is only meaningful in the strict Body
+            # source-analysis stage.  Do not let same-named internal fields
+            # leak into Expression, Face, ordinary, or legacy Brain requests.
+            return None
+        if source_mode == "inference_first":
+            if raw_receipt is not None:
+                raise CapabilityActivationError(
+                    "body_proportion_analysis_source_mode_invalid"
+                )
+            return None
+        if source_mode != "reference_assisted":
+            if raw_receipt is not None:
+                raise CapabilityActivationError(
+                    "body_proportion_analysis_source_mode_invalid"
+                )
+            return None
+        if raw_receipt is not None:
+            if not isinstance(raw_receipt, BodyProportionEvidenceProfile):
+                raise CapabilityActivationError("body_proportion_analysis_untrusted")
+            return raw_receipt
+
+        raw_assets = metadata.get("professional_anchor_reference_assets")
+        if not isinstance(raw_assets, list):
+            raw_assets = []
+        body_assets = [
+            asset
+            for asset in raw_assets
+            if isinstance(asset, dict)
+            and asset.get("role") == "body_proportion_reference"
+        ]
+        try:
+            return self.body_proportion_source_analysis_adapter.analyze(
+                body_assets,
+                source_mode="reference_assisted",
+                analyzer=self.body_proportion_source_analyzer,
+            )
+        except BodyProportionAnalysisError as exc:
+            raise CapabilityActivationError(str(exc)) from exc
+
     def _run_llm_brain(
         self,
         request: ScenarioRuntimeRequest,
@@ -6120,7 +6199,13 @@ class ScenarioRuntime:
             # cross that boundary.
             base_metadata.pop("professional_reference_channel_plans", None)
             base_metadata.pop("professional_planning_metadata", None)
+            # The source-analysis receipt is an in-memory typed projection;
+            # never forward an isolated raw/public value from the request.
+            base_metadata.pop("professional_body_proportion_analysis_receipt", None)
             base_metadata["professional_mode"] = True
+            body_profile = self._body_proportion_profile_for_brain(request, stage=stage)
+            if body_profile is not None:
+                base_metadata["professional_body_proportion_analysis_receipt"] = body_profile
             if isinstance(safe_binding, dict):
                 base_metadata["professional_mode_binding"] = dict(safe_binding)
             if isinstance(safe_admission, dict):

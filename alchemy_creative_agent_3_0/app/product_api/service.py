@@ -48,6 +48,7 @@ from ..visual_assets import (
 )
 from ..visual_assets.body_silhouette_source_standard import body_silhouette_mcp_materialization_channel_contract
 from ..visual_assets.character_card import BodyRefreshPresentationIntent
+from ..visual_assets.body_proportion_evidence_profile import BodySourceAnalysisProvider
 from ..shared_capabilities import CapabilityRunResult
 from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from ..shared_capabilities.visual_cluster import (
@@ -807,6 +808,7 @@ class V3ProductApiService:
         photographer_profile_region_resolver: Callable[[], str | None] | None = None,
         visual_asset_catalog: InMemoryVisualAssetCatalog | None = None,
         mcp_materialization_store: McpMaterializationHandoffStore | None = None,
+        body_proportion_source_analyzer: BodySourceAnalysisProvider | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -815,6 +817,10 @@ class V3ProductApiService:
         self.asset_store = asset_store or V3UploadedAssetStore()
         self.output_store = output_store or V3GeneratedOutputStore()
         self.mcp_materialization_store = mcp_materialization_store or McpMaterializationHandoffStore()
+        # This is an explicit server-owned injection boundary.  No default
+        # analyzer is fabricated from metadata; absent configuration must
+        # fail closed for reference-assisted Body proportion analysis.
+        self.body_proportion_source_analyzer = body_proportion_source_analyzer
         operator_catalog = self._default_photography_operator_catalog() if scenario_runtime is None else None
         self.photographer_profile_catalog = (
             photographer_profile_catalog
@@ -842,6 +848,7 @@ class V3ProductApiService:
             return ScenarioRuntime(
                 brand_profile_service=self.brand_profile_service,
                 generation_router=generation_router,
+                body_proportion_source_analyzer=self.body_proportion_source_analyzer,
             )
         from ..scenario_packs.photography import PhotographyScenarioPackPlanner
         from ..scenario_runtime.specialized_planning import PhotographyScenarioPlanningAdapter
@@ -853,6 +860,7 @@ class V3ProductApiService:
             brand_profile_service=self.brand_profile_service,
             generation_router=generation_router,
             specialized_planning_adapters=[adapter],
+            body_proportion_source_analyzer=self.body_proportion_source_analyzer,
         )
 
     def _default_photography_operator_catalog(self):
@@ -9711,6 +9719,7 @@ class V3ProductApiService:
             "professional_character_card_body_model_context",
             "professional_character_card_body_refresh_contract_required",
             "professional_character_card_body_refresh_presentation_intent",
+            "professional_body_proportion_analysis_receipt",
             "professional_character_card_reference_output_ids",
             "professional_character_card_body_source_admission",
             "generation_channel",
@@ -9726,6 +9735,7 @@ class V3ProductApiService:
             "professional_character_card_candidate_count",
             "professional_character_card_candidate_lifecycle_checkpoints",
             "professional_character_card_body_refresh_presentation_intent",
+            "professional_body_proportion_analysis_receipt",
         }
     )
 

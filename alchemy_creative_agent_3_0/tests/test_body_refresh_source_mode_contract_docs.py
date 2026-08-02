@@ -74,14 +74,24 @@ def test_reference_assisted_requires_server_resolved_body_truth_and_keeps_channe
         "role is `body_proportion_reference`",
         "`metadata.reference_truth_layer` is `body_proportion_truth`",
         "consent or rights provenance is present",
+            "server-owned Body source-analysis boundary",
+            "`body_proportion_evidence_profile`",
+            "`body_proportion_analysis_missing`",
+            "physical ImageGen reference input",
+        ):
+            assert required in assisted
+    for required in (
+        "explicit configured Body source-analysis provider boundary",
+        "no proportion-learning capability",
+        "five Body references have been learned",
     ):
-        assert required in assisted
+        assert required in squashed
 
     assert "similar-person full-body proportion reference" in squashed
     assert "must not be represented as, the same person as the current Character Card subject" in squashed
     assert "source provenance is bound to the current Professional Character Card Body refresh/card request" in squashed
     assert "not as same-person identity evidence" in squashed
-    assert "not Face Identity truth" in assisted
+    assert "not Face Identity truth" in squashed
     assert "current subject's Face Identity remains owned by the existing Character Card Face Identity references" in squashed
     assert "cannot replace, override, or weaken those Face Identity references" in squashed
     for forbidden_lock in (
@@ -168,8 +178,9 @@ def test_compatibility_activation_downstream_and_scene_isolation_remain_explicit
         "No source mode may replace active Body slots without a later activation gate",
         "Downstream General, Photography, and E-Commerce isolation",
         "Provider cap and Provider role isolation",
-        "`reference_assisted` may add one Body-only reference",
-        "`inference_first` may not fabricate one",
+        "admitted Body evidence only for the Body-owner analysis/profile context",
+        "physical MCP/ImageGen inputs remain Face-only",
+        "`inference_first` may not fabricate observed Body evidence or a completed profile",
     ):
         assert invariant in squashed
 

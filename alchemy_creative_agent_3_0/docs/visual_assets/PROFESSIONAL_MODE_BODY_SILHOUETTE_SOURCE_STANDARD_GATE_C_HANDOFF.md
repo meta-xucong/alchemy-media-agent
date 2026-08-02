@@ -259,11 +259,27 @@ must be computed by the server and must prove all of the following:
   Body refresh/card request as Body-only proportion evidence, not as same-person
   identity evidence.
 
-The admitted Body reference may be projected only as Body-owner evidence for
-body scale, neck/shoulder transition, torso/limb proportion,
+The admitted Body references are Body-owner source evidence only.  They must
+pass a server-owned Body source-analysis boundary before they can become a
+`body_proportion_evidence_profile` consumed by the Brain/body-generation
+request.  The closed profile may contain only body scale, neck/shoulder
+transition, torso/limb proportion, arm/leg proportion,
 developmental-stage coherence, stance/ground contact, and cross-view support.
-It is not Face Identity truth and must not lock wardrobe, pose, lighting,
-camera, expression, background, scene, product identity, swimwear, poolside,
+Partition presence, hashes, or an evidence count cannot stand in for source
+analysis; when no valid server-owned analysis receipt exists, the request must
+fail closed as `body_proportion_analysis_missing`.
+The runtime exposes an explicit configured Body source-analysis provider
+boundary; an unconfigured deployment has no proportion-learning capability
+and must remain blocked rather than using fixed or metadata-derived bands.
+Therefore, this contract stage alone does not mean that the five Body
+references have been learned; that claim requires a configured source-image
+analysis provider and a validated profile receipt.
+
+The Body evidence/profile is not a physical ImageGen reference input.  The
+MCP/renderer reference list remains Face Identity-only and must not carry Body
+paths, Body `provider_input_required`, or Body truth.  Body evidence is not
+Face Identity truth and must not lock wardrobe, pose, lighting, camera,
+expression, background, scene, product identity, swimwear, poolside,
 kidswear, E-Commerce, Photography, or General deliverable semantics.
 The current subject's Face Identity remains owned by the existing Character
 Card Face Identity references; a similar-person Body reference cannot replace,
@@ -317,8 +333,11 @@ Both source modes must preserve:
 4. Downstream General, Photography, and E-Commerce isolation.  Runtime
    body-only projection consumes active Body slots after activation; it does
    not choose the refresh source mode.
-5. Provider cap and Provider role isolation.  `reference_assisted` may add one
-   Body-only reference; `inference_first` may not fabricate one.
+5. Provider cap and Provider role isolation.  `reference_assisted` retains
+   admitted Body evidence only for the Body-owner analysis/profile context;
+   physical MCP/ImageGen inputs remain Face-only and continue to obey the
+   existing provider cap.  `inference_first` may not fabricate observed Body
+   evidence or a completed profile.
 6. Scene-neutral source standards.  No six-year-old, swimwear, poolside,
    kidswear, E-Commerce, wardrobe, pose, lighting, camera, expression, or fixed
    head/body-ratio recipe is introduced.
