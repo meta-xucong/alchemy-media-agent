@@ -25,7 +25,9 @@ from typing import Any
 from ..creative_core.mcp_reference_partition import McpBodyReferencePartition
 from ..creative_core.rules import stable_id
 from ..visual_assets.body_silhouette_source_standard import (
+    BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
     body_silhouette_mcp_materialization_channel_contract,
+    body_silhouette_mcp_materialization_prompt_findings,
 )
 from ..visual_assets.character_card import (
     BodySilhouetteBackdropPresentationContract,
@@ -297,6 +299,24 @@ class McpMaterializationHandoffStore:
             rendering_contract,
             require_body_rendering_contract=require_body_rendering_contract,
         )
+        strict_body = (
+            require_body_rendering_contract is True
+            and isinstance(safe_rendering_contract, dict)
+            and safe_rendering_contract.get("body_silhouette_mcp_materialization_channel_contract")
+            is not None
+            and safe_rendering_contract.get("body_refresh_source_mode")
+            in {"inference_first", "reference_assisted"}
+        )
+        if strict_body:
+            prompt_findings = body_silhouette_mcp_materialization_prompt_findings(prompt)
+            if BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING in prompt_findings:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_clothing_absence_contract_invalid",
+                    detail={
+                        "failure_code": "character_card_body_mcp_clothing_absence_contract_invalid",
+                        "fallback": "blocked",
+                    },
+                )
         rendering_fingerprint = self._rendering_contract_fingerprint(safe_rendering_contract)
         with self._transaction_lock():
             for revision in range(1, 1000):

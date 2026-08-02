@@ -92,6 +92,7 @@ BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS = (
     "expression_or_professional_pose_language_present",
     "scene_or_studio_styling_present",
 )
+BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING = "clothing_absence_positive_semantics_present"
 
 _BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS = {
     "wardrobe_or_attire_channel_present": (
@@ -134,6 +135,23 @@ _BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS = {
         "camera",
         "lens",
         "white field",
+    ),
+    "clothing_absence_positive_semantics_present": (
+        "nude",
+        "naked",
+        "unclothed",
+        "undressed",
+        "no clothing",
+        "no clothes",
+        "no garments",
+        "clothing free",
+        "without clothing",
+        "without clothes",
+        "without garments",
+        "clothing absent",
+        "absence of clothing",
+        "bare body",
+        "unclothed silhouette",
     ),
 }
 
@@ -227,10 +245,36 @@ def body_silhouette_mcp_materialization_prompt_findings(prompt: Any) -> tuple[st
             return True
         return False
 
+    def clothing_absence_term_present(term: str) -> bool:
+        """Detect positive absence language without treating negation as positive."""
+
+        normalized_term = " ".join(
+            str(term or "").lower().replace("_", " ").replace("-", " ").split()
+        )
+        if not normalized_term:
+            return False
+        term_pattern = re.escape(normalized_term).replace(r"\ ", r"\s+")
+        for match in re.finditer(rf"\b{term_pattern}\b", normalized):
+            before = normalized[max(0, match.start() - 48):match.start()].strip()
+            if re.search(
+                r"\b(?:not|never|avoid|without being|no nudity|fully clothed|wearing)\b[^.?!;:]{0,32}$",
+                before,
+            ):
+                continue
+            return True
+        return False
+
     findings: list[str] = []
-    for finding in BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS:
+    for finding in (
+        *BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS,
+        BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
+    ):
         terms = _BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS[finding]
-        if any(term_present(term) for term in terms):
+        if finding == "clothing_absence_positive_semantics_present":
+            matched = any(clothing_absence_term_present(term) for term in terms)
+        else:
+            matched = any(term_present(term) for term in terms)
+        if matched:
             findings.append(finding)
     return tuple(findings)
 
@@ -330,6 +374,7 @@ __all__ = [
     "BODY_SILHOUETTE_CROSS_VIEW_PARITY_DIMENSION",
     "BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE",
     "BODY_SILHOUETTE_MCP_ALLOWED_BODY_CHANNELS",
+    "BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING",
     "BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS",
     "BODY_SILHOUETTE_MCP_MATERIALIZATION_CHANNEL_CONTRACT_VERSION",
     "BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES",

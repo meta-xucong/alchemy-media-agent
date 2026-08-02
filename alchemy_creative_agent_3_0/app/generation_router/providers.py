@@ -29,6 +29,7 @@ from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
 from ..visual_assets.body_silhouette_source_standard import (
+    BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
 )
@@ -6089,11 +6090,16 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         findings = body_silhouette_mcp_materialization_prompt_findings(prompt)
         if not findings:
             return
+        failure_code = (
+            "character_card_body_mcp_clothing_absence_contract_invalid"
+            if BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING in findings
+            else "character_card_body_mcp_source_contract_invalid"
+        )
         raise ProviderRuntimeError(
             "MCP Body Silhouette handoff carries non-Body-owned prompt channels.",
             provider=self.provider_name,
             detail={
-                "failure_code": "character_card_body_mcp_source_contract_invalid",
+                "failure_code": failure_code,
                 "contract_version": body_silhouette_mcp_materialization_channel_contract()["contract_version"],
                 "forbidden_channel_findings": list(findings),
                 "stage": "body_silhouette",
