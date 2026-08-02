@@ -40,6 +40,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profi
     BodyProportionAnalysisError,
     BodyProportionEvidenceProfile,
     BodyProportionSourceAnalysisAdapter,
+    BodySourceAnalysisAssetEnvelope,
     ConfiguredBodySourceAnalysisProvider,
 )
 
@@ -149,6 +150,25 @@ def _reference_assisted_metadata() -> dict[str, Any]:
         ),
         "professional_anchor_reference_assets": _body_evidence_assets(),
     }
+
+
+def _trusted_internal_source_analysis_assets() -> list[BodySourceAnalysisAssetEnvelope]:
+    """Build the server-owned analyzer proof used by legacy runtime seams."""
+
+    return [
+        BodySourceAnalysisAssetEnvelope(
+            asset_id=f"v3-body-source-{index}",
+            role="body_proportion_reference",
+            reference_truth_layer="body_proportion_truth",
+            file_path=f"C:/private/body-source-{index}.png",
+            mime_type="image/png",
+            source_sha256=(f"{index + 1:02x}" * 32),
+            source_provenance="user_provided_body_reference",
+            consent_reference="consent-body-reference",
+            rights_reference="rights-body-reference",
+        )
+        for index in range(5)
+    ]
 
 
 def _fake_body_owner_source_analysis(body_assets: list[dict[str, Any]]) -> dict[str, Any]:
@@ -490,7 +510,10 @@ def test_runtime_body_owner_call_site_consumes_admitted_refs_through_injected_pr
     runtime = ScenarioRuntime(body_proportion_source_analyzer=provider)
 
     profile = runtime._body_proportion_profile_for_brain(  # noqa: SLF001
-        SimpleNamespace(metadata=_reference_assisted_metadata()),
+        SimpleNamespace(
+            metadata=_reference_assisted_metadata(),
+            body_source_analysis_assets=_trusted_internal_source_analysis_assets(),
+        ),
         stage="plan",
     )
 
@@ -506,7 +529,10 @@ def test_runtime_body_owner_call_site_without_configured_provider_fails_closed()
 
     with pytest.raises(CapabilityActivationError, match="body_proportion_analysis_missing"):
         runtime._body_proportion_profile_for_brain(  # noqa: SLF001
-            SimpleNamespace(metadata=_reference_assisted_metadata()),
+            SimpleNamespace(
+                metadata=_reference_assisted_metadata(),
+                body_source_analysis_assets=_trusted_internal_source_analysis_assets(),
+            ),
             stage="plan",
         )
 
@@ -558,6 +584,7 @@ def test_runtime_run_llm_brain_forwards_injected_profile_into_brain_request(monk
     )
     request = type("RuntimeRequest", (), {})()
     request.metadata = _reference_assisted_metadata()
+    request.body_source_analysis_assets = _trusted_internal_source_analysis_assets()
     request.user_input = "Build a Body Silhouette request."
     request.product_profile = {}
     request.uploaded_assets = []

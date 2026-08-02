@@ -94,6 +94,7 @@ from ..visual_assets.body_proportion_evidence_profile import (
     BodyProportionAnalysisError,
     BodyProportionEvidenceProfile,
     BodyProportionSourceAnalysisAdapter,
+    BodySourceAnalysisAssetEnvelope,
     BodySourceAnalysisProvider,
 )
 from ..schemas import PlanningResult, ProviderStrategy
@@ -6078,6 +6079,10 @@ class ScenarioRuntime:
         parameters = dict(selection.parameters) if selection is not None else {}
         parameters.setdefault("mode", resolution.selected_mode_id)
         parameters.setdefault("preset", resolution.selected_preset_id)
+        brain_uploaded_assets = self._brain_reference_assets_without_body(
+            request,
+            [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)],
+        )
         metadata = {
             **dict(request.metadata),
             "scenario_id": resolution.manifest.scenario_id,
@@ -6087,16 +6092,46 @@ class ScenarioRuntime:
             "scenario_preset_id": resolution.selected_preset_id,
             "scenario_parameters": parameters,
             "platform_profile": selection.platform_profile if selection is not None else None,
-            "uploaded_assets": [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)],
-            "uploaded_asset_ids": self._uploaded_asset_ids(request),
-            "reference_assets": self._reference_assets_from_request_metadata(request),
+            "uploaded_assets": brain_uploaded_assets,
+            "uploaded_asset_ids": [str(asset.get("asset_id")) for asset in brain_uploaded_assets],
+            "reference_assets": self._brain_reference_assets_without_body(
+                request,
+                self._reference_assets_from_request_metadata(request),
+            ),
             "product_profile": dict(request.product_profile),
         }
+        metadata["professional_anchor_reference_assets"] = self._brain_reference_assets_without_body(
+            request,
+            metadata.get("professional_anchor_reference_assets"),
+        )
+        # The Brain receives the validated typed profile, never the Body
+        # source admission IDs or its internal provenance proof.
+        metadata.pop("professional_character_card_body_source_admission", None)
         if quality_mode is not None:
             metadata["quality_mode"] = quality_mode
         if brain_result is not None:
             metadata["llm_brain"] = brain_result.safe_metadata()
         return metadata
+
+    @staticmethod
+    def _brain_reference_assets_without_body(
+        request: ScenarioRuntimeRequest,
+        references: Any,
+    ) -> list[dict[str, Any]]:
+        """Keep Body source evidence out of the Brain's raw reference channel."""
+
+        if not isinstance(references, list):
+            return []
+        metadata = request.metadata
+        stage = str(metadata.get("professional_character_card_stage") or "").strip().lower()
+        slot = str(metadata.get("professional_character_card_slot") or "").strip().lower()
+        if stage != "body_silhouette" or not slot.startswith("body."):
+            return [dict(item) for item in references if isinstance(item, dict)]
+        return [
+            dict(item)
+            for item in references
+            if isinstance(item, dict) and item.get("role") != "body_proportion_reference"
+        ]
 
     def _body_proportion_profile_for_brain(
         self,
@@ -6148,15 +6183,14 @@ class ScenarioRuntime:
                 raise CapabilityActivationError("body_proportion_analysis_untrusted")
             return raw_receipt
 
-        raw_assets = metadata.get("professional_anchor_reference_assets")
-        if not isinstance(raw_assets, list):
-            raw_assets = []
-        body_assets = [
-            asset
-            for asset in raw_assets
-            if isinstance(asset, dict)
-            and asset.get("role") == "body_proportion_reference"
-        ]
+        internal_assets = list(getattr(request, "body_source_analysis_assets", []) or [])
+        if not internal_assets:
+            raise CapabilityActivationError("body_proportion_analysis_source_not_ready")
+        body_assets = []
+        for asset in internal_assets:
+            if not isinstance(asset, BodySourceAnalysisAssetEnvelope):
+                raise CapabilityActivationError("body_proportion_analysis_untrusted")
+            body_assets.append(asset.to_analyzer_record())
         try:
             return self.body_proportion_source_analysis_adapter.analyze(
                 body_assets,

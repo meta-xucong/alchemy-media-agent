@@ -353,6 +353,66 @@ class BodySourceImagePayload:
     mime_type: str
 
 
+class BodySourceAnalysisAssetEnvelope(V3BaseModel):
+    """Typed internal proof for one server-resolved Body source image.
+
+    This envelope is intentionally carried outside public request metadata and
+    is consumed only by the Body source-analysis adapter.  It may contain the
+    server's transient file locator and provenance proof, but it must never be
+    copied into Brain metadata, Provider reference inputs, or public status.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    asset_id: str
+    role: Literal["body_proportion_reference"]
+    reference_truth_layer: Literal["body_proportion_truth"]
+    file_path: str
+    mime_type: Literal["image/png", "image/jpeg", "image/webp"]
+    source_sha256: str
+    content_stored: Literal[True] = True
+    ready_for_v3_runtime: Literal[True] = True
+    source_provenance: str
+    consent_reference: str
+    rights_reference: str
+
+    @field_validator("asset_id", "file_path", "source_provenance", "consent_reference", "rights_reference")
+    @classmethod
+    def require_nonempty_internal_value(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("body_proportion_analysis_source_invalid")
+        return cleaned
+
+    @field_validator("source_sha256")
+    @classmethod
+    def require_sha256(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if len(cleaned) != 64 or any(char not in "0123456789abcdef" for char in cleaned):
+            raise ValueError("body_proportion_analysis_source_hash_mismatch")
+        return cleaned
+
+    def to_analyzer_record(self) -> dict[str, Any]:
+        """Build the ephemeral mapping accepted by the analyzer adapter."""
+
+        return {
+            "asset_id": self.asset_id,
+            "role": self.role,
+            "reference_truth_layer": self.reference_truth_layer,
+            "file_path": self.file_path,
+            "mime_type": self.mime_type,
+            "metadata": {
+                "content_stored": True,
+                "ready_for_v3_runtime": True,
+                "source_sha256": self.source_sha256,
+                "source_provenance": self.source_provenance,
+                "consent_reference": self.consent_reference,
+                "rights_reference": self.rights_reference,
+                "reference_truth_layer": self.reference_truth_layer,
+            },
+        }
+
+
 class BodySourceAnalysisTransport(Protocol):
     """Provider-neutral transport for one structured multimodal analysis."""
 

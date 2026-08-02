@@ -49,6 +49,7 @@ from ..visual_assets import (
 from ..visual_assets.body_silhouette_source_standard import body_silhouette_mcp_materialization_channel_contract
 from ..visual_assets.character_card import BodyRefreshPresentationIntent
 from ..visual_assets.body_proportion_evidence_profile import (
+    BodySourceAnalysisAssetEnvelope,
     BodySourceAnalysisProvider,
     create_configured_body_source_analysis_provider,
 )
@@ -1733,6 +1734,81 @@ class V3ProductApiService:
                 }
             )
         return references
+
+    def _professional_character_card_body_source_analysis_assets(
+        self,
+        body_source_admission: dict[str, Any] | None,
+        *,
+        source_class: str | None,
+        face_reference_output_ids: list[str],
+    ) -> list[BodySourceAnalysisAssetEnvelope]:
+        """Build the private analyzer envelope from resolved ready uploads.
+
+        The ordinary anchor reference projection is intentionally compact and
+        suitable for capability/provider metadata.  Source analysis needs a
+        separate proof of readiness and integrity, so it is rebuilt from the
+        server-owned upload store and passed as an ephemeral runtime field.
+        """
+
+        if source_class != "observed" or body_source_admission is None:
+            return []
+        admission = self._safe_professional_character_card_body_source_admission(
+            body_source_admission,
+            source_class=source_class,
+            face_reference_output_ids=face_reference_output_ids,
+        )
+        envelopes: list[BodySourceAnalysisAssetEnvelope] = []
+        for asset_id in admission["body_evidence_ids"]:
+            upload = self.asset_store.get_upload(asset_id)
+            if upload is None:
+                raise ValueError("body_proportion_analysis_source_not_ready")
+            status = str(getattr(getattr(upload, "status", None), "value", getattr(upload, "status", None)) or "")
+            path = Path(str(getattr(upload, "file_path", "") or ""))
+            metadata = dict(getattr(upload, "metadata", {}) or {})
+            if status != "ready" or not path.is_file():
+                raise ValueError("body_proportion_analysis_source_not_ready")
+            if str(getattr(upload, "role", "") or "").strip().lower() != "body_proportion_reference":
+                raise ValueError("body_proportion_analysis_role_invalid")
+            truth_layer = str(
+                metadata.get("reference_truth_layer")
+                or getattr(upload, "reference_truth_layer", "")
+                or ""
+            ).strip()
+            if truth_layer != "body_proportion_truth":
+                raise ValueError("body_proportion_analysis_truth_layer_invalid")
+            if metadata.get("content_stored") is not True or metadata.get("ready_for_v3_runtime") is not True:
+                raise ValueError("body_proportion_analysis_source_not_ready")
+            provenance = metadata.get("source_provenance")
+            consent = metadata.get("consent_reference")
+            rights = metadata.get("rights_reference")
+            if not all(isinstance(value, str) and value.strip() for value in (provenance, consent, rights)):
+                raise ValueError("body_proportion_analysis_source_invalid")
+            source_sha256 = str(metadata.get("source_sha256") or "").strip().lower()
+            if len(source_sha256) != 64 or any(char not in "0123456789abcdef" for char in source_sha256):
+                raise ValueError("body_proportion_analysis_source_hash_mismatch")
+            try:
+                content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise ValueError("body_proportion_analysis_source_not_ready") from exc
+            if content_hash != source_sha256:
+                raise ValueError("body_proportion_analysis_source_hash_mismatch")
+            try:
+                envelopes.append(
+                    BodySourceAnalysisAssetEnvelope(
+                        asset_id=asset_id,
+                        role="body_proportion_reference",
+                        reference_truth_layer="body_proportion_truth",
+                        file_path=str(path),
+                        mime_type=str(getattr(upload, "mime_type", "") or "").strip().lower(),
+                        source_sha256=source_sha256,
+                        source_provenance=provenance,
+                        consent_reference=consent,
+                        rights_reference=rights,
+                    )
+                )
+            except ValidationError as exc:
+                raise ValueError("body_proportion_analysis_source_invalid") from exc
+        return envelopes
 
     @staticmethod
     def _professional_character_card_provider_reference_output_ids(
@@ -9603,6 +9679,15 @@ class V3ProductApiService:
             for item in group
             if isinstance(item, dict)
         ]
+        body_source_analysis_assets = self._professional_character_card_body_source_analysis_assets(
+            metadata.get("professional_character_card_body_source_admission"),
+            source_class=metadata.get("professional_character_card_source_class"),
+            face_reference_output_ids=[
+                str(item).strip()
+                for item in (metadata.get("professional_character_card_reference_output_ids") or [])
+                if str(item).strip()
+            ],
+        )
         if frozen_anchor_references:
             uploaded_assets.extend(frozen_anchor_references)
             # Keep the server-resolved selected-output binding intact when
@@ -9610,6 +9695,11 @@ class V3ProductApiService:
             # reviewed winner as an ordinary upload strips its top-level
             # output_id/source_type and makes provider admission fail closed
             # before the supplementary anchor can materialize.
+            renderer_reference_assets = [
+                item
+                for item in frozen_anchor_references
+                if item.get("role") != "body_proportion_reference"
+            ]
             metadata["reference_assets"] = [
                 *[
                     item.model_dump(mode="json")
@@ -9617,7 +9707,7 @@ class V3ProductApiService:
                     else dict(item)
                     for item in resolved_uploads
                 ],
-                *frozen_anchor_references,
+                *renderer_reference_assets,
             ]
         payload = {
             "user_input": request.user_input,
@@ -9629,6 +9719,8 @@ class V3ProductApiService:
             "metadata": metadata,
             "trusted_capability_plan_reuse": trusted_reuse,
         }
+        if body_source_analysis_assets:
+            payload["body_source_analysis_assets"] = body_source_analysis_assets
         if isinstance(metadata.get("trusted_professional_anchor_view_decision_reuse"), dict):
             runtime_request = ScenarioRuntimeRequest.model_validate(payload)
             return runtime_request.model_copy(

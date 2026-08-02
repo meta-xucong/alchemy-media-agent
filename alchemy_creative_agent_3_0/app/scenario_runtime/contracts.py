@@ -20,6 +20,7 @@ from ..shared_capabilities.activation import (
 )
 from ..llm_brain import BrainRunResult
 from ..visual_assets import ProfessionalModePreparationResult, VisualAssetBindingSet
+from ..visual_assets.body_proportion_evidence_profile import BodySourceAnalysisAssetEnvelope
 from ..schemas import PlanningResult
 from ..schemas.models import V3BaseModel
 
@@ -42,6 +43,10 @@ class ScenarioRuntimeRequest(V3BaseModel):
     uploaded_assets: list[UploadedAssetInfo] = Field(default_factory=list)
     product_profile: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Server-owned, ephemeral Body source-analysis proof.  Product metadata
+    # cannot populate this field; ProductApi builds it from ready upload
+    # records immediately before entering ScenarioRuntime.
+    body_source_analysis_assets: list[BodySourceAnalysisAssetEnvelope] = Field(default_factory=list)
     # This is an internal service-to-runtime transport flag, never a Product
     # API control.  A frozen plan can only be reused after Product API has
     # resolved its persisted parent/job provenance and explicitly marked the
