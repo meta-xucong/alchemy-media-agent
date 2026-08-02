@@ -84,6 +84,15 @@ class BodyProportionEvidenceBands(V3BaseModel):
 
 
 _BODY_PROPORTION_BAND_KEYS = frozenset(BodyProportionEvidenceBands.model_fields)
+_BODY_PROPORTION_ALLOWED_VALUES = {
+    field_name: frozenset(
+        field_schema.get("enum", ())
+    )
+    for field_name, field_schema in BodyProportionEvidenceBands.model_json_schema().get(
+        "properties",
+        {},
+    ).items()
+}
 _BODY_ANALYSIS_RESPONSE_KEYS = frozenset({"allowed_bands"})
 _BODY_ANALYSIS_SHAPE_CODES = frozenset(
     {
@@ -211,6 +220,77 @@ def _safe_response_shape_projection(
     }
 
 
+def _safe_response_value_projection(
+    raw_response: Any,
+    *,
+    output_text: Any = _MISSING_RESPONSE_VALUE,
+    schema_code: str = "none",
+) -> dict[str, Any]:
+    """Classify band values without returning any band value itself."""
+
+    shape = _safe_response_shape_projection(
+        raw_response,
+        output_text=output_text,
+        schema_code=schema_code,
+    )
+    if output_text is _MISSING_RESPONSE_VALUE:
+        output_text_value = raw_response if isinstance(raw_response, str) else None
+    else:
+        output_text_value = output_text
+    parsed_response = raw_response
+    if isinstance(output_text_value, str):
+        try:
+            parsed_response = json.loads(output_text_value)
+        except (TypeError, ValueError):
+            parsed_response = _MISSING_RESPONSE_VALUE
+    bands = (
+        parsed_response.get("allowed_bands")
+        if isinstance(parsed_response, Mapping)
+        else None
+    )
+    band_key_set = set(_safe_response_keys(bands))
+    unknown_band_keys = sorted(band_key_set - _BODY_PROPORTION_BAND_KEYS)
+    per_band: list[dict[str, Any]] = []
+    for band_name in sorted(_BODY_PROPORTION_BAND_KEYS):
+        if not isinstance(bands, Mapping) or band_name not in bands:
+            per_band.append(
+                {
+                    "band": band_name,
+                    "present": False,
+                    "value_type": "absent",
+                    "allowed_membership": "missing",
+                    "closed_code": "body_proportion_analysis_profile_invalid",
+                }
+            )
+            continue
+        band_value = bands[band_name]
+        value_type = _safe_response_type(band_value)
+        if not isinstance(band_value, str):
+            allowed_membership = "not_applicable"
+            closed_code = "body_proportion_analysis_profile_invalid"
+        elif band_value in _BODY_PROPORTION_ALLOWED_VALUES.get(band_name, ()):
+            allowed_membership = "allowed"
+            closed_code = "none"
+        else:
+            allowed_membership = "not_allowed"
+            closed_code = "body_proportion_analysis_profile_invalid"
+        per_band.append(
+            {
+                "band": band_name,
+                "present": True,
+                "value_type": value_type,
+                "allowed_membership": allowed_membership,
+                "closed_code": closed_code,
+            }
+        )
+    return {
+        "unknown_band_key_count": len(unknown_band_keys),
+        "unknown_band_keys": unknown_band_keys,
+        "per_band": per_band,
+        "schema_code": shape["schema_code"],
+    }
+
+
 class BodyProportionAnalysisReceipt(V3BaseModel):
     """Server-owned proof that a Body profile came from source analysis."""
 
@@ -307,6 +387,7 @@ class OpenAICompatibleBodySourceAnalysisTransport:
         self.base_url = base_url
         self.model = model
         self.last_response_shape_projection: dict[str, Any] | None = None
+        self.last_response_value_projection: dict[str, Any] | None = None
 
     def analyze(
         self,
@@ -350,8 +431,15 @@ class OpenAICompatibleBodySourceAnalysisTransport:
             output_text,
             output_text=output_text if output_text else None,
         )
+        self.last_response_value_projection = _safe_response_value_projection(
+            output_text,
+            output_text=output_text if output_text else None,
+        )
         if not output_text:
             self.last_response_shape_projection["schema_code"] = (
+                "body_proportion_analysis_provider_unavailable"
+            )
+            self.last_response_value_projection["schema_code"] = (
                 "body_proportion_analysis_provider_unavailable"
             )
             raise ValueError("body source analysis response was empty")
@@ -359,6 +447,9 @@ class OpenAICompatibleBodySourceAnalysisTransport:
             return json.loads(output_text)
         except (TypeError, ValueError) as exc:
             self.last_response_shape_projection["schema_code"] = (
+                "body_proportion_analysis_provider_unavailable"
+            )
+            self.last_response_value_projection["schema_code"] = (
                 "body_proportion_analysis_provider_unavailable"
             )
             raise ValueError("body source analysis response was not valid JSON") from exc
@@ -400,6 +491,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.last_response_shape_projection: dict[str, Any] | None = None
+        self.last_response_value_projection: dict[str, Any] | None = None
         self.transport = transport or (
             OpenAICompatibleBodySourceAnalysisTransport(
                 api_key=api_key or "",
@@ -447,6 +539,19 @@ class OpenAICompatibleBodySourceAnalysisProvider:
                     schema_code="body_proportion_analysis_provider_unavailable",
                 )
             )
+            transport_value_projection = getattr(
+                self.transport,
+                "last_response_value_projection",
+                None,
+            )
+            self.last_response_value_projection = (
+                dict(transport_value_projection)
+                if isinstance(transport_value_projection, Mapping)
+                else _safe_response_value_projection(
+                    None,
+                    schema_code="body_proportion_analysis_provider_unavailable",
+                )
+            )
             raise BodyProportionAnalysisError(
                 "body_proportion_analysis_provider_unavailable"
             ) from exc
@@ -459,6 +564,16 @@ class OpenAICompatibleBodySourceAnalysisProvider:
             dict(transport_projection)
             if isinstance(transport_projection, Mapping)
             else _safe_response_shape_projection(raw_response)
+        )
+        transport_value_projection = getattr(
+            self.transport,
+            "last_response_value_projection",
+            None,
+        )
+        self.last_response_value_projection = (
+            dict(transport_value_projection)
+            if isinstance(transport_value_projection, Mapping)
+            else _safe_response_value_projection(raw_response)
         )
         try:
             payload = self._parse_response(raw_response)
@@ -483,11 +598,19 @@ class OpenAICompatibleBodySourceAnalysisProvider:
                 **(self.last_response_shape_projection or {}),
                 "schema_code": "body_proportion_analysis_profile_invalid",
             }
+            self.last_response_value_projection = {
+                **(self.last_response_value_projection or {}),
+                "schema_code": "body_proportion_analysis_profile_invalid",
+            }
             raise BodyProportionAnalysisError(
                 "body_proportion_analysis_profile_invalid"
             ) from exc
         self.last_response_shape_projection = {
             **(self.last_response_shape_projection or {}),
+            "schema_code": "body_proportion_analysis_profile_valid",
+        }
+        self.last_response_value_projection = {
+            **(self.last_response_value_projection or {}),
             "schema_code": "body_proportion_analysis_profile_valid",
         }
         return profile.model_dump(mode="json")

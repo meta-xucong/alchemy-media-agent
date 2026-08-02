@@ -252,3 +252,99 @@ def test_output_text_json_shape_projection_has_no_response_values(tmp_path: Path
     assert projection["allowed_bands_missing_field_count"] == 7
     assert projection["schema_code"] == "body_proportion_analysis_profile_invalid"
     assert "redacted" not in str(projection)
+
+
+@pytest.mark.parametrize(
+    ("case_name", "mutate", "expected_band_state"),
+    [
+        (
+            "missing",
+            lambda bands: bands.pop("arm_leg"),
+            {
+                "present": False,
+                "value_type": "absent",
+                "allowed_membership": "missing",
+                "closed_code": "body_proportion_analysis_profile_invalid",
+            },
+        ),
+        (
+            "unknown_key",
+            lambda bands: bands.update({"unexpected_band": "hidden"}),
+            {
+                "present": True,
+                "value_type": "string",
+                "allowed_membership": "allowed",
+                "closed_code": "none",
+            },
+        ),
+        (
+            "non_string",
+            lambda bands: bands.update({"arm_leg": 3}),
+            {
+                "present": True,
+                "value_type": "number",
+                "allowed_membership": "not_applicable",
+                "closed_code": "body_proportion_analysis_profile_invalid",
+            },
+        ),
+        (
+            "invalid_literal",
+            lambda bands: bands.update({"arm_leg": "natural_child_proportion"}),
+            {
+                "present": True,
+                "value_type": "string",
+                "allowed_membership": "not_allowed",
+                "closed_code": "body_proportion_analysis_profile_invalid",
+            },
+        ),
+        (
+            "valid_literal",
+            lambda bands: None,
+            {
+                "present": True,
+                "value_type": "string",
+                "allowed_membership": "allowed",
+                "closed_code": "none",
+            },
+        ),
+    ],
+)
+def test_per_band_value_projection_is_closed_and_value_free(
+    tmp_path: Path,
+    case_name: str,
+    mutate,
+    expected_band_state: dict[str, Any],
+) -> None:
+    bands = dict(_BANDS)
+    mutate(bands)
+    provider = _provider(_FakeAnalysisTransport(response={"allowed_bands": bands}))
+
+    if case_name in {"missing", "non_string", "invalid_literal", "unknown_key"}:
+        with pytest.raises(
+            BodyProportionAnalysisError,
+            match="body_proportion_analysis_profile_invalid",
+        ):
+            provider.analyze(_body_assets(tmp_path))
+    else:
+        provider.analyze(_body_assets(tmp_path))
+
+    projection = provider.last_response_value_projection
+    assert projection["unknown_band_key_count"] == (1 if case_name == "unknown_key" else 0)
+    assert projection["unknown_band_keys"] == (
+        ["unexpected_band"] if case_name == "unknown_key" else []
+    )
+    assert projection["schema_code"] == (
+        "body_proportion_analysis_profile_invalid"
+        if case_name in {"missing", "non_string", "invalid_literal", "unknown_key"}
+        else "body_proportion_analysis_profile_valid"
+    )
+    states = {item["band"]: item for item in projection["per_band"]}
+    assert states["arm_leg"] == {
+        "band": "arm_leg",
+        **expected_band_state,
+    }
+    assert all("value" not in item for item in projection["per_band"])
+    assert all(
+        forbidden not in str(projection)
+        for forbidden in ("natural_child_proportion", "hidden", "raw_response")
+    )
