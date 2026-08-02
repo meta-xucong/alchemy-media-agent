@@ -43,6 +43,97 @@ def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+_BODY_RENDERER_EXECUTION_DIRECTIVE_SCHEMA = "v3_body_mcp_renderer_execution_directive_v1"
+
+_BODY_RENDERER_PRESENTATION_PHRASES = {
+    "short_sleeve_top": "plain short-sleeve top",
+    "shorts": "shorts with legs visible",
+    "barefoot": "completely barefoot, no shoes or socks",
+}
+_BODY_RENDERER_BACKDROP_PHRASES = {
+    "solid_white": (
+        "perfectly uniform pure solid white backdrop, no gray, no gradient, "
+        "no floor, no shadow"
+    ),
+}
+
+
+def _canonical_json_sha256(value: dict[str, Any]) -> str:
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _build_body_renderer_execution_directive(
+    *,
+    canonical_prompt_sha256: str,
+    rendering_contract_fingerprint: str,
+    nonce: str,
+    rendering_contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Compile the closed Body contract into a renderer-owned directive.
+
+    The Brain canonical prompt and its hash remain immutable.  This separate
+    directive is the only server-owned execution context that may add the
+    closed Body presentation/backdrop/hair constraints for a renderer.  It
+    carries no Body evidence hashes, paths, raw prompt, or provider payload.
+    """
+
+    intent = dict(rendering_contract.get("body_refresh_presentation_intent") or {})
+    backdrop = dict(rendering_contract.get("body_silhouette_backdrop_presentation_contract") or {})
+    hair = dict(rendering_contract.get("body_silhouette_hair_continuity_contract") or {})
+    channel = dict(
+        rendering_contract.get("body_silhouette_mcp_materialization_channel_contract") or {}
+    )
+    directive: dict[str, Any] = {
+        "schema_version": _BODY_RENDERER_EXECUTION_DIRECTIVE_SCHEMA,
+        "execution_scope": "professional_character_card_body_silhouette_mcp_materialization_only",
+        "canonical_prompt_sha256": str(canonical_prompt_sha256),
+        "rendering_contract_fingerprint": str(rendering_contract_fingerprint),
+        "nonce_sha256": _sha256(str(nonce).encode("utf-8")),
+        "source_mode": rendering_contract.get("body_refresh_source_mode"),
+        "physical_reference_policy": "face_identity_only",
+        "presentation": {
+            "top": intent.get("top_presentation"),
+            "bottom": intent.get("bottom_presentation"),
+            "footwear": intent.get("footwear_presentation"),
+        },
+        "backdrop": backdrop.get("backdrop"),
+        "hair_continuity": {
+            "source": hair.get("source"),
+            "required_continuity": list(hair.get("required_continuity") or []),
+            "allowed_variation": list(hair.get("allowed_variation") or []),
+            "forbidden": list(hair.get("forbidden") or []),
+            "scope": hair.get("scope"),
+        },
+        "body_silhouette_execution_constraints": {
+            "allowed_body_owned_channels": list(channel.get("allowed_body_owned_channels") or []),
+            "face_identity_reference_scope": channel.get("face_identity_reference_scope"),
+            "body_reference_scope": channel.get("body_reference_scope"),
+            "source_mode_scope": list(channel.get("source_mode_scope") or []),
+        },
+    }
+    try:
+        top_phrase = _BODY_RENDERER_PRESENTATION_PHRASES[directive["presentation"]["top"]]
+        bottom_phrase = _BODY_RENDERER_PRESENTATION_PHRASES[directive["presentation"]["bottom"]]
+        footwear_phrase = _BODY_RENDERER_PRESENTATION_PHRASES[directive["presentation"]["footwear"]]
+        backdrop_phrase = _BODY_RENDERER_BACKDROP_PHRASES[directive["backdrop"]]
+    except KeyError as exc:
+        raise McpMaterializationError(
+            "mcp_materialization_renderer_execution_directive_invalid"
+        ) from exc
+    directive["materialization_prompt"] = (
+        "Execute the closed server-owned Body Silhouette renderer directive exactly. "
+        f"Render a {top_phrase}. Render {bottom_phrase}. Render the subject {footwear_phrase}. "
+        f"Use a {backdrop_phrase}. "
+        "Preserve hair from the current Face Identity references with the same "
+        "hairstyle category, same hair length tier, same bangs-or-parting pattern, "
+        "and same overall hair outline. Use Face identity references only as physical "
+        "inputs; Body proportion evidence is analysis-only."
+    )
+    directive["directive_sha256"] = _canonical_json_sha256(directive)
+    return directive
+
+
 def _validate_image(content: bytes) -> tuple[int | None, int | None]:
     try:
         from PIL import Image
@@ -219,6 +310,7 @@ class McpMaterializationHandoffStore:
                 path = self._record_path(handoff_id)
                 existing = self._read(handoff_id)
                 if existing is not None:
+                    self._validated_renderer_execution_directive(existing)
                     if str(existing.get("prompt_sha256") or "") != prompt_hash:
                         raise McpMaterializationError("mcp_materialization_prompt_mismatch")
                     if existing.get("reference_asset_hashes") != hashes:
@@ -246,6 +338,15 @@ class McpMaterializationHandoffStore:
                 break
             else:
                 raise McpMaterializationError("mcp_materialization_revision_exhausted")
+            nonce = secrets.token_urlsafe(24)
+            renderer_directive = None
+            if require_body_rendering_contract:
+                renderer_directive = _build_body_renderer_execution_directive(
+                    canonical_prompt_sha256=prompt_hash,
+                    rendering_contract_fingerprint=rendering_fingerprint,
+                    nonce=nonce,
+                    rendering_contract=safe_rendering_contract,
+                )
             payload = {
                 "schema_version": self.schema_version,
                 "handoff_id": handoff_id,
@@ -254,7 +355,7 @@ class McpMaterializationHandoffStore:
                 "status": "pending",
                 "created_at": _now_iso(),
                 "updated_at": _now_iso(),
-                "nonce": secrets.token_urlsafe(24),
+                "nonce": nonce,
                 "canonical_prompt": str(prompt),
                 "prompt_sha256": prompt_hash,
                 "reference_assets": self._safe_reference_contract(reference_assets, hashes),
@@ -262,6 +363,14 @@ class McpMaterializationHandoffStore:
                 "reference_semantic_fingerprint": reference_fingerprint,
                 "rendering_contract": safe_rendering_contract,
                 "rendering_contract_fingerprint": rendering_fingerprint,
+                **(
+                    {
+                        "renderer_execution_directive": renderer_directive,
+                        "renderer_execution_directive_sha256": renderer_directive["directive_sha256"],
+                    }
+                    if renderer_directive is not None
+                    else {}
+                ),
                 "artifact_file": None,
                 "artifact_sha256": None,
                 "artifact_format": None,
@@ -318,12 +427,114 @@ class McpMaterializationHandoffStore:
             raise McpMaterializationError("mcp_materialization_not_found")
         return self._public_view_from_payload(payload)
 
+    def public_renderer_request(self, handoff_id: str) -> dict[str, Any]:
+        """Build the single typed request that the host passes to ImageGen.
+
+        The caller must not concatenate the Brain prompt and renderer
+        directive itself.  This boundary validates the frozen handoff first,
+        then returns the canonical prompt unchanged alongside a separately
+        hashed renderer prompt.  Body evidence remains in the typed contract
+        and never becomes a physical renderer reference.
+        """
+
+        public = self.public_view(handoff_id)
+        return self._renderer_request_from_public_view(public)
+
+    @staticmethod
+    def _renderer_request_from_public_view(public: dict[str, Any]) -> dict[str, Any]:
+        directive = public.get("renderer_execution_directive")
+        canonical_prompt = str(public.get("canonical_prompt") or "")
+        if not isinstance(directive, dict):
+            renderer_prompt = canonical_prompt
+        else:
+            renderer_prompt = (
+                canonical_prompt
+                + "\n\n"
+                + str(directive.get("materialization_prompt") or "")
+            )
+        request = {
+            "handoff_id": public["handoff_id"],
+            "nonce": public["nonce"],
+            "canonical_prompt": canonical_prompt,
+            "canonical_prompt_sha256": public["prompt_sha256"],
+            "renderer_prompt": renderer_prompt,
+            "renderer_prompt_sha256": _sha256(renderer_prompt.encode("utf-8")),
+            "reference_assets": public["reference_assets"],
+            "reference_asset_hashes": public["reference_asset_hashes"],
+            "rendering_contract_fingerprint": public.get("rendering_contract_fingerprint"),
+            "renderer_execution_directive": directive,
+            "renderer_execution_directive_sha256": public.get("renderer_execution_directive_sha256"),
+        }
+        return request
+
+    @classmethod
+    def _validated_renderer_execution_directive(
+        cls,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        contract = payload.get("rendering_contract")
+        if not isinstance(contract, dict):
+            return None
+        strict_body = (
+            contract.get("body_silhouette_mcp_materialization_channel_contract") is not None
+            and contract.get("body_refresh_source_mode") in {"inference_first", "reference_assisted"}
+        )
+        if not strict_body:
+            return None
+        raw_directive = payload.get("renderer_execution_directive")
+        if not isinstance(raw_directive, dict):
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_execution_directive_missing"
+            )
+        rendering_fingerprint = str(payload.get("rendering_contract_fingerprint") or "").strip().lower()
+        computed_rendering_fingerprint = cls._rendering_contract_fingerprint(contract)
+        if rendering_fingerprint and rendering_fingerprint != computed_rendering_fingerprint:
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_execution_directive_mismatch"
+            )
+        rendering_fingerprint = computed_rendering_fingerprint
+        expected = _build_body_renderer_execution_directive(
+            canonical_prompt_sha256=str(payload.get("prompt_sha256") or ""),
+            rendering_contract_fingerprint=rendering_fingerprint,
+            nonce=str(payload.get("nonce") or ""),
+            rendering_contract=contract,
+        )
+        if raw_directive != expected or str(payload.get("renderer_execution_directive_sha256") or "") != str(
+            expected["directive_sha256"]
+        ):
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_execution_directive_mismatch"
+            )
+        return expected
+
+    @classmethod
+    def _validate_submitted_renderer_prompt_hash(
+        cls,
+        payload: dict[str, Any],
+        directive: dict[str, Any] | None,
+    ) -> str | None:
+        if directive is None:
+            return None
+        public = cls._public_view_from_payload(payload)
+        expected = cls._renderer_request_from_public_view(public)["renderer_prompt_sha256"]
+        stored = str(payload.get("renderer_prompt_sha256") or "").strip().lower()
+        if not stored:
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_prompt_hash_missing"
+            )
+        if stored != str(expected).lower():
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_prompt_hash_mismatch"
+            )
+        return stored
+
     @staticmethod
     def _public_view_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         # The endpoint is local-only, but still return only the fields Codex
         # needs to call ImageGen and submit one image.  No raw response or
         # internal Provider credentials are part of this contract.
-        return {
+        directive = McpMaterializationHandoffStore._validated_renderer_execution_directive(payload)
+        view = {
             "schema_version": "v3_mcp_materialization_public_v1",
             "handoff_id": payload["handoff_id"],
             "operation_id": payload["operation_id"],
@@ -334,9 +545,16 @@ class McpMaterializationHandoffStore:
             "reference_assets": payload["reference_assets"],
             "reference_asset_hashes": payload["reference_asset_hashes"],
             "rendering_contract": payload["rendering_contract"],
+            "rendering_contract_fingerprint": payload.get("rendering_contract_fingerprint"),
             "artifact_sha256": payload.get("artifact_sha256"),
             "artifact_format": payload.get("artifact_format"),
         }
+        if directive is not None:
+            view["renderer_execution_directive"] = directive
+            view["renderer_execution_directive_sha256"] = directive["directive_sha256"]
+            if payload.get("renderer_prompt_sha256"):
+                view["renderer_prompt_sha256"] = payload["renderer_prompt_sha256"]
+        return view
 
     def submit(
         self,
@@ -346,11 +564,38 @@ class McpMaterializationHandoffStore:
         prompt_sha256: str,
         reference_asset_hashes: list[str],
         artifact_bytes: bytes,
+        renderer_prompt_sha256: str | None = None,
+        renderer_execution_directive_sha256: str | None = None,
     ) -> dict[str, Any]:
         with self._transaction_lock():
             payload = self._read(handoff_id)
             if payload is None:
                 raise McpMaterializationError("mcp_materialization_not_found")
+            directive = self._validated_renderer_execution_directive(payload)
+            if directive is not None:
+                expected_host_request = self._renderer_request_from_public_view(
+                    self._public_view_from_payload(payload)
+                )
+                if not renderer_prompt_sha256:
+                    raise McpMaterializationError(
+                        "mcp_materialization_renderer_prompt_hash_required"
+                    )
+                if str(renderer_prompt_sha256).strip().lower() != str(
+                    expected_host_request["renderer_prompt_sha256"]
+                ).lower():
+                    raise McpMaterializationError(
+                        "mcp_materialization_renderer_prompt_hash_mismatch"
+                    )
+                if not renderer_execution_directive_sha256:
+                    raise McpMaterializationError(
+                        "mcp_materialization_renderer_execution_directive_hash_required"
+                    )
+                if str(renderer_execution_directive_sha256).strip().lower() != str(
+                    directive["directive_sha256"]
+                ).lower():
+                    raise McpMaterializationError(
+                        "mcp_materialization_renderer_execution_directive_hash_mismatch"
+                    )
             if str(nonce or "") != str(payload.get("nonce") or ""):
                 raise McpMaterializationError("mcp_materialization_nonce_invalid")
             if str(prompt_sha256 or "").strip().lower() != str(payload.get("prompt_sha256") or ""):
@@ -420,6 +665,7 @@ class McpMaterializationHandoffStore:
                 "job_checkpointed",
             }:
                 if str(payload.get("artifact_sha256") or "") == artifact_sha256:
+                    self._validate_submitted_renderer_prompt_hash(payload, directive)
                     return self._public_view_from_payload(payload)
                 raise McpMaterializationError("mcp_materialization_artifact_conflict")
             if status != "pending":
@@ -438,6 +684,11 @@ class McpMaterializationHandoffStore:
                 "artifact_width": width,
                 "artifact_height": height,
                 **(
+                    {"renderer_prompt_sha256": str(renderer_prompt_sha256).strip().lower()}
+                    if directive is not None
+                    else {}
+                ),
+                **(
                     {
                         "artifact_original_sha256": original_sha256,
                         "artifact_size_normalization": size_normalization,
@@ -454,6 +705,7 @@ class McpMaterializationHandoffStore:
             payload = self._read(handoff_id)
             if payload is None:
                 raise McpMaterializationError("mcp_materialization_not_found")
+            directive = self._validated_renderer_execution_directive(payload)
             status = str(payload.get("status") or "").strip().lower()
             if status not in {
                 "submitted",
@@ -463,6 +715,7 @@ class McpMaterializationHandoffStore:
                 "job_checkpointed",
             }:
                 raise McpMaterializationError("mcp_materialization_pending")
+            self._validate_submitted_renderer_prompt_hash(payload, directive)
             artifact_file = Path(str(payload.get("artifact_file") or ""))
             if not artifact_file.is_file():
                 raise McpMaterializationError("mcp_materialization_artifact_missing")
@@ -913,6 +1166,11 @@ class McpMaterializationHandoffStore:
             )
         unspecified = unspecified_body_refresh_presentation_intent()
         if raw_intent == unspecified:
+            if require_body_rendering_contract:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_refresh_presentation_intent_unspecified"},
+                )
             safe["body_refresh_presentation_intent"] = unspecified
         else:
             try:

@@ -186,6 +186,17 @@ def _png_bytes(color: tuple[int, int, int] = (224, 236, 255)) -> bytes:
     return buffer.getvalue()
 
 
+def _renderer_submit_hashes(store: McpMaterializationHandoffStore, handoff: dict) -> dict[str, str]:
+    payload = McpMaterializationHandoffStore.get(store, handoff["handoff_id"])
+    assert payload is not None
+    public = McpMaterializationHandoffStore._public_view_from_payload(payload)  # noqa: SLF001
+    request = McpMaterializationHandoffStore._renderer_request_from_public_view(public)  # noqa: SLF001
+    return {
+        "renderer_prompt_sha256": request["renderer_prompt_sha256"],
+        "renderer_execution_directive_sha256": request["renderer_execution_directive_sha256"],
+    }
+
+
 def _current_laugh_handoff_prompt(*, suffix: str = "") -> str:
     return (
         f"{laugh_expression_materialization_directive()} "
@@ -1101,6 +1112,7 @@ def test_doc205_character_card_recovers_orphan_submitted_handoff_without_replann
         prompt_sha256=handoff["prompt_sha256"],
         reference_asset_hashes=handoff["reference_asset_hashes"],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoffs, handoff),
     )
 
     class _Store:
@@ -2310,6 +2322,7 @@ def test_doc228_service_review_only_resume_rechecks_generated_timeout_package_wi
         prompt_sha256=pending["prompt_sha256"],
         reference_asset_hashes=pending["reference_asset_hashes"],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
     )
     consumed = handoff_store.consume(submitted["handoff_id"])
     handoff_store.mark_output_checkpoint(
@@ -2443,6 +2456,7 @@ def test_doc228_service_review_only_resume_rechecks_signal_provider_unavailable_
         prompt_sha256=pending["prompt_sha256"],
         reference_asset_hashes=pending["reference_asset_hashes"],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
     )
     consumed = handoff_store.consume(submitted["handoff_id"])
     handoff_store.mark_output_checkpoint(
@@ -2601,6 +2615,7 @@ def test_doc228_exact_body_handoff_resume_reenters_runtime_despite_stale_failed_
         prompt_sha256=prompt_sha,
         reference_asset_hashes=[],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
     )
     planning_metadata = _current_character_card_planning_metadata(
         operation_id=operation_id,
@@ -2760,6 +2775,7 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
         prompt_sha256=prompt_sha,
         reference_asset_hashes=[],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
     )
     assert submitted["status"] == "submitted"
     frozen_handoff = handoff_store.get(pending["handoff_id"])
@@ -2931,6 +2947,7 @@ def test_doc263_generating_body_resume_reconciles_submitted_handoff_before_consu
         prompt_sha256=prompt_sha,
         reference_asset_hashes=[],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
     )
     assert submitted["status"] == "submitted"
 
@@ -3212,6 +3229,7 @@ def test_doc263_submitted_body_resume_preserves_two_face_identity_reference_proj
         prompt_sha256=prompt_sha,
         reference_asset_hashes=reference_hashes,
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
     )
     assert submitted["status"] == "submitted"
     frozen_handoff = handoff_store.get(pending["handoff_id"])
@@ -3487,6 +3505,7 @@ def test_doc263_submitted_body_resume_contract_mismatch_fails_closed(
         prompt_sha256=prompt_sha,
         reference_asset_hashes=[],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
     )
 
     planning_metadata = _current_character_card_planning_metadata(
@@ -3635,6 +3654,7 @@ def test_doc228_exact_body_handoff_resume_accepts_real_productapi_contract_envel
         prompt_sha256=prompt_sha,
         reference_assets=[],
         rendering_contract=frozen_contract,
+        require_body_rendering_contract=True,
     )
     handoffs.submit(
         handoff["handoff_id"],
@@ -3642,6 +3662,7 @@ def test_doc228_exact_body_handoff_resume_accepts_real_productapi_contract_envel
         prompt_sha256=handoff["prompt_sha256"],
         reference_asset_hashes=handoff["reference_asset_hashes"],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoffs, handoff),
     )
 
     current_request = _minimal_request(metadata=metadata)
@@ -3984,6 +4005,7 @@ def test_doc228_review_only_resume_syncs_durable_job_checkpoint_and_review_pendi
         prompt_sha256=pending["prompt_sha256"],
         reference_asset_hashes=pending["reference_asset_hashes"],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
     )
     consumed = handoff_store.consume(submitted["handoff_id"])
     handoff_store.mark_output_checkpoint(
@@ -5461,6 +5483,7 @@ def test_doc203_submitted_body_resume_without_durable_planning_does_not_remain_g
         prompt_sha256=prompt_sha,
         reference_asset_hashes=[],
         artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoffs, pending),
     )
     assert submitted["status"] == "submitted"
 

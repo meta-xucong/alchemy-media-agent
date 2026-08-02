@@ -176,6 +176,14 @@ def _tiny_png_b64() -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def _renderer_submit_hashes(store: McpMaterializationHandoffStore, handoff: dict) -> dict[str, str]:
+    request = store.public_renderer_request(handoff["handoff_id"])
+    return {
+        "renderer_prompt_sha256": request["renderer_prompt_sha256"],
+        "renderer_execution_directive_sha256": request["renderer_execution_directive_sha256"],
+    }
+
+
 def _body_slot_delta_runtime_request(slot_key: str = "body.front_full") -> ScenarioRuntimeRequest:
     return ScenarioRuntimeRequest(
         user_input=(
@@ -2209,19 +2217,18 @@ def test_doc245_mcp_handoff_store_rendering_fingerprint_includes_body_intent(
         rendering_contract=first_contract,
         require_body_rendering_contract=True,
     )
-    changed = store.ensure_pending(
-        operation_id=DOC245_REAL_BODY_MCP_OPERATION_ID,
-        prompt="same Body MCP renderer prompt",
-        prompt_sha256="b" * 64,
-        reference_assets=[],
-        rendering_contract=second_contract,
-        require_body_rendering_contract=True,
-    )
-
     assert resumed["handoff_id"] == first["handoff_id"]
-    assert changed["handoff_id"] != first["handoff_id"]
-    assert changed["revision"] == 2
-    assert changed["rendering_contract"]["body_refresh_presentation_intent"] == second_intent
+    with pytest.raises(McpMaterializationError) as exc_info:
+        store.ensure_pending(
+            operation_id=DOC245_REAL_BODY_MCP_OPERATION_ID,
+            prompt="same Body MCP renderer prompt",
+            prompt_sha256="b" * 64,
+            reference_assets=[],
+            rendering_contract=second_contract,
+            require_body_rendering_contract=True,
+        )
+    assert exc_info.value.detail["failure_code"] == "body_refresh_presentation_intent_unspecified"
+    assert store.list_unconsumed_by_operation(DOC245_REAL_BODY_MCP_OPERATION_ID) == [first]
 
 
 @pytest.mark.parametrize(
@@ -2424,6 +2431,7 @@ def test_doc245_submitted_body_handoff_resume_uses_frozen_rendering_contract(
         prompt_sha256=prompt_sha,
         reference_asset_hashes=[],
         artifact_bytes=base64.b64decode(_tiny_png_b64()),
+        **_renderer_submit_hashes(store, handoff),
     )
     request = _mcp_body_generation_request(
         "Full-body front-view Body Silhouette source-standard materialization.",
@@ -2511,6 +2519,7 @@ def test_doc245_submitted_body_handoff_resume_rejects_non_envelope_contract_drif
         prompt_sha256=prompt_sha,
         reference_asset_hashes=[],
         artifact_bytes=base64.b64decode(_tiny_png_b64()),
+        **_renderer_submit_hashes(store, handoff),
     )
     request = _mcp_body_generation_request(
         "Full-body front-view Body Silhouette source-standard materialization.",

@@ -271,6 +271,16 @@ def test_mcp_body_materialization_channel_contract_is_documented_without_generat
     assert "downstream General/Photography/E-Commerce projection" in squashed
     assert "provider cap" in mcp
     assert "It authorizes no real generation by itself" in mcp
+    assert "canonical Brain prompt and its canonical prompt hash remain unchanged" in mcp
+    assert "single owner that compiles and validates the closed" in squashed
+    assert "renderer_execution_directive" in mcp
+    assert "renderer_prompt" in mcp
+    assert "public_renderer_request" in mcp
+    assert "renderer_prompt_sha256" in mcp
+    assert "renderer_execution_directive_sha256" in mcp
+    assert "Body evidence remains in the analysis/profile contract" in squashed
+    assert "Pixel-level shared review remains the authority" in mcp
+    assert "a typed directive is not a visual pass" in squashed
 
 
 def test_body_refresh_presentation_intent_is_request_scoped_not_body_truth() -> None:

@@ -420,6 +420,19 @@ This section supersedes any older Body MCP handoff behavior that allowed
 expression/professional-pose language, or studio/scene/camera/lighting recipe
 to enter a new Body Silhouette MCP handoff.
 
+The canonical Brain prompt and its canonical prompt hash remain unchanged.
+For strict Body MCP, the handoff store is the single owner that compiles and
+validates the closed `renderer_execution_directive` and the derived final
+`renderer_prompt` hash.  The host must obtain its typed ImageGen input through
+`public_renderer_request`; a runner or host may not concatenate the directive
+or add prompt text itself.  Strict submit requires both the final
+`renderer_prompt_sha256` and the `renderer_execution_directive_sha256`, and
+submit/consume/resume fail closed when either hash, the nonce, or the frozen
+rendering-contract fingerprint does not match.  Body evidence remains in the analysis/profile contract and never enters the physical renderer prompt or
+reference list.  Pixel-level shared review remains the authority for
+presentation, hair, backdrop, and Body acceptance; a typed directive is not a
+visual pass.
+
 This closure does not change the standard three-candidate requirement, shared
 review, Body source-standard positive evidence, formal slot receipt,
 card-level cross-view parity, pending refresh, explicit activation, downstream

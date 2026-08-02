@@ -770,8 +770,19 @@ class V3ProductRouteHandlers:
     def get_mcp_materialization(self, handoff_id: str) -> dict[str, Any]:
         return self.service.mcp_materialization_store.public_view(handoff_id)
 
+    def get_mcp_materialization_renderer_request(self, handoff_id: str) -> dict[str, Any]:
+        return self.service.mcp_materialization_store.public_renderer_request(handoff_id)
+
     def post_mcp_materialization_submit(self, handoff_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        allowed = {"nonce", "prompt_sha256", "reference_asset_hashes", "artifact_base64", "artifact_path"}
+        allowed = {
+            "nonce",
+            "prompt_sha256",
+            "reference_asset_hashes",
+            "renderer_prompt_sha256",
+            "renderer_execution_directive_sha256",
+            "artifact_base64",
+            "artifact_path",
+        }
         if set(payload) - allowed:
             raise ValueError("mcp_materialization_submit_payload_invalid")
         if not isinstance(payload.get("reference_asset_hashes"), list):
@@ -799,6 +810,16 @@ class V3ProductRouteHandlers:
             prompt_sha256=str(payload.get("prompt_sha256") or ""),
             reference_asset_hashes=[str(item or "") for item in payload["reference_asset_hashes"]],
             artifact_bytes=content,
+            renderer_prompt_sha256=(
+                str(payload.get("renderer_prompt_sha256") or "")
+                if "renderer_prompt_sha256" in payload
+                else None
+            ),
+            renderer_execution_directive_sha256=(
+                str(payload.get("renderer_execution_directive_sha256") or "")
+                if "renderer_execution_directive_sha256" in payload
+                else None
+            ),
         )
 
     def get_creative_job(self, job_id: str) -> dict[str, Any]:
