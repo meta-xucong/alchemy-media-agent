@@ -41,6 +41,17 @@ _BANDS = {
     "stance_ground": "grounded_full_contact",
     "cross_view_support": "front_back_supported",
 }
+_MORPHOLOGY = {
+    "relative_head_to_stature": "larger",
+    "shoulder_to_head": "narrower",
+    "torso_to_leg": "shorter_torso",
+    "arm_to_leg": "proportional",
+    "build": "slender",
+    "neck_shoulder": "narrow_transition",
+    "developmental_stage_context": "middle_stage_context",
+    "stance_ground": "grounded_full_contact",
+    "cross_view_support": "multi_view_supported",
+}
 _FORBIDDEN_OUTPUT_TOKENS = (
     "file_path",
     "path",
@@ -116,6 +127,72 @@ def _provider(transport: _FakeAnalysisTransport) -> OpenAICompatibleBodySourceAn
         model="test-body-source-analysis",
         transport=transport,
     )
+
+
+def _morphology_provider(
+    transport: _FakeAnalysisTransport,
+) -> OpenAICompatibleBodySourceAnalysisProvider:
+    return OpenAICompatibleBodySourceAnalysisProvider(
+        api_key=None,
+        base_url=None,
+        model="test-body-source-analysis",
+        profile_version="v2",
+        transport=transport,
+    )
+
+
+def test_v2_invalid_morphology_exposes_value_free_field_diagnostics(tmp_path: Path) -> None:
+    response = {**_MORPHOLOGY, "arm_to_leg": "private-invalid-value"}
+    provider = _morphology_provider(_FakeAnalysisTransport(response=response))
+
+    with pytest.raises(
+        BodyProportionAnalysisError,
+        match="body_proportion_analysis_profile_invalid",
+    ):
+        provider.analyze(_body_assets(tmp_path))
+
+    shape = provider.last_response_shape_projection
+    assert shape["response_top_level_keys"] == sorted(_MORPHOLOGY)
+    assert shape["morphology_unknown_field_count"] == 0
+    assert shape["morphology_missing_field_count"] == 0
+    assert "allowed_bands" not in shape
+
+    values = provider.last_response_value_projection
+    states = {item["field"]: item for item in values["per_field"]}
+    assert states["arm_to_leg"] == {
+        "field": "arm_to_leg",
+        "present": True,
+        "value_type": "string",
+        "allowed_membership": "not_allowed",
+        "closed_code": "body_proportion_analysis_profile_invalid",
+    }
+    assert all("value" not in item for item in values["per_field"])
+    assert "private-invalid-value" not in str(shape)
+    assert "private-invalid-value" not in str(values)
+
+
+def test_v2_morphology_diagnostics_report_missing_and_unknown_fields(tmp_path: Path) -> None:
+    response = dict(_MORPHOLOGY)
+    response.pop("build")
+    response["private_field"] = "private-value"
+    provider = _morphology_provider(_FakeAnalysisTransport(response=response))
+
+    with pytest.raises(
+        BodyProportionAnalysisError,
+        match="body_proportion_analysis_profile_invalid",
+    ):
+        provider.analyze(_body_assets(tmp_path))
+
+    shape = provider.last_response_shape_projection
+    assert shape["morphology_unknown_field_count"] == 1
+    assert shape["morphology_missing_field_count"] == 1
+    values = provider.last_response_value_projection
+    assert values["unknown_field_count"] == 1
+    assert values["unknown_fields"] == ["private_field"]
+    states = {item["field"]: item for item in values["per_field"]}
+    assert states["build"]["present"] is False
+    assert "private-value" not in str(shape)
+    assert "private-value" not in str(values)
 
 
 def test_five_admitted_body_files_are_transiently_analyzed_into_closed_profile(tmp_path: Path) -> None:

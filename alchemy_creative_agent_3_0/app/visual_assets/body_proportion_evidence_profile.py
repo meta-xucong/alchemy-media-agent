@@ -564,11 +564,21 @@ class OpenAICompatibleBodySourceAnalysisTransport:
         except Exception as exc:
             raise RuntimeError("body source analysis transport failed") from exc
         output_text = str(getattr(response, "output_text", "") or "").strip()
-        self.last_response_shape_projection = _safe_response_shape_projection(
+        shape_projector = (
+            _safe_morphology_response_shape_projection
+            if self.profile_version == "v2"
+            else _safe_response_shape_projection
+        )
+        value_projector = (
+            _safe_morphology_response_value_projection
+            if self.profile_version == "v2"
+            else _safe_response_value_projection
+        )
+        self.last_response_shape_projection = shape_projector(
             output_text,
             output_text=output_text if output_text else None,
         )
-        self.last_response_value_projection = _safe_response_value_projection(
+        self.last_response_value_projection = value_projector(
             output_text,
             output_text=output_text if output_text else None,
         )
@@ -698,7 +708,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
             self.last_response_shape_projection = (
                 dict(transport_projection)
                 if isinstance(transport_projection, Mapping)
-                else _safe_response_shape_projection(
+                else self._safe_shape_projection(
                     None,
                     schema_code="body_proportion_analysis_provider_unavailable",
                 )
@@ -711,7 +721,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
             self.last_response_value_projection = (
                 dict(transport_value_projection)
                 if isinstance(transport_value_projection, Mapping)
-                else _safe_response_value_projection(
+                else self._safe_value_projection(
                     None,
                     schema_code="body_proportion_analysis_provider_unavailable",
                 )
@@ -727,7 +737,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         self.last_response_shape_projection = (
             dict(transport_projection)
             if isinstance(transport_projection, Mapping)
-            else _safe_response_shape_projection(raw_response)
+            else self._safe_shape_projection(raw_response)
         )
         transport_value_projection = getattr(
             self.transport,
@@ -737,7 +747,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         self.last_response_value_projection = (
             dict(transport_value_projection)
             if isinstance(transport_value_projection, Mapping)
-            else _safe_response_value_projection(raw_response)
+            else self._safe_value_projection(raw_response)
         )
         try:
             if self.profile_version == "v2":
@@ -795,6 +805,42 @@ class OpenAICompatibleBodySourceAnalysisProvider:
             "schema_code": "body_proportion_analysis_profile_valid",
         }
         return profile.model_dump(mode="json")
+
+    def _safe_shape_projection(
+        self,
+        raw_response: Any,
+        *,
+        output_text: Any = _MISSING_RESPONSE_VALUE,
+        schema_code: str = "none",
+    ) -> dict[str, Any]:
+        projector = (
+            _safe_morphology_response_shape_projection
+            if self.profile_version == "v2"
+            else _safe_response_shape_projection
+        )
+        return projector(
+            raw_response,
+            output_text=output_text,
+            schema_code=schema_code,
+        )
+
+    def _safe_value_projection(
+        self,
+        raw_response: Any,
+        *,
+        output_text: Any = _MISSING_RESPONSE_VALUE,
+        schema_code: str = "none",
+    ) -> dict[str, Any]:
+        projector = (
+            _safe_morphology_response_value_projection
+            if self.profile_version == "v2"
+            else _safe_response_value_projection
+        )
+        return projector(
+            raw_response,
+            output_text=output_text,
+            schema_code=schema_code,
+        )
 
     @classmethod
     def _parse_response(cls, raw_response: Mapping[str, Any] | str) -> dict[str, Any]:
@@ -1017,6 +1063,130 @@ class BodyMorphologyEvidenceProfile(V3BaseModel):
         if type(value) is not int or value != 5:
             raise ValueError("body_proportion_analysis_source_count_invalid")
         return value
+
+
+def _parsed_response_for_safe_projection(
+    raw_response: Any,
+    *,
+    output_text: Any,
+) -> tuple[Any, bool, str, str]:
+    output_text_value = (
+        raw_response if output_text is _MISSING_RESPONSE_VALUE and isinstance(raw_response, str)
+        else None if output_text is _MISSING_RESPONSE_VALUE
+        else output_text
+    )
+    output_text_present = output_text_value is not None
+    output_text_type = _safe_response_type(output_text_value) if output_text_present else "absent"
+    parsed_response = raw_response
+    json_parse_status = "not_applicable"
+    if output_text_present:
+        if isinstance(output_text_value, str):
+            try:
+                parsed_response = json.loads(output_text_value)
+                json_parse_status = "success"
+            except (TypeError, ValueError):
+                parsed_response = _MISSING_RESPONSE_VALUE
+                json_parse_status = "failed"
+        else:
+            parsed_response = _MISSING_RESPONSE_VALUE
+            json_parse_status = "not_attempted"
+    return parsed_response, output_text_present, output_text_type, json_parse_status
+
+
+def _safe_morphology_response_shape_projection(
+    raw_response: Any,
+    *,
+    output_text: Any = _MISSING_RESPONSE_VALUE,
+    schema_code: str = "none",
+) -> dict[str, Any]:
+    """Project v2 morphology response shape without response values."""
+
+    if schema_code not in _BODY_ANALYSIS_SHAPE_CODES:
+        schema_code = "body_proportion_analysis_profile_invalid"
+    parsed, output_present, output_type, parse_status = _parsed_response_for_safe_projection(
+        raw_response,
+        output_text=output_text,
+    )
+    response_type = "unknown" if parsed is _MISSING_RESPONSE_VALUE else _safe_response_type(parsed)
+    response_keys = [] if parsed is _MISSING_RESPONSE_VALUE else _safe_response_keys(parsed)
+    key_set = set(response_keys)
+    expected = set(_BODY_MORPHOLOGY_ANALYSIS_FIELDS)
+    return {
+        "output_text_present": output_present,
+        "output_text_type": output_type,
+        "json_parse_status": parse_status,
+        "response_top_level_type": response_type,
+        "response_top_level_keys": response_keys,
+        "morphology_unknown_field_count": len(key_set - expected),
+        "morphology_missing_field_count": len(expected - key_set),
+        "schema_code": schema_code,
+    }
+
+
+def _safe_morphology_response_value_projection(
+    raw_response: Any,
+    *,
+    output_text: Any = _MISSING_RESPONSE_VALUE,
+    schema_code: str = "none",
+) -> dict[str, Any]:
+    """Classify v2 morphology values while never returning a value."""
+
+    shape = _safe_morphology_response_shape_projection(
+        raw_response,
+        output_text=output_text,
+        schema_code=schema_code,
+    )
+    parsed, _present, _type, _parse = _parsed_response_for_safe_projection(
+        raw_response,
+        output_text=output_text,
+    )
+    field_schema = BodyMorphologyEvidenceProfile.model_json_schema().get("properties", {})
+    allowed_values = {
+        field: frozenset(field_schema.get(field, {}).get("enum", ()))
+        for field in _BODY_MORPHOLOGY_ANALYSIS_FIELDS
+    }
+    key_set = set(_safe_response_keys(parsed))
+    expected = set(_BODY_MORPHOLOGY_ANALYSIS_FIELDS)
+    unknown_fields = sorted(key_set - expected)
+    per_field: list[dict[str, Any]] = []
+    for field in _BODY_MORPHOLOGY_ANALYSIS_FIELDS:
+        if not isinstance(parsed, Mapping) or field not in parsed:
+            per_field.append(
+                {
+                    "field": field,
+                    "present": False,
+                    "value_type": "absent",
+                    "allowed_membership": "missing",
+                    "closed_code": "body_proportion_analysis_profile_invalid",
+                }
+            )
+            continue
+        value = parsed[field]
+        value_type = _safe_response_type(value)
+        if not isinstance(value, str):
+            membership = "not_applicable"
+            closed_code = "body_proportion_analysis_profile_invalid"
+        elif value in allowed_values[field]:
+            membership = "allowed"
+            closed_code = "none"
+        else:
+            membership = "not_allowed"
+            closed_code = "body_proportion_analysis_profile_invalid"
+        per_field.append(
+            {
+                "field": field,
+                "present": True,
+                "value_type": value_type,
+                "allowed_membership": membership,
+                "closed_code": closed_code,
+            }
+        )
+    return {
+        "unknown_field_count": len(unknown_fields),
+        "unknown_fields": unknown_fields,
+        "per_field": per_field,
+        "schema_code": shape["schema_code"],
+    }
 
 
 class BodyRefreshAnalysisContext(V3BaseModel):
