@@ -47,7 +47,7 @@ from ..visual_assets import (
     bind_professional_mode,
 )
 from ..visual_assets.body_silhouette_source_standard import body_silhouette_mcp_materialization_channel_contract
-from ..visual_assets.character_card import BodyRefreshPresentationIntent
+from ..visual_assets.character_card import BodyRefreshPresentationIntent, BodySourceAdmission
 from ..visual_assets.body_proportion_evidence_profile import (
     BodyRefreshAnalysisContext,
     BodySourceAnalysisAssetEnvelope,
@@ -814,6 +814,7 @@ class V3ProductApiService:
         visual_asset_catalog: InMemoryVisualAssetCatalog | None = None,
         mcp_materialization_store: McpMaterializationHandoffStore | None = None,
         body_proportion_source_analyzer: BodySourceAnalysisProvider | None = None,
+        body_refresh_source_admission_resolver: Callable[[str], BodySourceAdmission | None] | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -837,6 +838,7 @@ class V3ProductApiService:
             self.body_proportion_source_analyzer = (
                 create_configured_body_source_analysis_provider()
             )
+        self.body_refresh_source_admission_resolver = body_refresh_source_admission_resolver
         operator_catalog = self._default_photography_operator_catalog() if scenario_runtime is None else None
         self.photographer_profile_catalog = (
             photographer_profile_catalog
@@ -849,6 +851,38 @@ class V3ProductApiService:
         self.mode_role_director = mode_role_director or ModeAwareRoleDirector()
         self.photographer_profile_region_resolver = photographer_profile_region_resolver or (lambda: None)
         self.visual_asset_catalog = visual_asset_catalog or InMemoryVisualAssetCatalog()
+
+    def resolve_body_refresh_source_admission(
+        self,
+        *,
+        primary_asset_id: str | None,
+        face_reference_output_ids: list[str],
+    ) -> BodySourceAdmission:
+        """Resolve the exact five-source Body admission at the server boundary.
+
+        The public request may name one anchor asset, but strict observed Body
+        refreshes must use a server-owned typed five-source admission. A
+        caller-provided dict or a one-source fallback is never authoritative.
+        """
+
+        primary = str(primary_asset_id or "").strip()
+        if not primary:
+            raise ValueError("body_refresh_source_admission_primary_missing")
+        resolver = self.body_refresh_source_admission_resolver
+        if not callable(resolver):
+            raise ValueError("body_refresh_source_admission_resolver_unavailable")
+        admission = resolver(primary)
+        if not isinstance(admission, BodySourceAdmission):
+            raise ValueError("body_refresh_source_admission_untrusted")
+        if admission.source_class != "observed":
+            raise ValueError("body_refresh_source_admission_source_mismatch")
+        if len(admission.body_evidence_ids) != 5:
+            raise ValueError("body_refresh_source_admission_five_sources_required")
+        if primary not in admission.body_evidence_ids:
+            raise ValueError("body_refresh_source_admission_primary_mismatch")
+        if admission.face_reference_output_ids != list(face_reference_output_ids):
+            raise ValueError("body_refresh_source_admission_face_chain_mismatch")
+        return admission
 
     def _default_scenario_runtime(self, operator_catalog=None) -> ScenarioRuntime:
         """Compose the default runtime from one reviewed Photography catalog source."""
@@ -1095,6 +1129,25 @@ class V3ProductApiService:
                     source_class=professional_character_card_source_class,
                     body_source_admission=professional_character_card_body_source_admission,
                 )
+                if (
+                    generation_channel == "mcp"
+                    and source_mode_contract.get("professional_character_card_body_refresh_source_mode")
+                    == "reference_assisted"
+                    and professional_character_card_body_refresh_analysis_context is not None
+                ):
+                    try:
+                        typed_admission = BodySourceAdmission.model_validate(
+                            professional_character_card_body_source_admission
+                        )
+                    except ValidationError as exc:
+                        raise ValueError("body_refresh_source_admission_untrusted") from exc
+                    if len(typed_admission.body_evidence_ids) != 5:
+                        raise ValueError("body_refresh_source_admission_five_sources_required")
+                    if (
+                        professional_character_card_body_refresh_analysis_context.source_evidence_id_digest
+                        != typed_admission.source_evidence_id_digest()
+                    ):
+                        raise ValueError("body_refresh_source_admission_digest_mismatch")
                 presentation_intent_contract = (
                     self._safe_professional_character_card_body_refresh_presentation_intent(
                         professional_character_card_body_refresh_presentation_intent,

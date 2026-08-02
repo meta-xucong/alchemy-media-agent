@@ -52,6 +52,7 @@ from ..visual_assets.character_card import (
     BodyPreparationRequest,
     BodyRefreshAttemptIdentity,
     BodyRefreshPresentationIntent,
+    BodySourceAdmission,
     CharacterCardCandidateAttempt,
     CharacterCardCandidateLifecycleBoundaryError,
     CharacterCardCandidateLifecycleCheckpoint,
@@ -1270,6 +1271,35 @@ class ProductApiAnchorPackPreparationHost:
             append_only_revision=attempt_identity.append_only_revision,
         )
 
+    def prepare_body_refresh_analysis_context_for_refresh(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        request: Any,
+        attempt_identity: BodyRefreshAttemptIdentity,
+    ) -> tuple[BodySourceAdmission, BodyRefreshAnalysisContext]:
+        """Own admission resolution and one analysis before candidate fan-out."""
+
+        face_reference_output_ids = [
+            str(card.face_slots[key].output_id or "").strip()
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ]
+        if any(not item for item in face_reference_output_ids):
+            raise ValueError("character_card_body_face_winners_missing")
+        admission = self.product_service.resolve_body_refresh_source_admission(
+            primary_asset_id=getattr(request, "body_reference_asset_id", None),
+            face_reference_output_ids=face_reference_output_ids,
+        )
+        context = self.prepare_body_refresh_analysis_context(
+            body_source_admission=admission.model_dump(mode="json"),
+            face_reference_output_ids=face_reference_output_ids,
+            attempt_identity=attempt_identity,
+        )
+        if context.source_evidence_id_digest != admission.source_evidence_id_digest():
+            raise ValueError("body_refresh_source_admission_digest_mismatch")
+        return admission, context
+
     def refresh_body_silhouette(
         self,
         *,
@@ -1279,6 +1309,8 @@ class ProductApiAnchorPackPreparationHost:
         generation_channel: str = "provider",
         body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
         body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
+        body_source_admission: BodySourceAdmission | None = None,
+        body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
     ) -> CharacterCardStageResult:
         if request is None:
             raise ValueError("character_card_body_source_required")
@@ -1298,8 +1330,29 @@ class ProductApiAnchorPackPreparationHost:
                 raise ValueError("body_proportion_analysis_context_missing")
             if not isinstance(body_refresh_analysis_context, BodyRefreshAnalysisContext):
                 raise ValueError("body_refresh_analysis_context_untrusted")
+            if not isinstance(body_source_admission, BodySourceAdmission):
+                raise ValueError("body_refresh_source_admission_missing")
+            if len(body_source_admission.body_evidence_ids) != 5:
+                raise ValueError("body_refresh_source_admission_five_sources_required")
+            if body_refresh_analysis_context.source_evidence_id_digest != body_source_admission.source_evidence_id_digest():
+                raise ValueError("body_refresh_source_admission_digest_mismatch")
+            if str(request.body_reference_asset_id or "").strip() not in body_source_admission.body_evidence_ids:
+                raise ValueError("body_refresh_source_admission_primary_mismatch")
+            if body_refresh_attempt_identity is None:
+                body_refresh_attempt_identity = BodyRefreshAttemptIdentity(
+                    attempt_id=body_refresh_analysis_context.attempt_id,
+                    append_only_revision=body_refresh_analysis_context.append_only_revision,
+                )
+            if (
+                body_refresh_attempt_identity.attempt_id != body_refresh_analysis_context.attempt_id
+                or body_refresh_attempt_identity.append_only_revision
+                != body_refresh_analysis_context.append_only_revision
+            ):
+                raise ValueError("body_proportion_analysis_context_attempt_mismatch")
         body_evidence_ids = (
-            [str(request.body_reference_asset_id)]
+            list(body_source_admission.body_evidence_ids)
+            if body_source_admission is not None and request.source_class == "observed"
+            else [str(request.body_reference_asset_id)]
             if request.source_class == "observed" and request.body_reference_asset_id
             else []
         )
@@ -1319,14 +1372,7 @@ class ProductApiAnchorPackPreparationHost:
             generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
             body_refresh_presentation_intent=body_refresh_presentation_intent,
             body_refresh_analysis_context=body_refresh_analysis_context,
-            body_refresh_attempt_identity=(
-                BodyRefreshAttemptIdentity(
-                    attempt_id=body_refresh_analysis_context.attempt_id,
-                    append_only_revision=body_refresh_analysis_context.append_only_revision,
-                )
-                if body_refresh_analysis_context is not None
-                else None
-            ),
+            body_refresh_attempt_identity=body_refresh_attempt_identity,
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
 

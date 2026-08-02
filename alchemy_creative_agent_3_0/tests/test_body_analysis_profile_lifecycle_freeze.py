@@ -20,6 +20,7 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profile import (
     BodyRefreshAnalysisContext,
     BodyProportionEvidenceProfile,
@@ -31,6 +32,12 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardCandidateRequest,
     CharacterCardCandidateResult,
     CharacterCardPreparationService,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.library import (
+    BodySilhouettePublicRequest,
+    LibraryVisualAssetCreateRequest,
+    VisualAssetLibraryCatalog,
+    VisualAssetLibraryLifecycleService,
 )
 from test_v3_doc245_body_formal_slot_receipt_seam import _BodyReviewer, _active_body_card
 
@@ -155,7 +162,7 @@ def test_fresh_body_refresh_freezes_one_profile_before_three_view_candidate_fano
     )
     result = service.refresh_body_silhouette(
         _active_body_card(),
-        face_reference_output_ids=["face.front", "face.profile", "face.rear"],
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
         source_class="observed",
         body_evidence_ids=[f"body-source-{index}" for index in range(5)],
         consent_provenance_id="server-consent-reference",
@@ -266,6 +273,20 @@ def test_public_dict_context_and_wrong_attempt_are_rejected() -> None:
         )
 
 
+def test_candidate_rejects_same_attempt_with_different_five_source_admission() -> None:
+    attempt, context = _profile_context()
+    kwargs = _candidate_contract_kwargs(attempt=attempt, context=context)
+    kwargs["body_source_admission"] = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=[f"other-body-source-{index}" for index in range(5)],
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=["face.front", "face.profile", "face.rear"],
+    )
+    with pytest.raises(ValueError, match="body_refresh_source_admission_digest_mismatch"):
+        CharacterCardCandidateRequest(**kwargs)
+
+
 def test_inference_first_rejects_observed_analysis_context() -> None:
     attempt, context = _profile_context()
     with pytest.raises(ValueError, match="body_proportion_analysis_context_source_mode_invalid"):
@@ -308,6 +329,15 @@ def test_runtime_rejects_profile_or_source_binding_digest_drift() -> None:
             ),
             stage="plan",
         )
+    drifted_source_ids = context.model_copy(update={"source_evidence_id_digest": "2" * 64})
+    with pytest.raises(Exception, match="body_proportion_analysis_context_mismatch"):
+        runtime._body_proportion_profile_for_brain(  # noqa: SLF001
+            SimpleNamespace(
+                metadata=request_metadata,
+                body_refresh_analysis_context=drifted_source_ids,
+            ),
+            stage="plan",
+        )
 
 
 def test_safe_refresh_context_has_no_raw_source_or_provider_fields() -> None:
@@ -320,12 +350,203 @@ def test_safe_refresh_context_has_no_raw_source_or_provider_fields() -> None:
         "attempt_id",
         "append_only_revision",
         "source_binding_digest",
+        "source_evidence_id_digest",
         "profile_digest",
     }
     assert all(
         not any(marker in str(value).lower() for marker in ("path", "url", "base64", "provider_id"))
         for value in safe.values()
     )
+
+
+class _LibraryOwnedBodyHost(ProductApiAnchorPackPreparationHost):
+    """Real Product API host preparation plus deterministic candidate fan-out."""
+
+    def __init__(self, service: V3ProductApiService, runtime: ScenarioRuntime) -> None:
+        super().__init__(service)
+        self.runtime = runtime
+        self.generator = _RefreshFanoutGenerator(runtime)
+        self.preparation = CharacterCardPreparationService(
+            generator=self.generator,
+            reviewer=_BodyReviewer(),
+        )
+        self.prepared_admissions: list[BodySourceAdmission] = []
+
+    def refresh_body_silhouette(
+        self,
+        *,
+        asset: Any,
+        card: Any,
+        request: Any = None,
+        generation_channel: str = "provider",
+        body_refresh_presentation_intent: Any = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
+        body_source_admission: BodySourceAdmission | None = None,
+        body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
+    ) -> Any:
+        assert body_source_admission is not None
+        self.prepared_admissions.append(body_source_admission)
+        return self.preparation.refresh_body_silhouette(
+            card,
+            face_reference_output_ids=[
+                str(card.face_slots[key].output_id or "")
+                for key in ("face.front", "face.profile", "face.rear_head")
+            ],
+            source_class="observed",
+            project_id=f"visual_asset_{asset.visual_asset_id}",
+            people_asset_id=asset.visual_asset_id,
+            body_evidence_ids=list(body_source_admission.body_evidence_ids),
+            consent_provenance_id="server-consent-reference",
+            user_intent="reference-assisted Body refresh",
+            generation_channel=generation_channel,
+            body_refresh_analysis_context=body_refresh_analysis_context,
+            body_refresh_attempt_identity=body_refresh_attempt_identity,
+        )
+
+
+class _LifecycleProductApiService(V3ProductApiService):
+    """Keep source bytes out of this lifecycle test while using ProductApi prep."""
+
+    def _professional_character_card_body_source_analysis_assets(
+        self,
+        body_source_admission: dict[str, Any] | None,
+        *,
+        source_class: str | None,
+        face_reference_output_ids: list[str],
+    ) -> list[BodySourceAnalysisAssetEnvelope]:
+        assert source_class == "observed"
+        assert body_source_admission is not None
+        assert len(body_source_admission["body_evidence_ids"]) == 5
+        return _internal_body_sources()
+
+
+def _library_refresh_fixture(*, admission: BodySourceAdmission) -> tuple[
+    VisualAssetLibraryLifecycleService, _LibraryOwnedBodyHost, BodySourceAdmission
+]:
+    catalog = VisualAssetLibraryCatalog()
+    created = catalog.create(
+        owner_scope="owner",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Model",
+            root_source_asset_id="root_source",
+            consent_reference="consent",
+            preparation_intent="scene-neutral body silhouette source refresh",
+        ),
+    )
+    active_card = _active_body_card()
+    catalog.save(
+        created.model_copy(
+            update={
+                "lifecycle_status": "active",
+                "active_version_id": "version_1",
+                "versions": [
+                    {
+                        "version_id": "version_1",
+                        "visual_asset_id": created.visual_asset_id,
+                        "lifecycle_status": "active",
+                        "approved_evidence_ids": ["face_front_output"],
+                        "activation_confirmed": True,
+                        "immutable_source_provenance": created.root_source_provenance,
+                    }
+                ],
+                "character_card": active_card,
+            }
+        )
+    )
+    analyzer = _CountingBodyAnalyzer()
+    runtime = ScenarioRuntime(body_proportion_source_analyzer=analyzer)
+    service = _LifecycleProductApiService(
+        scenario_runtime=runtime,
+        body_refresh_source_admission_resolver=lambda _primary_asset_id: admission,
+    )
+    host = _LibraryOwnedBodyHost(service, runtime)
+    lifecycle = VisualAssetLibraryLifecycleService(
+        catalog,
+        root_source_resolver=lambda source_id: SimpleNamespace(
+            status="ready",
+            role="body_proportion_reference",
+            metadata={
+                "consent_reference": "consent_123",
+                "reference_truth_layer": "body_proportion_truth",
+            },
+        ) if source_id == "body-source-0" else None,
+        character_card_stage_host=host,
+    )
+    return lifecycle, host, admission
+
+
+def test_visual_asset_library_entry_owns_one_analysis_before_nine_candidate_fanout() -> None:
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=[f"body-source-{index}" for index in range(5)],
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+    )
+    lifecycle, host, admission = _library_refresh_fixture(admission=admission)
+    refreshed = lifecycle.refresh_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=lifecycle.catalog._assets[("owner", next(iter(lifecycle.catalog._assets))[1])].visual_asset_id,
+        body_request=BodySilhouettePublicRequest(
+            source_class="observed",
+            body_reference_asset_id="body-source-0",
+        ),
+        generation_channel="mcp",
+    )
+    assert refreshed.character_card.body_silhouette_refresh_status == "reviewing"
+    assert len(host.generator.requests) == 9
+    assert len(host.prepared_admissions) == 1
+    assert host.prepared_admissions[0].body_evidence_ids == admission.body_evidence_ids
+    assert len({request.body_refresh_analysis_context.profile_digest for request in host.generator.requests}) == 1
+    assert len({id(request.body_refresh_analysis_context) for request in host.generator.requests}) == 1
+    assert len({request.body_refresh_attempt_identity.attempt_id for request in host.generator.requests}) == 1
+
+
+def test_visual_asset_library_rejects_caller_supplied_typed_context() -> None:
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=[f"body-source-{index}" for index in range(5)],
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+    )
+    lifecycle, _host, _ = _library_refresh_fixture(admission=admission)
+    _attempt, forged_context = _profile_context()
+    visual_asset_id = next(iter(lifecycle.catalog._assets))[1]
+    with pytest.raises(ValueError, match="body_refresh_analysis_context_caller_injection_forbidden"):
+        lifecycle.refresh_character_card_body_silhouette(
+            owner_scope="owner",
+            visual_asset_id=visual_asset_id,
+            body_request=BodySilhouettePublicRequest(
+                source_class="observed",
+                body_reference_asset_id="body-source-0",
+            ),
+            generation_channel="mcp",
+            body_refresh_analysis_context=forged_context,
+        )
+
+
+def test_visual_asset_library_strict_refresh_rejects_one_source_admission_before_fanout() -> None:
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=["body-source-0"],
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+    )
+    lifecycle, host, _ = _library_refresh_fixture(admission=admission)
+    visual_asset_id = next(iter(lifecycle.catalog._assets))[1]
+    with pytest.raises(ValueError, match="body_refresh_source_admission_five_sources_required"):
+        lifecycle.refresh_character_card_body_silhouette(
+            owner_scope="owner",
+            visual_asset_id=visual_asset_id,
+            body_request=BodySilhouettePublicRequest(
+                source_class="observed",
+                body_reference_asset_id="body-source-0",
+            ),
+            generation_channel="mcp",
+        )
+    assert host.generator.requests == []
 
 
 def test_product_api_anchor_host_fails_closed_before_fanout_without_context() -> None:

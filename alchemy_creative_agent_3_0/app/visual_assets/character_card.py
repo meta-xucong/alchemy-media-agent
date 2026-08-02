@@ -9,6 +9,8 @@ provider, review, retry, selector, or image store.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import hashlib
+import json
 from typing import Any, Callable, Literal, Protocol
 from uuid import uuid4
 
@@ -525,6 +527,17 @@ class BodySourceAdmission(_CharacterCardModel):
             if self.body_reference_role is not None or self.body_reference_truth_layer is not None:
                 raise ValueError("user_described_body_source_admission_has_reference_role")
         return self
+
+    def source_evidence_id_digest(self) -> str:
+        """Return a stable digest for this exact ordered Body evidence set."""
+
+        return hashlib.sha256(
+            json.dumps(
+                list(self.body_evidence_ids),
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
 
 class CharacterCardSlot(_CharacterCardModel):
@@ -1175,10 +1188,16 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                     != self.body_refresh_attempt_identity.append_only_revision
                 ):
                     raise ValueError("body_proportion_analysis_context_attempt_mismatch")
+                if len(self.body_source_admission.body_evidence_ids) != 5:
+                    raise ValueError("body_refresh_source_admission_five_sources_required")
+                if (
+                    self.body_refresh_analysis_context.source_evidence_id_digest
+                    != self.body_source_admission.source_evidence_id_digest()
+                ):
+                    raise ValueError("body_refresh_source_admission_digest_mismatch")
             elif self.body_refresh_analysis_context is not None:
                 raise ValueError("body_proportion_analysis_context_source_mode_invalid")
         return self
-
 
 class CharacterCardCandidateResult(_CharacterCardModel):
     candidate_id: str
@@ -1924,6 +1943,8 @@ class CharacterCardStageHost(Protocol):
         generation_channel: str = "provider",
         body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
         body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
+        body_source_admission: BodySourceAdmission | None = None,
+        body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
     ) -> CharacterCardStageResult:
         ...
 
@@ -2611,6 +2632,10 @@ class CharacterCardPreparationService:
                 != body_refresh_attempt_identity.append_only_revision
             ):
                 raise ValueError("body_proportion_analysis_context_attempt_mismatch")
+            if len(body_source_admission.body_evidence_ids) != 5:
+                raise ValueError("body_refresh_source_admission_five_sources_required")
+            if body_refresh_analysis_context.source_evidence_id_digest != body_source_admission.source_evidence_id_digest():
+                raise ValueError("body_refresh_source_admission_digest_mismatch")
         attempts: list[CharacterCardCandidateAttempt] = []
         winners: dict[str, str] = {}
         formal_slot_receipts: dict[str, FormalSlotReceipt] = {}

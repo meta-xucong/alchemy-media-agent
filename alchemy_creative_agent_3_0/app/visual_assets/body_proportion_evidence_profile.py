@@ -876,6 +876,7 @@ class BodyRefreshAnalysisContext(V3BaseModel):
     attempt_id: StrictStr
     append_only_revision: StrictInt = 1
     source_binding_digest: StrictStr
+    source_evidence_id_digest: StrictStr
     profile_digest: StrictStr
     profile: BodyProportionEvidenceProfile
 
@@ -896,7 +897,7 @@ class BodyRefreshAnalysisContext(V3BaseModel):
             raise ValueError("body_refresh_analysis_revision_invalid")
         return value
 
-    @field_validator("source_binding_digest", "profile_digest")
+    @field_validator("source_binding_digest", "source_evidence_id_digest", "profile_digest")
     @classmethod
     def require_sha256_digest(cls, value: str) -> str:
         cleaned = value.strip().lower()
@@ -931,9 +932,15 @@ class BodyRefreshAnalysisContext(V3BaseModel):
     ) -> "BodyRefreshAnalysisContext":
         if len(admitted_body_assets) != 5:
             raise ValueError("body_refresh_analysis_source_count_invalid")
+        source_ids = [asset.asset_id for asset in admitted_body_assets]
+        if len(source_ids) != len(set(source_ids)):
+            raise ValueError("body_refresh_analysis_source_ids_invalid")
         source_binding = [asset.source_sha256 for asset in admitted_body_assets]
         source_binding_digest = hashlib.sha256(
             json.dumps(source_binding, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        source_evidence_id_digest = hashlib.sha256(
+            json.dumps(source_ids, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         profile_digest = hashlib.sha256(
             json.dumps(
@@ -948,6 +955,7 @@ class BodyRefreshAnalysisContext(V3BaseModel):
             attempt_id=attempt_id,
             append_only_revision=append_only_revision,
             source_binding_digest=source_binding_digest,
+            source_evidence_id_digest=source_evidence_id_digest,
             profile_digest=profile_digest,
             profile=profile,
         )
@@ -962,6 +970,7 @@ class BodyRefreshAnalysisContext(V3BaseModel):
             "attempt_id": self.attempt_id,
             "append_only_revision": self.append_only_revision,
             "source_binding_digest": self.source_binding_digest,
+            "source_evidence_id_digest": self.source_evidence_id_digest,
             "profile_digest": self.profile_digest,
         }
 

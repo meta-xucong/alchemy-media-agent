@@ -23,7 +23,9 @@ from ..schemas.models import V3BaseModel
 from .anchor_pack import AnchorPackPreparationResult
 from .character_card import (
     BODY_SLOT_KEYS,
+    BodyRefreshAttemptIdentity,
     BodyRefreshPresentationIntent,
+    BodySourceAdmission,
     BodySilhouettePublicRequest,
     CharacterCardPreparationService,
     CharacterCardRuntimeUnavailable,
@@ -1133,6 +1135,36 @@ class VisualAssetLibraryLifecycleService:
         method_kwargs = {"asset": asset, "card": card, "request": body_request}
         if generation_channel == "mcp":
             method_kwargs["generation_channel"] = "mcp"
+        if generation_channel == "mcp" and body_request.source_class == "observed":
+            if body_refresh_analysis_context is not None:
+                raise ValueError("body_refresh_analysis_context_caller_injection_forbidden")
+            attempt_identity = BodyRefreshAttemptIdentity.create(
+                append_only_revision=card.append_only_revision + 1
+            )
+            prepare = getattr(
+                self.character_card_stage_host,
+                "prepare_body_refresh_analysis_context_for_refresh",
+                None,
+            )
+            if not callable(prepare):
+                raise CharacterCardRuntimeUnavailable("body_refresh_analysis_owner_unavailable")
+            admission, prepared_context = prepare(
+                asset=asset,
+                card=card,
+                request=body_request,
+                attempt_identity=attempt_identity,
+            )
+            if not isinstance(admission, BodySourceAdmission):
+                raise ValueError("body_refresh_source_admission_untrusted")
+            if not isinstance(prepared_context, BodyRefreshAnalysisContext):
+                raise ValueError("body_refresh_analysis_context_untrusted")
+            if prepared_context.attempt_id != attempt_identity.attempt_id:
+                raise ValueError("body_proportion_analysis_context_attempt_mismatch")
+            if prepared_context.source_evidence_id_digest != admission.source_evidence_id_digest():
+                raise ValueError("body_refresh_source_admission_digest_mismatch")
+            body_refresh_analysis_context = prepared_context
+            method_kwargs["body_source_admission"] = admission
+            method_kwargs["body_refresh_attempt_identity"] = attempt_identity
         if body_refresh_presentation_intent is not None:
             method_kwargs["body_refresh_presentation_intent"] = body_refresh_presentation_intent
         if body_refresh_analysis_context is not None:
