@@ -1136,6 +1136,13 @@ class VisualAssetLibraryLifecycleService:
         if generation_channel == "mcp":
             method_kwargs["generation_channel"] = "mcp"
         if generation_channel == "mcp" and body_request.source_class == "observed":
+            if len(body_request.body_reference_asset_ids) != 5:
+                raise ValueError("body_refresh_source_admission_five_sources_required")
+            if (
+                body_request.body_reference_asset_id is not None
+                and body_request.body_reference_asset_id not in body_request.body_reference_asset_ids
+            ):
+                raise ValueError("body_refresh_source_admission_primary_mismatch")
             if body_refresh_analysis_context is not None:
                 raise ValueError("body_refresh_analysis_context_caller_injection_forbidden")
             attempt_identity = BodyRefreshAttemptIdentity.create(
@@ -1457,7 +1464,10 @@ class VisualAssetLibraryLifecycleService:
 
         if self.root_source_resolver is None:
             raise CharacterCardRuntimeUnavailable("character_card_body_reference_unavailable")
-        source = self.root_source_resolver(str(request.body_reference_asset_id))
+        primary_asset_id = request.body_reference_asset_id or (
+            request.body_reference_asset_ids[0] if request.body_reference_asset_ids else None
+        )
+        source = self.root_source_resolver(str(primary_asset_id))
         status = str(getattr(getattr(source, "status", None), "value", getattr(source, "status", "")) or "").lower()
         role = str(getattr(getattr(source, "role", None), "value", getattr(source, "role", "")) or "").strip().lower()
         if source is None or status != "ready":

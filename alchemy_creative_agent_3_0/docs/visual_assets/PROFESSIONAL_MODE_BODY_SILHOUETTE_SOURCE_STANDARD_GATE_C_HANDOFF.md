@@ -251,6 +251,15 @@ body modeling; it is not required to be, and must not be represented as, the
 same person as the current Character Card subject.  Its reference admission
 must be computed by the server and must prove all of the following:
 
+The strict public request carries an explicit, ordered
+`body_reference_asset_ids` selector list of exactly five unique V3 asset IDs
+(with the legacy singular `body_reference_asset_id` retained only for
+ordinary/non-strict compatibility).  These IDs select records; they are not
+admission truth.  ProductApi resolves each selected record through the V3
+upload store and fails closed on missing, duplicate, non-ready, wrong-role,
+wrong-truth, missing content/hash/provenance/consent/rights, or primary-chain
+mismatch.  It never scans unrelated ready Body assets to fill the list.
+
 - source class is `observed`;
 - role is `body_proportion_reference`;
 - `metadata.reference_truth_layer` is `body_proportion_truth`;

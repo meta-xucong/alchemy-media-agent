@@ -437,6 +437,7 @@ class BodySilhouettePublicRequest(_CharacterCardModel):
 
     source_class: BodySourceClass
     body_reference_asset_id: str | None = None
+    body_reference_asset_ids: list[StrictStr] = Field(default_factory=list)
     body_facts: str | None = Field(default=None, max_length=2000)
 
     @field_validator("body_reference_asset_id")
@@ -447,6 +448,22 @@ class BodySilhouettePublicRequest(_CharacterCardModel):
         cleaned = value.strip()
         if not cleaned or "/" in cleaned or "\\" in cleaned or ":" in cleaned:
             raise ValueError("body reference must be an asset identifier")
+        return cleaned
+
+    @field_validator("body_reference_asset_ids", mode="before")
+    @classmethod
+    def validate_reference_ids(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("body_reference_asset_ids must be a list")
+        cleaned = [item.strip() if isinstance(item, str) else item for item in value]
+        if any(not isinstance(item, str) or not item for item in cleaned):
+            raise ValueError("body_reference_asset_ids must contain asset identifiers")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("body_reference_asset_ids must be unique")
+        if any("/" in item or "\\" in item or ":" in item for item in cleaned):
+            raise ValueError("body_reference_asset_ids must not contain paths")
         return cleaned
 
     @field_validator("body_facts")
@@ -462,12 +479,22 @@ class BodySilhouettePublicRequest(_CharacterCardModel):
     @model_validator(mode="after")
     def enforce_source_truth(self) -> "BodySilhouettePublicRequest":
         if self.source_class == "observed":
-            if not self.body_reference_asset_id or self.body_facts is not None:
-                raise ValueError("observed Body Silhouette requires one authorized full-body asset")
+            if self.body_facts is not None or (
+                not self.body_reference_asset_id and not self.body_reference_asset_ids
+            ):
+                raise ValueError("observed Body Silhouette requires an authorized full-body asset")
+            if self.body_reference_asset_ids:
+                if len(self.body_reference_asset_ids) != 5:
+                    raise ValueError("body_reference_asset_ids_exactly_five_required")
+                if (
+                    self.body_reference_asset_id is not None
+                    and self.body_reference_asset_id not in self.body_reference_asset_ids
+                ):
+                    raise ValueError("body_reference_asset_primary_mismatch")
         elif self.source_class == "user_described":
-            if self.body_reference_asset_id is not None or not self.body_facts:
+            if self.body_reference_asset_id is not None or self.body_reference_asset_ids or not self.body_facts:
                 raise ValueError("user_described Body Silhouette requires natural-language facts")
-        elif self.body_reference_asset_id is not None or self.body_facts is not None:
+        elif self.body_reference_asset_id is not None or self.body_reference_asset_ids or self.body_facts is not None:
             raise ValueError("brain_inferred Body Silhouette accepts no observed body facts")
         return self
 

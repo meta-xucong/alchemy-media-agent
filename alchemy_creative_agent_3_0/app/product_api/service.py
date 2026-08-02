@@ -814,7 +814,6 @@ class V3ProductApiService:
         visual_asset_catalog: InMemoryVisualAssetCatalog | None = None,
         mcp_materialization_store: McpMaterializationHandoffStore | None = None,
         body_proportion_source_analyzer: BodySourceAnalysisProvider | None = None,
-        body_refresh_source_admission_resolver: Callable[[str], BodySourceAdmission | None] | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -838,7 +837,6 @@ class V3ProductApiService:
             self.body_proportion_source_analyzer = (
                 create_configured_body_source_analysis_provider()
             )
-        self.body_refresh_source_admission_resolver = body_refresh_source_admission_resolver
         operator_catalog = self._default_photography_operator_catalog() if scenario_runtime is None else None
         self.photographer_profile_catalog = (
             photographer_profile_catalog
@@ -856,33 +854,55 @@ class V3ProductApiService:
         self,
         *,
         primary_asset_id: str | None,
+        body_reference_asset_ids: list[str],
         face_reference_output_ids: list[str],
     ) -> BodySourceAdmission:
         """Resolve the exact five-source Body admission at the server boundary.
 
-        The public request may name one anchor asset, but strict observed Body
-        refreshes must use a server-owned typed five-source admission. A
-        caller-provided dict or a one-source fallback is never authoritative.
+        The public request supplies selectors only.  Every selected record is
+        re-read from the V3 upload store and independently admitted before the
+        typed internal envelope is created.  There is deliberately no scan for
+        arbitrary ready Body assets and no caller-provided resolver authority.
         """
 
-        primary = str(primary_asset_id or "").strip()
-        if not primary:
-            raise ValueError("body_refresh_source_admission_primary_missing")
-        resolver = self.body_refresh_source_admission_resolver
-        if not callable(resolver):
-            raise ValueError("body_refresh_source_admission_resolver_unavailable")
-        admission = resolver(primary)
-        if not isinstance(admission, BodySourceAdmission):
-            raise ValueError("body_refresh_source_admission_untrusted")
-        if admission.source_class != "observed":
-            raise ValueError("body_refresh_source_admission_source_mismatch")
-        if len(admission.body_evidence_ids) != 5:
+        if primary_asset_id is not None and not isinstance(primary_asset_id, str):
+            raise ValueError("body_refresh_source_admission_primary_invalid")
+        if not isinstance(body_reference_asset_ids, list) or any(
+            not isinstance(item, str) for item in body_reference_asset_ids
+        ):
+            raise ValueError("body_refresh_source_admission_body_ids_invalid")
+        selected_ids = [item.strip() for item in body_reference_asset_ids]
+        if len(selected_ids) != 5:
             raise ValueError("body_refresh_source_admission_five_sources_required")
-        if primary not in admission.body_evidence_ids:
+        if len(selected_ids) != len(set(selected_ids)):
+            raise ValueError("body_refresh_source_admission_body_ids_invalid")
+        if any(not item for item in selected_ids):
+            raise ValueError("body_refresh_source_admission_body_ids_invalid")
+        primary = (primary_asset_id or "").strip() or selected_ids[0]
+        if primary not in selected_ids:
             raise ValueError("body_refresh_source_admission_primary_mismatch")
-        if admission.face_reference_output_ids != list(face_reference_output_ids):
+        if not isinstance(face_reference_output_ids, list) or any(
+            not isinstance(item, str) for item in face_reference_output_ids
+        ):
             raise ValueError("body_refresh_source_admission_face_chain_mismatch")
-        return admission
+        face_refs = [item.strip() for item in face_reference_output_ids]
+        if len(face_refs) != 3 or len(face_refs) != len(set(face_refs)) or any(not item for item in face_refs):
+            raise ValueError("body_refresh_source_admission_face_chain_mismatch")
+        raw_admission = BodySourceAdmission(
+            source_class="observed",
+            body_evidence_ids=selected_ids,
+            body_reference_role="body_proportion_reference",
+            body_reference_truth_layer="body_proportion_truth",
+            face_reference_output_ids=face_refs,
+        ).model_dump(mode="json")
+        envelopes = self._professional_character_card_body_source_analysis_assets(
+            raw_admission,
+            source_class="observed",
+            face_reference_output_ids=face_refs,
+        )
+        if len(envelopes) != 5:
+            raise ValueError("body_refresh_source_admission_five_sources_required")
+        return BodySourceAdmission.model_validate(raw_admission)
 
     def _default_scenario_runtime(self, operator_catalog=None) -> ScenarioRuntime:
         """Compose the default runtime from one reviewed Photography catalog source."""

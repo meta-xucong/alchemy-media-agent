@@ -241,6 +241,7 @@ class V3ProductRouteHandlers:
                 "generation_channel",
                 "source_class",
                 "body_reference_asset_id",
+                "body_reference_asset_ids",
                 "body_facts",
             }
             if not set(payload).issubset(allowed):

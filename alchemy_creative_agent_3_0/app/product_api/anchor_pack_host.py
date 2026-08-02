@@ -1231,9 +1231,8 @@ class ProductApiAnchorPackPreparationHost:
         if any(not item for item in face_reference_output_ids):
             raise ValueError("character_card_body_face_winners_missing")
         body_evidence_ids = (
-            [str(request.body_reference_asset_id)]
-            if request.source_class == "observed" and request.body_reference_asset_id
-            else []
+            list(getattr(request, "body_reference_asset_ids", []) or [])
+            or ([str(request.body_reference_asset_id)] if request.source_class == "observed" and request.body_reference_asset_id else [])
         )
         user_intent = self._character_card_body_stage_intent(asset)
         if not user_intent:
@@ -1288,7 +1287,11 @@ class ProductApiAnchorPackPreparationHost:
         if any(not item for item in face_reference_output_ids):
             raise ValueError("character_card_body_face_winners_missing")
         admission = self.product_service.resolve_body_refresh_source_admission(
-            primary_asset_id=getattr(request, "body_reference_asset_id", None),
+            primary_asset_id=(
+                getattr(request, "body_reference_asset_id", None)
+                or ((getattr(request, "body_reference_asset_ids", []) or [None])[0])
+            ),
+            body_reference_asset_ids=list(getattr(request, "body_reference_asset_ids", []) or []),
             face_reference_output_ids=face_reference_output_ids,
         )
         context = self.prepare_body_refresh_analysis_context(
@@ -1336,7 +1339,12 @@ class ProductApiAnchorPackPreparationHost:
                 raise ValueError("body_refresh_source_admission_five_sources_required")
             if body_refresh_analysis_context.source_evidence_id_digest != body_source_admission.source_evidence_id_digest():
                 raise ValueError("body_refresh_source_admission_digest_mismatch")
-            if str(request.body_reference_asset_id or "").strip() not in body_source_admission.body_evidence_ids:
+            requested_body_ids = list(getattr(request, "body_reference_asset_ids", []) or [])
+            requested_primary = str(
+                getattr(request, "body_reference_asset_id", None)
+                or (requested_body_ids[0] if requested_body_ids else "")
+            ).strip()
+            if requested_primary not in body_source_admission.body_evidence_ids:
                 raise ValueError("body_refresh_source_admission_primary_mismatch")
             if body_refresh_attempt_identity is None:
                 body_refresh_attempt_identity = BodyRefreshAttemptIdentity(
@@ -1349,13 +1357,14 @@ class ProductApiAnchorPackPreparationHost:
                 != body_refresh_analysis_context.append_only_revision
             ):
                 raise ValueError("body_proportion_analysis_context_attempt_mismatch")
-        body_evidence_ids = (
-            list(body_source_admission.body_evidence_ids)
-            if body_source_admission is not None and request.source_class == "observed"
-            else [str(request.body_reference_asset_id)]
-            if request.source_class == "observed" and request.body_reference_asset_id
-            else []
-        )
+        if body_source_admission is not None and request.source_class == "observed":
+            body_evidence_ids = list(body_source_admission.body_evidence_ids)
+        elif request.source_class == "observed":
+            body_evidence_ids = list(getattr(request, "body_reference_asset_ids", []) or [])
+            if not body_evidence_ids and request.body_reference_asset_id:
+                body_evidence_ids = [str(request.body_reference_asset_id)]
+        else:
+            body_evidence_ids = []
         user_intent = self._character_card_body_stage_intent(asset)
         if not user_intent:
             raise ValueError("character_card_body_intent_missing")

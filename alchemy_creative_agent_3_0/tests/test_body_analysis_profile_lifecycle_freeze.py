@@ -13,13 +13,19 @@ owner freezes the typed result.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from PIL import Image
 import pytest
 
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profile import (
     BodyRefreshAnalysisContext,
@@ -74,10 +80,12 @@ def _internal_body_sources() -> list[BodySourceAnalysisAssetEnvelope]:
 class _CountingBodyAnalyzer:
     def __init__(self) -> None:
         self.calls: list[tuple[str, ...]] = []
+        self.asset_ids: list[tuple[str, ...]] = []
 
     def analyze(self, assets: tuple[dict[str, Any], ...]) -> dict[str, Any]:
         binding = tuple(str(asset["metadata"]["source_sha256"]) for asset in assets)
         self.calls.append(binding)
+        self.asset_ids.append(tuple(str(asset["asset_id"]) for asset in assets))
         return {
             "contract_version": "body_proportion_evidence_profile_v1",
             "source_mode": "reference_assisted",
@@ -404,24 +412,64 @@ class _LibraryOwnedBodyHost(ProductApiAnchorPackPreparationHost):
         )
 
 
-class _LifecycleProductApiService(V3ProductApiService):
-    """Keep source bytes out of this lifecycle test while using ProductApi prep."""
+def _upload_body_sources(
+    service: V3ProductApiService,
+    *,
+    count: int = 5,
+    role_overrides: dict[int, str] | None = None,
+    metadata_overrides: dict[int, dict[str, Any]] | None = None,
+    incomplete_indices: set[int] | None = None,
+) -> list[str]:
+    image = Image.new("RGB", (2, 2), (120, 140, 160))
+    content_buffer = BytesIO()
+    image.save(content_buffer, format="PNG")
+    content = content_buffer.getvalue()
+    source_sha256 = hashlib.sha256(content).hexdigest()
+    asset_ids: list[str] = []
+    for index in range(count):
+        metadata = {
+            "reference_truth_layer": "body_proportion_truth",
+            "source_sha256": source_sha256,
+            "source_provenance": "user_provided_body_reference",
+            "consent_reference": "user_consent_body_reference",
+            "rights_reference": "user_rights_body_reference",
+        }
+        metadata.update((metadata_overrides or {}).get(index, {}))
+        upload = service.create_uploaded_asset(
+            {
+                "filename": f"body-{index}.png",
+                "mime_type": "image/png",
+                "size_bytes": len(content),
+                "role": (role_overrides or {}).get(index, "body_proportion_reference"),
+                "metadata": metadata,
+            }
+        )
+        asset_ids.append(upload.asset_id)
+        service.store_uploaded_asset_content(
+            upload.asset_id,
+            {
+                "content_base64": base64.b64encode(content).decode("ascii"),
+                "metadata": metadata,
+            },
+        )
+        if index not in (incomplete_indices or set()):
+            service.complete_uploaded_asset(upload.asset_id)
+    return asset_ids
 
-    def _professional_character_card_body_source_analysis_assets(
-        self,
-        body_source_admission: dict[str, Any] | None,
-        *,
-        source_class: str | None,
-        face_reference_output_ids: list[str],
-    ) -> list[BodySourceAnalysisAssetEnvelope]:
-        assert source_class == "observed"
-        assert body_source_admission is not None
-        assert len(body_source_admission["body_evidence_ids"]) == 5
-        return _internal_body_sources()
 
-
-def _library_refresh_fixture(*, admission: BodySourceAdmission) -> tuple[
-    VisualAssetLibraryLifecycleService, _LibraryOwnedBodyHost, BodySourceAdmission
+def _library_refresh_fixture(
+    *,
+    tmp_path: Path,
+    asset_count: int = 5,
+    role_overrides: dict[int, str] | None = None,
+    metadata_overrides: dict[int, dict[str, Any]] | None = None,
+    incomplete_indices: set[int] | None = None,
+) -> tuple[
+    VisualAssetLibraryLifecycleService,
+    _LibraryOwnedBodyHost,
+    V3ProductApiService,
+    list[str],
+    _CountingBodyAnalyzer,
 ]:
     catalog = VisualAssetLibraryCatalog()
     created = catalog.create(
@@ -455,62 +503,50 @@ def _library_refresh_fixture(*, admission: BodySourceAdmission) -> tuple[
     )
     analyzer = _CountingBodyAnalyzer()
     runtime = ScenarioRuntime(body_proportion_source_analyzer=analyzer)
-    service = _LifecycleProductApiService(
+    service = V3ProductApiService(
         scenario_runtime=runtime,
-        body_refresh_source_admission_resolver=lambda _primary_asset_id: admission,
+        asset_store=V3UploadedAssetStore(tmp_path / "uploads"),
+    )
+    body_asset_ids = _upload_body_sources(
+        service,
+        count=asset_count,
+        role_overrides=role_overrides,
+        metadata_overrides=metadata_overrides,
+        incomplete_indices=incomplete_indices,
     )
     host = _LibraryOwnedBodyHost(service, runtime)
     lifecycle = VisualAssetLibraryLifecycleService(
         catalog,
-        root_source_resolver=lambda source_id: SimpleNamespace(
-            status="ready",
-            role="body_proportion_reference",
-            metadata={
-                "consent_reference": "consent_123",
-                "reference_truth_layer": "body_proportion_truth",
-            },
-        ) if source_id == "body-source-0" else None,
+        root_source_resolver=service.get_uploaded_asset,
         character_card_stage_host=host,
     )
-    return lifecycle, host, admission
+    return lifecycle, host, service, body_asset_ids, analyzer
 
 
-def test_visual_asset_library_entry_owns_one_analysis_before_nine_candidate_fanout() -> None:
-    admission = BodySourceAdmission(
-        source_class="observed",
-        body_evidence_ids=[f"body-source-{index}" for index in range(5)],
-        body_reference_role="body_proportion_reference",
-        body_reference_truth_layer="body_proportion_truth",
-        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-    )
-    lifecycle, host, admission = _library_refresh_fixture(admission=admission)
+def test_visual_asset_library_entry_owns_one_analysis_before_nine_candidate_fanout(tmp_path: Path) -> None:
+    lifecycle, host, _service, body_asset_ids, analyzer = _library_refresh_fixture(tmp_path=tmp_path)
     refreshed = lifecycle.refresh_character_card_body_silhouette(
         owner_scope="owner",
         visual_asset_id=lifecycle.catalog._assets[("owner", next(iter(lifecycle.catalog._assets))[1])].visual_asset_id,
         body_request=BodySilhouettePublicRequest(
             source_class="observed",
-            body_reference_asset_id="body-source-0",
+            body_reference_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=body_asset_ids,
         ),
         generation_channel="mcp",
     )
     assert refreshed.character_card.body_silhouette_refresh_status == "reviewing"
     assert len(host.generator.requests) == 9
     assert len(host.prepared_admissions) == 1
-    assert host.prepared_admissions[0].body_evidence_ids == admission.body_evidence_ids
+    assert host.prepared_admissions[0].body_evidence_ids == body_asset_ids
+    assert analyzer.asset_ids == [tuple(body_asset_ids)]
     assert len({request.body_refresh_analysis_context.profile_digest for request in host.generator.requests}) == 1
     assert len({id(request.body_refresh_analysis_context) for request in host.generator.requests}) == 1
     assert len({request.body_refresh_attempt_identity.attempt_id for request in host.generator.requests}) == 1
 
 
-def test_visual_asset_library_rejects_caller_supplied_typed_context() -> None:
-    admission = BodySourceAdmission(
-        source_class="observed",
-        body_evidence_ids=[f"body-source-{index}" for index in range(5)],
-        body_reference_role="body_proportion_reference",
-        body_reference_truth_layer="body_proportion_truth",
-        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-    )
-    lifecycle, _host, _ = _library_refresh_fixture(admission=admission)
+def test_visual_asset_library_rejects_caller_supplied_typed_context(tmp_path: Path) -> None:
+    lifecycle, _host, _service, body_asset_ids, _analyzer = _library_refresh_fixture(tmp_path=tmp_path)
     _attempt, forged_context = _profile_context()
     visual_asset_id = next(iter(lifecycle.catalog._assets))[1]
     with pytest.raises(ValueError, match="body_refresh_analysis_context_caller_injection_forbidden"):
@@ -519,34 +555,118 @@ def test_visual_asset_library_rejects_caller_supplied_typed_context() -> None:
             visual_asset_id=visual_asset_id,
             body_request=BodySilhouettePublicRequest(
                 source_class="observed",
-                body_reference_asset_id="body-source-0",
+                body_reference_asset_id=body_asset_ids[0],
+                body_reference_asset_ids=body_asset_ids,
             ),
             generation_channel="mcp",
             body_refresh_analysis_context=forged_context,
         )
 
 
-def test_visual_asset_library_strict_refresh_rejects_one_source_admission_before_fanout() -> None:
-    admission = BodySourceAdmission(
-        source_class="observed",
-        body_evidence_ids=["body-source-0"],
-        body_reference_role="body_proportion_reference",
-        body_reference_truth_layer="body_proportion_truth",
-        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
-    )
-    lifecycle, host, _ = _library_refresh_fixture(admission=admission)
+def test_visual_asset_library_strict_refresh_rejects_one_source_admission_before_fanout(tmp_path: Path) -> None:
+    lifecycle, host, _service, body_asset_ids, _analyzer = _library_refresh_fixture(tmp_path=tmp_path)
     visual_asset_id = next(iter(lifecycle.catalog._assets))[1]
-    with pytest.raises(ValueError, match="body_refresh_source_admission_five_sources_required"):
+    with pytest.raises(ValueError, match="body_reference_asset_ids_exactly_five_required"):
         lifecycle.refresh_character_card_body_silhouette(
             owner_scope="owner",
             visual_asset_id=visual_asset_id,
             body_request=BodySilhouettePublicRequest(
                 source_class="observed",
-                body_reference_asset_id="body-source-0",
+                body_reference_asset_id=body_asset_ids[0],
+                body_reference_asset_ids=body_asset_ids[:1],
             ),
             generation_channel="mcp",
         )
     assert host.generator.requests == []
+
+
+@pytest.mark.parametrize("selected_count", [1, 4, 6])
+def test_default_product_api_resolver_requires_exactly_five_selectors(
+    tmp_path: Path,
+    selected_count: int,
+) -> None:
+    _lifecycle, _host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+        asset_count=max(5, selected_count),
+    )
+    with pytest.raises(ValueError, match="body_refresh_source_admission_five_sources_required"):
+        service.resolve_body_refresh_source_admission(
+            primary_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=body_asset_ids[:selected_count],
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        )
+
+
+def test_default_product_api_resolver_does_not_scan_unrelated_ready_body_assets(tmp_path: Path) -> None:
+    _lifecycle, _host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+        asset_count=6,
+    )
+    admission = service.resolve_body_refresh_source_admission(
+        primary_asset_id=body_asset_ids[0],
+        body_reference_asset_ids=body_asset_ids[:5],
+        face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+    )
+    assert admission.body_evidence_ids == body_asset_ids[:5]
+    assert body_asset_ids[5] not in admission.body_evidence_ids
+
+
+def test_default_product_api_resolver_rejects_missing_duplicate_and_primary_mismatch(tmp_path: Path) -> None:
+    _lifecycle, _host, service, body_asset_ids, _analyzer = _library_refresh_fixture(tmp_path=tmp_path)
+    with pytest.raises(ValueError, match="body_refresh_source_admission_body_ids_invalid"):
+        service.resolve_body_refresh_source_admission(
+            primary_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=[*body_asset_ids[:4], body_asset_ids[0]],
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        )
+    with pytest.raises(ValueError, match="body_proportion_analysis_source_not_ready"):
+        service.resolve_body_refresh_source_admission(
+            primary_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=[*body_asset_ids[:4], "v3_asset_0000000000000000"],
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        )
+    with pytest.raises(ValueError, match="body_refresh_source_admission_primary_mismatch"):
+        service.resolve_body_refresh_source_admission(
+            primary_asset_id="v3_asset_0000000000000000",
+            body_reference_asset_ids=body_asset_ids,
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("fixture_kwargs", "failure_code"),
+    [
+        ({"incomplete_indices": {2}}, "body_proportion_analysis_source_not_ready"),
+        ({"role_overrides": {2: "product_reference"}}, "body_proportion_analysis_role_invalid"),
+        (
+            {"metadata_overrides": {2: {"reference_truth_layer": "product_truth"}}},
+            "body_proportion_analysis_truth_layer_invalid",
+        ),
+        (
+            {"metadata_overrides": {2: {"source_provenance": None}}},
+            "body_proportion_analysis_source_invalid",
+        ),
+        (
+            {"metadata_overrides": {2: {"source_sha256": "0" * 64}}},
+            "body_proportion_analysis_source_hash_mismatch",
+        ),
+    ],
+)
+def test_default_product_api_resolver_rejects_untrusted_selected_uploads(
+    tmp_path: Path,
+    fixture_kwargs: dict[str, Any],
+    failure_code: str,
+) -> None:
+    _lifecycle, _host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+        **fixture_kwargs,
+    )
+    with pytest.raises(ValueError, match=failure_code):
+        service.resolve_body_refresh_source_admission(
+            primary_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=body_asset_ids,
+            face_reference_output_ids=["face_front_output", "face_profile_output", "face_rear_output"],
+        )
 
 
 def test_product_api_anchor_host_fails_closed_before_fanout_without_context() -> None:
