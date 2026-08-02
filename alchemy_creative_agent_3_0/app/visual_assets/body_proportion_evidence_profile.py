@@ -93,6 +93,30 @@ _BODY_PROPORTION_ALLOWED_VALUES = {
         {},
     ).items()
 }
+
+
+def _build_body_analysis_response_schema() -> dict[str, Any]:
+    band_schema = BodyProportionEvidenceBands.model_json_schema()
+    band_properties = band_schema.get("properties", {})
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "allowed_bands": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    field_name: {
+                        "type": "string",
+                        "enum": list(field_schema.get("enum", ())),
+                    }
+                    for field_name, field_schema in band_properties.items()
+                },
+                "required": sorted(band_properties),
+            }
+        },
+        "required": ["allowed_bands"],
+    }
 _BODY_ANALYSIS_RESPONSE_KEYS = frozenset({"allowed_bands"})
 _BODY_ANALYSIS_SHAPE_CODES = frozenset(
     {
@@ -420,7 +444,14 @@ class OpenAICompatibleBodySourceAnalysisTransport:
             response = client.responses.create(
                 model=self.model,
                 input=[{"role": "user", "content": content}],
-                text={"format": {"type": "json_object"}},
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "body_proportion_analysis_v1",
+                        "strict": True,
+                        "schema": _build_body_analysis_response_schema(),
+                    }
+                },
                 timeout=timeout_seconds,
                 max_output_tokens=1200,
             )
@@ -466,15 +497,24 @@ class OpenAICompatibleBodySourceAnalysisProvider:
 
     provider_name = "configured_body_source_analysis_provider"
     _ANALYSIS_RESPONSE_KEYS = frozenset({"allowed_bands"})
+    analysis_response_schema = _build_body_analysis_response_schema()
     _ANALYSIS_INSTRUCTIONS = (
         "Analyze exactly these five admitted Body proportion reference images "
         "for a similar-person Body-only modeling context. Return strict JSON "
-        "with exactly one key, allowed_bands, containing only these seven closed "
-        "dimensions: head_body_scale, neck_shoulder, torso_limb, arm_leg, "
-        "developmental_stage, stance_ground, cross_view_support. Use only the "
-        "declared categorical bands. Do not analyze or return Face identity, "
-        "hair, wardrobe, scene, lighting, camera, expression, pose style, "
-        "provider details, paths, IDs, URLs, raw image data, or biometric data."
+        "matching the closed schema contract. Each field must use exactly one "
+        "canonical literal from the following band table; do not paraphrase, "
+        "translate, alias, or infer defaults. Canonical literal table: "
+        + json.dumps(
+            {
+                field_name: sorted(values)
+                for field_name, values in _BODY_PROPORTION_ALLOWED_VALUES.items()
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + ". Do not analyze or return Face identity, hair, wardrobe, scene, "
+        "lighting, camera, expression, pose style, provider details, paths, "
+        "IDs, URLs, raw image data, or biometric data."
     )
 
     def __init__(

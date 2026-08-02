@@ -10,7 +10,10 @@ response, or physical renderer references.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,7 +26,9 @@ from alchemy_creative_agent_3_0.app.llm_brain.adapter import V3LLMBrainAdapter  
 from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profile import (
     BodyProportionAnalysisError,
     BodyProportionEvidenceProfile,
+    BodySourceImagePayload,
     OpenAICompatibleBodySourceAnalysisProvider,
+    OpenAICompatibleBodySourceAnalysisTransport,
 )
 
 
@@ -348,3 +353,56 @@ def test_per_band_value_projection_is_closed_and_value_free(
         forbidden not in str(projection)
         for forbidden in ("natural_child_proportion", "hidden", "raw_response")
     )
+
+
+def test_body_analysis_request_contract_exposes_only_exact_literal_members() -> None:
+    provider = _provider(_FakeAnalysisTransport())
+    contract = provider.analysis_response_schema
+    expected_schema = BodyProportionEvidenceProfile.model_json_schema()
+    expected_bands = expected_schema["$defs"]["BodyProportionEvidenceBands"]["properties"]
+
+    assert contract["type"] == "object"
+    assert contract["additionalProperties"] is False
+    assert set(contract["required"]) == {"allowed_bands"}
+    assert set(contract["properties"]) == {"allowed_bands"}
+    actual_bands = contract["properties"]["allowed_bands"]["properties"]
+    assert set(actual_bands) == set(expected_bands)
+    for band_name, band_schema in expected_bands.items():
+        assert actual_bands[band_name] == {
+            "type": "string",
+            "enum": band_schema["enum"],
+        }
+    assert contract["properties"]["allowed_bands"]["additionalProperties"] is False
+    assert "natural language" not in str(contract).lower()
+    assert "balanced fallback" not in str(contract).lower()
+
+
+def test_responses_transport_sends_same_closed_literal_schema(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Responses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=json.dumps({"allowed_bands": _BANDS}))
+
+    class _Client:
+        responses = _Responses()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: _Client()))
+    transport = OpenAICompatibleBodySourceAnalysisTransport(
+        api_key="test-key",
+        base_url="https://vision.example/v1",
+        model="body-model",
+    )
+
+    transport.analyze(
+        [BodySourceImagePayload(content=b"body", mime_type="image/png")],
+        instructions="closed instructions",
+        timeout_seconds=1,
+    )
+
+    response_format = captured["text"]["format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["name"] == "body_proportion_analysis_v1"
+    assert response_format["strict"] is True
+    assert response_format["schema"] == _provider(_FakeAnalysisTransport()).analysis_response_schema
