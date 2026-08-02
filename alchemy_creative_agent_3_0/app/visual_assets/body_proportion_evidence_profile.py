@@ -641,10 +641,13 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         model: str | None,
         profile_version: str = "v1",
         timeout_seconds: float = 90.0,
+        max_analysis_attempts: int = 2,
         transport: BodySourceAnalysisTransport | None = None,
     ) -> None:
         if profile_version not in {"v1", "v2"}:
             raise ValueError("body_refresh_analysis_profile_version_invalid")
+        if type(max_analysis_attempts) is not int or max_analysis_attempts not in {1, 2}:
+            raise ValueError("body_proportion_analysis_attempt_limit_invalid")
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
@@ -663,6 +666,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
             else self._ANALYSIS_INSTRUCTIONS
         )
         self.timeout_seconds = timeout_seconds
+        self.max_analysis_attempts = max_analysis_attempts
         self.last_response_shape_projection: dict[str, Any] | None = None
         self.last_response_value_projection: dict[str, Any] | None = None
         self.transport = transport or (
@@ -683,6 +687,29 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         return self.transport is not None
 
     def analyze(
+        self,
+        admitted_body_assets: Sequence[Mapping[str, Any]],
+    ) -> Mapping[str, Any]:
+        last_error: BodyProportionAnalysisError | None = None
+        for attempt in range(1, self.max_analysis_attempts + 1):
+            try:
+                return self._analyze_once(admitted_body_assets)
+            except BodyProportionAnalysisError as exc:
+                last_error = exc
+                if (
+                    str(exc)
+                    not in {
+                        "body_proportion_analysis_provider_unavailable",
+                        "body_proportion_analysis_profile_invalid",
+                    }
+                    or attempt >= self.max_analysis_attempts
+                ):
+                    raise
+        if last_error is None:  # pragma: no cover - constructor closes this state.
+            raise BodyProportionAnalysisError("body_proportion_analysis_provider_unavailable")
+        raise last_error
+
+    def _analyze_once(
         self,
         admitted_body_assets: Sequence[Mapping[str, Any]],
     ) -> Mapping[str, Any]:

@@ -120,6 +120,25 @@ class _FakeAnalysisTransport:
         return self.response
 
 
+class _SequencedAnalysisTransport(_FakeAnalysisTransport):
+    def __init__(self, outcomes: list[Any]) -> None:
+        super().__init__()
+        self.outcomes = list(outcomes)
+
+    def analyze(self, images, *, instructions: str, timeout_seconds: float):
+        self.calls.append(
+            {
+                "images": tuple(images),
+                "instructions": instructions,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
 def _provider(transport: _FakeAnalysisTransport) -> OpenAICompatibleBodySourceAnalysisProvider:
     return OpenAICompatibleBodySourceAnalysisProvider(
         api_key=None,
@@ -193,6 +212,49 @@ def test_v2_morphology_diagnostics_report_missing_and_unknown_fields(tmp_path: P
     assert states["build"]["present"] is False
     assert "private-value" not in str(shape)
     assert "private-value" not in str(values)
+
+
+@pytest.mark.parametrize(
+    "first_outcome",
+    [
+        {**_MORPHOLOGY, "build": "private-invalid-value"},
+        TimeoutError("private transport failure"),
+    ],
+)
+def test_v2_analysis_retries_once_then_freezes_one_valid_profile(
+    tmp_path: Path,
+    first_outcome: Any,
+) -> None:
+    transport = _SequencedAnalysisTransport([first_outcome, dict(_MORPHOLOGY)])
+    provider = _morphology_provider(transport)
+
+    profile = provider.analyze(_body_assets(tmp_path))
+
+    assert len(transport.calls) == 2
+    assert profile["contract_version"] == "body_morphology_evidence_profile_v2"
+    assert {field: profile[field] for field in _MORPHOLOGY} == _MORPHOLOGY
+    assert provider.last_response_shape_projection["schema_code"] == (
+        "body_proportion_analysis_profile_valid"
+    )
+    assert provider.last_response_value_projection["schema_code"] == (
+        "body_proportion_analysis_profile_valid"
+    )
+
+
+def test_v2_analysis_stops_after_two_invalid_responses(tmp_path: Path) -> None:
+    invalid = {**_MORPHOLOGY, "build": "private-invalid-value"}
+    transport = _SequencedAnalysisTransport([dict(invalid), dict(invalid)])
+    provider = _morphology_provider(transport)
+
+    with pytest.raises(
+        BodyProportionAnalysisError,
+        match="body_proportion_analysis_profile_invalid",
+    ):
+        provider.analyze(_body_assets(tmp_path))
+
+    assert len(transport.calls) == 2
+    assert "private-invalid-value" not in str(provider.last_response_shape_projection)
+    assert "private-invalid-value" not in str(provider.last_response_value_projection)
 
 
 def test_five_admitted_body_files_are_transiently_analyzed_into_closed_profile(tmp_path: Path) -> None:
