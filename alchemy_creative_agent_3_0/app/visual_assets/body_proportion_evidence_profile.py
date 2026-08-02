@@ -397,6 +397,50 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         return images
 
 
+def _lab_vision_enabled() -> bool:
+    """Read the existing V3 lab-vision enablement without owning its config."""
+
+    from ..shared_capabilities.visual_cluster.vision_provider import (
+        _lab_vision_enabled as read_lab_vision_enabled,
+    )
+
+    return bool(read_lab_vision_enabled())
+
+
+def _lab_vision_setting(field: str) -> Any:
+    """Read only the existing lab-vision route's safe setting fields."""
+
+    from ..shared_capabilities.visual_cluster.vision_provider import (
+        _lab_vision_setting as read_lab_vision_setting,
+    )
+
+    return read_lab_vision_setting(field)
+
+
+def create_configured_body_source_analysis_provider() -> (
+    OpenAICompatibleBodySourceAnalysisProvider | None
+):
+    """Construct the Body analyzer only from a complete lab-vision route.
+
+    This is configuration wiring, not generated-output inspection.  It reads
+    only the existing lab-vision provider's credential/base/model resolution;
+    it never falls back to the DeepSeek text Brain or an image renderer.
+    """
+
+    if not _lab_vision_enabled():
+        return None
+    api_key = _lab_vision_setting("api_key")
+    base_url = _lab_vision_setting("base_url")
+    model = _lab_vision_setting("model")
+    if not all(isinstance(value, str) and value.strip() for value in (api_key, base_url, model)):
+        return None
+    return OpenAICompatibleBodySourceAnalysisProvider(
+        api_key=api_key.strip(),
+        base_url=base_url.strip(),
+        model=model.strip(),
+    )
+
+
 class BodyProportionEvidenceProfile(V3BaseModel):
     """Typed, public-safe result of Body-only proportion source analysis."""
 

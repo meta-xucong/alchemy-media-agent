@@ -48,7 +48,10 @@ from ..visual_assets import (
 )
 from ..visual_assets.body_silhouette_source_standard import body_silhouette_mcp_materialization_channel_contract
 from ..visual_assets.character_card import BodyRefreshPresentationIntent
-from ..visual_assets.body_proportion_evidence_profile import BodySourceAnalysisProvider
+from ..visual_assets.body_proportion_evidence_profile import (
+    BodySourceAnalysisProvider,
+    create_configured_body_source_analysis_provider,
+)
 from ..shared_capabilities import CapabilityRunResult
 from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from ..shared_capabilities.visual_cluster import (
@@ -817,10 +820,21 @@ class V3ProductApiService:
         self.asset_store = asset_store or V3UploadedAssetStore()
         self.output_store = output_store or V3GeneratedOutputStore()
         self.mcp_materialization_store = mcp_materialization_store or McpMaterializationHandoffStore()
-        # This is an explicit server-owned injection boundary.  No default
-        # analyzer is fabricated from metadata; absent configuration must
-        # fail closed for reference-assisted Body proportion analysis.
-        self.body_proportion_source_analyzer = body_proportion_source_analyzer
+        # This is the single default wiring boundary.  The factory only reads
+        # complete existing lab-vision configuration; absent configuration
+        # remains None and the Body analysis seam fails closed.
+        if body_proportion_source_analyzer is not None:
+            self.body_proportion_source_analyzer = body_proportion_source_analyzer
+        elif scenario_runtime is not None:
+            self.body_proportion_source_analyzer = getattr(
+                scenario_runtime,
+                "body_proportion_source_analyzer",
+                None,
+            )
+        else:
+            self.body_proportion_source_analyzer = (
+                create_configured_body_source_analysis_provider()
+            )
         operator_catalog = self._default_photography_operator_catalog() if scenario_runtime is None else None
         self.photographer_profile_catalog = (
             photographer_profile_catalog
