@@ -268,21 +268,30 @@ after canonical materialization, by final Provider derivative/reference count,
 not by raw source count.
 
 The current Provider path may expand one identity source into multiple face
-derivatives. Body projection therefore needs a deterministic
-source-to-derivative admission contract rather than a source-count target.
-For body-required outputs, the hard sources and final materialized derivatives
-are closed:
+derivatives. Body projection therefore needs a deterministic evidence-to-
+renderer partition rather than a source-count target. The five admitted Body
+proportion images remain server-owned Body evidence for the existing
+Body-owner/Vision/Brain proportion-admission context; they are not physical
+GPT Image inputs and do not become Body provider derivatives. This boundary
+does not perform pixel analysis or create a biometric profile. A separate
+server-owned proportion receipt/analysis must already be present before the
+Body lifecycle may claim observed proportional learning. Only the
+current-person Face identity projection is eligible for the physical renderer
+cap:
 
 ```text
-portrait/root source        -> at most one admitted identity derivative when body is required
-selected face winner source -> at most one admitted identity derivative when body is required
-body source                 -> exactly one body_proportion_truth derivative
-selected product/source     -> at most one module hard-truth derivative
+portrait/root source        -> Face identity derivative(s) selected by the identity evidence owner
+selected face winner source -> Face identity derivative(s) selected by the identity evidence owner
+body source                 -> Body-owner proportion evidence/receipt, no physical renderer input
+selected product/source     -> at most one module hard-truth derivative when that module owns it
 ```
 
-The body source must never generate portrait-identity derivatives. If the
-Provider cannot produce this compact body-aware derivative plan, the output
-blocks before Host instead of increasing the cap or dropping a hard reference.
+The body source must never generate portrait-identity or physical renderer
+derivatives. If the Body-owner proportion evidence/receipt is absent, the
+Body lifecycle blocks at its own typed contract boundary; the renderer must
+not compensate by receiving the Body images. If the Face-only physical plan
+cannot fit the cap, the output blocks before Host instead of increasing the
+cap or dropping a hard Face reference.
 
 Deterministic compact derivative policy:
 
@@ -290,16 +299,19 @@ Deterministic compact derivative policy:
 | --- | --- | --- |
 | immutable root portrait | exactly one identity-preserving derivative selected by the existing identity evidence owner | No |
 | selected face winner | exactly one identity/view derivative selected by the existing identity evidence owner | No |
-| active Body Silhouette | exactly one `body_proportion_truth` derivative with the selected closed `body_view_kind` | No |
+| active Body Silhouette | server-owned `body_proportion_truth` evidence/receipt; no physical provider derivative | N/A for renderer |
 | E-Commerce selected product truth | exactly one `product_truth` derivative | No |
 | Photography hard reference | exactly one Photography-owned derivative only when that shot contract requires it | No, if required |
 | General hard reference | exactly one General-owned derivative only when that output contract requires it | No, if required |
 
-There is no open-ended residual slot in this contract. If a module hard
-reference plus root, face, and body require more than five final materialized
-references, Host is blocked before materialization. The system must not fit by
-silently deleting body, face, product, Photography hard truth, or General hard
-truth.
+There is no open-ended residual slot in this contract. If the Face physical
+projection plus any module-owned hard reference requires more than five final
+materialized references, Host is blocked before materialization. The system
+must not fit by silently deleting Body evidence from the server-owned
+proportion context, deleting Face identity, or deleting a module-owned hard
+truth. Body evidence is preserved in the typed partition/fingerprint but is
+deliberately absent from physical `reference_assets` and
+`reference_asset_hashes`.
 
 ### 5.1 E-Commerce visible/full body
 
@@ -308,7 +320,7 @@ Provider-facing final references must fit within five materialized assets:
 ```text
 1. root portrait identity derivative
 2. selected face winner derivative
-3. body_proportion_truth derivative with body_view_kind
+3. server-owned Body proportion evidence/receipt (not a Provider input)
 4. selected product_truth derivative
 ```
 
@@ -333,7 +345,7 @@ Provider-facing final references must fit within five materialized assets:
 ```text
 1. root portrait identity derivative
 2. selected face winner derivative
-3. body_proportion_truth derivative with body_view_kind
+3. server-owned Body proportion evidence/receipt (not a Provider input)
 4. Photography-owned hard reference, only when required by the shot contract
 ```
 
@@ -351,7 +363,7 @@ Professional per-output receipt requires visible/full human body evidence:
 ```text
 1. root portrait identity derivative
 2. selected face winner derivative
-3. body_proportion_truth derivative with body_view_kind
+3. server-owned Body proportion evidence/receipt (not a Provider input)
 4. General-owned hard reference, if any
 ```
 

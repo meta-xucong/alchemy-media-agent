@@ -1831,6 +1831,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         admitted_reference_assets = self._reference_assets(request)
         asset_plan = self._asset_plan(request, admitted_reference_assets)
+        asset_plan = self._provider_materialization_asset_plan(request, asset_plan)
         self._assert_professional_view_evidence_ready(request, asset_plan)
         # ``asset_plan`` is the single provider-input authority.  The Web
         # adapter reads its ``storage_path`` entries, so this materializer and
@@ -1981,6 +1982,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ]
         else:
             combined_assets = self._apply_adaptive_reference_selection(request, combined_assets)
+        # Specialized routes may separate server-owned evidence from the
+        # physical renderer inputs before this base method resolves files and
+        # enforces the route's reference cap.  The default preserves the
+        # historical provider behavior.
+        combined_assets = self._reference_input_scope(request, combined_assets)
         assets: list[dict[str, Any]] = []
         seen_evidence: dict[tuple[str, str], int] = {}
         resolution_audit: dict[str, Any] = {
@@ -2162,6 +2168,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 },
             )
         return assets
+
+    def _reference_input_scope(
+        self,
+        request: GenerationRequest,
+        combined_assets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Return the server-owned physical reference scope for this route."""
+
+        return combined_assets
 
     def _reference_capacity_limit(
         self,
@@ -3057,6 +3072,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 }
             )
         return resolved
+
+    def _provider_materialization_asset_plan(
+        self,
+        request: GenerationRequest,
+        asset_plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Allow a route to close its physical provider-input projection."""
+
+        return asset_plan
 
     def _reference_truth_package(
         self,
@@ -5528,6 +5552,115 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         super().__init__(output_store=output_store)
         self.handoff_store = handoff_store or McpMaterializationHandoffStore()
 
+    @staticmethod
+    def _reference_item_dict(item: Any) -> dict[str, Any]:
+        return item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
+
+    def _body_partition_source_assets(
+        self,
+        request: GenerationRequest,
+        renderer_assets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        metadata = self._generation_request_metadata(request)
+        anchor_assets = metadata.get("professional_anchor_reference_assets")
+        source_assets = [
+            self._reference_item_dict(item)
+            for item in (anchor_assets if isinstance(anchor_assets, list) else [])
+        ]
+        # Body truth is admitted only through this server-owned anchor list.
+        # The request's ordinary reference list may contribute Face identity
+        # refs, but it can never promote a client-supplied Body role into Body
+        # truth merely because it appears before the provider cap.
+        source_assets.extend(
+            self._reference_item_dict(item)
+            for item in renderer_assets
+            if str(item.get("role") or "").strip().lower() == "face_reference"
+        )
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in source_assets:
+            key = (
+                str(item.get("asset_id") or item.get("source_integrity_id") or ""),
+                str(item.get("file_path") or item.get("storage_path") or ""),
+            )
+            if key == ("", "") or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
+
+    def _ensure_reference_assisted_body_partition(
+        self,
+        request: GenerationRequest,
+        renderer_assets: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        metadata = self._generation_request_metadata(request)
+        existing = metadata.get("body_mcp_reference_partition")
+        if existing is not None:
+            try:
+                partition = McpBodyReferencePartition.model_validate(existing)
+            except ValidationError as exc:
+                raise ReferenceInputAdmissionError(
+                    "Reference-assisted Body MCP requires a valid typed Body/Face partition.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "body_mcp_reference_partition_invalid",
+                        "fallback": "blocked",
+                    },
+                ) from exc
+            payload = partition.model_dump(mode="json")
+            request.metadata["body_mcp_reference_partition"] = payload
+            return payload
+
+        source_assets = self._body_partition_source_assets(request, renderer_assets)
+        if not source_assets:
+            return None
+        try:
+            partition = build_mcp_body_reference_partition(source_assets)
+        except ValueError as exc:
+            raise ReferenceInputAdmissionError(
+                "Reference-assisted Body MCP requires separate Body evidence and Face identity refs.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": str(exc) or "body_mcp_reference_partition_invalid",
+                    "fallback": "blocked",
+                },
+            ) from exc
+        payload = partition.model_dump(mode="json")
+        request.metadata["body_mcp_reference_partition"] = payload
+        return payload
+
+    def _reference_input_scope(
+        self,
+        request: GenerationRequest,
+        combined_assets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        metadata = self._generation_request_metadata(request)
+        if not (
+            self._is_character_card_body_mcp_materialization(metadata)
+            and self._is_strict_character_card_body_refresh(metadata)
+            and str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip() == "reference_assisted"
+        ):
+            return combined_assets
+
+        anchor_assets = metadata.get("professional_anchor_reference_assets")
+        anchor_list = anchor_assets if isinstance(anchor_assets, list) else []
+        if not combined_assets and not anchor_list and metadata.get("body_mcp_reference_partition") is None:
+            # Submitted/resume requests may recover the frozen partition later
+            # from the handoff store; do not invent physical inputs here.
+            return combined_assets
+        self._ensure_reference_assisted_body_partition(request, combined_assets)
+
+        candidate_assets = combined_assets
+        if not any(str(item.get("role") or "").strip().lower() == "face_reference" for item in candidate_assets):
+            candidate_assets = [self._reference_item_dict(item) for item in anchor_list]
+        renderer_assets = [
+            self._reference_item_dict(item)
+            for item in candidate_assets
+            if str(item.get("role") or "").strip().lower() == "face_reference"
+        ]
+        return renderer_assets
+
     def _reference_capacity_limit(
         self,
         request: GenerationRequest,
@@ -5561,6 +5694,13 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 )
             # Inference-first preserves the ordinary MCP/Face-reference cap;
             # it does not manufacture or admit a Body truth partition.
+            return super()._reference_capacity_limit(request, reference_assets)
+        if metadata.get("body_mcp_reference_partition") is not None:
+            self._ensure_reference_assisted_body_partition(request, reference_assets)
+            # Body evidence is already captured in the typed partition; only
+            # the Face renderer projection reaches the unchanged base cap.
+            # A Face-only projection above five remains a closed capability
+            # failure; this boundary never trims it silently.
             return super()._reference_capacity_limit(request, reference_assets)
         if not reference_assets:
             # Exact submitted/resume requests may rebuild the provider request
@@ -5605,7 +5745,9 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             request.metadata["body_mcp_reference_partition"] = partition.model_dump(mode="json")
             return None
         try:
-            partition = build_mcp_body_reference_partition(reference_assets).model_dump(mode="json")
+            partition = self._ensure_reference_assisted_body_partition(request, reference_assets)
+            if partition is None:
+                raise ValueError("body_mcp_reference_partition_channel_missing")
         except ValueError as exc:
             raise ReferenceInputAdmissionError(
                 "Strict Body MCP materialization requires separate Body and Face reference partitions.",
@@ -5621,6 +5763,78 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         # admitted Body and Face input rather than changing the base provider
         # cap or silently trimming the request.
         return None
+
+    def _provider_materialization_asset_plan(
+        self,
+        request: GenerationRequest,
+        asset_plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        metadata = self._generation_request_metadata(request)
+        if not (
+            self._is_character_card_body_mcp_materialization(metadata)
+            and self._is_strict_character_card_body_refresh(metadata)
+            and str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip() == "reference_assisted"
+        ):
+            return asset_plan
+
+        physical_assets = [
+            dict(item or {})
+            for item in asset_plan.get("assets", [])
+            if str(item.get("role") or "").strip() == "portrait_identity"
+            and str(item.get("reference_truth_layer") or "").strip() == "portrait_identity_truth"
+            and item.get("provider_input_mode") == "reference_image"
+        ]
+        filtered = dict(asset_plan)
+        filtered["assets"] = physical_assets
+        filtered["provider_requirements"] = {
+            **dict(asset_plan.get("provider_requirements") or {}),
+            "needs_image_reference": bool(physical_assets),
+        }
+        provider_plan = dict(asset_plan.get("provider_input_plan") or {})
+        provider_plan.update(
+            {
+                "operation": "image_edit_with_reference_images" if physical_assets else "generate",
+                "reference_image_asset_ids": [item.get("asset_id") for item in physical_assets],
+                "reference_image_count": len(physical_assets),
+                "provider_reference_total_bytes": sum(
+                    int(item.get("provider_reference_bytes") or 0) for item in physical_assets
+                ),
+                "requires_image_reference": bool(physical_assets),
+                "identity_evidence_scopes": _dedupe(
+                    [
+                        str(item.get("identity_evidence_scope") or "")
+                        for item in physical_assets
+                        if item.get("identity_evidence_scope")
+                    ]
+                ),
+                "reference_truth_layers": [
+                    {
+                        "asset_id": item.get("asset_id"),
+                        "source_asset_id": item.get("source_asset_id") or item.get("asset_id"),
+                        "role": item.get("role"),
+                        "truth_layer": item.get("reference_truth_layer"),
+                        "truth_layers": item.get("truth_layers") or [],
+                        "derivative_kind": item.get("derivative_kind"),
+                        "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
+                        "fallback_to_original": bool(item.get("fallback_to_original")),
+                        "body_view_kind": item.get("body_view_kind"),
+                        "body_reference_policy": item.get("body_reference_policy"),
+                        "forbidden_inheritance_channels": item.get("forbidden_inheritance_channels") or [],
+                    }
+                    for item in physical_assets
+                ],
+            }
+        )
+        truth_package = dict(provider_plan.get("reference_truth_package") or {})
+        truth_package["truth_derivative_ids"] = [
+            item.get("asset_id")
+            for item in physical_assets
+            if item.get("provider_reference_derivative")
+        ]
+        truth_package["provider_reference_image_count"] = len(physical_assets)
+        provider_plan["reference_truth_package"] = truth_package
+        filtered["provider_input_plan"] = provider_plan
+        return filtered
 
     def _select_provider(self, reference_assets: list[dict[str, Any]]) -> str:
         return "codex_builtin_imagegen"

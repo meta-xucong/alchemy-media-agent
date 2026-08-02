@@ -11,12 +11,14 @@ hard-role competitors.  The result is a pre-MCP capability block even though
 the five Body assets and Face identity evidence were admitted independently.
 
 The owning fix is a typed, stage-aware materialization partition.  A strict
-Body/MCP request must retain the complete Body partition and the Face identity
-partition, including stable fingerprints, without merging either into a
-generic Face role.  Direct image-edit routes keep their existing ``>5``
-fail-closed contract.  MCP may only admit the partition under its own typed
-capability contract; it must never silently trim references.  The partition
-must survive the frozen handoff/public view, while ordinary MCP, Expression,
+Body/MCP request must retain the complete server-owned Body evidence partition
+and the Face identity partition, including stable fingerprints, without
+merging either into a generic Face role.  Body evidence informs the
+Body-owner/Vision/Brain proportion context; it is not a physical ImageGen
+input.  Only Face identity refs reach the renderer, so the direct image-edit
+cap is evaluated against the Face physical projection.  Direct image-edit
+routes keep their existing ``>5`` fail-closed contract.  The partition must
+survive the frozen handoff/public view, while ordinary MCP, Expression,
 General, and other routes must not inherit Body fields.  Prompt text,
 candidate/formal/activation authority, and provider routing are out of scope.
 
@@ -149,12 +151,16 @@ def test_direct_image_edit_route_keeps_over_five_reference_fail_closed(tmp_path)
 def test_mcp_body_route_partitions_and_retains_five_body_plus_two_face_refs(tmp_path) -> None:
     body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
     request = _provider_request(*body_assets, *face_assets, stage="body_silhouette")
+    request.metadata["professional_anchor_reference_assets"] = [*body_assets, *face_assets]
 
     retained = McpMaterializationProvider()._reference_assets(request)
 
-    assert len(retained) >= 7
-    assert sum(item["role"] == "body_proportion_reference" for item in retained) == 5
-    assert sum(item["role"] == "face_reference" for item in retained) == 2
+    assert len(retained) == 2
+    assert all(item["role"] == "face_reference" for item in retained)
+    assert all(
+        item.get("file_path") not in {body["file_path"] for body in body_assets}
+        for item in retained
+    )
     assert request.metadata["body_mcp_reference_partition"]["body_proportion_reference"]["asset_count"] == 5
     assert request.metadata["body_mcp_reference_partition"]["face_identity_reference"]["asset_count"] == 2
 
@@ -266,6 +272,7 @@ def test_mcp_body_build_app_request_carries_partition_into_frozen_context(tmp_pa
         {
             "professional_character_card_body_refresh_contract_required": True,
             "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+            "professional_anchor_reference_assets": [*body_assets, *face_assets],
             "reference_assets": [*body_assets, *face_assets],
         }
     )
@@ -274,9 +281,188 @@ def test_mcp_body_build_app_request_carries_partition_into_frozen_context(tmp_pa
 
     context = app_request.prompt_plan.variables["mcp_materialization_context"]
     partition = context["rendering_contract"]["body_mcp_reference_partition"]
-    assert len(retained) >= 7
+    assert len(retained) <= 5
+    assert all(item.get("role") == "portrait_identity" for item in retained)
     assert partition["body_proportion_reference"]["asset_count"] == 5
     assert partition["face_identity_reference"]["asset_count"] == 2
+
+
+def test_reference_assisted_body_partition_stays_typed_but_provider_inputs_are_face_only(
+    tmp_path,
+) -> None:
+    """Body truth remains server-owned context and never becomes an image input."""
+
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
+    request = _mcp_body_generation_request(
+        "Body proportion and stance only.",
+        source_mode="reference_assisted",
+    )
+    request.metadata.update(
+        {
+            "professional_character_card_body_refresh_contract_required": True,
+            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+            "professional_anchor_reference_assets": [*body_assets, *face_assets],
+            "reference_assets": [*body_assets, *face_assets],
+        }
+    )
+
+    app_request, _, provider_inputs = McpMaterializationProvider()._build_app_request(request)
+
+    context = app_request.prompt_plan.variables["mcp_materialization_context"]
+    partition = context["rendering_contract"]["body_mcp_reference_partition"]
+    assert partition["body_proportion_reference"]["asset_count"] == 5
+    assert partition["face_identity_reference"]["asset_count"] == 2
+    assert len(provider_inputs) <= 5
+    assert all(item.get("role") == "portrait_identity" for item in provider_inputs)
+    assert all(
+        item.get("reference_truth_layer") == "portrait_identity_truth"
+        for item in provider_inputs
+    )
+    assert not any(item.get("role") == "body_proportion_reference" for item in provider_inputs)
+    assert not any(
+        (item.get("metadata") or {}).get("reference_truth_layer") == "body_proportion_truth"
+        for item in provider_inputs
+    )
+    assert not any(
+        item.get("file_path") in {body["file_path"] for body in body_assets}
+        for item in provider_inputs
+    )
+    assert context["reference_assets"] == provider_inputs
+
+
+def test_reference_assisted_client_body_refs_cannot_promote_to_body_truth(tmp_path) -> None:
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
+    request = _mcp_body_generation_request(
+        "Body proportion and stance only.",
+        source_mode="reference_assisted",
+    )
+    request.metadata.update(
+        {
+            "professional_character_card_body_refresh_contract_required": True,
+            "reference_assets": [*body_assets, *face_assets],
+        }
+    )
+
+    with pytest.raises(ReferenceInputAdmissionError) as exc_info:
+        McpMaterializationProvider()._reference_assets(request)
+
+    assert exc_info.value.detail["reference_input_failure_code"] == (
+        "body_mcp_reference_partition_channel_missing"
+    )
+
+
+def test_reference_assisted_real_serial_derivatives_are_face_only_before_handoff_cap(tmp_path) -> None:
+    """Two semantic Face refs expand to four physical identity inputs, not Body inputs."""
+
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
+    request = _mcp_body_generation_request(
+        "Body proportion and stance only.",
+        source_mode="reference_assisted",
+    )
+    request.metadata.update(
+        {
+            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
+            "professional_anchor_reference_assets": [*body_assets, *face_assets],
+            "reference_assets": [*body_assets, *face_assets],
+            "professional_character_card_body_refresh_contract_required": True,
+        }
+    )
+
+    app_request, _, provider_inputs = McpMaterializationProvider()._build_app_request(request)
+    variables = app_request.prompt_plan.variables
+    asset_plan = variables["asset_plan"]
+    context = variables["mcp_materialization_context"]
+    partition = context["rendering_contract"]["body_mcp_reference_partition"]
+
+    assert partition["body_proportion_reference"]["asset_count"] == 5
+    assert partition["face_identity_reference"]["asset_count"] == 2
+    assert len(provider_inputs) <= 5
+    assert len(asset_plan["assets"]) <= 5
+    assert all(item.get("role") == "portrait_identity" for item in provider_inputs)
+    assert all(item.get("role") == "portrait_identity" for item in asset_plan["assets"])
+    assert all(item.get("reference_truth_layer") == "portrait_identity_truth" for item in provider_inputs)
+    assert all(item.get("reference_truth_layer") == "portrait_identity_truth" for item in asset_plan["assets"])
+    assert not any(
+        item.get("file_path") in {body["file_path"] for body in body_assets}
+        for item in provider_inputs
+    )
+    assert not any(
+        item.get("storage_path") in {body["file_path"] for body in body_assets}
+        for item in asset_plan["assets"]
+    )
+
+
+def test_reference_assisted_partition_is_built_before_base_provider_capacity_check(tmp_path) -> None:
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
+    request = _mcp_body_generation_request(
+        "Body proportion and stance only.",
+        source_mode="reference_assisted",
+    )
+    request.metadata.update(
+        {
+            "professional_anchor_reference_assets": [*body_assets, *face_assets],
+            "reference_assets": [*body_assets, *face_assets],
+            "professional_character_card_body_refresh_contract_required": True,
+        }
+    )
+
+    retained = McpMaterializationProvider()._reference_assets(request)
+
+    assert len(retained) == 2
+    assert request.metadata["body_mcp_reference_partition"]["body_proportion_reference"]["asset_count"] == 5
+    assert request.metadata["body_mcp_reference_partition"]["face_identity_reference"]["asset_count"] == 2
+
+
+def test_reference_assisted_face_physical_projection_still_enforces_cap(tmp_path) -> None:
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=6)
+    request = _mcp_body_generation_request(
+        "Body proportion and stance only.",
+        source_mode="reference_assisted",
+    )
+    request.metadata.update(
+        {
+            "professional_anchor_reference_assets": [*body_assets, *face_assets],
+            "reference_assets": [*body_assets, *face_assets],
+            "professional_character_card_body_refresh_contract_required": True,
+        }
+    )
+
+    with pytest.raises(ReferenceInputAdmissionError) as exc_info:
+        McpMaterializationProvider()._reference_assets(request)
+
+    assert exc_info.value.detail["reference_input_failure_code"] == (
+        "reference_input_capability_mismatch"
+    )
+    assert request.metadata["body_mcp_reference_partition"]["body_proportion_reference"][
+        "asset_count"
+    ] == 5
+
+
+def test_reference_assisted_body_partition_does_not_change_inference_first_face_only_isolation(
+    tmp_path,
+) -> None:
+    """The Body-only provider projection is scoped to reference-assisted mode."""
+
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
+    request = _mcp_body_generation_request(
+        "Body proportion and stance only.",
+        source_mode="inference_first",
+    )
+    request.metadata.update(
+        {
+            "professional_character_card_body_refresh_contract_required": True,
+            "reference_assets": face_assets,
+        }
+    )
+
+    _app_request, _, provider_inputs = McpMaterializationProvider()._build_app_request(request)
+
+    assert all(item.get("role") != "body_proportion_reference" for item in provider_inputs)
+    assert not any(
+        (item.get("metadata") or {}).get("reference_truth_layer") == "body_proportion_truth"
+        for item in provider_inputs
+    )
+    assert body_assets
 
 
 def test_mcp_inference_first_keeps_face_only_compatibility_without_body_partition(tmp_path) -> None:
