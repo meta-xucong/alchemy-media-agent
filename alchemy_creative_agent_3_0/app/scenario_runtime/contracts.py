@@ -20,7 +20,10 @@ from ..shared_capabilities.activation import (
 )
 from ..llm_brain import BrainRunResult
 from ..visual_assets import ProfessionalModePreparationResult, VisualAssetBindingSet
-from ..visual_assets.body_proportion_evidence_profile import BodySourceAnalysisAssetEnvelope
+from ..visual_assets.body_proportion_evidence_profile import (
+    BodyRefreshAnalysisContext,
+    BodySourceAnalysisAssetEnvelope,
+)
 from ..schemas import PlanningResult
 from ..schemas.models import V3BaseModel
 
@@ -47,6 +50,9 @@ class ScenarioRuntimeRequest(V3BaseModel):
     # cannot populate this field; ProductApi builds it from ready upload
     # records immediately before entering ScenarioRuntime.
     body_source_analysis_assets: list[BodySourceAnalysisAssetEnvelope] = Field(default_factory=list)
+    # Server-owned immutable context prepared once by the fresh Body refresh
+    # owner.  A public dictionary is not a trusted substitute.
+    body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None
     # This is an internal service-to-runtime transport flag, never a Product
     # API control.  A frozen plan can only be reused after Product API has
     # resolved its persisted parent/job provenance and explicitly marked the
@@ -58,6 +64,13 @@ class ScenarioRuntimeRequest(V3BaseModel):
     # candidate, and operation context.  Ordinary request metadata alone must
     # never activate this path.
     trusted_professional_anchor_view_decision_reuse: bool = False
+
+    @field_validator("body_refresh_analysis_context", mode="before")
+    @classmethod
+    def reject_untrusted_body_refresh_context(cls, value: Any) -> Any:
+        if value is None or isinstance(value, BodyRefreshAnalysisContext):
+            return value
+        raise ValueError("body_refresh_analysis_context_untrusted")
 
     @model_validator(mode="before")
     @classmethod

@@ -50,6 +50,7 @@ from .formal_slot_acceptance import (
     mark_formal_slot_receipt_reload_public_projection_verified,
     validate_formal_slot_receipt_for_activation,
 )
+from .body_proportion_evidence_profile import BodyRefreshAnalysisContext
 
 
 VisualAssetType = Literal["people", "product", "scene", "brand"]
@@ -1096,6 +1097,7 @@ class VisualAssetLibraryLifecycleService:
         body_request: BodySilhouettePublicRequest,
         generation_channel: Literal["provider", "mcp"] = "provider",
         body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
     ) -> VisualAsset:
         """Append a pending Body Silhouette refresh through the owning lifecycle."""
 
@@ -1104,6 +1106,11 @@ class VisualAssetLibraryLifecycleService:
             and not isinstance(body_refresh_presentation_intent, BodyRefreshPresentationIntent)
         ):
             raise ValueError("character_card_body_refresh_presentation_intent_invalid")
+        if body_refresh_analysis_context is not None and not isinstance(
+            body_refresh_analysis_context,
+            BodyRefreshAnalysisContext,
+        ):
+            raise ValueError("body_refresh_analysis_context_untrusted")
         if self.character_card_stage_host is None:
             raise CharacterCardRuntimeUnavailable("character_card_body_refresh_unavailable")
         if getattr(self.character_card_stage_host, "production_shared_runtime", False) is not True:
@@ -1128,6 +1135,8 @@ class VisualAssetLibraryLifecycleService:
             method_kwargs["generation_channel"] = "mcp"
         if body_refresh_presentation_intent is not None:
             method_kwargs["body_refresh_presentation_intent"] = body_refresh_presentation_intent
+        if body_refresh_analysis_context is not None:
+            method_kwargs["body_refresh_analysis_context"] = body_refresh_analysis_context
         result = method(**method_kwargs)
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")

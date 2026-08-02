@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from pydantic import ConfigDict, ValidationError, field_validator
+from pydantic import ConfigDict, StrictInt, StrictStr, ValidationError, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 
@@ -853,6 +853,117 @@ class BodyProportionEvidenceProfile(V3BaseModel):
         if type(value) is not int or value != 5:
             raise ValueError("body_proportion_analysis_source_count_invalid")
         return value
+
+
+class BodyRefreshAnalysisContext(V3BaseModel):
+    """One immutable, server-owned analysis result for a Body refresh.
+
+    The context is an in-memory hand-off from the Product API refresh owner to
+    the Character Card candidate fan-out.  It deliberately retains the typed
+    profile and only safe digests for lifecycle persistence; source paths,
+    provenance, upload IDs, and provider responses never belong here.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    contract_version: Literal["body_refresh_analysis_context_v1"] = (
+        "body_refresh_analysis_context_v1"
+    )
+    schema_version: Literal["body_proportion_evidence_profile_v1"] = (
+        "body_proportion_evidence_profile_v1"
+    )
+    source_mode: Literal["reference_assisted"]
+    attempt_id: StrictStr
+    append_only_revision: StrictInt = 1
+    source_binding_digest: StrictStr
+    profile_digest: StrictStr
+    profile: BodyProportionEvidenceProfile
+
+    @field_validator("attempt_id")
+    @classmethod
+    def require_server_attempt_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        prefix = "body_refresh_attempt_"
+        suffix = cleaned[len(prefix):] if cleaned.startswith(prefix) else ""
+        if len(suffix) != 32 or any(char not in "0123456789abcdef" for char in suffix):
+            raise ValueError("body_refresh_analysis_attempt_invalid")
+        return cleaned
+
+    @field_validator("append_only_revision")
+    @classmethod
+    def require_positive_revision(cls, value: int) -> int:
+        if type(value) is not int or value < 1:
+            raise ValueError("body_refresh_analysis_revision_invalid")
+        return value
+
+    @field_validator("source_binding_digest", "profile_digest")
+    @classmethod
+    def require_sha256_digest(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if len(cleaned) != 64 or any(char not in "0123456789abcdef" for char in cleaned):
+            raise ValueError("body_refresh_analysis_digest_invalid")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_profile_contract(self) -> "BodyRefreshAnalysisContext":
+        if self.profile.source_mode != self.source_mode:
+            raise ValueError("body_refresh_analysis_profile_source_mode_mismatch")
+        expected_profile_digest = hashlib.sha256(
+            json.dumps(
+                self.profile.model_dump(mode="json"),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.profile_digest != expected_profile_digest:
+            raise ValueError("body_refresh_analysis_profile_digest_mismatch")
+        return self
+
+    @classmethod
+    def from_analysis(
+        cls,
+        *,
+        attempt_id: str,
+        append_only_revision: int,
+        admitted_body_assets: Sequence[BodySourceAnalysisAssetEnvelope],
+        profile: BodyProportionEvidenceProfile,
+    ) -> "BodyRefreshAnalysisContext":
+        if len(admitted_body_assets) != 5:
+            raise ValueError("body_refresh_analysis_source_count_invalid")
+        source_binding = [asset.source_sha256 for asset in admitted_body_assets]
+        source_binding_digest = hashlib.sha256(
+            json.dumps(source_binding, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        profile_digest = hashlib.sha256(
+            json.dumps(
+                profile.model_dump(mode="json"),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return cls(
+            source_mode="reference_assisted",
+            attempt_id=attempt_id,
+            append_only_revision=append_only_revision,
+            source_binding_digest=source_binding_digest,
+            profile_digest=profile_digest,
+            profile=profile,
+        )
+
+    def safe_metadata(self) -> dict[str, Any]:
+        """Return the only context projection allowed into a job record."""
+
+        return {
+            "contract_version": self.contract_version,
+            "schema_version": self.schema_version,
+            "source_mode": self.source_mode,
+            "attempt_id": self.attempt_id,
+            "append_only_revision": self.append_only_revision,
+            "source_binding_digest": self.source_binding_digest,
+            "profile_digest": self.profile_digest,
+        }
 
 
 class BodyProportionSourceAnalysisAdapter:

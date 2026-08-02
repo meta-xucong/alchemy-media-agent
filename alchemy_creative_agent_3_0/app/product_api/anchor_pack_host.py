@@ -50,6 +50,7 @@ from ..visual_assets.anchor_pack import (
 )
 from ..visual_assets.character_card import (
     BodyPreparationRequest,
+    BodyRefreshAttemptIdentity,
     BodyRefreshPresentationIntent,
     CharacterCardCandidateAttempt,
     CharacterCardCandidateLifecycleBoundaryError,
@@ -64,6 +65,7 @@ from ..visual_assets.character_card import (
     CharacterCardState,
     SlotAcceptanceCore,
 )
+from ..visual_assets.body_proportion_evidence_profile import BodyRefreshAnalysisContext
 from ..visual_assets.contracts import (
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
@@ -1249,6 +1251,25 @@ class ProductApiAnchorPackPreparationHost:
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
 
+    def prepare_body_refresh_analysis_context(
+        self,
+        *,
+        body_source_admission: dict[str, Any],
+        face_reference_output_ids: list[str],
+        attempt_identity: BodyRefreshAttemptIdentity,
+    ) -> BodyRefreshAnalysisContext:
+        """Freeze one resolver/analyzer result before Character Card fan-out."""
+
+        if not isinstance(attempt_identity, BodyRefreshAttemptIdentity):
+            raise ValueError("body_proportion_analysis_attempt_untrusted")
+        return self.product_service.prepare_body_refresh_analysis_context(
+            body_source_admission=body_source_admission,
+            source_class="observed",
+            face_reference_output_ids=list(face_reference_output_ids),
+            attempt_id=attempt_identity.attempt_id,
+            append_only_revision=attempt_identity.append_only_revision,
+        )
+
     def refresh_body_silhouette(
         self,
         *,
@@ -1257,6 +1278,7 @@ class ProductApiAnchorPackPreparationHost:
         request: Any = None,
         generation_channel: str = "provider",
         body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
     ) -> CharacterCardStageResult:
         if request is None:
             raise ValueError("character_card_body_source_required")
@@ -1271,6 +1293,11 @@ class ProductApiAnchorPackPreparationHost:
         ]
         if any(not item for item in face_reference_output_ids):
             raise ValueError("character_card_body_face_winners_missing")
+        if request.source_class == "observed" and generation_channel == "mcp":
+            if body_refresh_analysis_context is None:
+                raise ValueError("body_proportion_analysis_context_missing")
+            if not isinstance(body_refresh_analysis_context, BodyRefreshAnalysisContext):
+                raise ValueError("body_refresh_analysis_context_untrusted")
         body_evidence_ids = (
             [str(request.body_reference_asset_id)]
             if request.source_class == "observed" and request.body_reference_asset_id
@@ -1291,6 +1318,15 @@ class ProductApiAnchorPackPreparationHost:
             user_intent=user_intent,
             generation_channel=generation_channel if generation_channel in {"provider", "mcp"} else "provider",
             body_refresh_presentation_intent=body_refresh_presentation_intent,
+            body_refresh_analysis_context=body_refresh_analysis_context,
+            body_refresh_attempt_identity=(
+                BodyRefreshAttemptIdentity(
+                    attempt_id=body_refresh_analysis_context.attempt_id,
+                    append_only_revision=body_refresh_analysis_context.append_only_revision,
+                )
+                if body_refresh_analysis_context is not None
+                else None
+            ),
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
 
@@ -1493,6 +1529,19 @@ class ProductApiAnchorPackPreparationHost:
             else None
         )
         if (
+            resume_record is not None
+            and request.body_refresh_source_mode == "reference_assisted"
+            and request.generation_channel == "mcp"
+        ):
+            context = request.body_refresh_analysis_context
+            persisted_context = dict(resume_record.request.metadata or {}).get(
+                "professional_body_refresh_analysis_context"
+            )
+            if context is None:
+                raise AnchorCandidateUnavailable("body_proportion_analysis_context_missing")
+            if persisted_context != context.safe_metadata():
+                raise AnchorCandidateUnavailable("body_proportion_analysis_context_mismatch")
+        if (
             request.review_only_resume
             and resume_record is not None
             and request.generation_channel == "mcp"
@@ -1542,6 +1591,7 @@ class ProductApiAnchorPackPreparationHost:
                     if request.body_refresh_presentation_intent is not None
                     else None
                 ),
+                body_refresh_analysis_context=request.body_refresh_analysis_context,
                 generation_channel=request.generation_channel,
                 mcp_operation_id=operation_id,
                 attempt_round=request.attempt_round,

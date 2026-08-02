@@ -93,6 +93,7 @@ from ..visual_assets import (
 from ..visual_assets.body_proportion_evidence_profile import (
     BodyProportionAnalysisError,
     BodyProportionEvidenceProfile,
+    BodyRefreshAnalysisContext,
     BodyProportionSourceAnalysisAdapter,
     BodySourceAnalysisAssetEnvelope,
     BodySourceAnalysisProvider,
@@ -6171,6 +6172,10 @@ class ScenarioRuntime:
                 raise CapabilityActivationError(
                     "body_proportion_analysis_source_mode_invalid"
                 )
+            if getattr(request, "body_refresh_analysis_context", None) is not None:
+                raise CapabilityActivationError(
+                    "body_proportion_analysis_source_mode_invalid"
+                )
             return None
         if source_mode != "reference_assisted":
             if raw_receipt is not None:
@@ -6178,10 +6183,28 @@ class ScenarioRuntime:
                     "body_proportion_analysis_source_mode_invalid"
                 )
             return None
+        frozen_context = getattr(request, "body_refresh_analysis_context", None)
+        if frozen_context is not None:
+            if not isinstance(frozen_context, BodyRefreshAnalysisContext):
+                raise CapabilityActivationError("body_refresh_analysis_context_untrusted")
+            safe_context = metadata.get("professional_body_refresh_analysis_context")
+            if not isinstance(safe_context, dict) or safe_context != frozen_context.safe_metadata():
+                raise CapabilityActivationError("body_proportion_analysis_context_mismatch")
+            return frozen_context.profile
         if raw_receipt is not None:
             if not isinstance(raw_receipt, BodyProportionEvidenceProfile):
                 raise CapabilityActivationError("body_proportion_analysis_untrusted")
             return raw_receipt
+
+        # Official Character Card stage jobs must arrive with the frozen
+        # refresh context.  The direct analysis-only smoke seam remains able
+        # to analyze an ephemeral envelope, but no candidate may fall back to
+        # per-request analysis.
+        if (
+            metadata.get("professional_character_card_candidate_index") is not None
+            or "professional_body_refresh_analysis_context" in metadata
+        ):
+            raise CapabilityActivationError("body_proportion_analysis_context_missing")
 
         internal_assets = list(getattr(request, "body_source_analysis_assets", []) or [])
         if not internal_assets:

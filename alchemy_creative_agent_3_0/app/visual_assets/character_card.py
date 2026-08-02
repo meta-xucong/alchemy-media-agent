@@ -37,6 +37,7 @@ from .body_silhouette_source_standard import (
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
 )
+from .body_proportion_evidence_profile import BodyRefreshAnalysisContext
 from .expression_model_card_framing import compose_expression_model_card_enhanced_summary
 
 
@@ -1071,10 +1072,18 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None
     generation_channel: Literal["provider", "mcp"] = "provider"
     body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None
+    body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None
     mcp_handoff_id: str | None = None
     prior_review_repair: dict[str, Any] | None = None
     review_only_resume: bool = False
     candidate_count: Literal[3] = 3
+
+    @field_validator("body_refresh_analysis_context", mode="before")
+    @classmethod
+    def reject_untrusted_analysis_context(cls, value: Any) -> Any:
+        if value is None or isinstance(value, BodyRefreshAnalysisContext):
+            return value
+        raise ValueError("body_refresh_analysis_context_untrusted")
 
     @field_validator("project_id", "people_asset_id", "card_version_id", "user_intent")
     @classmethod
@@ -1105,6 +1114,8 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("Expression Set does not accept body source admission")
             if self.body_refresh_attempt_identity is not None:
                 raise ValueError("Expression Set does not accept body refresh attempt identity")
+            if self.body_refresh_analysis_context is not None:
+                raise ValueError("Expression Set does not accept Body analysis context")
             if self.body_refresh_presentation_intent is not None:
                 raise ValueError("Expression Set does not accept body refresh presentation intent")
         else:
@@ -1149,6 +1160,23 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                     raise ValueError("Body Silhouette source admission class mismatch")
                 if self.body_source_admission.face_reference_output_ids != self.reference_output_ids:
                     raise ValueError("Body Silhouette source admission face chain mismatch")
+            if (
+                self.body_refresh_source_mode == "reference_assisted"
+                and self.generation_channel == "mcp"
+            ):
+                if self.body_refresh_analysis_context is None:
+                    raise ValueError("body_proportion_analysis_context_missing")
+                if self.body_refresh_attempt_identity is None:
+                    raise ValueError("body_proportion_analysis_attempt_missing")
+                if (
+                    self.body_refresh_analysis_context.attempt_id
+                    != self.body_refresh_attempt_identity.attempt_id
+                    or self.body_refresh_analysis_context.append_only_revision
+                    != self.body_refresh_attempt_identity.append_only_revision
+                ):
+                    raise ValueError("body_proportion_analysis_context_attempt_mismatch")
+            elif self.body_refresh_analysis_context is not None:
+                raise ValueError("body_proportion_analysis_context_source_mode_invalid")
         return self
 
 
@@ -1895,6 +1923,7 @@ class CharacterCardStageHost(Protocol):
         request: BodySilhouettePublicRequest | None = None,
         generation_channel: str = "provider",
         body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
     ) -> CharacterCardStageResult:
         ...
 
@@ -2543,6 +2572,8 @@ class CharacterCardPreparationService:
         user_intent: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
+        body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
     ) -> CharacterCardStageResult:
         """Append a pending Body Silhouette refresh without replacing active slots."""
 
@@ -2566,6 +2597,20 @@ class CharacterCardPreparationService:
             strict_body_source_repair=True,
         )
         body_source_admission = request.source_admission()
+        if source_class == "brain_inferred" and body_refresh_analysis_context is not None:
+            raise ValueError("body_proportion_analysis_context_source_mode_invalid")
+        if source_class == "observed" and generation_channel == "mcp":
+            if body_refresh_analysis_context is None:
+                raise ValueError("body_proportion_analysis_context_missing")
+            if body_refresh_attempt_identity is None:
+                raise ValueError("body_proportion_analysis_attempt_missing")
+            if (
+                body_refresh_analysis_context.attempt_id
+                != body_refresh_attempt_identity.attempt_id
+                or body_refresh_analysis_context.append_only_revision
+                != body_refresh_attempt_identity.append_only_revision
+            ):
+                raise ValueError("body_proportion_analysis_context_attempt_mismatch")
         attempts: list[CharacterCardCandidateAttempt] = []
         winners: dict[str, str] = {}
         formal_slot_receipts: dict[str, FormalSlotReceipt] = {}
@@ -2583,7 +2628,7 @@ class CharacterCardPreparationService:
                 "resume_available": False,
             }
         )
-        body_refresh_attempt_identity = BodyRefreshAttemptIdentity.create(
+        body_refresh_attempt_identity = body_refresh_attempt_identity or BodyRefreshAttemptIdentity.create(
             append_only_revision=card.append_only_revision + 1
         )
         refresh_slots: dict[str, CharacterCardSlot] = {}
@@ -2605,6 +2650,7 @@ class CharacterCardPreparationService:
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 body_refresh_attempt_identity=body_refresh_attempt_identity,
+                body_refresh_analysis_context=body_refresh_analysis_context,
                 attempts=attempts,
                 candidate_lifecycle_checkpoints=candidate_lifecycle_checkpoints,
             )
@@ -2727,6 +2773,7 @@ class CharacterCardPreparationService:
         consent_provenance_id: str | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
         review_only_resume: bool = False,
         attempts: list[CharacterCardCandidateAttempt],
         candidate_lifecycle_checkpoints: list[CharacterCardCandidateLifecycleCheckpoint] | None = None,
@@ -2797,6 +2844,7 @@ class CharacterCardPreparationService:
                 consent_provenance_id=consent_provenance_id,
                 generation_channel=generation_channel,
                 body_refresh_attempt_identity=body_refresh_attempt_identity,
+                body_refresh_analysis_context=body_refresh_analysis_context,
                 mcp_handoff_id=self._resumable_mcp_handoff_id(
                     card,
                     module=module,

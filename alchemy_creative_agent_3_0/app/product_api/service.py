@@ -49,6 +49,7 @@ from ..visual_assets import (
 from ..visual_assets.body_silhouette_source_standard import body_silhouette_mcp_materialization_channel_contract
 from ..visual_assets.character_card import BodyRefreshPresentationIntent
 from ..visual_assets.body_proportion_evidence_profile import (
+    BodyRefreshAnalysisContext,
     BodySourceAnalysisAssetEnvelope,
     BodySourceAnalysisProvider,
     create_configured_body_source_analysis_provider,
@@ -970,6 +971,7 @@ class V3ProductApiService:
         professional_character_card_body_refresh_contract_required: bool = False,
         professional_character_card_body_source_admission: dict[str, Any] | None = None,
         professional_character_card_body_refresh_presentation_intent: dict[str, Any] | None = None,
+        professional_character_card_body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
         professional_character_card_candidate_index: int | None = None,
         professional_character_card_candidate_count: int | None = None,
         professional_character_card_attempt_round: int = 1,
@@ -982,6 +984,16 @@ class V3ProductApiService:
             trusted_professional_anchor_preparation or trusted_professional_character_card
         ):
             raise ValueError("mcp_generation_channel_requires_trusted_professional_stage")
+        if professional_character_card_body_refresh_analysis_context is not None and not isinstance(
+            professional_character_card_body_refresh_analysis_context,
+            BodyRefreshAnalysisContext,
+        ):
+            raise ValueError("body_refresh_analysis_context_untrusted")
+        if (
+            professional_character_card_body_refresh_analysis_context is not None
+            and professional_character_card_body_refresh_source_mode != "reference_assisted"
+        ):
+            raise ValueError("body_proportion_analysis_context_source_mode_invalid")
         self._reject_legacy_professional_mode_forward_write(
             create_request,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
@@ -1089,6 +1101,13 @@ class V3ProductApiService:
                         strict_refresh=bool(source_mode_contract),
                     )
                 )
+                if (
+                    generation_channel == "mcp"
+                    and source_mode_contract.get("professional_character_card_body_refresh_source_mode")
+                    == "reference_assisted"
+                    and professional_character_card_body_refresh_analysis_context is None
+                ):
+                    raise ValueError("body_proportion_analysis_context_missing")
             else:
                 source_mode_contract = {}
                 presentation_intent_contract = {}
@@ -1112,6 +1131,13 @@ class V3ProductApiService:
                 "professional_character_card_source_class": professional_character_card_source_class,
                 **source_mode_contract,
                 **presentation_intent_contract,
+                **(
+                    {
+                        "professional_body_refresh_analysis_context": professional_character_card_body_refresh_analysis_context.safe_metadata()
+                    }
+                    if professional_character_card_body_refresh_analysis_context is not None
+                    else {}
+                ),
                 "professional_character_card_attempt_round": max(
                     1, int(professional_character_card_attempt_round)
                 ),
@@ -1354,6 +1380,7 @@ class V3ProductApiService:
         body_refresh_contract_required: bool = False,
         body_source_admission: dict[str, Any] | None = None,
         body_refresh_presentation_intent: dict[str, Any] | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
         attempt_round: int = 1,
@@ -1375,6 +1402,7 @@ class V3ProductApiService:
             professional_character_card_body_refresh_contract_required=body_refresh_contract_required,
             professional_character_card_body_source_admission=body_source_admission,
             professional_character_card_body_refresh_presentation_intent=body_refresh_presentation_intent,
+            professional_character_card_body_refresh_analysis_context=body_refresh_analysis_context,
             professional_character_card_attempt_round=attempt_round,
             generation_channel=generation_channel,
             mcp_operation_id=mcp_operation_id,
@@ -1809,6 +1837,37 @@ class V3ProductApiService:
             except ValidationError as exc:
                 raise ValueError("body_proportion_analysis_source_invalid") from exc
         return envelopes
+
+    def prepare_body_refresh_analysis_context(
+        self,
+        *,
+        body_source_admission: dict[str, Any],
+        source_class: str,
+        face_reference_output_ids: list[str],
+        attempt_id: str,
+        append_only_revision: int,
+    ) -> BodyRefreshAnalysisContext:
+        """Analyze one server-resolved Body binding before candidate fan-out."""
+
+        envelopes = self._professional_character_card_body_source_analysis_assets(
+            body_source_admission,
+            source_class=source_class,
+            face_reference_output_ids=face_reference_output_ids,
+        )
+        if len(envelopes) != 5:
+            raise ValueError("body_refresh_analysis_source_count_invalid")
+        analyzer = self.scenario_runtime.body_proportion_source_analyzer
+        profile = self.scenario_runtime.body_proportion_source_analysis_adapter.analyze(
+            [asset.to_analyzer_record() for asset in envelopes],
+            source_mode="reference_assisted",
+            analyzer=analyzer,
+        )
+        return BodyRefreshAnalysisContext.from_analysis(
+            attempt_id=attempt_id,
+            append_only_revision=append_only_revision,
+            admitted_body_assets=envelopes,
+            profile=profile,
+        )
 
     @staticmethod
     def _professional_character_card_provider_reference_output_ids(
@@ -9660,6 +9719,7 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest,
         *,
         trusted_capability_plan_reuse: bool | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
     ) -> dict[str, Any] | ScenarioRuntimeRequest:
         self._prepare_ecommerce_creative_context(request)
         metadata = self._runtime_metadata_without_retired_ecommerce_execution(request)
@@ -9679,14 +9739,18 @@ class V3ProductApiService:
             for item in group
             if isinstance(item, dict)
         ]
-        body_source_analysis_assets = self._professional_character_card_body_source_analysis_assets(
-            metadata.get("professional_character_card_body_source_admission"),
-            source_class=metadata.get("professional_character_card_source_class"),
-            face_reference_output_ids=[
-                str(item).strip()
-                for item in (metadata.get("professional_character_card_reference_output_ids") or [])
-                if str(item).strip()
-            ],
+        body_source_analysis_assets = (
+            []
+            if body_refresh_analysis_context is not None
+            else self._professional_character_card_body_source_analysis_assets(
+                metadata.get("professional_character_card_body_source_admission"),
+                source_class=metadata.get("professional_character_card_source_class"),
+                face_reference_output_ids=[
+                    str(item).strip()
+                    for item in (metadata.get("professional_character_card_reference_output_ids") or [])
+                    if str(item).strip()
+                ],
+            )
         )
         if frozen_anchor_references:
             uploaded_assets.extend(frozen_anchor_references)
@@ -9719,6 +9783,10 @@ class V3ProductApiService:
             "metadata": metadata,
             "trusted_capability_plan_reuse": trusted_reuse,
         }
+        if body_refresh_analysis_context is not None:
+            if not isinstance(body_refresh_analysis_context, BodyRefreshAnalysisContext):
+                raise ValueError("body_refresh_analysis_context_untrusted")
+            payload["body_refresh_analysis_context"] = body_refresh_analysis_context
         if body_source_analysis_assets:
             payload["body_source_analysis_assets"] = body_source_analysis_assets
         if isinstance(metadata.get("trusted_professional_anchor_view_decision_reuse"), dict):
@@ -9826,6 +9894,7 @@ class V3ProductApiService:
             "professional_character_card_body_refresh_contract_required",
             "professional_character_card_body_refresh_presentation_intent",
             "professional_body_proportion_analysis_receipt",
+            "professional_body_refresh_analysis_context",
             "professional_character_card_reference_output_ids",
             "professional_character_card_body_source_admission",
             "generation_channel",
@@ -9842,6 +9911,7 @@ class V3ProductApiService:
             "professional_character_card_candidate_lifecycle_checkpoints",
             "professional_character_card_body_refresh_presentation_intent",
             "professional_body_proportion_analysis_receipt",
+            "professional_body_refresh_analysis_context",
         }
     )
 
