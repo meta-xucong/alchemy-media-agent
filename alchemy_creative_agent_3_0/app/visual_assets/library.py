@@ -11,6 +11,7 @@ the Visual Asset category or Standard Mode.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -25,6 +26,8 @@ from .character_card import (
     BODY_SLOT_KEYS,
     BodyRefreshAttemptIdentity,
     BodyRefreshPresentationIntent,
+    BodySilhouetteBackdropPresentationContract,
+    BodySilhouetteHairContinuityContract,
     BodySourceAdmission,
     BodySilhouettePublicRequest,
     CharacterCardPreparationService,
@@ -53,6 +56,11 @@ from .formal_slot_acceptance import (
     validate_formal_slot_receipt_for_activation,
 )
 from .body_proportion_evidence_profile import BodyRefreshAnalysisContext
+from .body_refresh_attempt_state import (
+    BodyRefreshAttemptState,
+    BodyRefreshAttemptStateError,
+    BodyRefreshAttemptStateStore,
+)
 
 
 VisualAssetType = Literal["people", "product", "scene", "brand"]
@@ -72,6 +80,33 @@ BindingSetState = Literal["valid", "empty", "blocked"]
 _RELEASED_ASSET_TYPES = frozenset({"people"})
 _PEOPLE_OWNED_CHANNELS = ("face_geometry", "face_feature_relationships", "same_person_continuity")
 _SAFE_STORAGE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def _body_refresh_candidate_operation_id(request: Any, candidate: Any) -> str:
+    """Return the server-owned operation identity stored in a private cursor.
+
+    Concrete Product API candidates carry this value.  The deterministic test
+    generator and older internal adapters may not, so the lifecycle derives the
+    same canonical token from the typed request rather than inventing a second
+    identity.  This helper never enters public metadata.
+    """
+
+    operation_id = str(getattr(candidate, "operation_id", "") or "").strip()
+    if operation_id:
+        return operation_id
+    operation_id = (
+        f"{request.people_asset_id}:{request.module}:{request.slot_key}:"
+        f"{request.candidate_index}"
+    )
+    attempt_identity = getattr(request, "body_refresh_attempt_identity", None)
+    attempt_id = str(getattr(attempt_identity, "attempt_id", "") or "").strip()
+    if request.module == "body_silhouette" and attempt_id:
+        attempt_digest = hashlib.sha256(attempt_id.encode("utf-8")).hexdigest()[:16]
+        operation_id = f"{operation_id}:refresh_attempt_{attempt_digest}"
+    attempt_round = int(getattr(request, "attempt_round", 1) or 1)
+    if attempt_round > 1:
+        operation_id = f"{operation_id}:round{attempt_round}"
+    return operation_id
 
 
 class _StrictLibraryModel(V3BaseModel):
@@ -811,11 +846,15 @@ class VisualAssetLibraryLifecycleService:
         root_source_resolver: Callable[[str], Any | None] | None = None,
         anchor_pack_host: LibraryAssetPreparationHost | None = None,
         character_card_stage_host: CharacterCardStageHost | None = None,
+        body_refresh_attempt_state_store: BodyRefreshAttemptStateStore | None = None,
     ) -> None:
         self.catalog = catalog
         self.root_source_resolver = root_source_resolver
         self.anchor_pack_host = anchor_pack_host
         self.character_card_stage_host = character_card_stage_host
+        self.body_refresh_attempt_state_store = body_refresh_attempt_state_store or BodyRefreshAttemptStateStore(
+            Path(".media_storage") / "v3_body_refresh_attempts"
+        )
 
     def create_draft(
         self,
@@ -1133,6 +1172,19 @@ class VisualAssetLibraryLifecycleService:
         if not callable(method):
             raise CharacterCardRuntimeUnavailable("character_card_body_refresh_unavailable")
         method_kwargs = {"asset": asset, "card": card, "request": body_request}
+        set_checkpoint_callback = None
+        set_formal_callback = None
+        old_candidate_callback = getattr(
+            self.character_card_stage_host,
+            "_body_refresh_candidate_checkpoint_callback",
+            None,
+        )
+        old_formal_callback = getattr(
+            self.character_card_stage_host,
+            "_body_refresh_formal_receipt_callback",
+            None,
+        )
+        checkpoint_state_enabled = False
         if generation_channel == "mcp":
             method_kwargs["generation_channel"] = "mcp"
         if generation_channel == "mcp" and body_request.source_class == "observed":
@@ -1172,11 +1224,98 @@ class VisualAssetLibraryLifecycleService:
             body_refresh_analysis_context = prepared_context
             method_kwargs["body_source_admission"] = admission
             method_kwargs["body_refresh_attempt_identity"] = attempt_identity
+            checkpoint_state_enabled = False
+            set_checkpoint_callback = getattr(
+                self.character_card_stage_host,
+                "set_body_refresh_candidate_checkpoint_callback",
+                None,
+            )
+            set_formal_callback = getattr(
+                self.character_card_stage_host,
+                "set_body_refresh_formal_receipt_callback",
+                None,
+            )
+            if not callable(set_checkpoint_callback) or not callable(set_formal_callback):
+                raise BodyRefreshAttemptStateError(
+                    "body refresh durable callbacks unavailable"
+                )
+            try:
+                self.body_refresh_attempt_state_store.begin(
+                    visual_asset_id=visual_asset_id,
+                    attempt_identity=attempt_identity,
+                    analysis_context=prepared_context,
+                    body_source_admission=admission,
+                    presentation_intent=body_refresh_presentation_intent
+                    or BodyRefreshPresentationIntent(),
+                    hair_continuity=BodySilhouetteHairContinuityContract(),
+                    backdrop=BodySilhouetteBackdropPresentationContract(),
+                    analyzer_call_count=1,
+                )
+                checkpoint_state_enabled = True
+            except BodyRefreshAttemptStateError:
+                raise
+
+            def checkpoint_reviewed_candidate(
+                request: Any,
+                candidate: Any,
+                review: Any,
+                review_status: str,
+            ) -> None:
+                if not checkpoint_state_enabled:
+                    return
+                candidate_output = str(getattr(candidate, "output_id", "") or "").strip()
+                if not candidate_output:
+                    raise BodyRefreshAttemptStateError("body refresh reviewed output binding missing")
+                try:
+                    review_receipt_digest = CharacterCardPreparationService.body_refresh_review_receipt_digest(
+                        candidate,
+                        review,
+                    )
+                except ValueError as exc:
+                    raise BodyRefreshAttemptStateError(
+                        "body refresh reviewed shared receipt missing"
+                    ) from exc
+                candidate_operation_id = _body_refresh_candidate_operation_id(request, candidate)
+                self.body_refresh_attempt_state_store.checkpoint_reviewed_candidate(
+                    self.body_refresh_attempt_state_store.load(
+                        visual_asset_id=visual_asset_id,
+                        attempt_id=attempt_identity.attempt_id,
+                    ),
+                    slot_key=str(request.slot_key),
+                    candidate_index=int(request.candidate_index),
+                    attempt_round=int(getattr(request, "attempt_round", 1) or 1),
+                    candidate_digest=hashlib.sha256(candidate_output.encode("utf-8")).hexdigest(),
+                    review_status=review_status,
+                    review_receipt_digest=review_receipt_digest,
+                    operation_id=candidate_operation_id,
+                    output_id=candidate_output,
+                )
+
+            set_checkpoint_callback(checkpoint_reviewed_candidate)
+
+            def record_formal_receipt(receipt: Any) -> None:
+                if not checkpoint_state_enabled:
+                    return
+                self.body_refresh_attempt_state_store.record_formal_receipt(
+                    self.body_refresh_attempt_state_store.load(
+                        visual_asset_id=visual_asset_id,
+                        attempt_id=attempt_identity.attempt_id,
+                    ),
+                    formal_receipt=receipt,
+                )
+
+            set_formal_callback(record_formal_receipt)
         if body_refresh_presentation_intent is not None:
             method_kwargs["body_refresh_presentation_intent"] = body_refresh_presentation_intent
         if body_refresh_analysis_context is not None:
             method_kwargs["body_refresh_analysis_context"] = body_refresh_analysis_context
-        result = method(**method_kwargs)
+        try:
+            result = method(**method_kwargs)
+        finally:
+            if callable(set_checkpoint_callback):
+                set_checkpoint_callback(old_candidate_callback)
+            if callable(set_formal_callback):
+                set_formal_callback(old_formal_callback)
         if getattr(result, "card", None) is None:
             raise ValueError("character_card_stage_result_missing")
         if getattr(result, "status", None) == "review":
@@ -1210,7 +1349,242 @@ class VisualAssetLibraryLifecycleService:
                         update={"character_card": verified_card, "updated_at": _utc_now()}
                     )
                 )
+            self._record_body_refresh_cross_view_parity_after_review(
+                visual_asset_id=visual_asset_id,
+                saved_asset=saved_asset,
+            )
         return saved_asset
+
+    def resume_character_card_body_silhouette(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        body_request: BodySilhouettePublicRequest,
+        generation_channel: Literal["mcp"] = "mcp",
+    ) -> VisualAsset:
+        """Resume one server-owned Body attempt from its durable candidate cursor."""
+
+        if generation_channel != "mcp" or body_request.source_class != "observed":
+            raise BodyRefreshAttemptStateError("body refresh durable resume requires observed MCP")
+        state = self.body_refresh_attempt_state_store.load_current(visual_asset_id=visual_asset_id)
+        requested_ids = list(body_request.body_reference_asset_ids or [])
+        if requested_ids != list(state.body_source_admission.body_evidence_ids):
+            raise BodyRefreshAttemptStateError("body refresh resume source admission mismatch")
+        if body_request.body_reference_asset_id not in requested_ids:
+            raise BodyRefreshAttemptStateError("body refresh resume primary source mismatch")
+        formal_only_resume = (
+            state.status == "awaiting_slot_acceptance"
+            and state.next_slot_key is not None
+            and state.next_candidate_index is None
+        )
+        if state.next_slot_key is None or (
+            state.next_candidate_index is None and not formal_only_resume
+        ):
+            raise BodyRefreshAttemptStateError("body refresh attempt has no candidate cursor")
+        if self.character_card_stage_host is None:
+            raise CharacterCardRuntimeUnavailable("character_card_body_refresh_unavailable")
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        current_face_reference_output_ids = [
+            str(asset.character_card.face_slots[key].output_id or "").strip()
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ]
+        if current_face_reference_output_ids != list(
+            state.body_source_admission.face_reference_output_ids
+        ):
+            raise BodyRefreshAttemptStateError(
+                "body refresh resume face reference chain mismatch"
+            )
+        method = getattr(self.character_card_stage_host, "resume_body_silhouette", None)
+        if not callable(method):
+            raise CharacterCardRuntimeUnavailable("body_refresh_durable_resume_unavailable")
+        set_checkpoint_callback = getattr(
+            self.character_card_stage_host,
+            "set_body_refresh_candidate_checkpoint_callback",
+            None,
+        )
+        set_formal_callback = getattr(
+            self.character_card_stage_host,
+            "set_body_refresh_formal_receipt_callback",
+            None,
+        )
+        if not callable(set_checkpoint_callback) or not callable(set_formal_callback):
+            raise BodyRefreshAttemptStateError(
+                "body refresh durable callbacks unavailable"
+            )
+        old_candidate_callback = getattr(
+            self.character_card_stage_host,
+            "_body_refresh_candidate_checkpoint_callback",
+            None,
+        )
+        old_formal_callback = getattr(
+            self.character_card_stage_host,
+            "_body_refresh_formal_receipt_callback",
+            None,
+        )
+
+        def checkpoint_reviewed_candidate(
+            request: Any,
+            candidate: Any,
+            review: Any,
+            review_status: str,
+        ) -> None:
+            candidate_output = str(getattr(candidate, "output_id", "") or "").strip()
+            if not candidate_output:
+                raise BodyRefreshAttemptStateError("body refresh reviewed output binding missing")
+            try:
+                review_receipt_digest = CharacterCardPreparationService.body_refresh_review_receipt_digest(
+                    candidate,
+                    review,
+                )
+            except ValueError as exc:
+                raise BodyRefreshAttemptStateError(
+                    "body refresh reviewed shared receipt missing"
+                ) from exc
+            candidate_operation_id = _body_refresh_candidate_operation_id(request, candidate)
+            self.body_refresh_attempt_state_store.checkpoint_reviewed_candidate(
+                self.body_refresh_attempt_state_store.load(
+                    visual_asset_id=visual_asset_id,
+                    attempt_id=state.attempt_identity.attempt_id,
+                ),
+                slot_key=str(request.slot_key),
+                candidate_index=int(request.candidate_index),
+                attempt_round=int(getattr(request, "attempt_round", 1) or 1),
+                candidate_digest=hashlib.sha256(candidate_output.encode("utf-8")).hexdigest(),
+                review_status=review_status,
+                review_receipt_digest=review_receipt_digest,
+                operation_id=candidate_operation_id,
+                output_id=candidate_output,
+            )
+
+        set_checkpoint_callback(checkpoint_reviewed_candidate)
+
+        def record_formal_receipt(receipt: Any) -> None:
+            self.body_refresh_attempt_state_store.record_formal_receipt(
+                self.body_refresh_attempt_state_store.load(
+                    visual_asset_id=visual_asset_id,
+                    attempt_id=state.attempt_identity.attempt_id,
+                ),
+                formal_receipt=receipt,
+            )
+
+        set_formal_callback(record_formal_receipt)
+        try:
+            result = method(
+                asset=asset,
+                card=asset.character_card,
+                request=body_request,
+                generation_channel="mcp",
+                body_refresh_analysis_context=state.analysis_context,
+                body_source_admission=state.body_source_admission,
+                body_refresh_attempt_identity=state.attempt_identity,
+                body_refresh_presentation_intent=state.presentation_intent,
+                resume_slot_key=state.next_slot_key,
+                resume_candidate_index=state.next_candidate_index,
+                formal_only_resume=formal_only_resume,
+                prior_reviewed_candidate_checkpoints=list(state.candidate_checkpoints),
+            )
+        finally:
+            if callable(set_checkpoint_callback):
+                set_checkpoint_callback(old_candidate_callback)
+            if callable(set_formal_callback):
+                set_formal_callback(old_formal_callback)
+        if getattr(result, "card", None) is None:
+            raise ValueError("character_card_stage_result_missing")
+        if getattr(result, "status", None) not in {"review", "blocked"}:
+            raise CharacterCardRuntimeUnavailable("character_card_stage_status_invalid")
+        saved = self.catalog.save(
+            asset.model_copy(update={"character_card": result.card, "updated_at": _utc_now()})
+        )
+        if getattr(result, "status", None) == "review" or getattr(
+            result, "formal_slot_receipts", {}
+        ):
+            reloaded_asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+            verified_card = self._mark_body_refresh_formal_receipts_after_projection(
+                reloaded_asset.character_card
+            )
+            if verified_card != reloaded_asset.character_card:
+                saved = self.catalog.save(
+                    reloaded_asset.model_copy(
+                        update={"character_card": verified_card, "updated_at": _utc_now()}
+                    )
+                )
+        if getattr(result, "status", None) == "review":
+            self._record_body_refresh_cross_view_parity_after_review(
+                visual_asset_id=visual_asset_id,
+                saved_asset=saved,
+            )
+        return saved
+
+    def _record_body_refresh_cross_view_parity_after_review(
+        self,
+        *,
+        visual_asset_id: str,
+        saved_asset: VisualAsset,
+    ) -> None:
+        """Project the existing Character Card parity result into private state."""
+
+        try:
+            state = self.body_refresh_attempt_state_store.load_current(
+                visual_asset_id=visual_asset_id,
+            )
+        except BodyRefreshAttemptStateError as exc:
+            # Legacy ordinary/inference-first lifecycle calls do not own the
+            # reference-assisted durable attempt store.  They retain their
+            # historical card result; only a real durable attempt can be
+            # projected to pending refresh.
+            if str(exc) in {
+                "body refresh attempt state missing",
+                "body refresh current pointer missing",
+            }:
+                return
+            raise
+        if state.status != "awaiting_cross_view":
+            raise BodyRefreshAttemptStateError(
+                f"body refresh formal review did not reach cross-view boundary: {state.status}"
+            )
+        card = saved_asset.character_card
+        if card.body_silhouette_refresh_version_id != state.attempt_identity.attempt_id:
+            raise BodyRefreshAttemptStateError(
+                "body refresh cross-view attempt binding mismatch"
+            )
+        if set(card.body_silhouette_refresh_slots) != set(BODY_SLOT_KEYS):
+            raise BodyRefreshAttemptStateError(
+                "body refresh cross-view formal slots missing"
+            )
+        receipt_payload: list[dict[str, Any]] = []
+        for slot_key in BODY_SLOT_KEYS:
+            slot = card.body_silhouette_refresh_slots[slot_key]
+            if slot.state != "winner_selected" or slot.formal_slot_receipt is None:
+                raise BodyRefreshAttemptStateError(
+                    "body refresh cross-view formal slot invalid"
+                )
+            receipt = validate_formal_slot_receipt_for_activation(
+                FormalSlotReceipt.model_validate(slot.formal_slot_receipt)
+            )
+            receipt_payload.append(
+                {
+                    "slot_key": slot_key,
+                    "winner_output_id": receipt.winner_output_id,
+                    "receipt": receipt.model_dump(mode="json"),
+                }
+            )
+        parity_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "attempt_id": state.attempt_identity.attempt_id,
+                    "body_refresh_version_id": card.body_silhouette_refresh_version_id,
+                    "formal_receipts": receipt_payload,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.body_refresh_attempt_state_store.record_cross_view_parity(
+            state,
+            parity_digest=parity_digest,
+        )
 
     @staticmethod
     def _expression_mcp_resume_requires_review_only(

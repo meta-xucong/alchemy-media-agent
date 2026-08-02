@@ -384,6 +384,14 @@ class _LibraryOwnedBodyHost(ProductApiAnchorPackPreparationHost):
         )
         self.prepared_admissions: list[BodySourceAdmission] = []
 
+    def set_body_refresh_candidate_checkpoint_callback(self, callback: Any | None) -> None:
+        super().set_body_refresh_candidate_checkpoint_callback(callback)
+        self.preparation.candidate_checkpoint_callback = callback
+
+    def set_body_refresh_formal_receipt_callback(self, callback: Any | None) -> None:
+        super().set_body_refresh_formal_receipt_callback(callback)
+        self.preparation.formal_receipt_callback = callback
+
     def refresh_body_silhouette(
         self,
         *,

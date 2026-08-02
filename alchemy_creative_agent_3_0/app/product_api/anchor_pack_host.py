@@ -58,6 +58,7 @@ from ..visual_assets.character_card import (
     CharacterCardCandidateLifecycleCheckpoint,
     CharacterCardCandidateRequest,
     CharacterCardCandidateResult,
+    CharacterCardRuntimeUnavailable,
     CharacterCardFailureEvent,
     CharacterCardPreparationService,
     CharacterCardSharedRuntimeReceipt,
@@ -188,6 +189,8 @@ class ProductApiAnchorPackPreparationHost:
         self._character_card_reviews: dict[str, AnchorReviewDecision] = {}
         self._character_card_retry_counts: dict[tuple[str, str], int] = {}
         self._identity_metric_provider: Any | None = None
+        self._body_refresh_candidate_checkpoint_callback: Any | None = None
+        self._body_refresh_formal_receipt_callback: Any | None = None
         self._orchestrator = AnchorPackPreparationService(
             generator=self,
             reviewer=self,
@@ -195,6 +198,16 @@ class ProductApiAnchorPackPreparationHost:
         )
 
     production_shared_runtime = True
+
+    def set_body_refresh_candidate_checkpoint_callback(self, callback: Any | None) -> None:
+        """Install the lifecycle-owned durable cursor callback."""
+
+        self._body_refresh_candidate_checkpoint_callback = callback
+
+    def set_body_refresh_formal_receipt_callback(self, callback: Any | None) -> None:
+        """Install the lifecycle-owned formal receipt persistence callback."""
+
+        self._body_refresh_formal_receipt_callback = callback
 
     def prepare(
         self,
@@ -1314,6 +1327,9 @@ class ProductApiAnchorPackPreparationHost:
         body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
         body_source_admission: BodySourceAdmission | None = None,
         body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
+        resume_slot_key: str | None = None,
+        resume_candidate_index: int | None = None,
+        prior_reviewed_candidates: dict[tuple[str, int], CharacterCardCandidateAttempt] | None = None,
     ) -> CharacterCardStageResult:
         if request is None:
             raise ValueError("character_card_body_source_required")
@@ -1368,7 +1384,14 @@ class ProductApiAnchorPackPreparationHost:
         user_intent = self._character_card_body_stage_intent(asset)
         if not user_intent:
             raise ValueError("character_card_body_intent_missing")
-        preparation = CharacterCardPreparationService(generator=self, reviewer=self)
+        preparation = CharacterCardPreparationService(
+            generator=self,
+            reviewer=self,
+        )
+        # Install callbacks after construction so older injected preparation
+        # test seams that only accept generator/reviewer remain compatible.
+        preparation.candidate_checkpoint_callback = self._body_refresh_candidate_checkpoint_callback
+        preparation.formal_receipt_callback = self._body_refresh_formal_receipt_callback
         result = preparation.refresh_body_silhouette(
             card,
             face_reference_output_ids=face_reference_output_ids,
@@ -1382,8 +1405,175 @@ class ProductApiAnchorPackPreparationHost:
             body_refresh_presentation_intent=body_refresh_presentation_intent,
             body_refresh_analysis_context=body_refresh_analysis_context,
             body_refresh_attempt_identity=body_refresh_attempt_identity,
+            resume_slot_key=resume_slot_key,
+            resume_candidate_index=resume_candidate_index,
+            prior_reviewed_candidates=prior_reviewed_candidates,
         )
         return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
+
+    def resume_body_silhouette(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        request: Any,
+        generation_channel: str = "mcp",
+        body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext,
+        body_source_admission: BodySourceAdmission,
+        body_refresh_attempt_identity: BodyRefreshAttemptIdentity,
+        resume_slot_key: str,
+        resume_candidate_index: int | None,
+        formal_only_resume: bool = False,
+        prior_reviewed_candidate_checkpoints: list[Any] | None = None,
+    ) -> CharacterCardStageResult:
+        """Resume from the lifecycle cursor without rebuilding candidate one."""
+        face_reference_output_ids = [
+            str(card.face_slots[key].output_id or "").strip()
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ]
+        user_intent = self._character_card_body_stage_intent(asset)
+        prior_reviewed_candidates: dict[tuple[str, int], CharacterCardCandidateAttempt] = {}
+        for checkpoint in prior_reviewed_candidate_checkpoints or []:
+            checkpoint_slot = str(getattr(checkpoint, "slot_key", "") or "").strip()
+            checkpoint_index = int(getattr(checkpoint, "candidate_index", 0) or 0)
+            checkpoint_attempt_round = int(getattr(checkpoint, "attempt_round", 0) or 0)
+            checkpoint_operation_id = str(getattr(checkpoint, "operation_id", "") or "").strip()
+            checkpoint_output_id = str(getattr(checkpoint, "output_id", "") or "").strip()
+            if checkpoint_slot not in {"body.front_full", "body.side_full", "body.rear_full"}:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_slot_invalid")
+            if not 1 <= checkpoint_index <= 3:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_index_invalid")
+            if checkpoint_attempt_round < 1:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_attempt_round_invalid")
+            if not checkpoint_operation_id or not checkpoint_output_id:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_identity_missing")
+            prior_request = CharacterCardCandidateRequest(
+                project_id=f"visual_asset_{asset.visual_asset_id}",
+                people_asset_id=str(asset.visual_asset_id),
+                card_version_id=card.card_version_id,
+                module="body_silhouette",
+                slot_key=checkpoint_slot,  # type: ignore[arg-type]
+                candidate_index=checkpoint_index,
+                attempt_round=checkpoint_attempt_round,
+                reference_output_ids=face_reference_output_ids,
+                user_intent=user_intent,
+                source_class="observed",
+                body_source_admission=body_source_admission,
+                body_refresh_source_mode="reference_assisted",
+                body_model_context="similar_person_body_reference_assisted_v1",
+                body_refresh_contract_required=True,
+                body_refresh_presentation_intent=body_refresh_presentation_intent,
+                consent_provenance_id=getattr(asset.root_source_provenance, "consent_reference", None),
+                generation_channel="mcp",
+                body_refresh_attempt_identity=body_refresh_attempt_identity,
+                body_refresh_analysis_context=body_refresh_analysis_context,
+            )
+            expected_operation_id = self._character_card_candidate_mcp_operation_id(prior_request)
+            if checkpoint_operation_id != expected_operation_id:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_operation_mismatch")
+            operation_id = checkpoint_operation_id
+            record = self._mcp_resume_character_card_stage_job_record(prior_request, operation_id)
+            if record is None or getattr(record, "generation_result", None) is None:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_record_missing")
+            record_metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+            if record_metadata.get("professional_body_refresh_analysis_context") != body_refresh_analysis_context.safe_metadata():
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_context_mismatch")
+            if record_metadata.get("professional_character_card_candidate_index") != checkpoint_index:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_index_mismatch")
+            if record_metadata.get("professional_character_card_candidate_count") != 3:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_count_mismatch")
+            if record_metadata.get("professional_character_card_attempt_round") != checkpoint_attempt_round:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_attempt_round_mismatch")
+            if record_metadata.get("professional_character_card_body_refresh_source_mode") != "reference_assisted":
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_source_mode_mismatch")
+            if record_metadata.get("professional_character_card_body_model_context") != (
+                "similar_person_body_reference_assisted_v1"
+            ):
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_model_context_mismatch")
+            if record_metadata.get("mcp_operation_id") != checkpoint_operation_id:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_operation_mismatch")
+            try:
+                record_admission = BodySourceAdmission.model_validate(
+                    record_metadata.get("professional_character_card_body_source_admission")
+                )
+            except Exception as exc:
+                raise CharacterCardRuntimeUnavailable(
+                    "body_refresh_prior_candidate_admission_missing"
+                ) from exc
+            if record_admission.body_evidence_ids != body_source_admission.body_evidence_ids:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_source_mismatch")
+            if record_admission.face_reference_output_ids != body_source_admission.face_reference_output_ids:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_face_chain_mismatch")
+            if record_admission.source_evidence_id_digest() != body_source_admission.source_evidence_id_digest():
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_source_digest_mismatch")
+            candidate, review = self._character_card_candidate_and_review(record.job_id, prior_request)
+            if str(candidate.output_id or "").strip() != checkpoint_output_id:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_output_mismatch")
+            if int(candidate.candidate_index) != checkpoint_index:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_index_mismatch")
+            if str(candidate.operation_id or "").strip() != checkpoint_operation_id:
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_operation_mismatch")
+            if str(getattr(review, "status", "")).strip() != str(
+                getattr(checkpoint, "review_status", "") or ""
+            ).strip():
+                raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_review_mismatch")
+            try:
+                reconstructed_review_digest = (
+                    CharacterCardPreparationService.body_refresh_review_receipt_digest(
+                        candidate,
+                        review,
+                    )
+                )
+            except ValueError as exc:
+                raise CharacterCardRuntimeUnavailable(
+                    "body_refresh_prior_candidate_review_receipt_missing"
+                ) from exc
+            if reconstructed_review_digest != checkpoint.review_receipt_digest:
+                raise CharacterCardRuntimeUnavailable(
+                    "body_refresh_prior_candidate_review_receipt_mismatch"
+                )
+            prior_reviewed_candidates[(checkpoint_slot, checkpoint_index)] = CharacterCardCandidateAttempt(
+                request=prior_request,
+                candidate=candidate,
+                review=review,
+            )
+        if formal_only_resume:
+            if resume_candidate_index is not None:
+                raise CharacterCardRuntimeUnavailable("body_refresh_formal_only_cursor_invalid")
+            preparation = CharacterCardPreparationService(
+                generator=self,
+                reviewer=self,
+            )
+            preparation.candidate_checkpoint_callback = self._body_refresh_candidate_checkpoint_callback
+            preparation.formal_receipt_callback = self._body_refresh_formal_receipt_callback
+            result = preparation.resume_body_silhouette_formal_only(
+                card=card,
+                slot_key=resume_slot_key,
+                body_refresh_attempt_identity=body_refresh_attempt_identity,
+                prior_reviewed_candidates=prior_reviewed_candidates,
+                consent_provenance_id=getattr(
+                    asset.root_source_provenance,
+                    "consent_reference",
+                    None,
+                ),
+            )
+            return self._attach_character_card_receipt(result, asset=asset, stage="body_silhouette")
+        if resume_candidate_index is None:
+            raise CharacterCardRuntimeUnavailable("body_refresh_candidate_cursor_missing")
+        return self.refresh_body_silhouette(
+            asset=asset,
+            card=card,
+            request=request,
+            generation_channel=generation_channel,
+            body_refresh_presentation_intent=body_refresh_presentation_intent,
+            body_refresh_analysis_context=body_refresh_analysis_context,
+            body_source_admission=body_source_admission,
+            body_refresh_attempt_identity=body_refresh_attempt_identity,
+            resume_slot_key=resume_slot_key,
+            resume_candidate_index=resume_candidate_index,
+            prior_reviewed_candidates=prior_reviewed_candidates,
+        )
 
     @staticmethod
     def _character_card_body_stage_intent(asset: Any) -> str:
@@ -2764,7 +2954,11 @@ class ProductApiAnchorPackPreparationHost:
             module=request.module,
             slot_key=request.slot_key,
             candidate_index=request.candidate_index,
-            operation_id=expression_operation_id or None,
+            operation_id=(
+                self._character_card_candidate_mcp_operation_id(request)
+                if request.module == "body_silhouette" and request.generation_channel == "mcp"
+                else expression_operation_id or None
+            ),
             round_id=expression_round_id,
             source_candidate_ids=[item.candidate_id for item in outputs],
             source_output_ids=list(request.reference_output_ids),

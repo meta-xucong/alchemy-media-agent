@@ -1996,9 +1996,13 @@ class CharacterCardPreparationService:
         *,
         generator: CharacterCardCandidateGenerator | None,
         reviewer: CharacterCardCandidateReviewer | None,
+        candidate_checkpoint_callback: Callable[[CharacterCardCandidateRequest, CharacterCardCandidateResult, Any, str], None] | None = None,
+        formal_receipt_callback: Callable[[FormalSlotReceipt], None] | None = None,
     ) -> None:
         self.generator = generator
         self.reviewer = reviewer
+        self.candidate_checkpoint_callback = candidate_checkpoint_callback
+        self.formal_receipt_callback = formal_receipt_callback
 
     @classmethod
     def _candidate_lifecycle_projection(
@@ -2521,6 +2525,8 @@ class CharacterCardPreparationService:
             )
             attempts.extend(slot_attempts)
             failures.extend(slot_failures)
+            if formal_receipt is not None and self.formal_receipt_callback is not None:
+                self.formal_receipt_callback(formal_receipt)
             if winner is None:
                 failure_code = slot_failures[-1].failure_code if slot_failures else f"{slot_key}_review_failed"
                 failure_details = self._latest_failure_details(slot_failures)
@@ -2622,6 +2628,9 @@ class CharacterCardPreparationService:
         body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None,
         body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
         body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
+        resume_slot_key: str | None = None,
+        resume_candidate_index: int | None = None,
+        prior_reviewed_candidates: dict[tuple[str, int], CharacterCardCandidateAttempt] | None = None,
     ) -> CharacterCardStageResult:
         """Append a pending Body Silhouette refresh without replacing active slots."""
 
@@ -2683,8 +2692,24 @@ class CharacterCardPreparationService:
         body_refresh_attempt_identity = body_refresh_attempt_identity or BodyRefreshAttemptIdentity.create(
             append_only_revision=card.append_only_revision + 1
         )
-        refresh_slots: dict[str, CharacterCardSlot] = {}
+        refresh_slots = self._validated_refresh_slots_for_resume(
+            card,
+            attempt_id=body_refresh_attempt_identity.attempt_id,
+            resume_slot_key=resume_slot_key,
+        )
+        for preserved_slot_key, preserved_slot in refresh_slots.items():
+            if preserved_slot.formal_slot_receipt is None or not preserved_slot.output_id:
+                raise ValueError("body_refresh_resume_formal_receipt_missing")
+            formal_slot_receipts[preserved_slot_key] = FormalSlotReceipt.model_validate(
+                preserved_slot.formal_slot_receipt
+            )
+            winners[preserved_slot_key] = preserved_slot.output_id
+        resume_started = resume_slot_key is None
         for slot_key in BODY_SLOT_KEYS:
+            if not resume_started:
+                if slot_key != resume_slot_key:
+                    continue
+                resume_started = True
             winner, slot_attempts, slot_failures, formal_receipt = self._prepare_slot(
                 card=generation_card,
                 module="body_silhouette",
@@ -2703,11 +2728,21 @@ class CharacterCardPreparationService:
                 generation_channel=generation_channel,
                 body_refresh_attempt_identity=body_refresh_attempt_identity,
                 body_refresh_analysis_context=body_refresh_analysis_context,
+                start_candidate_index_override=(
+                    resume_candidate_index if slot_key == resume_slot_key else None
+                ),
+                prior_reviewed_attempts={
+                    index: attempt
+                    for (prior_slot, index), attempt in (prior_reviewed_candidates or {}).items()
+                    if prior_slot == slot_key
+                },
                 attempts=attempts,
                 candidate_lifecycle_checkpoints=candidate_lifecycle_checkpoints,
             )
             attempts.extend(slot_attempts)
             failures.extend(slot_failures)
+            if formal_receipt is not None and self.formal_receipt_callback is not None:
+                self.formal_receipt_callback(formal_receipt)
             if winner is None:
                 failure_code = slot_failures[-1].failure_code if slot_failures else f"{slot_key}_review_failed"
                 failure_details = self._latest_failure_details(slot_failures)
@@ -2806,6 +2841,117 @@ class CharacterCardPreparationService:
             candidate_lifecycle_checkpoints=candidate_lifecycle_checkpoints,
         )
 
+    @staticmethod
+    def _validated_refresh_slots_for_resume(
+        card: CharacterCardState,
+        *,
+        attempt_id: str,
+        resume_slot_key: str | None,
+    ) -> dict[str, CharacterCardSlot]:
+        """Keep only formally verified slots from this exact refresh attempt.
+
+        A resume may continue at side/rear after an earlier slot was formally
+        accepted.  Refresh slots are visible card state, so they must be
+        validated against the attempt/version before being carried forward;
+        stale blocked slots are never treated as winners.
+        """
+
+        if resume_slot_key is None:
+            return {}
+        if resume_slot_key not in BODY_SLOT_KEYS:
+            raise ValueError("body_refresh_resume_slot_invalid")
+        if card.body_silhouette_refresh_slots and card.body_silhouette_refresh_version_id != attempt_id:
+            raise ValueError("body_refresh_resume_attempt_binding_mismatch")
+        target_index = BODY_SLOT_KEYS.index(resume_slot_key)
+        preserved: dict[str, CharacterCardSlot] = {}
+        for slot_key, slot in card.body_silhouette_refresh_slots.items():
+            if slot_key not in BODY_SLOT_KEYS:
+                raise ValueError("body_refresh_resume_slot_invalid")
+            slot_index = BODY_SLOT_KEYS.index(slot_key)
+            if slot_index >= target_index:
+                raise ValueError("body_refresh_resume_stale_slot_projection")
+            if slot.state != "winner_selected" or slot.formal_slot_receipt is None:
+                raise ValueError("body_refresh_resume_formal_receipt_missing")
+            receipt = validate_formal_slot_receipt_for_activation(
+                FormalSlotReceipt.model_validate(slot.formal_slot_receipt)
+            )
+            if (
+                receipt.module != "body_silhouette"
+                or receipt.slot_key != slot_key
+                or receipt.acceptance_mode != "standard_three_candidate"
+                or receipt.reviewed_candidate_count != CharacterCardPreparationService.CANDIDATE_COUNT
+                or receipt.winner_output_id != slot.output_id
+            ):
+                raise ValueError("body_refresh_resume_formal_receipt_invalid")
+            preserved[slot_key] = slot.model_copy(update={"formal_slot_receipt": receipt})
+        return preserved
+
+    def resume_body_silhouette_formal_only(
+        self,
+        card: CharacterCardState,
+        *,
+        slot_key: str,
+        body_refresh_attempt_identity: BodyRefreshAttemptIdentity,
+        prior_reviewed_candidates: dict[tuple[str, int], CharacterCardCandidateAttempt],
+        consent_provenance_id: str | None = None,
+    ) -> CharacterCardStageResult:
+        """Reconstitute formal acceptance without generating another candidate."""
+
+        if slot_key not in BODY_SLOT_KEYS:
+            raise ValueError("body_refresh_formal_only_slot_invalid")
+        if card.body_silhouette_refresh_version_id != body_refresh_attempt_identity.attempt_id:
+            raise ValueError("body_refresh_formal_only_attempt_binding_mismatch")
+        attempts = [
+            prior_reviewed_candidates[(slot_key, index)]
+            for index in range(1, self.CANDIDATE_COUNT + 1)
+            if (slot_key, index) in prior_reviewed_candidates
+        ]
+        if len(attempts) != self.CANDIDATE_COUNT:
+            raise ValueError("body_refresh_formal_only_reviewed_candidates_missing")
+        receipt = self._formal_body_slot_receipt(slot_key=slot_key, attempts=attempts)
+        winner_attempt = next(
+            attempt
+            for attempt in attempts
+            if attempt.candidate.output_id == receipt.winner_output_id
+        )
+        preserved = self._validated_refresh_slots_for_resume(
+            card,
+            attempt_id=body_refresh_attempt_identity.attempt_id,
+            resume_slot_key=slot_key,
+        )
+        if slot_key in preserved:
+            raise ValueError("body_refresh_formal_only_receipt_already_projected")
+        preserved[slot_key] = self._winner_slot(
+            module="body_silhouette",
+            slot_key=slot_key,
+            winner=winner_attempt.candidate,
+            source_class="observed",
+            consent_provenance_id=consent_provenance_id
+            or winner_attempt.request.consent_provenance_id,
+            formal_slot_receipt=receipt,
+        )
+        if self.formal_receipt_callback is not None:
+            self.formal_receipt_callback(receipt)
+        updated = card.model_copy(
+            update={
+                "body_silhouette_refresh_status": "blocked",
+                "body_silhouette_refresh_version_id": body_refresh_attempt_identity.attempt_id,
+                "body_silhouette_refresh_slots": preserved,
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_details": None,
+                "resume_available": False,
+            }
+        )
+        return CharacterCardStageResult(
+            status="blocked",
+            card=updated,
+            attempts=attempts,
+            winner_output_ids={slot_key: winner_attempt.candidate.output_id},
+            formal_slot_receipts={slot_key: receipt},
+        )
+
     def _prepare_slot(
         self,
         *,
@@ -2827,6 +2973,8 @@ class CharacterCardPreparationService:
         body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None = None,
         body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
         review_only_resume: bool = False,
+        start_candidate_index_override: int | None = None,
+        prior_reviewed_attempts: dict[int, CharacterCardCandidateAttempt] | None = None,
         attempts: list[CharacterCardCandidateAttempt],
         candidate_lifecycle_checkpoints: list[CharacterCardCandidateLifecycleCheckpoint] | None = None,
     ) -> tuple[
@@ -2854,6 +3002,10 @@ class CharacterCardPreparationService:
             generation_channel=generation_channel,
             review_only_resume=review_only_resume,
         )
+        if start_candidate_index_override is not None:
+            if type(start_candidate_index_override) is not int or not 1 <= start_candidate_index_override <= self.CANDIDATE_COUNT:
+                raise ValueError("body_refresh_resume_candidate_index_invalid")
+            start_candidate_index = start_candidate_index_override
         prior_review_repair: dict[str, Any] | None = self._resumable_review_repair_context(
             card,
             module=module,
@@ -2876,6 +3028,44 @@ class CharacterCardPreparationService:
                 ],
                 None,
             )
+        # A durable resume cursor starts generation at the next candidate, but
+        # formal acceptance still needs the already reviewed candidates from
+        # this slot.  Reconstitute those prior attempts before the new loop;
+        # they are evidence from the authoritative job/review chain, not new
+        # generator work and not a second acceptance implementation.
+        for prior_index in sorted(prior_reviewed_attempts or {}):
+            if prior_index >= start_candidate_index:
+                continue
+            prior_attempt = (prior_reviewed_attempts or {}).get(prior_index)
+            if prior_attempt is None:
+                continue
+            if (
+                prior_attempt.request.slot_key != slot_key
+                or prior_attempt.candidate.candidate_index != prior_index
+            ):
+                raise ValueError("body_refresh_prior_candidate_binding_mismatch")
+            lifecycle_checkpoints.append(
+                self._candidate_lifecycle_checkpoint(
+                    module=module,
+                    slot_key=slot_key,
+                    candidate_index=prior_index,
+                    lifecycle_phase="review",
+                    status="completed",
+                )
+            )
+            slot_attempts.append(prior_attempt)
+            if acceptance_core.accepts_review(prior_attempt.review):
+                passing.append((prior_attempt.candidate, prior_attempt.review))
+            else:
+                slot_failures.append(
+                    CharacterCardFailureEvent(
+                        module=module,
+                        slot_key=slot_key,  # type: ignore[arg-type]
+                        candidate_index=prior_index,
+                        attempt_round=attempt_round,
+                        failure_code="character_card_shared_review_failed",
+                    )
+                )
         for candidate_index in range(start_candidate_index, self.CANDIDATE_COUNT + 1):
             request = CharacterCardCandidateRequest(
                 project_id=project_id,
@@ -2907,6 +3097,33 @@ class CharacterCardPreparationService:
                 prior_review_repair=prior_review_repair,
                 review_only_resume=review_only_resume,
             )
+            prior_attempt = (prior_reviewed_attempts or {}).get(candidate_index)
+            if prior_attempt is not None:
+                if prior_attempt.request.slot_key != slot_key or prior_attempt.candidate.candidate_index != candidate_index:
+                    raise ValueError("body_refresh_prior_candidate_binding_mismatch")
+                lifecycle_checkpoints.append(
+                    self._candidate_lifecycle_checkpoint(
+                        module=module,
+                        slot_key=slot_key,
+                        candidate_index=candidate_index,
+                        lifecycle_phase="review",
+                        status="completed",
+                    )
+                )
+                slot_attempts.append(prior_attempt)
+                if acceptance_core.accepts_review(prior_attempt.review):
+                    passing.append((prior_attempt.candidate, prior_attempt.review))
+                else:
+                    slot_failures.append(
+                        CharacterCardFailureEvent(
+                            module=module,
+                            slot_key=slot_key,  # type: ignore[arg-type]
+                            candidate_index=candidate_index,
+                            attempt_round=attempt_round,
+                            failure_code="character_card_shared_review_failed",
+                        )
+                    )
+                continue
             try:
                 candidate = self.generator.generate(request)
             except AnchorCandidateUnavailable as exc:
@@ -3040,7 +3257,10 @@ class CharacterCardPreparationService:
             )
             attempt = CharacterCardCandidateAttempt(request=request, candidate=candidate, review=review)
             slot_attempts.append(attempt)
-            if acceptance_core.accepts_review(review):
+            review_passed = acceptance_core.accepts_review(review)
+            if self.candidate_checkpoint_callback is not None:
+                self.candidate_checkpoint_callback(request, candidate, review, "pass" if review_passed else "fail")
+            if review_passed:
                 passing.append((candidate, review))
             else:
                 repair_context = shared_review_repair_context_from_decision(
@@ -3360,6 +3580,40 @@ class CharacterCardPreparationService:
         if summary.passed != review_passed:
             raise ValueError("Expression formal shared review status does not match candidate review")
         return summary
+
+    @staticmethod
+    def body_refresh_review_receipt_digest(
+        candidate: CharacterCardCandidateResult,
+        review: Any,
+    ) -> str:
+        """Return the one safe digest used by durable Body checkpoints.
+
+        The digest is derived only from the typed candidate identity and the
+        canonical shared-review receipt.  It never includes provider payload,
+        pixels, paths, prompts, or raw Vision response data.
+        """
+
+        try:
+            shared_review = CharacterCardPreparationService._formal_shared_review_summary(review)
+        except ValueError as exc:
+            raise ValueError("body_refresh_shared_review_receipt_missing") from exc
+        payload = {
+            "candidate_id": candidate.candidate_id,
+            "candidate_index": candidate.candidate_index,
+            "module": candidate.module,
+            "output_id": candidate.output_id,
+            "slot_key": candidate.slot_key,
+            "review_status": str(getattr(review, "status", "")).strip(),
+            "shared_review": shared_review.model_dump(mode="json"),
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
     @staticmethod
     def _formal_requirement_summary(
