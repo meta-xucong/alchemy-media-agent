@@ -26,7 +26,11 @@ import pytest
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.assets import V3UploadedAssetStore
-from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.contracts import CreateCreativeJobRequest, ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api.service import (
+    ProductJobRecord,
+    V3ProductApiService,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profile import (
     BodyRefreshAnalysisContext,
     BodyProportionEvidenceProfile,
@@ -543,6 +547,243 @@ def test_visual_asset_library_entry_owns_one_analysis_before_nine_candidate_fano
     assert len({request.body_refresh_analysis_context.profile_digest for request in host.generator.requests}) == 1
     assert len({id(request.body_refresh_analysis_context) for request in host.generator.requests}) == 1
     assert len({request.body_refresh_attempt_identity.attempt_id for request in host.generator.requests}) == 1
+
+
+def _server_owned_body_admission(context: BodyRefreshAnalysisContext) -> dict[str, Any]:
+    return BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=[
+            f"body-source-{index}" for index in range(5)
+        ],
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=["face.front", "face.profile", "face.rear"],
+    ).model_dump(mode="json")
+
+
+def _fake_runtime_result(runtime: ScenarioRuntime, job_id: str) -> SimpleNamespace:
+    from alchemy_creative_agent_3_0.tests.test_v3_doc203_mcp_handoff_resume import (
+        _minimal_planning_result,
+    )
+
+    return SimpleNamespace(
+        status="planned",
+        scenario_resolution=runtime.scenario_registry.resolve(
+            {"scenario_id": "general_creative"}
+        ),
+        planning_result=_minimal_planning_result(job_id),
+        generation_result=None,
+        capability_run=None,
+        warnings=[],
+        metadata={},
+    )
+
+
+def test_product_api_stage_job_delivers_typed_context_to_plan_and_persists_only_safe_metadata(
+    tmp_path: Path,
+) -> None:
+    lifecycle, _host, service, body_asset_ids, analyzer = _library_refresh_fixture(tmp_path=tmp_path)
+    service._professional_character_card_reference_assets = lambda _ids: []  # type: ignore[method-assign]
+    face_ids = ["face.front", "face.profile", "face.rear"]
+    admission = service.resolve_body_refresh_source_admission(
+        primary_asset_id=body_asset_ids[0],
+        body_reference_asset_ids=body_asset_ids,
+        face_reference_output_ids=face_ids,
+    )
+    attempt = BodyRefreshAttemptIdentity.create(append_only_revision=4)
+    context = service.prepare_body_refresh_analysis_context(
+        body_source_admission=admission.model_dump(mode="json"),
+        source_class="observed",
+        face_reference_output_ids=face_ids,
+        attempt_id=attempt.attempt_id,
+        append_only_revision=attempt.append_only_revision,
+    )
+    runtime = service.scenario_runtime
+    plan_payloads: list[Any] = []
+
+    def fake_plan(payload: Any) -> Any:
+        plan_payloads.append(payload)
+        assert payload["body_refresh_analysis_context"] is context
+        return _fake_runtime_result(runtime, "job_body_context_plan")
+
+    runtime.plan_job = fake_plan  # type: ignore[method-assign]
+    status = service.create_professional_character_card_stage_job(
+        CreateCreativeJobRequest(
+            user_input="reference-assisted Body refresh",
+            scenario_selection={"scenario_id": "general_creative"},
+        ),
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        reference_output_ids=face_ids,
+        candidate_index=1,
+        source_class="observed",
+        body_refresh_source_mode="reference_assisted",
+        body_model_context="similar_person_body_reference_assisted_v1",
+        body_refresh_contract_required=True,
+        body_source_admission=admission.model_dump(mode="json"),
+        body_refresh_analysis_context=context,
+        generation_channel="mcp",
+        mcp_operation_id="body-context-plan-1",
+    )
+
+    assert status.status == ProductJobStatusValue.PLANNED
+    assert len(plan_payloads) == 1
+    record = service.get_job_record(status.job_id)
+    assert record is not None
+    safe_context = record.request.metadata["professional_body_refresh_analysis_context"]
+    assert safe_context == context.safe_metadata()
+    assert "allowed_bands" not in safe_context
+    assert "profile" not in safe_context
+    assert len(analyzer.calls) == 1
+    assert lifecycle is not None
+
+
+def test_anchor_product_api_generation_delivers_same_ephemeral_context_to_generate_runtime(
+    tmp_path: Path,
+) -> None:
+    _lifecycle, _host, service, _body_asset_ids, _analyzer = _library_refresh_fixture(tmp_path=tmp_path)
+    attempt, context = _profile_context()
+    admission = _server_owned_body_admission(context)
+    from alchemy_creative_agent_3_0.tests.test_v3_doc203_mcp_handoff_resume import (
+        _minimal_planning_result,
+    )
+
+    runtime = service.scenario_runtime
+    planning = _minimal_planning_result("job_body_context_generate")
+    resolution = runtime.scenario_registry.resolve({"scenario_id": "general_creative"})
+    request = CreateCreativeJobRequest(
+        user_input="reference-assisted Body refresh",
+        metadata={
+            "professional_mode": True,
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": "body.front_full",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_reference_output_ids": [
+                "face.front",
+                "face.profile",
+                "face.rear",
+            ],
+            "professional_character_card_source_class": "observed",
+            "professional_character_card_body_refresh_source_mode": "reference_assisted",
+            "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
+            "professional_character_card_body_source_admission": admission,
+            "professional_body_refresh_analysis_context": context.safe_metadata(),
+            "generation_channel": "mcp",
+            "mcp_operation_id": "body-context-generate-1",
+        },
+    )
+    service.job_store.save(
+        ProductJobRecord(
+            request=request,
+            status=ProductJobStatusValue.PLANNED,
+            job_id_value="job_body_context_generate",
+            planning_result=planning,
+            scenario_resolution=resolution,
+        )
+    )
+    generate_payloads: list[Any] = []
+
+    def fake_generate(payload: Any, **_kwargs: Any) -> Any:
+        generate_payloads.append(payload)
+        assert payload["body_refresh_analysis_context"] is context
+        return SimpleNamespace(
+            generation_result=None,
+            scenario_resolution=resolution,
+            capability_run=None,
+            warnings=[],
+            metadata={},
+        )
+
+    runtime.generate_job = fake_generate  # type: ignore[method-assign]
+    service._provider_strategy_for_generate = lambda *_args: "mcp_materialization"  # type: ignore[method-assign]
+
+    status = service.generate_professional_character_card_candidate(
+        "job_body_context_generate",
+        {"quality_mode": "strict", "metadata": {}},
+        body_refresh_analysis_context=context,
+    )
+
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert len(generate_payloads) == 1
+    assert service.get_job_record("job_body_context_generate").request.metadata[
+        "professional_body_refresh_analysis_context"
+    ] == context.safe_metadata()
+    assert attempt.attempt_id == context.attempt_id
+
+
+def test_product_api_generation_context_digest_mismatch_fails_before_runtime(
+    tmp_path: Path,
+) -> None:
+    _lifecycle, _host, service, _body_asset_ids, _analyzer = _library_refresh_fixture(tmp_path=tmp_path)
+    _attempt, context = _profile_context()
+    admission = _server_owned_body_admission(context)
+    from alchemy_creative_agent_3_0.tests.test_v3_doc203_mcp_handoff_resume import (
+        _minimal_planning_result,
+    )
+
+    runtime = service.scenario_runtime
+    resolution = runtime.scenario_registry.resolve({"scenario_id": "general_creative"})
+    service.job_store.save(
+        ProductJobRecord(
+            request=CreateCreativeJobRequest(
+                user_input="reference-assisted Body refresh",
+                metadata={
+                    "professional_character_card_stage": "body_silhouette",
+                    "professional_character_card_slot": "body.front_full",
+                    "professional_character_card_candidate_index": 1,
+                    "professional_character_card_candidate_count": 3,
+                    "professional_character_card_source_class": "observed",
+                    "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                    "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
+                    "professional_character_card_reference_output_ids": [
+                        "face.front",
+                        "face.profile",
+                        "face.rear",
+                    ],
+                    "generation_channel": "mcp",
+                    "professional_character_card_body_source_admission": admission,
+                    "professional_body_refresh_analysis_context": context.safe_metadata(),
+                },
+            ),
+            status=ProductJobStatusValue.PLANNED,
+            job_id_value="job_body_context_mismatch",
+            planning_result=_minimal_planning_result("job_body_context_mismatch"),
+            scenario_resolution=resolution,
+        )
+    )
+    runtime_calls = 0
+
+    def unexpected_generate(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal runtime_calls
+        runtime_calls += 1
+        raise AssertionError("runtime must not be reached after context mismatch")
+
+    runtime.generate_job = unexpected_generate  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="body_proportion_analysis_context_mismatch"):
+        service.generate_professional_character_card_candidate(
+            "job_body_context_mismatch",
+            {"quality_mode": "strict", "metadata": {}},
+            body_refresh_analysis_context=context.model_copy(
+                update={"profile_digest": "0" * 64}
+            ),
+        )
+    assert runtime_calls == 0
+
+
+def test_public_create_route_cannot_forge_body_refresh_context() -> None:
+    _attempt, context = _profile_context()
+    service = V3ProductApiService()
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_creative_job(
+            {
+                "user_input": "forged Body refresh",
+                "metadata": {
+                    "professional_body_refresh_analysis_context": context.safe_metadata()
+                },
+            }
+        )
 
 
 def test_visual_asset_library_rejects_caller_supplied_typed_context(tmp_path: Path) -> None:

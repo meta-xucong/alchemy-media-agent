@@ -1270,6 +1270,7 @@ class V3ProductApiService:
             self._runtime_request_payload(
                 create_request,
                 trusted_capability_plan_reuse=trusted_capability_plan_reuse,
+                body_refresh_analysis_context=professional_character_card_body_refresh_analysis_context,
             )
         )
         self._record_ecommerce_runtime_provenance(create_request, runtime_result, stage="planning")
@@ -2330,10 +2331,17 @@ class V3ProductApiService:
         self,
         job_id: str,
         request: GenerateJobRequest | dict[str, Any] | None = None,
+        *,
+        _trusted_body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
     ) -> ProductJobStatus:
         record = self.job_store.get(job_id)
         if record is None:
             return self._not_found_status(job_id)
+        if _trusted_body_refresh_analysis_context is not None and not isinstance(
+            _trusted_body_refresh_analysis_context,
+            BodyRefreshAnalysisContext,
+        ):
+            raise ValueError("body_refresh_analysis_context_untrusted")
         generate_request = self._coerce_generate_request(request or {})
         self._assert_photographer_profile_binding_immutable(record, generate_request)
         worker_claim = bool(generate_request.metadata.pop("_v3_background_worker_claim", False))
@@ -2432,7 +2440,10 @@ class V3ProductApiService:
                 record.lifecycle = self._build_lifecycle(record)
                 self.job_store.save(record)
                 generation_runtime_result = self.scenario_runtime.generate_job(
-                    self._runtime_request_payload(record.request),
+                    self._runtime_request_payload(
+                        record.request,
+                        body_refresh_analysis_context=_trusted_body_refresh_analysis_context,
+                    ),
                     mock_profile=QUALITY_MODE_TO_MOCK_PROFILE[generate_request.quality_mode],
                     apply_memory_update=False,
                     provider_strategy=provider_strategy,
@@ -3759,6 +3770,68 @@ class V3ProductApiService:
         request: GenerateJobRequest | dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         return self.generate_asset_series(job_id, request)
+
+    def generate_professional_character_card_candidate(
+        self,
+        job_id: str,
+        request: GenerateJobRequest | dict[str, Any] | None = None,
+        *,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext,
+    ) -> ProductJobStatus:
+        """Generate one Character Card candidate with an ephemeral frozen context.
+
+        This is an internal Anchor -> Product API seam.  The full Body profile
+        is never accepted from a public request or recovered from durable
+        metadata; the typed context must match the server-owned safe digest and
+        five-source admission already persisted on this planned job.
+        """
+
+        if not isinstance(body_refresh_analysis_context, BodyRefreshAnalysisContext):
+            raise ValueError("body_refresh_analysis_context_untrusted")
+        record = self.job_store.get(job_id)
+        if record is None:
+            return self._not_found_status(job_id)
+        metadata = dict(record.request.metadata or {})
+        if (
+            metadata.get("professional_character_card_stage") != "body_silhouette"
+            or metadata.get("professional_character_card_source_class") != "observed"
+            or metadata.get("professional_character_card_body_refresh_source_mode")
+            != "reference_assisted"
+            or metadata.get("generation_channel") != "mcp"
+            or metadata.get("professional_character_card_body_model_context")
+            != "similar_person_body_reference_assisted_v1"
+        ):
+            raise ValueError("body_refresh_analysis_context_stage_invalid")
+        slot_key = str(metadata.get("professional_character_card_slot") or "").strip()
+        if slot_key not in {"body.front_full", "body.side_full", "body.rear_full"}:
+            raise ValueError("body_refresh_analysis_context_stage_invalid")
+        if type(metadata.get("professional_character_card_candidate_index")) is not int or not 1 <= int(
+            metadata.get("professional_character_card_candidate_index")
+        ) <= 3:
+            raise ValueError("body_refresh_analysis_context_candidate_invalid")
+        if metadata.get("professional_character_card_candidate_count") != 3:
+            raise ValueError("body_refresh_analysis_context_candidate_invalid")
+        if metadata.get("professional_body_refresh_analysis_context") != body_refresh_analysis_context.safe_metadata():
+            raise ValueError("body_proportion_analysis_context_mismatch")
+        try:
+            admission = BodySourceAdmission.model_validate(
+                metadata.get("professional_character_card_body_source_admission")
+            )
+        except ValidationError as exc:
+            raise ValueError("body_refresh_source_admission_untrusted") from exc
+        if len(admission.body_evidence_ids) != 5:
+            raise ValueError("body_refresh_source_admission_five_sources_required")
+        if list(metadata.get("professional_character_card_reference_output_ids") or []) != list(
+            admission.face_reference_output_ids
+        ):
+            raise ValueError("body_refresh_source_admission_face_chain_mismatch")
+        if body_refresh_analysis_context.source_evidence_id_digest != admission.source_evidence_id_digest():
+            raise ValueError("body_refresh_source_admission_digest_mismatch")
+        return self.generate_asset_series(
+            job_id,
+            request,
+            _trusted_body_refresh_analysis_context=body_refresh_analysis_context,
+        )
 
     def _background_generation_attempt_is_current(self, record: ProductJobRecord, background_attempt_id: str) -> bool:
         if not background_attempt_id:

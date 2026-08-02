@@ -1701,26 +1701,31 @@ class ProductApiAnchorPackPreparationHost:
             if failure_code:
                 raise AnchorCandidateUnavailable(failure_code)
             raise AnchorCandidateUnavailable("character_card_candidate_planning_blocked")
-        generation = self.product_service.generate_job(
-            status_job_id,
-            {
-                "quality_mode": "strict",
-                "metadata": {
-                    "disable_visual_auto_retry": True,
-                    "max_visual_retry_attempts": 0,
-                    **(
-                        {"_v3_resume_interrupted_mcp_materialization": True}
-                        if resume_interrupted_mcp_materialization
-                        else {}
-                    ),
-                    **(
-                        {"_v3_resume_finalizing_review": True}
-                        if resume_record is not None and request.generation_channel == "mcp"
-                        else {}
-                    ),
-                },
+        generation_request = {
+            "quality_mode": "strict",
+            "metadata": {
+                "disable_visual_auto_retry": True,
+                "max_visual_retry_attempts": 0,
+                **(
+                    {"_v3_resume_interrupted_mcp_materialization": True}
+                    if resume_interrupted_mcp_materialization
+                    else {}
+                ),
+                **(
+                    {"_v3_resume_finalizing_review": True}
+                    if resume_record is not None and request.generation_channel == "mcp"
+                    else {}
+                ),
             },
-        )
+        }
+        if request.body_refresh_analysis_context is not None:
+            generation = self.product_service.generate_professional_character_card_candidate(
+                status_job_id,
+                generation_request,
+                body_refresh_analysis_context=request.body_refresh_analysis_context,
+            )
+        else:
+            generation = self.product_service.generate_job(status_job_id, generation_request)
         self._record_character_card_retry_usage(stage_key, status_job_id)
         if generation.status not in {ProductJobStatusValue.GENERATED, ProductJobStatusValue.SELECTED}:
             if (
