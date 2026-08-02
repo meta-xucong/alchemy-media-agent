@@ -25,6 +25,9 @@ class BodyProportionAnalysisError(ValueError):
     """Closed failure raised when Body source analysis cannot be trusted."""
 
 
+BODY_REFRESH_ANALYSIS_CONTEXT_SCHEMA_VERSION = "body_refresh_analysis_context_v2"
+
+
 _CLOSED_ANALYSIS_ERROR_CODES = frozenset(
     {
         "body_proportion_analysis_missing",
@@ -116,6 +119,37 @@ def _build_body_analysis_response_schema() -> dict[str, Any]:
             }
         },
         "required": ["allowed_bands"],
+    }
+
+
+_BODY_MORPHOLOGY_ANALYSIS_FIELDS = (
+    "relative_head_to_stature",
+    "shoulder_to_head",
+    "torso_to_leg",
+    "arm_to_leg",
+    "build",
+    "neck_shoulder",
+    "developmental_stage_context",
+    "stance_ground",
+    "cross_view_support",
+)
+
+
+def build_body_morphology_analysis_response_schema() -> dict[str, Any]:
+    """Return the exact v2 source-image analyzer response contract."""
+
+    properties = BodyMorphologyEvidenceProfile.model_json_schema().get("properties", {})
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            field_name: {
+                "type": "string",
+                "enum": list(properties[field_name].get("enum", ())),
+            }
+            for field_name in _BODY_MORPHOLOGY_ANALYSIS_FIELDS
+        },
+        "required": list(_BODY_MORPHOLOGY_ANALYSIS_FIELDS),
     }
 _BODY_ANALYSIS_RESPONSE_KEYS = frozenset({"allowed_bands"})
 _BODY_ANALYSIS_SHAPE_CODES = frozenset(
@@ -466,10 +500,14 @@ class OpenAICompatibleBodySourceAnalysisTransport:
         api_key: str,
         base_url: str,
         model: str,
+        profile_version: str = "v1",
     ) -> None:
+        if profile_version not in {"v1", "v2"}:
+            raise ValueError("body_refresh_analysis_profile_version_invalid")
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
+        self.profile_version = profile_version
         self.last_response_shape_projection: dict[str, Any] | None = None
         self.last_response_value_projection: dict[str, Any] | None = None
 
@@ -507,9 +545,17 @@ class OpenAICompatibleBodySourceAnalysisTransport:
                 text={
                     "format": {
                         "type": "json_schema",
-                        "name": "body_proportion_analysis_v1",
+                        "name": (
+                            "body_morphology_analysis_v2"
+                            if self.profile_version == "v2"
+                            else "body_proportion_analysis_v1"
+                        ),
                         "strict": True,
-                        "schema": _build_body_analysis_response_schema(),
+                        "schema": (
+                            build_body_morphology_analysis_response_schema()
+                            if self.profile_version == "v2"
+                            else _build_body_analysis_response_schema()
+                        ),
                     }
                 },
                 timeout=timeout_seconds,
@@ -583,12 +629,29 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         api_key: str | None,
         base_url: str | None,
         model: str | None,
+        profile_version: str = "v1",
         timeout_seconds: float = 90.0,
         transport: BodySourceAnalysisTransport | None = None,
     ) -> None:
+        if profile_version not in {"v1", "v2"}:
+            raise ValueError("body_refresh_analysis_profile_version_invalid")
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
+        self.profile_version = profile_version
+        self.analysis_response_schema = (
+            build_body_morphology_analysis_response_schema()
+            if profile_version == "v2"
+            else _build_body_analysis_response_schema()
+        )
+        self.analysis_instructions = (
+            "Analyze exactly five admitted Body proportion reference images. Return only strict JSON "
+            "with these exact canonical morphology fields and no prose, identity, hair, clothing, scene, "
+            "lighting, camera, expression, path, ID, URL, raw image, or biometric data: "
+            + json.dumps(self.analysis_response_schema["properties"], sort_keys=True, separators=(",", ":"))
+            if profile_version == "v2"
+            else self._ANALYSIS_INSTRUCTIONS
+        )
         self.timeout_seconds = timeout_seconds
         self.last_response_shape_projection: dict[str, Any] | None = None
         self.last_response_value_projection: dict[str, Any] | None = None
@@ -597,6 +660,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
                 api_key=api_key or "",
                 base_url=base_url or "",
                 model=model or "",
+                profile_version=profile_version,
             )
             if api_key and base_url and model
             else None
@@ -620,7 +684,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         try:
             raw_response = self.transport.analyze(  # type: ignore[union-attr]
                 images,
-                instructions=self._ANALYSIS_INSTRUCTIONS,
+                instructions=self.analysis_instructions,
                 timeout_seconds=self.timeout_seconds,
             )
         except BodyProportionAnalysisError:
@@ -676,21 +740,38 @@ class OpenAICompatibleBodySourceAnalysisProvider:
             else _safe_response_value_projection(raw_response)
         )
         try:
-            payload = self._parse_response(raw_response)
-            profile = BodyProportionEvidenceProfile.model_validate(
-                {
-                    "contract_version": "body_proportion_evidence_profile_v1",
-                    "source_mode": "reference_assisted",
-                    "source_truth_layer": "body_proportion_truth",
-                    "allowed_bands": payload["allowed_bands"],
-                    "source_count": 5,
-                    "analysis_receipt": {
-                        "owner": "server_owned_body_proportion_analysis",
-                        "status": "complete",
-                        "analysis_provider": self.provider_name,
-                    },
-                }
-            )
+            if self.profile_version == "v2":
+                payload = self._parse_morphology_response(raw_response)
+                profile = BodyMorphologyEvidenceProfile.model_validate(
+                    {
+                        "contract_version": "body_morphology_evidence_profile_v2",
+                        "source_mode": "reference_assisted",
+                        "source_truth_layer": "body_proportion_truth",
+                        **payload,
+                        "source_count": 5,
+                        "analysis_receipt": {
+                            "owner": "server_owned_body_proportion_analysis",
+                            "status": "complete",
+                            "analysis_provider": self.provider_name,
+                        },
+                    }
+                )
+            else:
+                payload = self._parse_response(raw_response)
+                profile = BodyProportionEvidenceProfile.model_validate(
+                    {
+                        "contract_version": "body_proportion_evidence_profile_v1",
+                        "source_mode": "reference_assisted",
+                        "source_truth_layer": "body_proportion_truth",
+                        "allowed_bands": payload["allowed_bands"],
+                        "source_count": 5,
+                        "analysis_receipt": {
+                            "owner": "server_owned_body_proportion_analysis",
+                            "status": "complete",
+                            "analysis_provider": self.provider_name,
+                        },
+                    }
+                )
         except BodyProportionAnalysisError:
             raise
         except (ValidationError, TypeError, ValueError, KeyError) as exc:
@@ -727,6 +808,16 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         if not isinstance(bands, Mapping):
             raise TypeError("body source analysis bands must be an object")
         return {"allowed_bands": dict(bands)}
+
+    @staticmethod
+    def _parse_morphology_response(raw_response: Mapping[str, Any] | str) -> dict[str, Any]:
+        if isinstance(raw_response, str):
+            raw_response = json.loads(raw_response)
+        if not isinstance(raw_response, Mapping):
+            raise TypeError("body morphology analysis response must be an object")
+        if set(raw_response) != set(_BODY_MORPHOLOGY_ANALYSIS_FIELDS):
+            raise ValueError("body morphology analysis response has unknown fields")
+        return {field: raw_response[field] for field in _BODY_MORPHOLOGY_ANALYSIS_FIELDS}
 
     @staticmethod
     def _read_admitted_body_images(
@@ -832,6 +923,7 @@ def create_configured_body_source_analysis_provider() -> (
         api_key=api_key.strip(),
         base_url=base_url.strip(),
         model=model.strip(),
+        profile_version="v2",
     )
 
 
@@ -855,6 +947,78 @@ class BodyProportionEvidenceProfile(V3BaseModel):
         return value
 
 
+class BodyMorphologyEvidenceProfile(V3BaseModel):
+    """Richer closed Body morphology result for a new observed refresh.
+
+    These are categorical, non-biometric morphology bands.  They deliberately
+    do not carry raw source references, measurements, vectors, identity, hair,
+    clothing, scene, or provider data.  The v2 contract supersedes the older
+    generic ``allowed_bands`` profile for new strict Body refresh attempts.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    contract_version: Literal["body_morphology_evidence_profile_v2"]
+    source_mode: Literal["reference_assisted"]
+    source_truth_layer: Literal["body_proportion_truth"]
+    relative_head_to_stature: Literal[
+        "larger",
+        "proportional",
+        "smaller",
+    ]
+    shoulder_to_head: Literal[
+        "narrower",
+        "proportional",
+        "wider",
+    ]
+    torso_to_leg: Literal[
+        "shorter_torso",
+        "proportional",
+        "longer_torso",
+    ]
+    arm_to_leg: Literal[
+        "relatively_shorter",
+        "proportional",
+        "relatively_longer",
+    ]
+    build: Literal[
+        "slender",
+        "medium",
+        "sturdy",
+    ]
+    neck_shoulder: Literal[
+        "narrow_transition",
+        "proportional_transition",
+        "wide_transition",
+    ]
+    developmental_stage_context: Literal[
+        "early_stage_context",
+        "middle_stage_context",
+        "later_stage_context",
+        "adult_stage_context",
+        "unknown_stage_context",
+    ]
+    stance_ground: Literal[
+        "grounded_full_contact",
+        "toe_weighted_contact",
+        "dynamic_contact",
+    ]
+    cross_view_support: Literal[
+        "front_only",
+        "front_back_supported",
+        "multi_view_supported",
+    ]
+    source_count: StrictInt
+    analysis_receipt: BodyProportionAnalysisReceipt
+
+    @field_validator("source_count")
+    @classmethod
+    def require_five_admitted_sources(cls, value: int) -> int:
+        if type(value) is not int or value != 5:
+            raise ValueError("body_proportion_analysis_source_count_invalid")
+        return value
+
+
 class BodyRefreshAnalysisContext(V3BaseModel):
     """One immutable, server-owned analysis result for a Body refresh.
 
@@ -866,10 +1030,10 @@ class BodyRefreshAnalysisContext(V3BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    contract_version: Literal["body_refresh_analysis_context_v1"] = (
+    contract_version: Literal["body_refresh_analysis_context_v1", "body_refresh_analysis_context_v2"] = (
         "body_refresh_analysis_context_v1"
     )
-    schema_version: Literal["body_proportion_evidence_profile_v1"] = (
+    schema_version: Literal["body_proportion_evidence_profile_v1", "body_morphology_evidence_profile_v2"] = (
         "body_proportion_evidence_profile_v1"
     )
     source_mode: Literal["reference_assisted"]
@@ -878,7 +1042,7 @@ class BodyRefreshAnalysisContext(V3BaseModel):
     source_binding_digest: StrictStr
     source_evidence_id_digest: StrictStr
     profile_digest: StrictStr
-    profile: BodyProportionEvidenceProfile
+    profile: BodyProportionEvidenceProfile | BodyMorphologyEvidenceProfile
 
     @field_validator("attempt_id")
     @classmethod
@@ -909,6 +1073,18 @@ class BodyRefreshAnalysisContext(V3BaseModel):
     def validate_profile_contract(self) -> "BodyRefreshAnalysisContext":
         if self.profile.source_mode != self.source_mode:
             raise ValueError("body_refresh_analysis_profile_source_mode_mismatch")
+        expected_context_version = (
+            "body_refresh_analysis_context_v2"
+            if isinstance(self.profile, BodyMorphologyEvidenceProfile)
+            else "body_refresh_analysis_context_v1"
+        )
+        expected_schema_version = (
+            "body_morphology_evidence_profile_v2"
+            if isinstance(self.profile, BodyMorphologyEvidenceProfile)
+            else "body_proportion_evidence_profile_v1"
+        )
+        if self.contract_version != expected_context_version or self.schema_version != expected_schema_version:
+            raise ValueError("body_refresh_analysis_context_schema_mismatch")
         expected_profile_digest = hashlib.sha256(
             json.dumps(
                 self.profile.model_dump(mode="json"),
@@ -928,7 +1104,7 @@ class BodyRefreshAnalysisContext(V3BaseModel):
         attempt_id: str,
         append_only_revision: int,
         admitted_body_assets: Sequence[BodySourceAnalysisAssetEnvelope],
-        profile: BodyProportionEvidenceProfile,
+        profile: BodyProportionEvidenceProfile | BodyMorphologyEvidenceProfile,
     ) -> "BodyRefreshAnalysisContext":
         if len(admitted_body_assets) != 5:
             raise ValueError("body_refresh_analysis_source_count_invalid")
@@ -950,7 +1126,18 @@ class BodyRefreshAnalysisContext(V3BaseModel):
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
+        is_morphology_v2 = isinstance(profile, BodyMorphologyEvidenceProfile)
         return cls(
+            contract_version=(
+                "body_refresh_analysis_context_v2"
+                if is_morphology_v2
+                else "body_refresh_analysis_context_v1"
+            ),
+            schema_version=(
+                "body_morphology_evidence_profile_v2"
+                if is_morphology_v2
+                else "body_proportion_evidence_profile_v1"
+            ),
             source_mode="reference_assisted",
             attempt_id=attempt_id,
             append_only_revision=append_only_revision,
@@ -975,6 +1162,30 @@ class BodyRefreshAnalysisContext(V3BaseModel):
         }
 
 
+def require_explicit_body_morphology_profile_version(profile_version: str) -> str:
+    """Require the new morphology contract at a fresh strict Body boundary."""
+
+    if profile_version != "v2":
+        raise ValueError("body_refresh_analysis_profile_version_v2_required")
+    return profile_version
+
+
+def require_current_body_refresh_analysis_context(
+    context: BodyRefreshAnalysisContext,
+) -> BodyRefreshAnalysisContext:
+    """Reject generic v1 contexts for new strict attempts/resume."""
+
+    if not isinstance(context, BodyRefreshAnalysisContext):
+        raise ValueError("body_refresh_analysis_context_superseded")
+    if (
+        context.contract_version != "body_refresh_analysis_context_v2"
+        or context.schema_version != "body_morphology_evidence_profile_v2"
+        or not isinstance(context.profile, BodyMorphologyEvidenceProfile)
+    ):
+        raise ValueError("body_refresh_analysis_context_superseded")
+    return context
+
+
 class BodyProportionSourceAnalysisAdapter:
     """Validate admitted Body inputs and one injected source-analysis result.
 
@@ -989,6 +1200,7 @@ class BodyProportionSourceAnalysisAdapter:
         admitted_body_assets: Sequence[Mapping[str, Any]],
         *,
         source_mode: str,
+        profile_version: str,
         analyzer: BodySourceAnalysisProvider
         | Callable[[Sequence[Mapping[str, Any]]], Mapping[str, Any]]
         | None,
@@ -1005,7 +1217,12 @@ class BodyProportionSourceAnalysisAdapter:
                 raw_profile = analyzer(tuple(admitted_body_assets))
             else:
                 raw_profile = analyzer.analyze(tuple(admitted_body_assets))
-            profile = BodyProportionEvidenceProfile.model_validate(raw_profile)
+            profile_model = (
+                BodyMorphologyEvidenceProfile
+                if profile_version == "v2"
+                else BodyProportionEvidenceProfile
+            )
+            profile = profile_model.model_validate(raw_profile)
         except BodyProportionAnalysisError as exc:
             code = str(exc)
             if code in _CLOSED_ANALYSIS_ERROR_CODES:

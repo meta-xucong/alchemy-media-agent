@@ -492,3 +492,27 @@ binding resolver -> native planner -> Provider body-only projection -> focused t
 No Host/MCP/ImageGen or business delivery mutation is authorized until
 document review, code review, planning-only materialization audit, and visual
 review gates pass in order.
+
+## 12. Superseding Body evidence and renderer projection
+
+Section 7's earlier wording that required a Body source image in the final
+provider input plan is superseded for Professional Character Card Body
+Silhouette refresh. The current authority is:
+
+```text
+five Body sources -> one frozen typed morphology profile -> Brain/renderer
+execution context
+current Face winner for target view -> physical identity evidence derivatives
+```
+
+Body evidence remains in the analysis/profile contract and is never forwarded
+as a physical renderer image. The safe profile carries only closed morphology
+bands and digests; it carries no source image, path, identifier, raw response,
+or biometric vector. Face refs are identity evidence only and do not replace
+the morphology profile.
+
+The actual renderer must execute the `integrated_whole_person` contract rather
+than perform a head swap or composite. Shared pixel review must explicitly
+verify the integrated head-neck-shoulder/body chain and natural weight bearing.
+The old attempt is superseded and may not be resumed or used as acceptance
+evidence.

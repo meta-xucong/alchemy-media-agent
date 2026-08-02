@@ -56,6 +56,7 @@ from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_prompt_findings,
 )
 from ..visual_assets.body_proportion_evidence_profile import (
+    BodyMorphologyEvidenceProfile,
     BodyProportionEvidenceProfile,
 )
 
@@ -845,7 +846,7 @@ class V3LLMBrainAdapter:
     @staticmethod
     def _validated_body_proportion_profile(
         metadata: Mapping[str, Any],
-    ) -> BodyProportionEvidenceProfile | None:
+    ) -> BodyProportionEvidenceProfile | BodyMorphologyEvidenceProfile | None:
         """Consume only a typed, server-owned observed Body profile.
 
         Raw public metadata, partitions, hashes, and counts are never promoted
@@ -873,8 +874,16 @@ class V3LLMBrainAdapter:
             return None
         if raw_receipt is None:
             raise ValueError("body_proportion_analysis_missing")
-        if not isinstance(raw_receipt, BodyProportionEvidenceProfile):
+        if not isinstance(
+            raw_receipt,
+            (BodyProportionEvidenceProfile, BodyMorphologyEvidenceProfile),
+        ):
             raise ValueError("body_proportion_analysis_untrusted")
+        if (
+            metadata.get("professional_character_card_candidate_index") is not None
+            and not isinstance(raw_receipt, BodyMorphologyEvidenceProfile)
+        ):
+            raise ValueError("body_refresh_analysis_context_superseded")
         return raw_receipt
 
     def _activation_scope_enabled(self, request: BrainRunRequest) -> bool:

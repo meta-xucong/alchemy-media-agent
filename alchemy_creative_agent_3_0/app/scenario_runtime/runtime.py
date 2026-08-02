@@ -92,11 +92,13 @@ from ..visual_assets import (
 )
 from ..visual_assets.body_proportion_evidence_profile import (
     BodyProportionAnalysisError,
+    BodyMorphologyEvidenceProfile,
     BodyProportionEvidenceProfile,
     BodyRefreshAnalysisContext,
     BodyProportionSourceAnalysisAdapter,
     BodySourceAnalysisAssetEnvelope,
     BodySourceAnalysisProvider,
+    require_current_body_refresh_analysis_context,
 )
 from ..schemas import PlanningResult, ProviderStrategy
 from .contracts import (
@@ -6139,7 +6141,7 @@ class ScenarioRuntime:
         request: ScenarioRuntimeRequest,
         *,
         stage: str,
-    ) -> BodyProportionEvidenceProfile | None:
+    ) -> BodyProportionEvidenceProfile | BodyMorphologyEvidenceProfile | None:
         """Resolve the one trusted Body source-analysis seam before Brain.
 
         Reference-assisted Professional Body requests must cross the
@@ -6161,6 +6163,9 @@ class ScenarioRuntime:
         slot = str(metadata.get("professional_character_card_slot") or "").strip().lower()
         body_stage = character_stage == "body_silhouette" and slot.startswith("body.")
         professional = self._is_professional_mode_selected(request)
+        context_is_fresh_candidate = (
+            metadata.get("professional_character_card_candidate_index") is not None
+        )
 
         if not professional or not body_stage:
             # A typed observed receipt is only meaningful in the strict Body
@@ -6190,9 +6195,17 @@ class ScenarioRuntime:
             safe_context = metadata.get("professional_body_refresh_analysis_context")
             if not isinstance(safe_context, dict) or safe_context != frozen_context.safe_metadata():
                 raise CapabilityActivationError("body_proportion_analysis_context_mismatch")
+            if context_is_fresh_candidate:
+                try:
+                    require_current_body_refresh_analysis_context(frozen_context)
+                except ValueError as exc:
+                    raise CapabilityActivationError(str(exc)) from exc
             return frozen_context.profile
         if raw_receipt is not None:
-            if not isinstance(raw_receipt, BodyProportionEvidenceProfile):
+            if not isinstance(
+                raw_receipt,
+                (BodyProportionEvidenceProfile, BodyMorphologyEvidenceProfile),
+            ):
                 raise CapabilityActivationError("body_proportion_analysis_untrusted")
             return raw_receipt
 
@@ -6218,6 +6231,7 @@ class ScenarioRuntime:
             return self.body_proportion_source_analysis_adapter.analyze(
                 body_assets,
                 source_mode="reference_assisted",
+                profile_version="v1",
                 analyzer=self.body_proportion_source_analyzer,
             )
         except BodyProportionAnalysisError as exc:

@@ -33,6 +33,7 @@ from alchemy_creative_agent_3_0.app.product_api.service import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profile import (
     BodyRefreshAnalysisContext,
+    BodyMorphologyEvidenceProfile,
     BodyProportionEvidenceProfile,
     BodySourceAnalysisAssetEnvelope,
 )
@@ -91,10 +92,18 @@ class _CountingBodyAnalyzer:
         self.calls.append(binding)
         self.asset_ids.append(tuple(str(asset["asset_id"]) for asset in assets))
         return {
-            "contract_version": "body_proportion_evidence_profile_v1",
+            "contract_version": "body_morphology_evidence_profile_v2",
             "source_mode": "reference_assisted",
             "source_truth_layer": "body_proportion_truth",
-            "allowed_bands": dict(_BODY_BANDS),
+            "relative_head_to_stature": "larger",
+            "shoulder_to_head": "narrower",
+            "torso_to_leg": "shorter_torso",
+            "arm_to_leg": "proportional",
+            "build": "slender",
+            "neck_shoulder": "narrow_transition",
+            "developmental_stage_context": "middle_stage_context",
+            "stance_ground": "grounded_full_contact",
+            "cross_view_support": "multi_view_supported",
             "source_count": 5,
             "analysis_receipt": {
                 "owner": "server_owned_body_proportion_analysis",
@@ -164,6 +173,7 @@ def test_fresh_body_refresh_freezes_one_profile_before_three_view_candidate_fano
     profile = runtime.body_proportion_source_analysis_adapter.analyze(
         [asset.to_analyzer_record() for asset in _internal_body_sources()],
         source_mode="reference_assisted",
+        profile_version="v2",
         analyzer=analyzer,
     )
     context = BodyRefreshAnalysisContext.from_analysis(
@@ -189,7 +199,7 @@ def test_fresh_body_refresh_freezes_one_profile_before_three_view_candidate_fano
     assert [request.slot_key for request in generator.requests] == [
         slot_key for slot_key in _BODY_SLOTS for _ in (1, 2, 3)
     ]
-    assert all(isinstance(profile, BodyProportionEvidenceProfile) for profile in generator.request_profiles)
+    assert all(isinstance(profile, BodyMorphologyEvidenceProfile) for profile in generator.request_profiles)
     assert len({profile.model_dump_json() for profile in generator.request_profiles}) == 1
     assert len(analyzer.calls) == 1
     assert len({request.body_refresh_attempt_identity.attempt_id for request in generator.requests}) == 1
@@ -202,11 +212,19 @@ def test_fresh_body_refresh_freezes_one_profile_before_three_view_candidate_fano
 
 def _profile_context() -> tuple[BodyRefreshAttemptIdentity, BodyRefreshAnalysisContext]:
     runtime = ScenarioRuntime(body_proportion_source_analyzer=_CountingBodyAnalyzer())
-    profile = BodyProportionEvidenceProfile(
-        contract_version="body_proportion_evidence_profile_v1",
+    profile = BodyMorphologyEvidenceProfile(
+        contract_version="body_morphology_evidence_profile_v2",
         source_mode="reference_assisted",
         source_truth_layer="body_proportion_truth",
-        allowed_bands=_BODY_BANDS,
+        relative_head_to_stature="larger",
+        shoulder_to_head="narrower",
+        torso_to_leg="shorter_torso",
+        arm_to_leg="proportional",
+        build="slender",
+        neck_shoulder="narrow_transition",
+        developmental_stage_context="middle_stage_context",
+        stance_ground="grounded_full_contact",
+        cross_view_support="multi_view_supported",
         source_count=5,
         analysis_receipt={
             "owner": "server_owned_body_proportion_analysis",

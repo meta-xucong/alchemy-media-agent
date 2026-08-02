@@ -1215,6 +1215,11 @@ class V3ProductApiService:
                     1, int(professional_character_card_attempt_round)
                 ),
                 "professional_character_card_reference_output_ids": reference_ids,
+                "professional_character_card_face_view_binding": (
+                    self._professional_character_card_face_view_binding(reference_ids)
+                    if professional_character_card_stage == "body_silhouette"
+                    else None
+                ),
                 **(
                     {
                         "professional_character_card_body_source_admission": self._safe_professional_character_card_body_source_admission(
@@ -1934,6 +1939,7 @@ class V3ProductApiService:
         profile = self.scenario_runtime.body_proportion_source_analysis_adapter.analyze(
             [asset.to_analyzer_record() for asset in envelopes],
             source_mode="reference_assisted",
+            profile_version="v2",
             analyzer=analyzer,
         )
         return BodyRefreshAnalysisContext.from_analysis(
@@ -1953,9 +1959,9 @@ class V3ProductApiService:
         """Select the bounded materialization subset without changing formal lineage.
 
         Body formal receipts still bind all three Face winners
-        (front/profile/rear).  The Provider/MCP image-edit path, however, only
-        needs the slot-relevant view pair so it stays inside the native
-        reference budget while preserving the correct angle authority.
+        (front/profile/rear). The physical renderer receives only the exact
+        view-owned winner; the provider derives the complementary Doc95
+        feature-detail and head-geometry evidence pair from that source.
         """
 
         refs = [str(item or "").strip() for item in reference_output_ids if str(item or "").strip()]
@@ -1965,12 +1971,26 @@ class V3ProductApiService:
             raise ValueError("professional_character_card_reference_chain_invalid")
         front, profile, rear = refs
         if slot_key == "body.front_full":
-            return [front, rear]
+            return [front]
         if slot_key == "body.side_full":
-            return [profile, front]
+            return [profile]
         if slot_key == "body.rear_full":
-            return [rear, profile]
+            return [rear]
         raise ValueError("professional_character_card_slot_invalid")
+
+    @staticmethod
+    def _professional_character_card_face_view_binding(
+        reference_output_ids: list[str],
+    ) -> dict[str, dict[str, str]]:
+        refs = [str(item or "").strip() for item in reference_output_ids if str(item or "").strip()]
+        if len(refs) != 3 or len(set(refs)) != 3:
+            raise ValueError("professional_character_card_reference_chain_invalid")
+        front, profile, rear = refs
+        return {
+            "front_full": {"face_slot": "face.front", "source_asset_id": front},
+            "side_full": {"face_slot": "face.profile", "source_asset_id": profile},
+            "rear_full": {"face_slot": "face.rear_head", "source_asset_id": rear},
+        }
 
     @staticmethod
     def _professional_anchor_provider_evidence_ids(
@@ -2910,6 +2930,7 @@ class V3ProductApiService:
             "generation_channel",
             "professional_character_card_body_refresh_source_mode",
             "professional_character_card_body_refresh_presentation_intent",
+            "professional_character_card_face_view_binding",
         ):
             if key in frozen_plan_metadata and frozen_plan_metadata.get(key) != metadata.get(key):
                 return None
@@ -2940,6 +2961,7 @@ class V3ProductApiService:
             "professional_character_card_body_model_context",
             "professional_character_card_body_refresh_contract_required",
             "professional_character_card_body_refresh_presentation_intent",
+            "professional_character_card_face_view_binding",
             "professional_character_card_candidate_index",
             "professional_character_card_candidate_count",
             "professional_character_card_reference_output_ids",
@@ -10039,6 +10061,7 @@ class V3ProductApiService:
             "professional_character_card_body_model_context",
             "professional_character_card_body_refresh_contract_required",
             "professional_character_card_body_refresh_presentation_intent",
+            "professional_character_card_face_view_binding",
             "professional_body_proportion_analysis_receipt",
             "professional_body_refresh_analysis_context",
             "professional_character_card_reference_output_ids",
@@ -10056,6 +10079,7 @@ class V3ProductApiService:
             "professional_character_card_candidate_count",
             "professional_character_card_candidate_lifecycle_checkpoints",
             "professional_character_card_body_refresh_presentation_intent",
+            "professional_character_card_face_view_binding",
             "professional_body_proportion_analysis_receipt",
             "professional_body_refresh_analysis_context",
         }

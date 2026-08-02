@@ -28,7 +28,9 @@ from ..visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
+    body_silhouette_integrated_whole_person_synthesis_contract,
 )
+from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
 from ..visual_assets.character_card import (
     BodySilhouetteBackdropPresentationContract,
     BodySilhouetteHairContinuityContract,
@@ -59,6 +61,56 @@ _BODY_RENDERER_BACKDROP_PHRASES = {
     ),
 }
 
+_BODY_MORPHOLOGY_RENDERER_PHRASES = {
+    "relative_head_to_stature": {
+        "larger": "a relatively larger head-to-stature relationship",
+        "proportional": "a proportionate head-to-stature relationship",
+        "smaller": "a relatively smaller head-to-stature relationship",
+    },
+    "shoulder_to_head": {
+        "narrower": "shoulders narrower relative to the head",
+        "proportional": "shoulders proportionate to the head",
+        "wider": "shoulders wider relative to the head",
+    },
+    "torso_to_leg": {
+        "shorter_torso": "a shorter torso relative to leg length",
+        "proportional": "a proportionate torso-to-leg relationship",
+        "longer_torso": "a longer torso relative to leg length",
+    },
+    "arm_to_leg": {
+        "relatively_shorter": "relatively shorter arms against leg length",
+        "proportional": "a proportionate arm-to-leg relationship",
+        "relatively_longer": "relatively longer arms against leg length",
+    },
+    "build": {
+        "slender": "a slender natural build",
+        "medium": "a medium natural build",
+        "sturdy": "a sturdy natural build",
+    },
+    "neck_shoulder": {
+        "narrow_transition": "a narrow natural neck-to-shoulder transition",
+        "proportional_transition": "a proportionate natural neck-to-shoulder transition",
+        "wide_transition": "a wide natural neck-to-shoulder transition",
+    },
+    "developmental_stage_context": {
+        "early_stage_context": "the frozen early developmental-stage body context",
+        "middle_stage_context": "the frozen middle developmental-stage body context",
+        "later_stage_context": "the frozen later developmental-stage body context",
+        "adult_stage_context": "the frozen adult developmental-stage body context",
+        "unknown_stage_context": "no unsupported developmental-stage claim",
+    },
+    "stance_ground": {
+        "grounded_full_contact": "natural full-contact standing and weight bearing",
+        "toe_weighted_contact": "natural toe-weighted contact and balanced weight bearing",
+        "dynamic_contact": "natural dynamic ground contact and weight transfer",
+    },
+    "cross_view_support": {
+        "multi_view_supported": "the same morphology across front, side, and rear views",
+        "front_back_supported": "the same morphology across the supported front and rear views",
+        "front_only": "only the morphology supported by the front view",
+    },
+}
+
 
 def _canonical_json_sha256(value: dict[str, Any]) -> str:
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -86,6 +138,48 @@ def _build_body_renderer_execution_directive(
     channel = dict(
         rendering_contract.get("body_silhouette_mcp_materialization_channel_contract") or {}
     )
+    integrated = rendering_contract.get(
+        "body_silhouette_integrated_whole_person_synthesis_contract"
+    )
+    if integrated != body_silhouette_integrated_whole_person_synthesis_contract():
+        raise McpMaterializationError(
+            "mcp_materialization_renderer_execution_directive_invalid"
+        )
+    morphology = rendering_contract.get("body_morphology_profile")
+    if rendering_contract.get("body_refresh_source_mode") == "reference_assisted":
+        if not isinstance(morphology, dict):
+            raise McpMaterializationError(
+                "mcp_materialization_body_morphology_profile_missing"
+            )
+        try:
+            bands = dict(morphology["bands"])
+            BodyMorphologyEvidenceProfile.model_validate(
+                {
+                    "contract_version": "body_morphology_evidence_profile_v2",
+                    "source_mode": "reference_assisted",
+                    "source_truth_layer": "body_proportion_truth",
+                    **bands,
+                    "source_count": 5,
+                    "analysis_receipt": {
+                        "owner": "server_owned_body_proportion_analysis",
+                        "status": "complete",
+                        "analysis_provider": "configured_body_source_analysis_provider",
+                    },
+                }
+            )
+            if not isinstance(morphology.get("profile_digest"), str) or len(morphology["profile_digest"]) != 64:
+                raise ValueError("profile digest")
+            bands_digest = _canonical_json_sha256(bands)
+            if morphology.get("bands_digest") != bands_digest:
+                raise ValueError("bands digest")
+        except Exception as exc:
+            raise McpMaterializationError(
+                "mcp_materialization_body_morphology_profile_invalid"
+            ) from exc
+    elif morphology is not None:
+        raise McpMaterializationError(
+            "mcp_materialization_body_morphology_profile_forbidden"
+        )
     directive: dict[str, Any] = {
         "schema_version": _BODY_RENDERER_EXECUTION_DIRECTIVE_SCHEMA,
         "execution_scope": "professional_character_card_body_silhouette_mcp_materialization_only",
@@ -113,7 +207,10 @@ def _build_body_renderer_execution_directive(
             "body_reference_scope": channel.get("body_reference_scope"),
             "source_mode_scope": list(channel.get("source_mode_scope") or []),
         },
+        "integrated_whole_person_synthesis": integrated,
     }
+    if morphology is not None:
+        directive["body_morphology_profile"] = morphology
     try:
         top_phrase = _BODY_RENDERER_PRESENTATION_PHRASES[directive["presentation"]["top"]]
         bottom_phrase = _BODY_RENDERER_PRESENTATION_PHRASES[directive["presentation"]["bottom"]]
@@ -130,8 +227,29 @@ def _build_body_renderer_execution_directive(
         "Preserve hair from the current Face Identity references with the same "
         "hairstyle category, same hair length tier, same bangs-or-parting pattern, "
         "and same overall hair outline. Use Face identity references only as physical "
-        "inputs; Body proportion evidence is analysis-only."
+        "inputs; Body proportion evidence is analysis-only. "
+        "Synthesize one coherent whole person in one natural body chain from head, "
+        "neck, shoulders, torso, and limbs; preserve anatomical head-neck-shoulder "
+        "continuity, natural asymmetry, weight bearing, joint placement, and ground "
+        "contact. Never paste, swap, or composite a head onto a body; never use a "
+        "mannequin or cardboard stance."
     )
+    if isinstance(morphology, dict):
+        bands = morphology["bands"]
+        try:
+            morphology_phrases = [
+                _BODY_MORPHOLOGY_RENDERER_PHRASES[field][bands[field]]
+                for field in _BODY_MORPHOLOGY_RENDERER_PHRASES
+            ]
+        except KeyError as exc:
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_execution_directive_invalid"
+            ) from exc
+        directive["materialization_prompt"] += (
+            " Apply the closed Body morphology profile as one integrated person: "
+            + "; ".join(morphology_phrases)
+            + "."
+        )
     directive["directive_sha256"] = _canonical_json_sha256(directive)
     return directive
 
@@ -1143,6 +1261,24 @@ class McpMaterializationHandoffStore:
                 )
             return safe
         safe["body_silhouette_mcp_materialization_channel_contract"] = expected_body_contract
+        expected_integrated_contract = body_silhouette_integrated_whole_person_synthesis_contract()
+        raw_integrated = raw.get(
+            "body_silhouette_integrated_whole_person_synthesis_contract"
+        )
+        if raw_integrated is None and require_body_rendering_contract:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "integrated_whole_person_contract_missing"},
+            )
+        if raw_integrated is not None:
+            if raw_integrated != expected_integrated_contract:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "integrated_whole_person_contract_invalid"},
+                )
+            safe["body_silhouette_integrated_whole_person_synthesis_contract"] = (
+                expected_integrated_contract
+            )
         raw_source_mode = raw.get("body_refresh_source_mode")
         if raw_source_mode not in {"inference_first", "reference_assisted"}:
             if require_body_rendering_contract:
@@ -1202,6 +1338,70 @@ class McpMaterializationHandoffStore:
                     "mcp_materialization_body_rendering_contract_invalid",
                     detail={"failure_code": "body_refresh_presentation_intent_invalid"},
                 ) from None
+        raw_morphology = raw.get("body_morphology_profile")
+        if raw_source_mode == "reference_assisted":
+            if raw_morphology is None and require_body_rendering_contract:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_morphology_profile_missing"},
+                )
+            if raw_morphology is not None:
+                try:
+                    if set(raw_morphology) != {
+                        "schema_version",
+                        "profile_digest",
+                        "bands_digest",
+                        "bands",
+                    }:
+                        raise ValueError("morphology fields")
+                    if raw_morphology["schema_version"] != "body_morphology_evidence_profile_v2":
+                        raise ValueError("morphology version")
+                    digest = raw_morphology["profile_digest"]
+                    if (
+                        type(digest) is not str
+                        or len(digest) != 64
+                        or any(char not in "0123456789abcdef" for char in digest.lower())
+                    ):
+                        raise ValueError("morphology digest")
+                    bands = raw_morphology["bands"]
+                    if type(bands) is not dict:
+                        raise ValueError("morphology bands")
+                    bands_digest = raw_morphology["bands_digest"]
+                    if (
+                        type(bands_digest) is not str
+                        or bands_digest.lower() != _canonical_json_sha256(bands)
+                    ):
+                        raise ValueError("morphology bands digest")
+                    BodyMorphologyEvidenceProfile.model_validate(
+                        {
+                            "contract_version": "body_morphology_evidence_profile_v2",
+                            "source_mode": "reference_assisted",
+                            "source_truth_layer": "body_proportion_truth",
+                            **bands,
+                            "source_count": 5,
+                            "analysis_receipt": {
+                                "owner": "server_owned_body_proportion_analysis",
+                                "status": "complete",
+                                "analysis_provider": "configured_body_source_analysis_provider",
+                            },
+                        }
+                    )
+                    safe["body_morphology_profile"] = {
+                        "schema_version": "body_morphology_evidence_profile_v2",
+                        "profile_digest": digest.lower(),
+                        "bands_digest": bands_digest.lower(),
+                        "bands": dict(bands),
+                    }
+                except Exception:
+                    raise McpMaterializationError(
+                        "mcp_materialization_body_rendering_contract_invalid",
+                        detail={"failure_code": "body_morphology_profile_invalid"},
+                    ) from None
+        elif raw_morphology is not None:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_morphology_profile_forbidden"},
+            )
         raw_hair = raw.get("body_silhouette_hair_continuity_contract")
         if raw_hair is None and require_body_rendering_contract:
             raise McpMaterializationError(

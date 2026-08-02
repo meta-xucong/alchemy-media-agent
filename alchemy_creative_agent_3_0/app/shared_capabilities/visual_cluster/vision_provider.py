@@ -27,6 +27,8 @@ from .micro_real_human_fidelity import (
     REQUIRED_STANDARD_FRONT_MINIMUM_GROUP_DIMENSIONS,
 )
 from ...visual_assets.body_silhouette_source_standard import (
+    BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE,
+    BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS,
     validated_body_silhouette_source_standard_contract,
 )
 from ...visual_assets.character_card import BodySilhouetteBackdropPresentationContract
@@ -360,6 +362,16 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             "Use beginner-safe wording in summaries. For general_creative, say subject/object/visual direction instead of product/ecommerce language.",
             f"Template: {template_id}",
             f"User goal: {user_goal}",
+            (
+                "Body Silhouette review must emit body_silhouette_blocking_issue_evaluation_complete "
+                "only after pixel evaluation, plus typed integrated_whole_person_review_evidence with "
+                "head_neck_shoulder_continuity, single_person_synthesis, natural_body_chain, "
+                "natural_weight_bearing, and shoulder_head_proportion; each is pass|fail|unknown "
+                "with pixel_evidence_present. Missing/unknown/false or pasted/mannequin/cardboard/"
+                "shoulder/joint/ground issues blocks formal acceptance."
+                if body_silhouette_review
+                else ""
+            ),
             f"Project context summary: {json.dumps(project_summary, ensure_ascii=False)[:1200]}",
             f"Resolved reference policy: {json.dumps(reference_policy, ensure_ascii=False)[:2200]}",
             (
@@ -391,7 +403,7 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
                 else ""
             ),
             "Allowed issue_codes: visible_text_artifact, watermark_or_signature, faint_corner_watermark, ai_generated_badge_trace, signature_like_artifact, lower_right_mark_artifact, commercial_cleanliness_failure, collage_or_split_panel, identity_drift, bone_structure_drift, face_shape_drift, cheek_jaw_chin_drift, eye_shape_or_spacing_identity_drift, eyebrow_eye_relationship_drift, nose_mouth_relationship_identity_drift, lip_contour_identity_drift, styling_changed_face_geometry, archetype_overrode_reference_identity, same_type_not_same_person, identity_reference_underweighted, hair_or_outfit_drift, camera_distance_drift, identity_card_missing, identity_card_not_applied, identity_feature_drift, eyebrow_shape_drift, eye_shape_or_spacing_drift, nose_mouth_relationship_drift, jaw_chin_direction_drift, unflattering_feature_degradation, beautiful_realism_balance_failure, realism_made_subject_less_attractive, pretty_but_too_ai_filtered, real_but_unflattering, skin_texture_beauty_balance_failure, source_hair_overinherited, source_makeup_overinherited, source_wardrobe_overinherited, source_lighting_overinherited, source_color_temperature_overinherited, source_color_grade_overinherited, source_scene_overinherited, source_camera_overinherited, source_camera_mood_overinherited, source_whole_style_overinherited, reference_used_as_style_when_identity_only, prompt_owned_channel_ignored, selected_anchor_overrode_current_prompt, structured_appearance_lock_misapplied, lighting_mismatch, composition_mismatch, unrelated_object, unrelated_product, product_identity_drift, product_silhouette_drift, product_pattern_registration_drift, product_layer_topology_drift, product_construction_detail_drift, product_material_response_drift, product_drape_behavior_drift, product_label_drift, product_label_unreadable, product_logo_or_label_obscured, brand_asset_drift, deliverable_intent_mismatch, delivery_set_role_mismatch, delivery_evidence_dimension_mismatch, bad_hands_or_body, face_artifact, ai_face_render, plastic_skin, over_smoothed_skin, missing_skin_texture, over_retouching, poreless_beauty_surface, synthetic_fashion_face, weak_photographic_imperfection, synthetic_beauty_filter, doll_like_face, template_smile, over_perfect_symmetry, wax_skin_highlight, uncanny_eye_expression, same_ai_face_repetition, beauty_app_face, idol_photocard_polish, skin_blur_retouching, over_uniform_skin_tone, over_sharp_ai_detail, perfect_smile_repetition, face_slimming_filter, beautified_facial_geometry, generic_ai_beauty_identity, dull_complexion, muddy_skin_tone, underexposed_face, harsh_facial_shadow, overly_matte_documentary_look, tired_expression, unflattering_color_cast, complexion_direction_drift, unintended_skin_darkening, unintended_skin_lightening, unflattering_skin_color_cast, age_identity_drift, age_inappropriate_rendering, suppressed_fair_complexion, forced_tan_or_bronze_cast, gray_brown_skin_cast, head_body_proportion_distortion, oversized_head, compressed_neck_shoulders, unflattering_face_drift, flat_scene_lighting, airbrushed_background_texture, synthetic_material_response, frozen_centered_pose, doll_like_child_face, adultified_child_model, synthetic_child_skin, pageant_polish_child_face, frozen_child_smile, unreal_child_eyes, unreal_child_teeth, child_face_ai_render, same_expression_repetition, same_head_angle_repetition, same_pose_repetition, studio_only_when_lifestyle_requested, role_collapse, flat_catalog_lighting, weak_lifestyle_context, repeated_concept_or_prop, reference_guard_ignored, reference_evidence_unavailable, low_commercial_finish, weak_aesthetic_finish, generic_stock_photo_finish, flat_low_contrast_finish, overexposed_washout, underexposed_muddy_frame, unbalanced_color_grade, weak_subject_readability, weak_depth_and_material_separation, unstable_composition_balance, overprocessed_hdr_finish, uncanny_micro_detail, low_resolution_output, policy_or_safety_block, low_confidence_review.",
-            'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review","confidence":0.0,"issue_codes":[],"scores":{"artifact_safety":0.0,"composition":0.0,"commercial_finish":0.0,"product_fidelity":0.0,"apparel_construction_fidelity":0.0,"delivery_evidence_fidelity":0.0,"identity_consistency":0.0,"same_person_readability":0.0,"face_outline_and_proportion":0.0,"brow_eye_geometry":0.0,"nose_mouth_relationship":0.0,"jaw_chin_geometry":0.0,"age_identity_direction":0.0,"prompt_owned_channel_obedience":0.0,"human_realism":0.0,"overall":0.0},"identity_deltas":[],"preserved_elements":[],"drift_warnings":[],"artifact_warnings":[],"summary":[],"feedback_verdict":{"status":"pass|violation|not_verifiable","violated_directions":[]},"similarity_verdict":{"status":"distinct|near_duplicate|not_verifiable","compared_reference_output_ids":[]},"retry_patch":{"identity_reinforcement":[]}}',
+            _review_response_shape(review_contract),
         ]
     )
     return _scope_inspection_prompt(prompt, metadata)
@@ -406,6 +418,27 @@ def _review_response_shape(contract: dict[str, Any]) -> str:
         if contract.get("human_naturalness_verdict_required")
         else ""
     )
+    professional_review = contract.get("professional_identity_quality")
+    body_review = (
+        professional_review.get("body_silhouette_review")
+        if isinstance(professional_review, dict)
+        else None
+    )
+    body_evidence = ""
+    if isinstance(body_review, dict) and body_review.get("applies"):
+        integrated_shape = {
+            dimension: {
+                "status": "pass|fail|unknown",
+                "pixel_evidence_present": False,
+            }
+            for dimension in BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS
+        }
+        body_evidence = (
+            ',"evidence_codes":["'
+            + BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE
+            + '"],"integrated_whole_person_review_evidence":'
+            + json.dumps(integrated_shape, ensure_ascii=False, separators=(",", ":"))
+        )
     return (
         'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review",'
         '"confidence":0.0,"issue_codes":[],"scores":'
@@ -415,6 +448,7 @@ def _review_response_shape(contract: dict[str, Any]) -> str:
         '"violated_directions":[]},"similarity_verdict":{"status":"distinct|near_duplicate|not_verifiable",'
         '"compared_reference_output_ids":[]}'
         + human_verdict
+        + body_evidence
         + ',"retry_patch":{}}'
     )
 
@@ -543,6 +577,16 @@ def _enforced_inspection_prompt(
                     "head-neck-shoulder support, implausible torso/limb/joint structure, or invalid stance/ground "
                     "contact. Do not apply a fixed numeric head-count ratio, clothing recipe, scene-specific "
                     "recipe, vertical-specific rule, commercial grade, or stage-specific shortcut."
+                )
+                lines.append(
+                    "Body Silhouette integrated whole-person pixel evidence is mandatory: return a typed "
+                    "integrated_whole_person_review_evidence object with exactly these dimensions: "
+                    "head_neck_shoulder_continuity, single_person_synthesis, natural_body_chain, "
+                    "natural_weight_bearing, shoulder_head_proportion. Each dimension must be status "
+                    "pass|fail|unknown plus pixel_evidence_present true|false. Missing, unknown, false, "
+                    "pasted_head_body_boundary, head_neck_shoulder_discontinuity, mannequin_body_chain, "
+                    "cardboard_stance, shoulder_width_incoherent, limb/joint/ground-contact issues all "
+                    "block Body formal acceptance. A generic high-confidence pass is not sufficient."
                 )
             if body_silhouette_review.get("slot_key") == "body.rear_full":
                 lines.append(

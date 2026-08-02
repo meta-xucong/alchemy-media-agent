@@ -30,6 +30,8 @@ planner's Body-stage partition handling, and the MCP handoff-store sanitizer.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -51,7 +53,11 @@ from alchemy_creative_agent_3_0.app.creative_core.mcp_reference_partition import
     McpBodyReferencePartition,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+    body_silhouette_integrated_whole_person_synthesis_contract,
     body_silhouette_mcp_materialization_channel_contract,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profile import (
+    BodyMorphologyEvidenceProfile,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     default_body_refresh_presentation_intent,
@@ -136,6 +142,80 @@ def _body_face_partition(body_assets: list[dict], face_assets: list[dict]) -> di
     }
 
 
+def _morphology_profile() -> BodyMorphologyEvidenceProfile:
+    return BodyMorphologyEvidenceProfile(
+        contract_version="body_morphology_evidence_profile_v2",
+        source_mode="reference_assisted",
+        source_truth_layer="body_proportion_truth",
+        relative_head_to_stature="proportional",
+        shoulder_to_head="narrower",
+        torso_to_leg="shorter_torso",
+        arm_to_leg="proportional",
+        build="slender",
+        neck_shoulder="narrow_transition",
+        developmental_stage_context="middle_stage_context",
+        stance_ground="grounded_full_contact",
+        cross_view_support="multi_view_supported",
+        source_count=5,
+        analysis_receipt={
+            "owner": "server_owned_body_proportion_analysis",
+            "status": "complete",
+            "analysis_provider": "configured_body_source_analysis_provider",
+        },
+    )
+
+
+def _morphology_contract() -> dict[str, object]:
+    profile = _morphology_profile()
+    profile_payload = profile.model_dump(mode="json")
+    bands = {
+        key: value
+        for key, value in profile_payload.items()
+        if key
+        not in {
+            "contract_version",
+            "source_mode",
+            "source_truth_layer",
+            "source_count",
+            "analysis_receipt",
+        }
+    }
+    canonical = lambda value: hashlib.sha256(  # noqa: E731
+        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema_version": "body_morphology_evidence_profile_v2",
+        "profile_digest": canonical(profile_payload),
+        "bands_digest": canonical(bands),
+        "bands": bands,
+    }
+
+
+def _attach_current_body_context(request, face_assets: list[dict]) -> None:  # noqa: ANN001
+    profile = _morphology_profile()
+    profile_digest = hashlib.sha256(
+        json.dumps(
+            profile.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    request.metadata.update(
+        {
+            "professional_identity_reference_strategy": "character_card_shared_identity_v1",
+            "professional_body_proportion_analysis_receipt": profile,
+            "professional_body_refresh_analysis_context": {"profile_digest": profile_digest},
+            "professional_character_card_face_view_binding": {
+                "front_full": {
+                    "face_slot": "face.front",
+                    "source_asset_id": face_assets[0]["asset_id"],
+                }
+            },
+        }
+    )
+
+
 def test_direct_image_edit_route_keeps_over_five_reference_fail_closed(tmp_path) -> None:
     body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
     request = _provider_request(*body_assets, *face_assets, stage="body_silhouette")
@@ -180,6 +260,9 @@ def test_mcp_body_handoff_public_view_preserves_typed_body_face_partition(tmp_pa
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
         "body_refresh_presentation_intent": default_body_refresh_presentation_intent().model_dump(
             mode="json"
         ),
@@ -190,6 +273,7 @@ def test_mcp_body_handoff_public_view_preserves_typed_body_face_partition(tmp_pa
             default_body_silhouette_backdrop_presentation_contract()
         ),
         "body_mcp_reference_partition": partition,
+        "body_morphology_profile": _morphology_contract(),
         "raw_prompt": "must never be persisted in the typed partition",
         "provider_payload": {"secret": "must never be persisted"},
     }
@@ -205,7 +289,15 @@ def test_mcp_body_handoff_public_view_preserves_typed_body_face_partition(tmp_pa
     )
 
     public_contract = store.public_view(handoff["handoff_id"])["rendering_contract"]
+    renderer_request = store.public_renderer_request(handoff["handoff_id"])
     assert public_contract["body_mcp_reference_partition"] == partition
+    renderer_prompt = renderer_request["renderer_prompt"].lower()
+    assert "proportionate head-to-stature relationship" in renderer_prompt
+    assert "shoulders narrower relative to the head" in renderer_prompt
+    assert "shorter torso relative to leg length" in renderer_prompt
+    assert "slender natural build" in renderer_prompt
+    assert "one coherent whole person" in renderer_prompt
+    assert "body proportion evidence is analysis-only" in renderer_prompt
     assert "raw_prompt" not in public_contract
     assert "provider_payload" not in public_contract
     assert handoff["rendering_contract_fingerprint"] == store._rendering_contract_fingerprint(contract)
@@ -271,11 +363,11 @@ def test_mcp_body_build_app_request_carries_partition_into_frozen_context(tmp_pa
     request.metadata.update(
         {
             "professional_character_card_body_refresh_contract_required": True,
-            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
             "professional_anchor_reference_assets": [*body_assets, *face_assets],
             "reference_assets": [*body_assets, *face_assets],
         }
     )
+    _attach_current_body_context(request, face_assets)
 
     app_request, _, retained = McpMaterializationProvider()._build_app_request(request)
 
@@ -300,11 +392,11 @@ def test_reference_assisted_body_partition_stays_typed_but_provider_inputs_are_f
     request.metadata.update(
         {
             "professional_character_card_body_refresh_contract_required": True,
-            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
             "professional_anchor_reference_assets": [*body_assets, *face_assets],
             "reference_assets": [*body_assets, *face_assets],
         }
     )
+    _attach_current_body_context(request, face_assets)
 
     app_request, _, provider_inputs = McpMaterializationProvider()._build_app_request(request)
 
@@ -351,8 +443,8 @@ def test_reference_assisted_client_body_refs_cannot_promote_to_body_truth(tmp_pa
     )
 
 
-def test_reference_assisted_real_serial_derivatives_are_face_only_before_handoff_cap(tmp_path) -> None:
-    """Two semantic Face refs expand to four physical identity inputs, not Body inputs."""
+def test_reference_assisted_view_owned_derivatives_are_face_only_before_handoff_cap(tmp_path) -> None:
+    """One view-owned Face source expands to the complementary Doc95 pair."""
 
     body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
     request = _mcp_body_generation_request(
@@ -361,12 +453,12 @@ def test_reference_assisted_real_serial_derivatives_are_face_only_before_handoff
     )
     request.metadata.update(
         {
-            "professional_identity_reference_strategy": "serial_anchor_pack_root_reuse_v1",
             "professional_anchor_reference_assets": [*body_assets, *face_assets],
             "reference_assets": [*body_assets, *face_assets],
             "professional_character_card_body_refresh_contract_required": True,
         }
     )
+    _attach_current_body_context(request, face_assets)
 
     app_request, _, provider_inputs = McpMaterializationProvider()._build_app_request(request)
     variables = app_request.prompt_plan.variables
@@ -376,8 +468,13 @@ def test_reference_assisted_real_serial_derivatives_are_face_only_before_handoff
 
     assert partition["body_proportion_reference"]["asset_count"] == 5
     assert partition["face_identity_reference"]["asset_count"] == 2
-    assert len(provider_inputs) <= 5
-    assert len(asset_plan["assets"]) <= 5
+    assert len(provider_inputs) == 2
+    assert len(asset_plan["assets"]) == 2
+    assert {item.get("source_asset_id") for item in provider_inputs} == {face_assets[0]["asset_id"]}
+    assert {item.get("identity_evidence_scope") for item in provider_inputs} == {
+        "feature_detail",
+        "pose_geometry",
+    }
     assert all(item.get("role") == "portrait_identity" for item in provider_inputs)
     assert all(item.get("role") == "portrait_identity" for item in asset_plan["assets"])
     assert all(item.get("reference_truth_layer") == "portrait_identity_truth" for item in provider_inputs)
@@ -564,6 +661,9 @@ def test_strict_body_handoff_missing_partition_fails_closed() -> None:
         "body_refresh_source_mode": "reference_assisted",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
         ),
     }
 

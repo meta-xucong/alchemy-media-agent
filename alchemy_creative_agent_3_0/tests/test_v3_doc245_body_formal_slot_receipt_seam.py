@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from io import BytesIO
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -109,6 +111,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standar
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
+    body_silhouette_integrated_whole_person_synthesis_contract,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
     body_silhouette_source_standard_contract,
@@ -306,6 +309,20 @@ def _mcp_body_generation_request(
         "professional_character_card_stage": stage,
         "professional_character_card_slot": slot_key,
         "professional_character_card_body_refresh_source_mode": source_mode,
+        "professional_character_card_face_view_binding": {
+            "front_full": {
+                "face_slot": "face.front",
+                "source_asset_id": "root-face",
+            },
+            "side_full": {
+                "face_slot": "face.profile",
+                "source_asset_id": "profile-face",
+            },
+            "rear_full": {
+                "face_slot": "face.rear_head",
+                "source_asset_id": "rear-face",
+            },
+        },
         "llm_brain": {
             "canonical_provider_prompts": [
                 {
@@ -957,6 +974,9 @@ def test_doc245_body_slot_delta_recovery_rejects_superseded_wardrobe_contract() 
         "body_silhouette_source_standard_contract": body_silhouette_source_standard_contract(),
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
         ),
         "body_silhouette_hair_continuity_contract": {
             "contract_version": "professional_body_silhouette_hair_continuity_v1",
@@ -1730,6 +1750,9 @@ def test_doc245_body_handoff_store_preserves_typed_hair_backdrop_and_fingerprint
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
             "hair_continuity_contract"
@@ -1798,6 +1821,9 @@ def test_doc245_body_handoff_store_rejects_old_strict_contract_without_hair_or_b
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
     }
 
@@ -1834,6 +1860,9 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
             "hair_continuity_contract"
@@ -1846,8 +1875,8 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
             "body_proportion_reference": {
                 "role": "body_proportion_reference",
                 "truth_layer": "body_proportion_truth",
-                "asset_count": 1,
-                "asset_hashes": ["doc245-body-fixture-hash"],
+                "asset_count": 5,
+                "asset_hashes": [f"doc245-body-fixture-hash-{index}" for index in range(5)],
             },
             "face_identity_reference": {
                 "role": "face_identity_reference",
@@ -1857,6 +1886,7 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
                 "asset_hashes": ["doc245-face-fixture-hash"],
             },
         },
+        "body_morphology_profile": _doc245_body_morphology_contract(),
     }
     store = McpMaterializationHandoffStore(storage_root=tmp_path)
     handoff = store.ensure_pending(
@@ -1926,6 +1956,9 @@ def test_doc245_body_host_public_view_consumer_reads_typed_hair_backdrop_contrac
         "size_normalization": "white_matte_contain_to_contract_size",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
         ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
@@ -2115,6 +2148,43 @@ def _doc245_generic_mcp_rendering_contract() -> dict[str, object]:
     }
 
 
+def _doc245_body_morphology_contract() -> dict[str, object]:
+    bands = {
+        "relative_head_to_stature": "larger",
+        "shoulder_to_head": "narrower",
+        "torso_to_leg": "shorter_torso",
+        "arm_to_leg": "proportional",
+        "build": "slender",
+        "neck_shoulder": "narrow_transition",
+        "developmental_stage_context": "middle_stage_context",
+        "stance_ground": "grounded_full_contact",
+        "cross_view_support": "multi_view_supported",
+    }
+    canonical = lambda value: hashlib.sha256(  # noqa: E731
+        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    profile = {
+        "contract_version": "body_morphology_evidence_profile_v2",
+        "source_mode": "reference_assisted",
+        "source_truth_layer": "body_proportion_truth",
+        **bands,
+        "source_count": 5,
+        "analysis_receipt": {
+            "owner": "server_owned_body_proportion_analysis",
+            "status": "complete",
+            "analysis_provider": "configured_body_source_analysis_provider",
+        },
+    }
+    return {
+        "schema_version": "body_morphology_evidence_profile_v2",
+        "profile_digest": canonical(profile),
+        "bands_digest": canonical(bands),
+        "bands": bands,
+    }
+
+
 def _doc245_body_frozen_contract_fields() -> dict[str, object]:
     stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="body_silhouette",
@@ -2125,6 +2195,9 @@ def _doc245_body_frozen_contract_fields() -> dict[str, object]:
         "body_refresh_source_mode": "inference_first",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
         ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
@@ -2263,6 +2336,9 @@ def test_doc245_mcp_handoff_store_fails_closed_for_body_contract_without_valid_i
         "body_refresh_source_mode": "inference_first",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
         ),
     }
     if intent_payload is not None:
@@ -5244,7 +5320,7 @@ def test_doc245_product_api_body_source_ref_is_body_only_and_separate_from_face_
     ]
 
     assert [ref["role"] for ref in refs].count("body_proportion_reference") == 1
-    assert [ref["role"] for ref in refs].count("face_reference") == 2
+    assert [ref["role"] for ref in refs].count("face_reference") == 1
     body_ref = next(ref for ref in refs if ref["role"] == "body_proportion_reference")
     assert body_ref["asset_id"] == body_upload.asset_id
     assert body_ref["metadata"]["reference_truth_layer"] == "body_proportion_truth"
@@ -6522,17 +6598,23 @@ def test_doc245_body_provider_reference_subset_keeps_side_profile_authority() ->
         stage="body_silhouette",
         slot_key="body.front_full",
         reference_output_ids=refs,
-    ) == ["face_front_winner", "face_rear_winner"]
+    ) == ["face_front_winner"]
     assert V3ProductApiService._professional_character_card_provider_reference_output_ids(
         stage="body_silhouette",
         slot_key="body.side_full",
         reference_output_ids=refs,
-    ) == ["face_profile_90_winner", "face_front_winner"]
+    ) == ["face_profile_90_winner"]
     assert V3ProductApiService._professional_character_card_provider_reference_output_ids(
         stage="body_silhouette",
         slot_key="body.rear_full",
         reference_output_ids=refs,
-    ) == ["face_rear_winner", "face_profile_90_winner"]
+    ) == ["face_rear_winner"]
+
+    assert V3ProductApiService._professional_character_card_face_view_binding(refs) == {
+        "front_full": {"face_slot": "face.front", "source_asset_id": "face_front_winner"},
+        "side_full": {"face_slot": "face.profile", "source_asset_id": "face_profile_90_winner"},
+        "rear_full": {"face_slot": "face.rear_head", "source_asset_id": "face_rear_winner"},
+    }
 
 
 def test_doc245_body_provider_reference_subset_rejects_invalid_body_chain() -> None:

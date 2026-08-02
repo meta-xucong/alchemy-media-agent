@@ -75,6 +75,7 @@ from app.providers.base import ProviderRuntimeError
 
 def _doc203_body_frozen_contract_fields() -> dict[str, object]:
     from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+        body_silhouette_integrated_whole_person_synthesis_contract,
         body_silhouette_mcp_materialization_channel_contract,
     )
     from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
@@ -87,6 +88,9 @@ def _doc203_body_frozen_contract_fields() -> dict[str, object]:
         "body_refresh_source_mode": "inference_first",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
+        ),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
         ),
         "body_refresh_presentation_intent": (
             default_body_refresh_presentation_intent().model_dump(mode="json")

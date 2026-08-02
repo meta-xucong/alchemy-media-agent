@@ -204,6 +204,7 @@ def _trusted_internal_body_analysis_metadata() -> dict[str, Any]:
     metadata["professional_body_proportion_analysis_receipt"] = BodyProportionSourceAnalysisAdapter().analyze(
         metadata["professional_anchor_reference_assets"],
         source_mode="reference_assisted",
+        profile_version="v1",
         analyzer=lambda assets: _fake_body_owner_source_analysis(
             list(assets)
         ),
@@ -218,6 +219,7 @@ def test_body_source_analysis_adapter_requires_real_analyzer_output() -> None:
         BodyProportionSourceAnalysisAdapter().analyze(
             metadata["professional_anchor_reference_assets"],
             source_mode="reference_assisted",
+            profile_version="v1",
             analyzer=None,
         )
 
@@ -235,6 +237,7 @@ def test_configured_body_source_provider_is_the_explicit_real_analyzer_boundary(
     profile = BodyProportionSourceAnalysisAdapter().analyze(
         metadata["professional_anchor_reference_assets"],
         source_mode="reference_assisted",
+        profile_version="v1",
         analyzer=provider,
     )
 
@@ -475,6 +478,7 @@ def test_body_source_analyzer_output_schema_is_validated_before_projection(mutat
         BodyProportionSourceAnalysisAdapter().analyze(
             metadata["professional_anchor_reference_assets"],
             source_mode="reference_assisted",
+            profile_version="v1",
             analyzer=lambda _assets: deepcopy(raw_profile),
         )
 
@@ -547,6 +551,7 @@ def test_body_source_provider_unavailable_fails_closed_without_raw_error_project
         BodyProportionSourceAnalysisAdapter().analyze(
             metadata["professional_anchor_reference_assets"],
             source_mode="reference_assisted",
+            profile_version="v1",
             analyzer=_UnavailableBodySourceAnalysisProvider(),
         )
 

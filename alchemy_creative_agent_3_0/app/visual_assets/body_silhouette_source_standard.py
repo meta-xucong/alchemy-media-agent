@@ -58,6 +58,7 @@ BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES = frozenset(
         "collapsed_weight_bearing",
         "cardboard_stance",
         "stance_centerline_error",
+        "body_silhouette_integrated_review_evidence_missing",
     }
 )
 
@@ -93,6 +94,21 @@ BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS = (
     "scene_or_studio_styling_present",
 )
 BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING = "clothing_absence_positive_semantics_present"
+BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE = (
+    "body_silhouette_blocking_issue_evaluation_complete"
+)
+
+BODY_SILHOUETTE_INTEGRATED_WHOLE_PERSON_CONTRACT_VERSION = (
+    "professional_body_silhouette_integrated_whole_person_synthesis_v1"
+)
+
+BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS = (
+    "head_neck_shoulder_continuity",
+    "single_person_synthesis",
+    "natural_body_chain",
+    "natural_weight_bearing",
+    "shoulder_head_proportion",
+)
 
 _BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS = {
     "wardrobe_or_attire_channel_present": (
@@ -175,6 +191,69 @@ def body_silhouette_mcp_materialization_channel_contract() -> dict[str, Any]:
         "forbidden_channel_findings": list(BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS),
         "source_mode_scope": ["inference_first", "reference_assisted"],
     }
+
+
+def body_silhouette_integrated_whole_person_synthesis_contract() -> dict[str, Any]:
+    """Return the closed whole-person execution authority for Body MCP."""
+
+    return {
+        "contract_version": BODY_SILHOUETTE_INTEGRATED_WHOLE_PERSON_CONTRACT_VERSION,
+        "synthesis_mode": "one_coherent_whole_person",
+        "required_integrated_channels": [
+            "face",
+            "head",
+            "neck",
+            "shoulders",
+            "torso",
+            "limbs",
+        ],
+        "forbidden_composition_modes": [
+            "pasted_head_body_boundary",
+            "head_swap_or_composite",
+            "mannequin_body_chain",
+            "cardboard_stance",
+        ],
+        "authority": "professional_body_silhouette_renderer_execution_directive",
+    }
+
+
+def evaluate_body_silhouette_visual_review(payload: Any) -> dict[str, Any]:
+    """Fail closed unless typed pixel evidence covers the Body blockers."""
+
+    if not isinstance(payload, dict):
+        return {"status": "blocked", "formal_eligible": False}
+    evidence_codes = payload.get("evidence_codes")
+    issue_codes = payload.get("issue_codes")
+    if not isinstance(evidence_codes, list) or not isinstance(issue_codes, list):
+        return {"status": "blocked", "formal_eligible": False}
+    if BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE not in evidence_codes:
+        return {"status": "blocked", "formal_eligible": False}
+    if payload.get("verified") is not True or payload.get("status") != "pass":
+        return {"status": "blocked", "formal_eligible": False}
+    if set(str(code) for code in issue_codes) & BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES:
+        return {"status": "blocked", "formal_eligible": False}
+    integrated = payload.get("integrated_whole_person_review_evidence")
+    if not validate_integrated_whole_person_review_evidence(integrated):
+        return {"status": "blocked", "formal_eligible": False}
+    return {"status": "pass", "formal_eligible": True}
+
+
+def validate_integrated_whole_person_review_evidence(payload: Any) -> bool:
+    """Validate the typed, pixel-backed shared review evidence envelope."""
+
+    if not isinstance(payload, dict) or set(payload) != set(BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS):
+        return False
+    for dimension in BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS:
+        item = payload.get(dimension)
+        if not isinstance(item, dict) or set(item) != {"status", "pixel_evidence_present"}:
+            return False
+        if item.get("status") not in {"pass", "fail", "unknown"}:
+            return False
+        if type(item.get("pixel_evidence_present")) is not bool:
+            return False
+        if item["status"] != "pass" or item["pixel_evidence_present"] is not True:
+            return False
+    return True
 
 
 def body_silhouette_mcp_materialization_prompt_findings(prompt: Any) -> tuple[str, ...]:
@@ -375,6 +454,9 @@ __all__ = [
     "BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE",
     "BODY_SILHOUETTE_MCP_ALLOWED_BODY_CHANNELS",
     "BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING",
+    "BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE",
+    "BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS",
+    "BODY_SILHOUETTE_INTEGRATED_WHOLE_PERSON_CONTRACT_VERSION",
     "BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS",
     "BODY_SILHOUETTE_MCP_MATERIALIZATION_CHANNEL_CONTRACT_VERSION",
     "BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES",
@@ -383,6 +465,9 @@ __all__ = [
     "BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR",
     "body_silhouette_mcp_materialization_channel_contract",
     "body_silhouette_mcp_materialization_prompt_findings",
+    "body_silhouette_integrated_whole_person_synthesis_contract",
     "body_silhouette_source_standard_contract",
+    "evaluate_body_silhouette_visual_review",
+    "validate_integrated_whole_person_review_evidence",
     "validated_body_silhouette_source_standard_contract",
 ]

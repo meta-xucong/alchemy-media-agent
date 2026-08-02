@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 from .contracts import BrainRunRequest
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS
 from ..shared_capabilities.visual_cluster.expression_review import LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION
+from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
 
 
 SYSTEM_PROMPT = """You are the V3 Creative OS planning brain. Return JSON only.
@@ -522,6 +524,67 @@ def _compact_text(value: object, limit: int) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
+_BODY_MORPHOLOGY_REMOTE_FIELDS = (
+    "relative_head_to_stature",
+    "shoulder_to_head",
+    "torso_to_leg",
+    "arm_to_leg",
+    "build",
+    "neck_shoulder",
+    "developmental_stage_context",
+    "stance_ground",
+    "cross_view_support",
+)
+
+
+def _compact_body_morphology_server_context(
+    request: BrainRunRequest,
+) -> dict[str, object] | None:
+    """Project only the trusted v2 morphology profile into the Brain payload."""
+
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    if metadata.get("professional_body_proportion_receipt_required") is not True:
+        return None
+    if str(metadata.get("professional_character_card_body_refresh_source_mode") or "").strip().lower() != "reference_assisted":
+        return None
+    if str(metadata.get("professional_character_card_stage") or "").strip().lower() != "body_silhouette":
+        return None
+    if not str(metadata.get("professional_character_card_slot") or "").strip().lower().startswith("body."):
+        return None
+    server_context = metadata.get("professional_body_proportion_server_context")
+    if not isinstance(server_context, dict):
+        raise ValueError("body_proportion_analysis_context_missing")
+    raw_profile = server_context.get("body_proportion_evidence_profile")
+    try:
+        profile = BodyMorphologyEvidenceProfile.model_validate(raw_profile)
+    except Exception as exc:
+        raise ValueError("body_refresh_analysis_context_superseded") from exc
+    safe_context = metadata.get("professional_body_refresh_analysis_context")
+    if not isinstance(safe_context, dict):
+        raise ValueError("body_proportion_analysis_context_missing")
+    profile_digest = str(safe_context.get("profile_digest") or "").strip().lower()
+    if len(profile_digest) != 64 or any(char not in "0123456789abcdef" for char in profile_digest):
+        raise ValueError("body_proportion_analysis_context_mismatch")
+    computed_digest = hashlib.sha256(
+        json.dumps(
+            profile.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if computed_digest != profile_digest:
+        raise ValueError("body_proportion_analysis_context_mismatch")
+    return {
+        "schema_version": "body_morphology_evidence_profile_v2",
+        "profile_digest": profile_digest,
+        "bands": {
+            field_name: getattr(profile, field_name)
+            for field_name in _BODY_MORPHOLOGY_REMOTE_FIELDS
+        },
+    }
+
+
 def _compact_remote_creative_payload(
     request: BrainRunRequest,
     *,
@@ -570,6 +633,9 @@ def _compact_remote_creative_payload(
     if photography_context:
         payload["photography_creative_context"] = photography_context
         payload["photography_context_instructions"] = PHOTOGRAPHY_CONTEXT_INSTRUCTIONS
+    body_context = _compact_body_morphology_server_context(request)
+    if body_context is not None:
+        payload["professional_body_proportion_server_context"] = body_context
     return payload
 
 

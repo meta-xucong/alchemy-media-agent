@@ -552,3 +552,33 @@ standard three-candidate requirement, shared review, Body source-standard
 positive evidence, formal slot receipt, card-level cross-view parity, pending
 refresh, explicit activation, provider cap, Brain route, MCP route, or any
 real generation authorization.
+
+## 13. Integrated whole-person synthesis supersedes composite-like Body output
+
+The previous reference-assisted Body attempt is superseded. Its generated
+images are failure evidence only and cannot be resumed, selected, written to a
+formal slot, or activated. A generic Body profile, multiple unmatched Face
+frames, or a high-confidence generic Vision pass is not sufficient acceptance.
+
+For a fresh reference-assisted attempt, Body evidence remains in the
+analysis/profile contract. The five similar-person source images are analyzed
+once into the closed `body_morphology_evidence_profile_v2`; those images do not
+become physical MCP or ImageGen inputs. Face refs are identity evidence only.
+For each Body view, the renderer receives one exact current-project Face
+winner and its complementary feature-detail and head-geometry derivatives.
+The renderer must never mix different Face view owners or use a Face reference
+as Body proportion truth.
+
+The frozen renderer authority is
+`professional_body_silhouette_integrated_whole_person_synthesis_v1`. It must
+synthesize one coherent person from face and head through neck, shoulders,
+torso, limbs, stance, and ground contact. A head swap, pasted/composite head,
+mannequin body chain, floating neck, or cardboard stance is a blocking defect,
+not an acceptable identity-preservation technique.
+
+Shared Vision must return typed `integrated_whole_person_review_evidence` for
+head/neck/shoulder continuity, single-person synthesis, natural body chain,
+natural weight bearing, and shoulder/head proportion. Every dimension must be
+pixel-backed and pass. Missing, unknown, or failed evidence blocks shared
+review and therefore blocks winner selection, formal receipt, pending refresh,
+and activation even when a generic provider verdict says pass.

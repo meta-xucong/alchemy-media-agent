@@ -23,6 +23,11 @@ from .vision_provider import (
 from .identity_metric import create_default_identity_metric_provider
 from .human_photorealism import HUMAN_REALISM_REVIEW_DIMENSIONS, normalize_human_realism_issue_code
 from .reference_channel_policy import reference_channel_retry_patch
+from ...visual_assets.body_silhouette_source_standard import (
+    BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE,
+    BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES,
+    validate_integrated_whole_person_review_evidence,
+)
 
 
 _WATERMARK_OR_TEXT_ISSUES = {
@@ -252,6 +257,7 @@ RETRYABLE_ISSUE_CODES = {
     # Doc143 uses the same generic Human Realism dimensions in a frozen pixel
     # attestation.  They remain capability evidence, never local retry prose.
     *HUMAN_REALISM_REVIEW_DIMENSIONS,
+    *BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES,
 }
 
 FINAL_ISSUE_CODES = {
@@ -500,6 +506,26 @@ class VisionOutputInspector:
             for code in _provider_issue_codes(payload)
         )
         review_contract = active_review_contract(metadata)
+        professional_review = review_contract.get("professional_identity_quality")
+        body_review = (
+            professional_review.get("body_silhouette_review")
+            if isinstance(professional_review, dict)
+            else None
+        )
+        integrated_review_evidence: dict[str, Any] = {}
+        if isinstance(body_review, dict) and body_review.get("applies"):
+            raw_integrated = payload.get("integrated_whole_person_review_evidence")
+            evidence_codes = _string_list(payload.get("evidence_codes"))
+            if (
+                BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE
+                in evidence_codes
+                and validate_integrated_whole_person_review_evidence(raw_integrated)
+            ):
+                integrated_review_evidence = dict(raw_integrated)
+            else:
+                issue_codes = _dedupe(
+                    [*issue_codes, "body_silhouette_integrated_review_evidence_missing"]
+                )
         feedback_evidence, feedback_issue_codes = _feedback_review_evidence(
             payload,
             review_feedback_contract(metadata),
@@ -596,6 +622,7 @@ class VisionOutputInspector:
                 "ignored_out_of_scope_issue_codes": ignored_out_of_scope_issue_codes,
                 "feedback_review": feedback_evidence,
                 "human_naturalness_attestation": human_attestation,
+                "integrated_whole_person_review_evidence": integrated_review_evidence,
             },
             user_visible_summary=user_summary[:4],
             metadata={"doc": "55", "vision_provider": provider_name, **_public_metadata(metadata)},

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import hashlib
+import json
 import math
 from pathlib import Path
 import re
@@ -32,6 +33,7 @@ from ..visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
+    body_silhouette_integrated_whole_person_synthesis_contract,
 )
 from ..visual_assets.character_card import (
     BodySilhouetteBackdropPresentationContract,
@@ -39,6 +41,7 @@ from ..visual_assets.character_card import (
     BodyRefreshPresentationIntent,
     unspecified_body_refresh_presentation_intent,
 )
+from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
 from app.providers.base import ProviderRuntimeError
 from .mcp_materialization import (
     McpMaterializationError,
@@ -205,6 +208,15 @@ def build_provider_generation_request(
             ),
             "professional_character_card_body_refresh_presentation_intent": metadata.get(
                 "professional_character_card_body_refresh_presentation_intent"
+            ),
+            "professional_character_card_face_view_binding": metadata.get(
+                "professional_character_card_face_view_binding"
+            ),
+            "professional_body_proportion_analysis_receipt": metadata.get(
+                "professional_body_proportion_analysis_receipt"
+            ),
+            "professional_body_refresh_analysis_context": metadata.get(
+                "professional_body_refresh_analysis_context"
             ),
             "professional_character_card_attempt_round": metadata.get("professional_character_card_attempt_round"),
             "professional_character_card_reference_output_ids": metadata.get(
@@ -3331,20 +3343,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 or asset_metadata.get("codex_native_reference_channel")
                 or ""
             ).strip()
+            stage = str(metadata.get("professional_character_card_stage") or "").strip()
+            if stage == "body_silhouette":
+                # The view binding selects one exact Face winner before this
+                # derivative expansion. Keep both Doc95 identity scopes even
+                # when Body physical-input isolation is active.
+                return ("portrait_identity_crop", "portrait_identity_pose_geometry_crop")
             if (
                 metadata.get("professional_body_proportion_projection_active") is True
                 and server_owned
                 and channel in {"portrait_identity", "selected_identity_reference"}
             ):
                 return ("portrait_identity_crop",)
-            stage = str(metadata.get("professional_character_card_stage") or "").strip()
             if stage == "expression_set":
                 return ("portrait_identity_crop", "portrait_identity_pose_geometry_crop")
-            if stage == "body_silhouette":
-                # Three face continuity winners remain three native evidence
-                # inputs; do not expand each into a pair and exceed the
-                # shared Provider reference budget.
-                return ("portrait_identity_crop",)
         if metadata.get("professional_identity_reference_strategy") == "visual_asset_library_product_model_v1":
             asset_metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
             server_owned = bool(
@@ -5785,6 +5797,27 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             and str(item.get("reference_truth_layer") or "").strip() == "portrait_identity_truth"
             and item.get("provider_input_mode") == "reference_image"
         ]
+        view_kind = str(metadata.get("professional_character_card_slot") or "").strip().lower()
+        view_kind = {
+            "body.front_full": "front_full",
+            "body.side_full": "side_full",
+            "body.rear_full": "rear_full",
+        }.get(view_kind, "")
+        binding = metadata.get("professional_character_card_face_view_binding")
+        if not isinstance(binding, dict):
+            raise ProviderRuntimeError(
+                "Strict Body MCP materialization requires an admitted Face view binding.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "professional_face_view_binding_missing",
+                    "fallback": "blocked",
+                },
+            )
+        physical_assets = self._view_aware_face_identity_renderer_plan(
+            physical_assets,
+            view_kind=view_kind,
+            face_view_binding=binding,
+        )
         filtered = dict(asset_plan)
         filtered["assets"] = physical_assets
         filtered["provider_requirements"] = {
@@ -5837,6 +5870,117 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         filtered["provider_input_plan"] = provider_plan
         return filtered
 
+    @staticmethod
+    def _view_aware_face_identity_renderer_plan(
+        references: list[dict[str, Any]],
+        *,
+        view_kind: str,
+        face_view_binding: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Apply Doc95 complementary Face evidence selection at provider scope."""
+
+        candidates = [
+            dict(item)
+            for item in references
+            if isinstance(item, dict)
+            and str(item.get("role") or "").strip() == "portrait_identity"
+            and str(item.get("provider_input_mode") or "").strip() == "reference_image"
+        ]
+        if not candidates:
+            raise ProviderRuntimeError(
+                "Strict Body MCP Face view binding has no renderer evidence.",
+                provider="codex_builtin_imagegen",
+                detail={"failure_code": "professional_face_view_binding_mismatch", "fallback": "blocked"},
+            )
+        view = str(view_kind or "").strip().lower()
+        binding = face_view_binding.get(view) or face_view_binding.get(f"body.{view}")
+        if not isinstance(binding, dict):
+            raise ProviderRuntimeError(
+                "Strict Body MCP materialization requires a Face binding for the requested view.",
+                provider="codex_builtin_imagegen",
+                detail={"failure_code": "professional_face_view_binding_missing", "fallback": "blocked"},
+            )
+        slot_key = str(binding.get("face_slot") or "").strip()
+        binding_source_id = str(binding.get("source_asset_id") or "").strip()
+        if not binding_source_id:
+            source_ids = [str(item).strip() for item in (binding.get("source_asset_ids") or []) if str(item).strip()]
+            if len(source_ids) != 1:
+                raise ProviderRuntimeError(
+                    "Strict Body MCP Face binding must identify one canonical Face source.",
+                    provider="codex_builtin_imagegen",
+                    detail={"failure_code": "professional_face_view_binding_invalid", "fallback": "blocked"},
+                )
+            binding_source_id = source_ids[0]
+        if not slot_key or not binding_source_id:
+            raise ProviderRuntimeError(
+                "Strict Body MCP Face binding is incomplete.",
+                provider="codex_builtin_imagegen",
+                detail={"failure_code": "professional_face_view_binding_invalid", "fallback": "blocked"},
+            )
+        candidates = [
+            item
+            for item in candidates
+            if str(item.get("source_asset_id") or "").strip() == binding_source_id
+            and str(item.get("face_slot") or slot_key).strip() == slot_key
+        ]
+        if not candidates:
+            raise ProviderRuntimeError(
+                "Strict Body MCP Face view binding has no matching renderer evidence.",
+                provider="codex_builtin_imagegen",
+                detail={"failure_code": "professional_face_view_binding_mismatch", "fallback": "blocked"},
+            )
+        matching = [
+            item
+            for item in candidates
+            if str(item.get("body_view_kind") or "").strip().lower() in {view, "", "all"}
+        ]
+        if matching:
+            candidates = matching
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for item in candidates:
+            candidate_source_id = str(
+                item.get("source_asset_id") or item.get("asset_id") or ""
+            ).strip()
+            if candidate_source_id:
+                groups.setdefault(candidate_source_id, []).append(item)
+        if set(groups) != {binding_source_id}:
+            raise ProviderRuntimeError(
+                "Strict Body MCP Face binding resolved an ambiguous source group.",
+                provider="codex_builtin_imagegen",
+                detail={"failure_code": "professional_face_view_binding_mismatch", "fallback": "blocked"},
+            )
+        # The server-owned binding identifies one exact Face source. Select
+        # only its complementary Doc95 derivatives; never choose a source by
+        # ordering and never mix full frames or other Face views.
+        group = groups[binding_source_id]
+        priority = {"feature_detail": 0, "head_geometry": 1, "pose_geometry": 1}
+        crops = [
+            item
+            for item in group
+            if str(item.get("identity_evidence_scope") or "").strip() in priority
+            and str(item.get("derivative_kind") or "").strip()
+            in {"portrait_identity_crop", "portrait_identity_pose_geometry_crop"}
+        ]
+        crops.sort(key=lambda item: priority.get(str(item.get("identity_evidence_scope") or ""), 9))
+        selected_by_scope: dict[str, dict[str, Any]] = {}
+        for item in crops:
+            scope = str(item.get("identity_evidence_scope") or "").strip()
+            canonical_scope = "head_geometry" if scope == "pose_geometry" else scope
+            if canonical_scope in selected_by_scope:
+                raise ProviderRuntimeError(
+                    "Strict Body MCP Face binding contains duplicate identity evidence scope.",
+                    provider="codex_builtin_imagegen",
+                    detail={"failure_code": "professional_face_view_binding_duplicate_scope", "fallback": "blocked"},
+                )
+            selected_by_scope[canonical_scope] = item
+        if set(selected_by_scope) != {"feature_detail", "head_geometry"}:
+            raise ProviderRuntimeError(
+                "Strict Body MCP Face binding requires complementary feature_detail and head_geometry crops.",
+                provider="codex_builtin_imagegen",
+                detail={"failure_code": "professional_face_view_binding_incomplete", "fallback": "blocked"},
+            )
+        return [selected_by_scope["feature_detail"], selected_by_scope["head_geometry"]]
+
     def _select_provider(self, reference_assets: list[dict[str, Any]]) -> str:
         return "codex_builtin_imagegen"
 
@@ -5860,6 +6004,9 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             self._reject_superseded_body_wardrobe_payload(metadata)
             contract["body_silhouette_mcp_materialization_channel_contract"] = (
                 body_silhouette_mcp_materialization_channel_contract()
+            )
+            contract["body_silhouette_integrated_whole_person_synthesis_contract"] = (
+                body_silhouette_integrated_whole_person_synthesis_contract()
             )
             if self._is_strict_character_card_body_refresh(metadata):
                 source_mode = str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip()
@@ -5895,6 +6042,71 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                 contract["body_silhouette_backdrop_presentation_contract"] = (
                     self._safe_body_silhouette_backdrop_presentation_contract(metadata)
                 )
+                if source_mode == "reference_assisted":
+                    profile = metadata.get("professional_body_proportion_analysis_receipt")
+                    if not isinstance(profile, BodyMorphologyEvidenceProfile):
+                        raise ReferenceInputAdmissionError(
+                            "Strict reference-assisted Body MCP requires the frozen v2 morphology profile.",
+                            provider=self.provider_name,
+                            detail={
+                                "reference_input_failure_code": "body_proportion_analysis_context_missing",
+                                "fallback": "blocked",
+                            },
+                        )
+                    safe_context = metadata.get("professional_body_refresh_analysis_context")
+                    if not isinstance(safe_context, dict):
+                        raise ReferenceInputAdmissionError(
+                            "Strict reference-assisted Body MCP requires the frozen analysis context.",
+                            provider=self.provider_name,
+                            detail={
+                                "reference_input_failure_code": "body_proportion_analysis_context_missing",
+                                "fallback": "blocked",
+                            },
+                        )
+                    profile_digest = hashlib.sha256(
+                        json.dumps(
+                            profile.model_dump(mode="json"),
+                            ensure_ascii=True,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    if profile_digest != str(safe_context.get("profile_digest") or "").strip().lower():
+                        raise ReferenceInputAdmissionError(
+                            "Strict reference-assisted Body MCP morphology context does not match its frozen digest.",
+                            provider=self.provider_name,
+                            detail={
+                                "reference_input_failure_code": "body_proportion_analysis_context_mismatch",
+                                "fallback": "blocked",
+                            },
+                        )
+                    morphology_bands = {
+                        field_name: getattr(profile, field_name)
+                        for field_name in (
+                            "relative_head_to_stature",
+                            "shoulder_to_head",
+                            "torso_to_leg",
+                            "arm_to_leg",
+                            "build",
+                            "neck_shoulder",
+                            "developmental_stage_context",
+                            "stance_ground",
+                            "cross_view_support",
+                        )
+                    }
+                    contract["body_morphology_profile"] = {
+                        "schema_version": "body_morphology_evidence_profile_v2",
+                        "profile_digest": profile_digest,
+                        "bands_digest": hashlib.sha256(
+                            json.dumps(
+                                morphology_bands,
+                                ensure_ascii=True,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode("utf-8")
+                        ).hexdigest(),
+                        "bands": morphology_bands,
+                    }
         require_body_rendering_contract = (
             self._is_character_card_body_mcp_materialization(metadata)
             and self._is_strict_character_card_body_refresh(metadata)
