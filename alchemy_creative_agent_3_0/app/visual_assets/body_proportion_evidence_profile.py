@@ -83,6 +83,134 @@ class BodyProportionEvidenceBands(V3BaseModel):
     ]
 
 
+_BODY_PROPORTION_BAND_KEYS = frozenset(BodyProportionEvidenceBands.model_fields)
+_BODY_ANALYSIS_RESPONSE_KEYS = frozenset({"allowed_bands"})
+_BODY_ANALYSIS_SHAPE_CODES = frozenset(
+    {
+        "none",
+        "body_proportion_analysis_profile_valid",
+        "body_proportion_analysis_profile_invalid",
+        "body_proportion_analysis_provider_unavailable",
+    }
+)
+_MISSING_RESPONSE_VALUE = object()
+
+
+def _safe_response_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, Mapping):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "other"
+
+
+def _safe_response_keys(value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    return sorted(
+        key if isinstance(key, str) else "<non_string_key>"
+        for key in value
+    )
+
+
+def _safe_response_shape_projection(
+    raw_response: Any,
+    *,
+    output_text: Any = _MISSING_RESPONSE_VALUE,
+    schema_code: str = "none",
+) -> dict[str, Any]:
+    """Return only bounded response-shape facts; never return response values."""
+
+    if schema_code not in _BODY_ANALYSIS_SHAPE_CODES:
+        schema_code = "body_proportion_analysis_profile_invalid"
+
+    if output_text is _MISSING_RESPONSE_VALUE:
+        output_text_value = raw_response if isinstance(raw_response, str) else None
+    else:
+        output_text_value = output_text
+    output_text_present = output_text_value is not None
+    output_text_type = (
+        _safe_response_type(output_text_value) if output_text_present else "absent"
+    )
+
+    parsed_response = raw_response
+    json_parse_status = "not_applicable"
+    if output_text_present:
+        if isinstance(output_text_value, str):
+            try:
+                parsed_response = json.loads(output_text_value)
+                json_parse_status = "success"
+            except (TypeError, ValueError):
+                parsed_response = _MISSING_RESPONSE_VALUE
+                json_parse_status = "failed"
+        else:
+            parsed_response = _MISSING_RESPONSE_VALUE
+            json_parse_status = "not_attempted"
+
+    if parsed_response is _MISSING_RESPONSE_VALUE:
+        response_top_level_type = "unknown"
+        response_top_level_keys: list[str] = []
+        response_unknown_field_count = 0
+        response_missing_field_count = len(_BODY_ANALYSIS_RESPONSE_KEYS)
+        allowed_bands_type = "absent"
+        allowed_bands_keys: list[str] = []
+        allowed_bands_unknown_field_count = 0
+        allowed_bands_missing_field_count = len(_BODY_PROPORTION_BAND_KEYS)
+    else:
+        response_top_level_type = _safe_response_type(parsed_response)
+        response_top_level_keys = _safe_response_keys(parsed_response)
+        response_key_set = set(response_top_level_keys)
+        response_unknown_field_count = len(
+            response_key_set - _BODY_ANALYSIS_RESPONSE_KEYS
+        )
+        response_missing_field_count = len(
+            _BODY_ANALYSIS_RESPONSE_KEYS - response_key_set
+        )
+        bands = (
+            parsed_response.get("allowed_bands")
+            if isinstance(parsed_response, Mapping)
+            else None
+        )
+        if isinstance(bands, Mapping):
+            allowed_bands_type = "object"
+            allowed_bands_keys = _safe_response_keys(bands)
+            band_key_set = set(allowed_bands_keys)
+            allowed_bands_unknown_field_count = len(
+                band_key_set - _BODY_PROPORTION_BAND_KEYS
+            )
+            allowed_bands_missing_field_count = len(
+                _BODY_PROPORTION_BAND_KEYS - band_key_set
+            )
+        else:
+            allowed_bands_type = "absent"
+            allowed_bands_keys = []
+            allowed_bands_unknown_field_count = 0
+            allowed_bands_missing_field_count = len(_BODY_PROPORTION_BAND_KEYS)
+
+    return {
+        "output_text_present": output_text_present,
+        "output_text_type": output_text_type,
+        "json_parse_status": json_parse_status,
+        "response_top_level_type": response_top_level_type,
+        "response_top_level_keys": response_top_level_keys,
+        "response_unknown_field_count": response_unknown_field_count,
+        "response_missing_field_count": response_missing_field_count,
+        "allowed_bands_type": allowed_bands_type,
+        "allowed_bands_keys": allowed_bands_keys,
+        "allowed_bands_unknown_field_count": allowed_bands_unknown_field_count,
+        "allowed_bands_missing_field_count": allowed_bands_missing_field_count,
+        "schema_code": schema_code,
+    }
+
+
 class BodyProportionAnalysisReceipt(V3BaseModel):
     """Server-owned proof that a Body profile came from source analysis."""
 
@@ -178,6 +306,7 @@ class OpenAICompatibleBodySourceAnalysisTransport:
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
+        self.last_response_shape_projection: dict[str, Any] | None = None
 
     def analyze(
         self,
@@ -217,11 +346,21 @@ class OpenAICompatibleBodySourceAnalysisTransport:
         except Exception as exc:
             raise RuntimeError("body source analysis transport failed") from exc
         output_text = str(getattr(response, "output_text", "") or "").strip()
+        self.last_response_shape_projection = _safe_response_shape_projection(
+            output_text,
+            output_text=output_text if output_text else None,
+        )
         if not output_text:
+            self.last_response_shape_projection["schema_code"] = (
+                "body_proportion_analysis_provider_unavailable"
+            )
             raise ValueError("body source analysis response was empty")
         try:
             return json.loads(output_text)
         except (TypeError, ValueError) as exc:
+            self.last_response_shape_projection["schema_code"] = (
+                "body_proportion_analysis_provider_unavailable"
+            )
             raise ValueError("body source analysis response was not valid JSON") from exc
 
 
@@ -260,6 +399,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         self.base_url = base_url
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.last_response_shape_projection: dict[str, Any] | None = None
         self.transport = transport or (
             OpenAICompatibleBodySourceAnalysisTransport(
                 api_key=api_key or "",
@@ -294,9 +434,32 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         except BodyProportionAnalysisError:
             raise
         except Exception as exc:
+            transport_projection = getattr(
+                self.transport,
+                "last_response_shape_projection",
+                None,
+            )
+            self.last_response_shape_projection = (
+                dict(transport_projection)
+                if isinstance(transport_projection, Mapping)
+                else _safe_response_shape_projection(
+                    None,
+                    schema_code="body_proportion_analysis_provider_unavailable",
+                )
+            )
             raise BodyProportionAnalysisError(
                 "body_proportion_analysis_provider_unavailable"
             ) from exc
+        transport_projection = getattr(
+            self.transport,
+            "last_response_shape_projection",
+            None,
+        )
+        self.last_response_shape_projection = (
+            dict(transport_projection)
+            if isinstance(transport_projection, Mapping)
+            else _safe_response_shape_projection(raw_response)
+        )
         try:
             payload = self._parse_response(raw_response)
             profile = BodyProportionEvidenceProfile.model_validate(
@@ -316,9 +479,17 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         except BodyProportionAnalysisError:
             raise
         except (ValidationError, TypeError, ValueError, KeyError) as exc:
+            self.last_response_shape_projection = {
+                **(self.last_response_shape_projection or {}),
+                "schema_code": "body_proportion_analysis_profile_invalid",
+            }
             raise BodyProportionAnalysisError(
                 "body_proportion_analysis_profile_invalid"
             ) from exc
+        self.last_response_shape_projection = {
+            **(self.last_response_shape_projection or {}),
+            "schema_code": "body_proportion_analysis_profile_valid",
+        }
         return profile.model_dump(mode="json")
 
     @classmethod

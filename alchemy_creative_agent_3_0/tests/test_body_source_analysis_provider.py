@@ -199,3 +199,56 @@ def test_body_source_result_does_not_create_physical_face_or_mcp_inputs(tmp_path
     assert "reference_assets" not in profile
     assert "face_identity_reference" not in profile
     assert "body_proportion_reference" not in profile
+
+
+def test_invalid_output_text_exposes_only_safe_response_shape_projection(tmp_path: Path) -> None:
+    response = {"allowed_bands": {**_BANDS, "unexpected": "closed"}}
+    provider = _provider(_FakeAnalysisTransport(response=response))
+
+    with pytest.raises(
+        BodyProportionAnalysisError,
+        match="body_proportion_analysis_profile_invalid",
+    ):
+        provider.analyze(_body_assets(tmp_path))
+
+    projection = provider.last_response_shape_projection
+    assert projection == {
+        "output_text_present": False,
+        "output_text_type": "absent",
+        "json_parse_status": "not_applicable",
+        "response_top_level_type": "object",
+        "response_top_level_keys": ["allowed_bands"],
+        "response_unknown_field_count": 0,
+        "response_missing_field_count": 0,
+        "allowed_bands_type": "object",
+        "allowed_bands_keys": sorted((*_BANDS, "unexpected")),
+        "allowed_bands_unknown_field_count": 1,
+        "allowed_bands_missing_field_count": 0,
+        "schema_code": "body_proportion_analysis_profile_invalid",
+    }
+    assert "raw_response" not in projection
+    assert "provider_payload" not in projection
+    assert "closed" not in projection["allowed_bands_keys"]
+
+
+def test_output_text_json_shape_projection_has_no_response_values(tmp_path: Path) -> None:
+    response = '{"allowed_bands": {"unexpected": "redacted"}}'
+    provider = _provider(_FakeAnalysisTransport(response=response))
+
+    with pytest.raises(
+        BodyProportionAnalysisError,
+        match="body_proportion_analysis_profile_invalid",
+    ):
+        provider.analyze(_body_assets(tmp_path))
+
+    projection = provider.last_response_shape_projection
+    assert projection["output_text_present"] is True
+    assert projection["output_text_type"] == "string"
+    assert projection["json_parse_status"] == "success"
+    assert projection["response_top_level_type"] == "object"
+    assert projection["response_top_level_keys"] == ["allowed_bands"]
+    assert projection["allowed_bands_keys"] == ["unexpected"]
+    assert projection["allowed_bands_unknown_field_count"] == 1
+    assert projection["allowed_bands_missing_field_count"] == 7
+    assert projection["schema_code"] == "body_proportion_analysis_profile_invalid"
+    assert "redacted" not in str(projection)
