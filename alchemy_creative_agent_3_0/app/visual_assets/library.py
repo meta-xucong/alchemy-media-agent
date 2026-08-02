@@ -1338,17 +1338,17 @@ class VisualAssetLibraryLifecycleService:
         saved_asset = self.catalog.save(
             asset.model_copy(update={"character_card": persisted_card, "updated_at": _utc_now()})
         )
-        if getattr(result, "status", None) == "review":
-            reloaded_asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
-            verified_card = self._mark_body_refresh_formal_receipts_after_projection(
-                reloaded_asset.character_card
-            )
-            if verified_card != reloaded_asset.character_card:
-                saved_asset = self.catalog.save(
-                    reloaded_asset.model_copy(
-                        update={"character_card": verified_card, "updated_at": _utc_now()}
-                    )
+        reloaded_asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        verified_card = self._mark_body_refresh_formal_receipts_after_projection(
+            reloaded_asset.character_card
+        )
+        if verified_card != reloaded_asset.character_card:
+            saved_asset = self.catalog.save(
+                reloaded_asset.model_copy(
+                    update={"character_card": verified_card, "updated_at": _utc_now()}
                 )
+            )
+        if getattr(result, "status", None) == "review":
             self._record_body_refresh_cross_view_parity_after_review(
                 visual_asset_id=visual_asset_id,
                 saved_asset=saved_asset,
@@ -1385,6 +1385,15 @@ class VisualAssetLibraryLifecycleService:
         if self.character_card_stage_host is None:
             raise CharacterCardRuntimeUnavailable("character_card_body_refresh_unavailable")
         asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        reconciled_card = self._mark_body_refresh_formal_receipts_after_projection(
+            asset.character_card
+        )
+        if reconciled_card != asset.character_card:
+            asset = self.catalog.save(
+                asset.model_copy(
+                    update={"character_card": reconciled_card, "updated_at": _utc_now()}
+                )
+            )
         current_face_reference_output_ids = [
             str(asset.character_card.face_slots[key].output_id or "").strip()
             for key in ("face.front", "face.profile", "face.rear_head")
@@ -1496,19 +1505,16 @@ class VisualAssetLibraryLifecycleService:
         saved = self.catalog.save(
             asset.model_copy(update={"character_card": result.card, "updated_at": _utc_now()})
         )
-        if getattr(result, "status", None) == "review" or getattr(
-            result, "formal_slot_receipts", {}
-        ):
-            reloaded_asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
-            verified_card = self._mark_body_refresh_formal_receipts_after_projection(
-                reloaded_asset.character_card
-            )
-            if verified_card != reloaded_asset.character_card:
-                saved = self.catalog.save(
-                    reloaded_asset.model_copy(
-                        update={"character_card": verified_card, "updated_at": _utc_now()}
-                    )
+        reloaded_asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        verified_card = self._mark_body_refresh_formal_receipts_after_projection(
+            reloaded_asset.character_card
+        )
+        if verified_card != reloaded_asset.character_card:
+            saved = self.catalog.save(
+                reloaded_asset.model_copy(
+                    update={"character_card": verified_card, "updated_at": _utc_now()}
                 )
+            )
         if getattr(result, "status", None) == "review":
             self._record_body_refresh_cross_view_parity_after_review(
                 visual_asset_id=visual_asset_id,

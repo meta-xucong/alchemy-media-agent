@@ -44,6 +44,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardCandidateResult,
     CharacterCardRuntimeUnavailable,
+    CharacterCardStageResult,
 )
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
@@ -595,12 +596,19 @@ def test_new_host_reconstitutes_front_candidate_and_reaches_formal_receipt(
     assert [request.candidate_index for request in continuation.requests[2:]] == [1, 2, 3, 1, 2, 3]
 
 
-def _card_with_formal_front_refresh_slot(asset, attempt, front_attempts):
+def _card_with_formal_front_refresh_slot(
+    asset,
+    attempt,
+    front_attempts,
+    *,
+    reload_public_projection_verified: bool = True,
+):
     formal_receipt = CharacterCardPreparationService._formal_body_slot_receipt(  # noqa: SLF001
         slot_key="body.front_full",
         attempts=front_attempts,
     )
-    formal_receipt = mark_formal_slot_receipt_reload_public_projection_verified(formal_receipt)
+    if reload_public_projection_verified:
+        formal_receipt = mark_formal_slot_receipt_reload_public_projection_verified(formal_receipt)
     winner_attempt = next(
         item for item in front_attempts
         if item.candidate.output_id == formal_receipt.winner_output_id
@@ -620,6 +628,195 @@ def _card_with_formal_front_refresh_slot(asset, attempt, front_attempts):
             "body_silhouette_refresh_slots": {"body.front_full": front_slot},
         }
     )
+
+
+def _state_after_formal_front(
+    *,
+    store: BodyRefreshAttemptStateStore,
+    asset,
+    attempt,
+    context,
+    admission: BodySourceAdmission,
+    front_attempts,
+):
+    state = store.begin(
+        visual_asset_id=asset.visual_asset_id,
+        attempt_identity=attempt,
+        analysis_context=context,
+        body_source_admission=admission,
+    )
+    for index, candidate_attempt in enumerate(front_attempts, start=1):
+        output_id = candidate_attempt.candidate.output_id
+        state = store.checkpoint_reviewed_candidate(
+            state,
+            slot_key="body.front_full",
+            candidate_index=index,
+            attempt_round=1,
+            candidate_digest=hashlib.sha256(output_id.encode()).hexdigest(),
+            review_status="pass",
+            review_receipt_digest=(
+                CharacterCardPreparationService.body_refresh_review_receipt_digest(
+                    candidate_attempt.candidate,
+                    candidate_attempt.review,
+                )
+            ),
+            operation_id=(
+                f"{asset.visual_asset_id}:body_silhouette:body.front_full:{index}:refresh_attempt_"
+                f"{hashlib.sha256(attempt.attempt_id.encode()).hexdigest()[:16]}"
+            ),
+            output_id=output_id,
+        )
+    formal_receipt = CharacterCardPreparationService._formal_body_slot_receipt(  # noqa: SLF001
+        slot_key="body.front_full",
+        attempts=front_attempts,
+    )
+    return store.record_formal_receipt(state, formal_receipt=formal_receipt)
+
+
+def test_library_resume_reconciles_persisted_formal_receipt_before_host(
+    tmp_path: Path,
+) -> None:
+    lifecycle, host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=[
+            str(asset.character_card.face_slots[key].output_id or "")
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ],
+    )
+    front_attempts = [_body_attempt(index, slot_key="body.front_full") for index in (1, 2, 3)]
+    unmarked_card = _card_with_formal_front_refresh_slot(
+        asset,
+        attempt,
+        front_attempts,
+        reload_public_projection_verified=False,
+    )
+    assert not unmarked_card.body_silhouette_refresh_slots[
+        "body.front_full"
+    ].formal_slot_receipt.reload_public_projection_verified
+    lifecycle.catalog.save(asset.model_copy(update={"character_card": unmarked_card}))
+    store = BodyRefreshAttemptStateStore(tmp_path / "pre-host-reconcile-state")
+    _state_after_formal_front(
+        store=store,
+        asset=asset,
+        attempt=attempt,
+        context=context,
+        admission=admission,
+        front_attempts=front_attempts,
+    )
+    lifecycle = VisualAssetLibraryLifecycleService(
+        lifecycle.catalog,
+        root_source_resolver=service.get_uploaded_asset,
+        character_card_stage_host=host,
+        body_refresh_attempt_state_store=store,
+    )
+    observed = {"verified": False}
+
+    def resume_body_silhouette(**kwargs):
+        receipt = kwargs["card"].body_silhouette_refresh_slots[
+            "body.front_full"
+        ].formal_slot_receipt
+        observed["verified"] = bool(receipt.reload_public_projection_verified)
+        return CharacterCardStageResult(
+            status="blocked",
+            card=kwargs["card"],
+            attempts=[],
+            winner_output_ids={},
+            failure_codes=["mcp_materialization_pending"],
+        )
+
+    host.resume_body_silhouette = resume_body_silhouette  # type: ignore[method-assign]
+    lifecycle.resume_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        body_request=BodySilhouettePublicRequest(
+            source_class="observed",
+            body_reference_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=body_asset_ids,
+        ),
+        generation_channel="mcp",
+    )
+
+    assert observed["verified"] is True
+    persisted = lifecycle.get(owner_scope="owner", visual_asset_id=asset.visual_asset_id)
+    assert persisted.character_card.body_silhouette_refresh_slots[
+        "body.front_full"
+    ].formal_slot_receipt.reload_public_projection_verified
+
+
+def test_library_marks_formal_receipt_when_later_slot_returns_blocked(
+    tmp_path: Path,
+) -> None:
+    lifecycle, host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=[
+            str(asset.character_card.face_slots[key].output_id or "")
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ],
+    )
+    front_attempts = [_body_attempt(index, slot_key="body.front_full") for index in (1, 2, 3)]
+    unmarked_card = _card_with_formal_front_refresh_slot(
+        asset,
+        attempt,
+        front_attempts,
+        reload_public_projection_verified=False,
+    )
+    store = BodyRefreshAttemptStateStore(tmp_path / "post-save-reconcile-state")
+    _state_after_formal_front(
+        store=store,
+        asset=asset,
+        attempt=attempt,
+        context=context,
+        admission=admission,
+        front_attempts=front_attempts,
+    )
+    lifecycle = VisualAssetLibraryLifecycleService(
+        lifecycle.catalog,
+        root_source_resolver=service.get_uploaded_asset,
+        character_card_stage_host=host,
+        body_refresh_attempt_state_store=store,
+    )
+
+    def resume_body_silhouette(**kwargs):
+        return CharacterCardStageResult(
+            status="blocked",
+            card=unmarked_card,
+            attempts=[],
+            winner_output_ids={"body.front_full": unmarked_card.body_silhouette_refresh_slots["body.front_full"].output_id},
+            failure_codes=["mcp_materialization_pending"],
+        )
+
+    host.resume_body_silhouette = resume_body_silhouette  # type: ignore[method-assign]
+    lifecycle.resume_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        body_request=BodySilhouettePublicRequest(
+            source_class="observed",
+            body_reference_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=body_asset_ids,
+        ),
+        generation_channel="mcp",
+    )
+
+    persisted = lifecycle.get(owner_scope="owner", visual_asset_id=asset.visual_asset_id)
+    assert persisted.character_card.body_silhouette_refresh_slots[
+        "body.front_full"
+    ].formal_slot_receipt.reload_public_projection_verified
 
 
 def test_resume_side_preserves_same_attempt_formal_front_slot(tmp_path: Path) -> None:
