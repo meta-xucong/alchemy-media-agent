@@ -641,12 +641,12 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         model: str | None,
         profile_version: str = "v1",
         timeout_seconds: float = 90.0,
-        max_analysis_attempts: int = 2,
+        max_analysis_attempts: int = 3,
         transport: BodySourceAnalysisTransport | None = None,
     ) -> None:
         if profile_version not in {"v1", "v2"}:
             raise ValueError("body_refresh_analysis_profile_version_invalid")
-        if type(max_analysis_attempts) is not int or max_analysis_attempts not in {1, 2}:
+        if type(max_analysis_attempts) is not int or max_analysis_attempts not in {1, 2, 3}:
             raise ValueError("body_proportion_analysis_attempt_limit_invalid")
         self.api_key = api_key
         self.base_url = base_url
@@ -667,6 +667,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
         )
         self.timeout_seconds = timeout_seconds
         self.max_analysis_attempts = max_analysis_attempts
+        self.last_analysis_attempt_count = 0
         self.last_response_shape_projection: dict[str, Any] | None = None
         self.last_response_value_projection: dict[str, Any] | None = None
         self.transport = transport or (
@@ -692,6 +693,7 @@ class OpenAICompatibleBodySourceAnalysisProvider:
     ) -> Mapping[str, Any]:
         last_error: BodyProportionAnalysisError | None = None
         for attempt in range(1, self.max_analysis_attempts + 1):
+            self.last_analysis_attempt_count = attempt
             try:
                 return self._analyze_once(admitted_body_assets)
             except BodyProportionAnalysisError as exc:
