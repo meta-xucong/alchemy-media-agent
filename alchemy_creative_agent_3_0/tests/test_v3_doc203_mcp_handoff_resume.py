@@ -2904,6 +2904,175 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
     assert "body_silhouette_mcp_materialization_channel_contract" in resumed_handoff["rendering_contract"]
 
 
+def test_doc263_submitted_consumer_projects_persisted_output_record_before_shared_review(
+    tmp_path: Path,
+) -> None:
+    """Submitted MCP pixels must become a file-backed current-job output."""
+
+    job_id = "job_doc263_output_projection"
+    operation_id = "visual_asset_doc263_output_projection:body_silhouette:body.front_full:1"
+    prompt = "closed Body Silhouette MCP output projection prompt"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    body_intent = _doc203_body_frozen_contract_fields()["body_refresh_presentation_intent"]
+    frozen_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_generate",
+        "input_fidelity": "high",
+        "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
+        **_doc203_body_frozen_contract_fields(),
+    }
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract=frozen_contract,
+        require_body_rendering_contract=True,
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
+    )
+    assert submitted["status"] == "submitted"
+
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        stage="body_silhouette",
+        slot_key="body.front_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "mcp_materialization": {
+                "handoff_id": pending["handoff_id"],
+                "status": "submitted",
+                "generation_channel": "mcp",
+                "resume_required": True,
+            },
+            "llm_brain": {
+                "canonical_provider_prompts": [
+                    {"output_index": 1, "prompt": prompt, "review_status": "approved"}
+                ]
+            },
+        }
+    )
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="submitted MCP output projection checkpoint",
+            metadata={**planning_metadata, "project_id": "project_doc263_output_projection"},
+        ),
+        status=ProductJobStatusValue.GENERATING,
+        job_id_value=job_id,
+        planning_result=_minimal_planning_result(job_id, generation_metadata=planning_metadata),
+        generation_result=None,
+        balance_estimate={"credits_required": 0},
+    )
+    job_store.save(record)
+    handoff_store.job_store = job_store
+
+    class _PersistedOutputRouter:
+        def __init__(self) -> None:
+            self.output_id = "v3_output_11111111111111111111"
+
+        def generate(self, request):  # noqa: ANN001
+            return SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        candidate_id="candidate_doc263_output_projection",
+                        provider="mcp_materialization",
+                        file_path=None,
+                        uri=None,
+                        prompt_compilation_id="prompt_doc263_output_projection",
+                        condition_plan_id="condition_doc263_output_projection",
+                        metadata={
+                            "output_id": self.output_id,
+                            "mcp_materialization": {
+                                "handoff_id": pending["handoff_id"],
+                                "expected_checkpoint": {
+                                    "candidate_id": "candidate_doc263_output_projection",
+                                    "output_id": self.output_id,
+                                },
+                            },
+                        },
+                    )
+                ],
+                provider_metadata={"test_only": True},
+            )
+
+    router = _PersistedOutputRouter()
+    runtime = SimpleNamespace(
+        generation_router=router,
+        scenario_registry=ScenarioRuntime().scenario_registry,
+    )
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+
+    with pytest.raises(RuntimeError, match="mcp_materialization_output_projection_missing"):
+        service._consume_submitted_body_mcp_artifact(record)  # noqa: SLF001
+
+    missing_path_record = output_store.save_base64_output(
+        job_id=job_id,
+        candidate_id="candidate_doc263_output_projection",
+        asset_id="asset_doc223c",
+        provider="mcp_materialization",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(_png_bytes()).decode("ascii"),
+        output_id="v3_output_22222222222222222222",
+    )
+    Path(missing_path_record.file_path).unlink()
+    router.output_id = missing_path_record.output_id
+    with pytest.raises(RuntimeError, match="mcp_materialization_output_projection_missing"):
+        service._consume_submitted_body_mcp_artifact(record)  # noqa: SLF001
+
+    persisted = output_store.save_base64_output(
+        job_id=job_id,
+        candidate_id="candidate_doc263_output_projection",
+        asset_id="asset_doc223c",
+        provider="mcp_materialization",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(_png_bytes((180, 212, 236))).decode("ascii"),
+        output_id="v3_output_33333333333333333333",
+    )
+    router.output_id = persisted.output_id
+    planning_id = record.planning_result.planning_result_id
+    generated_result = service._consume_submitted_body_mcp_artifact(record)  # noqa: SLF001
+    assert generated_result is not None
+    assert generated_result.creative_job.job_id == job_id
+    assert generated_result.planning_result_id != planning_id
+    generated = generated_result.asset_pack.assets[0]
+    assert generated.file_path == persisted.file_path
+    assert generated.uri == persisted.thumbnail_url
+    assert generated.metadata["output_id"] == persisted.output_id
+    assert generated.metadata["candidate_metadata"]["output_id"] == persisted.output_id
+    assert generated.metadata["candidate_metadata"]["file_path"] == persisted.file_path
+    assert generated.metadata["candidate_metadata"]["uri"] == persisted.thumbnail_url
+    assert Path(generated.file_path).is_file()
+
+
 def test_doc263_generating_body_resume_reconciles_submitted_handoff_before_consumer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -5906,7 +6075,16 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
 
     artifact_path = tmp_path / "generated.png"
     artifact_path.write_bytes(_png_bytes())
-    output_id = "v3_output_doc263_reference_assisted_rear3"
+    output_id = "v3_output_44444444444444444444"
+    output_store.save_base64_output(
+        job_id=job_id,
+        candidate_id="candidate_doc263_reference_assisted_rear3",
+        asset_id="asset_doc223c",
+        provider="mcp_materialization",
+        model="gpt-image-2",
+        encoded_image=base64.b64encode(_png_bytes()).decode("ascii"),
+        output_id=output_id,
+    )
 
     class _RecordingRouter:
         def __init__(self) -> None:

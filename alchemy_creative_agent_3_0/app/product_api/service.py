@@ -3113,18 +3113,59 @@ class V3ProductApiService:
         packaged = planning_result.asset_pack.assets[0] if planning_result.asset_pack.assets else None
         if packaged is None:
             raise RuntimeError("submitted MCP Body resume has no frozen packaged asset")
+        output_id = str(candidate_metadata.get("output_id") or "").strip()
+        output_record = self.output_store.get_output(output_id) if output_id else None
+        if (
+            output_record is None
+            or output_record.job_id != record.job_id
+            or output_record.candidate_id != str(candidate.candidate_id or "").strip()
+            or output_record.asset_id != packaged.asset_id
+            or not str(output_record.file_path or "").strip()
+            or not Path(str(output_record.file_path)).is_file()
+        ):
+            error = RuntimeError("mcp_materialization_output_projection_missing")
+            error.code = "mcp_materialization_output_projection_missing"  # type: ignore[attr-defined]
+            error.detail = {  # type: ignore[attr-defined]
+                "failure_code": "mcp_materialization_output_projection_missing",
+                "provider_request_started": True,
+            }
+            raise error
+        output_uri = str(output_record.thumbnail_url or output_record.download_url or "").strip()
+        if not output_uri:
+            error = RuntimeError("mcp_materialization_output_projection_missing")
+            error.code = "mcp_materialization_output_projection_missing"  # type: ignore[attr-defined]
+            error.detail = {  # type: ignore[attr-defined]
+                "failure_code": "mcp_materialization_output_projection_missing",
+                "provider_request_started": True,
+            }
+            raise error
+        candidate_metadata = {
+            **candidate_metadata,
+            "output_id": output_record.output_id,
+            "file_path": output_record.file_path,
+            "uri": output_uri,
+            "download_url": output_record.download_url,
+            "preview_url": output_record.preview_url,
+            "thumbnail_url": output_record.thumbnail_url,
+            "mime_type": output_record.mime_type,
+            "width": output_record.width,
+            "height": output_record.height,
+        }
         packaged_metadata = {
             **dict(packaged.metadata or {}),
             "planning_only": False,
             "selected_candidate_id": candidate.candidate_id,
             "selected_candidate_provider": candidate.provider,
             "selected_candidate_is_mock": False,
+            "output_id": output_record.output_id,
+            "file_path": output_record.file_path,
+            "uri": output_uri,
             "candidate_metadata": candidate_metadata,
         }
         generated_packaged = packaged.model_copy(
             update={
-                "file_path": candidate.file_path,
-                "uri": candidate.uri,
+                "file_path": output_record.file_path,
+                "uri": output_uri,
                 "prompt_compilation_id": candidate.prompt_compilation_id or packaged.prompt_compilation_id,
                 "metadata": packaged_metadata,
             }
@@ -4144,14 +4185,16 @@ class V3ProductApiService:
 
     @staticmethod
     def _product_api_runtime_failure_from_exception(exc: Exception) -> dict[str, Any]:
-        failure_code = "runtime_error" if isinstance(exc, RuntimeError) else "worker_error"
+        closed_failure_code = str(getattr(exc, "code", "") or "").strip()
+        if closed_failure_code != "mcp_materialization_output_projection_missing":
+            closed_failure_code = "runtime_error" if isinstance(exc, RuntimeError) else "worker_error"
         return {
             "schema_version": "v3_generation_lifecycle_failure_v1",
             "status": "blocked",
             "owner": "v3_product_api_runtime",
             "failure_family": "product_api_runtime",
-            "failure_code": failure_code,
-            "reason_code": failure_code,
+            "failure_code": closed_failure_code,
+            "reason_code": closed_failure_code,
             "provider_request_started": False,
         }
 
