@@ -2433,14 +2433,38 @@ class ProductApiAnchorPackPreparationHost:
             return False
         if contract.get("body_refresh_source_mode") != request.body_refresh_source_mode:
             return False
-        for key, expected in (
-            ("slot_key", request.slot_key),
-            ("candidate_index", request.candidate_index),
-            ("candidate_count", request.candidate_count),
-            ("professional_body_refresh_analysis_context", request.body_refresh_analysis_context.safe_metadata()),
+        # Older submitted handoffs predate these four rendering-contract
+        # projections. The durable job request metadata is the authority for
+        # a compatibility read, but only when it already passed the exact
+        # server-owned checks above. Existing handoff fields remain strict:
+        # conflicts never get repaired or written back.
+        effective_contract = dict(contract)
+        for contract_key, metadata_key, expected in (
+            ("slot_key", "professional_character_card_slot", request.slot_key),
+            (
+                "candidate_index",
+                "professional_character_card_candidate_index",
+                request.candidate_index,
+            ),
+            (
+                "candidate_count",
+                "professional_character_card_candidate_count",
+                request.candidate_count,
+            ),
+            (
+                "professional_body_refresh_analysis_context",
+                "professional_body_refresh_analysis_context",
+                request.body_refresh_analysis_context.safe_metadata(),
+            ),
         ):
-            if key not in contract or contract.get(key) != expected:
+            if metadata.get(metadata_key) != expected:
                 return False
+            if contract_key in contract:
+                if contract.get(contract_key) != expected:
+                    return False
+            else:
+                effective_contract[contract_key] = expected
+        contract = effective_contract
         morphology = contract.get("body_morphology_profile")
         if not isinstance(morphology, dict):
             return False

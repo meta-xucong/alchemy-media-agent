@@ -1451,6 +1451,61 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
     assert resolved.output_id == output_id
     assert review_calls == [(output_id, handoff_id)]
 
+    legacy_handoff = dict(handoff_payload)
+    legacy_contract = dict(handoff_payload["rendering_contract"])
+    for legacy_key in (
+        "slot_key",
+        "candidate_index",
+        "candidate_count",
+        "professional_body_refresh_analysis_context",
+    ):
+        legacy_contract.pop(legacy_key, None)
+    legacy_handoff["rendering_contract"] = legacy_contract
+    monkeypatch.setattr(
+        host,
+        "_mcp_materialization_payload",
+        lambda _handoff_id, payload=legacy_handoff: payload,
+    )
+    review_calls.clear()
+
+    legacy_resolved = host._generate_character_card_candidate(request)  # noqa: SLF001
+
+    assert legacy_resolved.output_id == output_id
+    assert review_calls == [(output_id, handoff_id)]
+
+    conflicting_handoff = dict(legacy_handoff)
+    conflicting_contract = dict(legacy_contract)
+    conflicting_contract["slot_key"] = "body.front_full"
+    conflicting_handoff["rendering_contract"] = conflicting_contract
+    monkeypatch.setattr(
+        host,
+        "_mcp_materialization_payload",
+        lambda _handoff_id, payload=conflicting_handoff: payload,
+    )
+    with pytest.raises(AnchorCandidateUnavailable) as conflict_exc:
+        host._generate_character_card_candidate(request)  # noqa: SLF001
+    assert conflict_exc.value.failure_code == "mcp_materialization_checkpoint_mismatch"
+
+    missing_metadata = dict(record_metadata)
+    missing_metadata.pop("professional_body_refresh_analysis_context")
+    missing_metadata_record = SimpleNamespace(
+        job_id=record.job_id,
+        request=SimpleNamespace(metadata=missing_metadata),
+        planning_result=record.planning_result,
+        generation_result=record.generation_result,
+    )
+    monkeypatch.setattr(host, "_mcp_operation_job_records", lambda _operation_id: [missing_metadata_record])
+    monkeypatch.setattr(
+        host,
+        "_mcp_materialization_payload",
+        lambda _handoff_id, payload=legacy_handoff: payload,
+    )
+    with pytest.raises(AnchorCandidateUnavailable) as missing_metadata_exc:
+        host._generate_character_card_candidate(request)  # noqa: SLF001
+    assert missing_metadata_exc.value.failure_code == "mcp_materialization_checkpoint_mismatch"
+
+    monkeypatch.setattr(host, "_mcp_operation_job_records", lambda _operation_id: [record])
+
     explicit_review_only_request = request.model_copy(update={"review_only_resume": True})
     with pytest.raises(AnchorCandidateUnavailable) as review_only_exc:
         host._mcp_resume_character_card_stage_job_record(  # noqa: SLF001
@@ -1516,9 +1571,10 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
         incomplete_contract.pop(missing_contract_key, None)
         incomplete_handoff["rendering_contract"] = incomplete_contract
         monkeypatch.setattr(host, "_mcp_materialization_payload", lambda _handoff_id, payload=incomplete_handoff: payload)
-        with pytest.raises(AnchorCandidateUnavailable) as missing_contract_exc:
-            host._mcp_resume_character_card_stage_job_record(request, operation_id)  # noqa: SLF001
-        assert missing_contract_exc.value.failure_code == "mcp_materialization_checkpoint_mismatch"
+        review_calls.clear()
+        resolved_incomplete = host._generate_character_card_candidate(request)  # noqa: SLF001
+        assert resolved_incomplete.output_id == output_id
+        assert review_calls == [(output_id, handoff_id)]
 
 
 def test_generated_resume_record_without_output_identity_fails_closed_before_output_scan(
