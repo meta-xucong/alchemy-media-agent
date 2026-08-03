@@ -5781,8 +5781,11 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
             "role": "face_identity_reference",
             "truth_layer": "identity_continuity",
             "identity_continuity_only": True,
-            "asset_count": 2,
-            "asset_hashes": ["1" * 64, "2" * 64],
+            # The typed partition counts semantic Face sources.  The frozen
+            # renderer handoff may carry two complementary derivatives from
+            # that one source.
+            "asset_count": 1,
+            "asset_hashes": ["9" * 64],
         },
     }
     morphology_bands = {
@@ -5854,6 +5857,12 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
             "professional_character_card_candidate_index": 3,
             "professional_character_card_candidate_count": 3,
             "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "professional_character_card_face_view_binding": {
+                "rear_full": {
+                    "face_slot": "face.rear_head",
+                    "source_asset_id": "face_rear_source",
+                }
+            },
             "mcp_materialization": {
                 "handoff_id": pending["handoff_id"],
                 "status": "pending",

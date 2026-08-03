@@ -3013,10 +3013,32 @@ class V3ProductApiService:
             face_channel = face_partition.get("face_identity_reference")
             if not isinstance(face_channel, dict):
                 return None
-            if face_channel.get("asset_count") != len(frozen_physical_references):
+            semantic_face_count = face_channel.get("asset_count")
+            semantic_face_hashes = face_channel.get("asset_hashes")
+            if (
+                type(semantic_face_count) is not int
+                or semantic_face_count <= 0
+                or type(semantic_face_hashes) is not list
+                or len(semantic_face_hashes) != semantic_face_count
+                or any(type(item) is not str or not item.strip() for item in semantic_face_hashes)
+            ):
                 return None
-            if list(face_channel.get("asset_hashes") or []) != frozen_reference_hashes:
+            face_binding = metadata.get("professional_character_card_face_view_binding")
+            view_kind = {
+                "body.front_full": "front_full",
+                "body.side_full": "side_full",
+                "body.rear_full": "rear_full",
+            }.get(str(metadata.get("professional_character_card_slot") or "").strip())
+            binding = face_binding.get(view_kind) if isinstance(face_binding, dict) and view_kind else None
+            if not isinstance(binding, dict):
                 return None
+            binding_source_id = str(binding.get("source_asset_id") or "").strip()
+            if not binding_source_id:
+                source_ids = [str(item).strip() for item in (binding.get("source_asset_ids") or []) if str(item).strip()]
+                if len(source_ids) != 1:
+                    return None
+                binding_source_id = source_ids[0]
+            physical_source_ids: list[str] = []
             for reference in frozen_physical_references:
                 if not isinstance(reference, dict):
                     return None
@@ -3032,6 +3054,16 @@ class V3ProductApiService:
                     return None
                 if str(reference_metadata.get("reference_truth_layer") or "").strip() == "body_proportion_truth":
                     return None
+                source_asset_id = str(
+                    item.get("source_asset_id") or reference_metadata.get("source_asset_id") or ""
+                ).strip()
+                if not source_asset_id or source_asset_id != binding_source_id:
+                    return None
+                physical_source_ids.append(source_asset_id)
+            # The partition counts semantic Face sources; the handoff carries
+            # one or more server-derived physical crops for each source.
+            if len(set(physical_source_ids)) != semantic_face_count:
+                return None
             plan_metadata["reference_assets"] = list(frozen_physical_references)
             generation_request = build_provider_generation_request(
                 asset_spec=asset,
