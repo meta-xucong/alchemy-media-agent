@@ -43,6 +43,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardCandidateResult,
+    CharacterCardCandidateRequest,
     CharacterCardRuntimeUnavailable,
     CharacterCardStageResult,
 )
@@ -594,6 +595,237 @@ def test_new_host_reconstitutes_front_candidate_and_reaches_formal_receipt(
     }
     assert [request.candidate_index for request in continuation.requests[:2]] == [2, 3]
     assert [request.candidate_index for request in continuation.requests[2:]] == [1, 2, 3, 1, 2, 3]
+
+
+def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_cursor_enters_plan_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prior candidate reconstruction must not re-project durable job records.
+
+    The resume cursor is rear/candidate3, while front1-3, side1-3, and
+    rear1-2 already have durable reviewed records.  Reconstitution may read
+    and re-project those records, but the durable operation/job identity set
+    must remain unchanged.  Only the current cursor may cross the host
+    refresh/create-plan boundary.
+    """
+
+    lifecycle, _old_host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    face_reference_output_ids = [
+        str(asset.character_card.face_slots[key].output_id or "")
+        for key in ("face.front", "face.profile", "face.rear_head")
+    ]
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=face_reference_output_ids,
+    )
+    host = ProductApiAnchorPackPreparationHost(service)
+    records: dict[str, SimpleNamespace] = {}
+    outputs_by_job: dict[str, list[SimpleNamespace]] = {}
+    checkpoints: list[SimpleNamespace] = []
+    positions = [
+        (slot_key, candidate_index)
+        for slot_key in ("body.front_full", "body.side_full", "body.rear_full")
+        for candidate_index in (1, 2, 3)
+        if not (slot_key == "body.rear_full" and candidate_index == 3)
+    ]
+
+    def request_for(slot_key: str, candidate_index: int) -> Any:
+        return CharacterCardCandidateRequest(
+            project_id=f"visual_asset_{asset.visual_asset_id}",
+            people_asset_id=str(asset.visual_asset_id),
+            card_version_id=asset.character_card.card_version_id,
+            module="body_silhouette",
+            slot_key=slot_key,
+            candidate_index=candidate_index,
+            attempt_round=1,
+            reference_output_ids=face_reference_output_ids,
+            user_intent="reference-assisted Body refresh",
+            source_class="observed",
+            body_source_admission=admission,
+            body_refresh_source_mode="reference_assisted",
+            body_model_context="similar_person_body_reference_assisted_v1",
+            body_refresh_contract_required=True,
+            consent_provenance_id="server-consent-reference",
+            generation_channel="mcp",
+            body_refresh_attempt_identity=attempt,
+            body_refresh_analysis_context=context,
+        )
+
+    def add_record(slot_key: str, candidate_index: int) -> None:
+        request = request_for(slot_key, candidate_index)
+        operation_id = host._character_card_candidate_mcp_operation_id(request)  # noqa: SLF001
+        job_id = f"job_reconstituted_{slot_key.rsplit('.', 1)[-1]}_{candidate_index}"
+        output_id = f"output_reconstituted_{slot_key.rsplit('.', 1)[-1]}_{candidate_index}"
+        inspection = {
+            "output_id": output_id,
+            "status": "pass",
+            "mode": "vision_model",
+            "verification_state": "verified",
+            "score_card": {
+                "same_person_readability": 0.95,
+                "distinctive_feature_readability": 0.95,
+                "human_realism": 0.95,
+                "pose_compliance": 0.95,
+                "visual_quality": 0.95,
+                "ai_overperfection_penalty": 0.95,
+                "overall": 0.95,
+                "body_chain_coherence": 0.95,
+                "stage_aware_proportion": 0.95,
+                "head_neck_shoulder_continuity": 0.95,
+                "torso_limb_joint_plausibility": 0.95,
+                "stance_ground_contact": 0.95,
+            },
+            "issue_codes": [],
+        }
+        metadata = {
+            "professional_character_card_preparation": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": slot_key,
+            "professional_character_card_candidate_index": candidate_index,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_attempt_round": 1,
+            "professional_character_card_body_refresh_source_mode": "reference_assisted",
+            "professional_character_card_body_model_context": (
+                "similar_person_body_reference_assisted_v1"
+            ),
+            "professional_character_card_reference_output_ids": face_reference_output_ids,
+            "professional_body_refresh_analysis_context": context.safe_metadata(),
+            "professional_character_card_body_source_admission": admission.model_dump(mode="json"),
+            "mcp_operation_id": operation_id,
+            "provider_prompt_sha256": "a" * 64,
+            "prompt_compilation_id": f"compiled_{candidate_index}",
+            "provider_reference_image_count": 2,
+            "provider_reference_assets": ["face_detail", "face_geometry"],
+            "post_generation_review_package": {"inspections": [inspection]},
+        }
+        record = SimpleNamespace(
+            job_id=job_id,
+            request=SimpleNamespace(metadata=metadata),
+            planning_result=None,
+            generation_result=SimpleNamespace(metadata=metadata),
+            created_at="created",
+            updated_at="updated",
+        )
+        output = SimpleNamespace(
+            output_id=output_id,
+            candidate_id=f"candidate_{slot_key}_{candidate_index}",
+            metadata={
+                "provider_prompt_sha256": "a" * 64,
+                "prompt_compilation_id": f"compiled_{candidate_index}",
+                "provider_reference_image_count": 2,
+                "provider_reference_assets": ["face_detail", "face_geometry"],
+            },
+        )
+        records[operation_id] = record
+        records[job_id] = record
+        outputs_by_job[job_id] = [output]
+        service.job_store._records[job_id] = record  # noqa: SLF001
+
+        # Prime the exact review receipt without allowing setup to persist a
+        # lifecycle projection.  The real resume below re-enables the writer.
+        candidate, review = host._character_card_candidate_and_review(job_id, request)  # noqa: SLF001
+        checkpoints.append(
+            SimpleNamespace(
+                slot_key=slot_key,
+                candidate_index=candidate_index,
+                attempt_round=1,
+                operation_id=operation_id,
+                output_id=output_id,
+                review_status=str(review.status),
+                review_receipt_digest=(
+                    CharacterCardPreparationService.body_refresh_review_receipt_digest(
+                        candidate,
+                        review,
+                    )
+                ),
+            )
+        )
+
+    original_recorder = service.record_character_card_candidate_lifecycle_checkpoint
+    monkeypatch.setattr(
+        service,
+        "record_character_card_candidate_lifecycle_checkpoint",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        service.output_store,
+        "list_by_job",
+        lambda job_id: list(outputs_by_job.get(job_id, [])),
+    )
+    for slot_key, candidate_index in positions:
+        add_record(slot_key, candidate_index)
+    monkeypatch.setattr(service, "record_character_card_candidate_lifecycle_checkpoint", original_recorder)
+    monkeypatch.setattr(
+        service,
+        "get_job_record",
+        lambda job_id: records.get(job_id),
+    )
+    monkeypatch.setattr(
+        service.output_store,
+        "list_by_job",
+        lambda job_id: list(outputs_by_job.get(job_id, [])),
+    )
+    monkeypatch.setattr(
+        host,
+        "_mcp_resume_character_card_stage_job_record",
+        lambda _request, operation_id: records.get(operation_id),
+    )
+
+    durable_job_ids_before_resume = set(service.job_store._records)  # noqa: SLF001
+    save_calls: list[str] = []
+    original_save = service.job_store.save
+
+    def tracked_save(record: Any) -> Any:
+        save_calls.append(str(record.job_id))
+        return original_save(record)
+
+    monkeypatch.setattr(service.job_store, "save", tracked_save)
+    current_plan_boundary: list[tuple[str, int | None]] = []
+
+    def current_cursor_only(**kwargs: Any) -> Any:
+        current_plan_boundary.append(
+            (str(kwargs["resume_slot_key"]), kwargs["resume_candidate_index"])
+        )
+        return SimpleNamespace(
+            card=asset.character_card,
+            status="blocked",
+            failure_codes=["mcp_materialization_pending"],
+            shared_runtime_failure=None,
+        )
+
+    monkeypatch.setattr(host, "refresh_body_silhouette", current_cursor_only)
+    result = host.resume_body_silhouette(
+        asset=asset,
+        card=asset.character_card,
+        request=BodySilhouettePublicRequest(
+            source_class="observed",
+            body_reference_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=body_asset_ids,
+        ),
+        generation_channel="mcp",
+        body_refresh_analysis_context=context,
+        body_source_admission=admission,
+        body_refresh_attempt_identity=attempt,
+        resume_slot_key="body.rear_full",
+        resume_candidate_index=3,
+        prior_reviewed_candidate_checkpoints=checkpoints,
+    )
+
+    assert result.status == "blocked"
+    assert current_plan_boundary == [("body.rear_full", 3)]
+    durable_job_ids_after_resume = set(service.job_store._records)  # noqa: SLF001
+    assert durable_job_ids_after_resume - durable_job_ids_before_resume == set()
+    assert durable_job_ids_before_resume - durable_job_ids_after_resume == set()
+    assert durable_job_ids_after_resume == durable_job_ids_before_resume
+    assert set(save_calls).issubset(durable_job_ids_before_resume)
 
 
 def _card_with_formal_front_refresh_slot(
