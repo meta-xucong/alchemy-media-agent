@@ -2702,17 +2702,9 @@ class V3ProductApiService:
 
         if record.generation_result is None or record.planning_result is None:
             raise RuntimeError("mcp_materialization_output_projection_missing")
-        existing_assets = list(record.generation_result.asset_pack.assets or [])
-        previous_asset_file_backed = bool(
-            len(existing_assets) == 1
-            and str(existing_assets[0].file_path or "").strip()
-            and str(existing_assets[0].uri or "").strip()
-            and Path(str(existing_assets[0].file_path)).is_file()
-        )
         previous_review_package = record.generation_result.metadata.get("post_generation_review_package")
         file_missing_review_requires_recheck = bool(
-            not previous_asset_file_backed
-            and self._post_generation_review_package_has_issue_code(previous_review_package, "file_missing")
+            self._post_generation_review_package_has_issue_code(previous_review_package, "file_missing")
         )
         metadata = dict(record.request.metadata or {})
         materialization = metadata.get("mcp_materialization")
