@@ -624,6 +624,9 @@ class PersistentProductJobStore(InMemoryProductJobStore):
     Restoring from an output PNG alone cannot safely recreate those contracts.
     This store persists the typed V3 record atomically while retaining the
     in-memory store as the deterministic default for isolated unit tests.
+    The private MCP operation index is maintained under the repository's
+    single-writer store boundary; its atomic replace protects readers, while
+    concurrent independent writers are outside this store contract.
     """
 
     schema_version = "v3_product_job_record_v1"
@@ -721,8 +724,7 @@ class PersistentProductJobStore(InMemoryProductJobStore):
 
     def _ensure_mcp_operation_index(self, operation_id: str) -> None:
         self._load_mcp_operation_index()
-        operation_key = _mcp_operation_index_key(operation_id)
-        if self._mcp_operation_index_complete or operation_key in self._mcp_operation_index:
+        if self._mcp_operation_index_complete:
             return
         # Migrate pre-index stores in a bounded streaming pass. Each legacy
         # job JSON is parsed, filtered, and released immediately; the old

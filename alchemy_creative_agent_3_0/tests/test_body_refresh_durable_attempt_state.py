@@ -160,6 +160,41 @@ def test_persistent_operation_index_is_maintained_on_save_and_reopen(tmp_path: P
     assert [item.job_id for item in matches] == ["job_rear3"]
 
 
+def test_incomplete_operation_index_merges_legacy_and_new_same_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = "visual_asset_body_silhouette_body.rear_full_3"
+    store = PersistentProductJobStore(tmp_path / "v3-jobs")
+
+    def record(job_id: str) -> ProductJobRecord:
+        return ProductJobRecord(
+            request=CreateCreativeJobRequest(
+                user_input="durable Body resume",
+                metadata={
+                    "generation_channel": "mcp",
+                    "mcp_operation_id": operation_id,
+                },
+            ),
+            status=ProductJobStatusValue.PLANNED,
+            job_id_value=job_id,
+        )
+
+    # Legacy A predates the private operation index. Saving B first creates an
+    # incomplete index entry for the same operation and must not hide A.
+    store._write_record(record("job_legacy_rear3"))  # noqa: SLF001
+    store.save(record("job_new_rear3"))
+    monkeypatch.setattr(
+        store,
+        "_load_all_records",
+        lambda: pytest.fail("operation lookup must not load the full job catalog"),
+    )
+
+    matches = store.get_mcp_operation_records(operation_id)
+
+    assert {item.job_id for item in matches} == {"job_legacy_rear3", "job_new_rear3"}
+
+
 class _InterruptAfterReviewedCandidate(_RefreshFanoutGenerator):
     """Allow candidate one to review, then emulate an outer process stop."""
 
