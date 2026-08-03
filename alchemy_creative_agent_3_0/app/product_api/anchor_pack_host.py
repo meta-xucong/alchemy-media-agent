@@ -1511,6 +1511,7 @@ class ProductApiAnchorPackPreparationHost:
                 record.job_id,
                 prior_request,
                 persist_lifecycle_checkpoints=False,
+                expected_output_id=checkpoint_output_id,
             )
             if str(candidate.output_id or "").strip() != checkpoint_output_id:
                 raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_output_mismatch")
@@ -2844,6 +2845,7 @@ class ProductApiAnchorPackPreparationHost:
         request: CharacterCardCandidateRequest,
         *,
         persist_lifecycle_checkpoints: bool = True,
+        expected_output_id: str | None = None,
     ) -> tuple[CharacterCardCandidateResult, AnchorReviewDecision]:
         def record_checkpoint(**kwargs: Any) -> None:
             if persist_lifecycle_checkpoints:
@@ -2875,7 +2877,63 @@ class ProductApiAnchorPackPreparationHost:
             for item in (package.get("inspections", []) if isinstance(package, dict) else [])
             if isinstance(item, dict)
         ]
-        outputs = self.product_service.output_store.list_by_job(job_id)
+        by_output = {
+            str(item.get("output_id") or ""): item
+            for item in inspections
+            if str(item.get("output_id") or "").strip()
+        }
+        directed_output_id = str(expected_output_id or "").strip()
+        if directed_output_id:
+            directed_output = None
+            getter = getattr(self.product_service.output_store, "get_output", None)
+            if callable(getter):
+                directed_output = getter(directed_output_id)
+            inspection = by_output.get(directed_output_id)
+            record_metadata = self._character_card_job_metadata(record)
+            directed_is_bound = (
+                directed_output is not None
+                and inspection is not None
+                and str(getattr(directed_output, "output_id", "") or "").strip()
+                == directed_output_id
+                and str(getattr(directed_output, "job_id", "") or "").strip()
+                == str(job_id or "").strip()
+                and str(inspection.get("job_id") or "").strip()
+                == str(job_id or "").strip()
+                and str(getattr(directed_output, "candidate_id", "") or "").strip()
+                and str(inspection.get("candidate_id") or "").strip()
+                == str(getattr(directed_output, "candidate_id", "") or "").strip()
+                and str(getattr(directed_output, "asset_id", "") or "").strip()
+                and str(inspection.get("asset_id") or "").strip()
+                == str(getattr(directed_output, "asset_id", "") or "").strip()
+                and str(getattr(directed_output, "file_path", "") or "").strip()
+            )
+            if request.module == "body_silhouette":
+                directed_is_bound = directed_is_bound and (
+                    record_metadata.get("professional_character_card_slot")
+                    == request.slot_key
+                    and record_metadata.get("professional_character_card_candidate_index")
+                    == request.candidate_index
+                    and record_metadata.get("professional_character_card_candidate_count") == 3
+                    and record_metadata.get("mcp_operation_id")
+                    == self._character_card_candidate_mcp_operation_id(request)
+                )
+            file_resolver = getattr(self.product_service.output_store, "file_for_variant", None)
+            file_binding = None
+            if directed_is_bound and callable(file_resolver):
+                try:
+                    file_binding = file_resolver(directed_output_id, "download")
+                except Exception:
+                    file_binding = None
+            if directed_is_bound and file_binding:
+                try:
+                    directed_is_bound = Path(str(file_binding[0])).is_file()
+                except (IndexError, TypeError, ValueError, OSError):
+                    directed_is_bound = False
+            else:
+                directed_is_bound = False
+            outputs = [directed_output] if directed_is_bound else []
+        else:
+            outputs = self.product_service.output_store.list_by_job(job_id)
         if not outputs or not inspections:
             record_checkpoint(
                 job_id=job_id,
@@ -2888,11 +2946,6 @@ class ProductApiAnchorPackPreparationHost:
             raise self._character_card_candidate_review_boundary(
                 "candidate_review_extraction_unbound"
             )
-        by_output = {
-            str(item.get("output_id") or ""): item
-            for item in inspections
-            if str(item.get("output_id") or "").strip()
-        }
         reviewed = [item for item in outputs if item.output_id in by_output]
         if not reviewed:
             record_checkpoint(

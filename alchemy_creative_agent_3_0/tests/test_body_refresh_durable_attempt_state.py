@@ -44,6 +44,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardCandidateResult,
     CharacterCardCandidateRequest,
+    CharacterCardCandidateLifecycleBoundaryError,
     CharacterCardRuntimeUnavailable,
     CharacterCardStageResult,
 )
@@ -664,7 +665,14 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
         operation_id = host._character_card_candidate_mcp_operation_id(request)  # noqa: SLF001
         job_id = f"job_reconstituted_{slot_key.rsplit('.', 1)[-1]}_{candidate_index}"
         output_id = f"output_reconstituted_{slot_key.rsplit('.', 1)[-1]}_{candidate_index}"
+        candidate_id = f"candidate_{slot_key}_{candidate_index}"
+        asset_id = f"asset_{asset.visual_asset_id}"
+        output_path = tmp_path / f"{output_id}.png"
+        output_path.write_bytes(b"directed-review-fixture")
         inspection = {
+            "job_id": job_id,
+            "candidate_id": candidate_id,
+            "asset_id": asset_id,
             "output_id": output_id,
             "status": "pass",
             "mode": "vision_model",
@@ -716,7 +724,12 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
         )
         output = SimpleNamespace(
             output_id=output_id,
-            candidate_id=f"candidate_{slot_key}_{candidate_index}",
+            job_id=job_id,
+            candidate_id=candidate_id,
+            asset_id=asset_id,
+            file_path=str(output_path),
+            output_format="png",
+            mime_type="image/png",
             metadata={
                 "provider_prompt_sha256": "a" * 64,
                 "prompt_compilation_id": f"compiled_{candidate_index}",
@@ -735,6 +748,7 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
             job_id,
             request,
             persist_lifecycle_checkpoints=False,
+            expected_output_id=output_id,
         )
         checkpoints.append(
             SimpleNamespace(
@@ -759,6 +773,18 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
         "record_character_card_candidate_lifecycle_checkpoint",
         lambda **_kwargs: None,
     )
+    def directed_get_output(output_id: str) -> Any:
+        return next(
+            (
+                output
+                for outputs in outputs_by_job.values()
+                for output in outputs
+                if str(output.output_id) == str(output_id)
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(service.output_store, "get_output", directed_get_output)
     monkeypatch.setattr(
         service.output_store,
         "list_by_job",
@@ -772,10 +798,13 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
         "get_job_record",
         lambda job_id: records.get(job_id),
     )
+    monkeypatch.setattr(service.output_store, "get_output", directed_get_output)
     monkeypatch.setattr(
         service.output_store,
         "list_by_job",
-        lambda job_id: list(outputs_by_job.get(job_id, [])),
+        lambda _job_id: pytest.fail(
+            "prior reconstitution must use the checkpoint output identity, not list_by_job"
+        ),
     )
     monkeypatch.setattr(
         host,
@@ -854,8 +883,32 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
     host._character_card_candidate_and_review(  # noqa: SLF001
         records[live_checkpoint.operation_id].job_id,
         request_for("body.rear_full", 2),
+        expected_output_id=live_checkpoint.output_id,
     )
     assert save_calls
+
+    valid_output = directed_get_output(live_checkpoint.output_id)
+    assert valid_output is not None
+    wrong_job_output = SimpleNamespace(
+        **{**vars(valid_output), "job_id": "job_wrong_binding"}
+    )
+    for invalid_output in (None, wrong_job_output):
+        monkeypatch.setattr(
+            service.output_store,
+            "get_output",
+            lambda _output_id, invalid_output=invalid_output: invalid_output,
+        )
+        with pytest.raises(CharacterCardCandidateLifecycleBoundaryError) as exc_info:
+            host._character_card_candidate_and_review(  # noqa: SLF001
+                records[live_checkpoint.operation_id].job_id,
+                request_for("body.rear_full", 2),
+                persist_lifecycle_checkpoints=False,
+                expected_output_id=live_checkpoint.output_id,
+            )
+        assert (
+            exc_info.value.candidate_lifecycle_failure_code
+            == "candidate_review_extraction_unbound"
+        )
 
 
 def test_library_resume_passes_pointer_cursor_to_one_host_boundary_without_fanout(
