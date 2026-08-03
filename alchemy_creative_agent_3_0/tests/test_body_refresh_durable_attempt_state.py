@@ -532,7 +532,7 @@ def test_new_host_reconstitutes_front_candidate_and_reaches_formal_receipt(
         else None
     )
     fresh_host._character_card_candidate_and_review = (  # noqa: SLF001
-        lambda _job_id, _request: (candidate, review)
+        lambda _job_id, _request, **_kwargs: (candidate, review)
     )
     continuation = _FormalContinuationGenerator()
 
@@ -731,7 +731,11 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
 
         # Prime the exact review receipt without allowing setup to persist a
         # lifecycle projection.  The real resume below re-enables the writer.
-        candidate, review = host._character_card_candidate_and_review(job_id, request)  # noqa: SLF001
+        candidate, review = host._character_card_candidate_and_review(  # noqa: SLF001
+            job_id,
+            request,
+            persist_lifecycle_checkpoints=False,
+        )
         checkpoints.append(
             SimpleNamespace(
                 slot_key=slot_key,
@@ -779,6 +783,13 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
         lambda _request, operation_id: records.get(operation_id),
     )
 
+    prior_record_snapshots = {
+        str(record.job_id): (
+            str(record.updated_at),
+            json.dumps(record.request.metadata, sort_keys=True, separators=(",", ":")),
+        )
+        for record in records.values()
+    }
     durable_job_ids_before_resume = set(service.job_store._records)  # noqa: SLF001
     save_calls: list[str] = []
     original_save = service.job_store.save
@@ -825,7 +836,110 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
     assert durable_job_ids_after_resume - durable_job_ids_before_resume == set()
     assert durable_job_ids_before_resume - durable_job_ids_after_resume == set()
     assert durable_job_ids_after_resume == durable_job_ids_before_resume
-    assert set(save_calls).issubset(durable_job_ids_before_resume)
+    assert save_calls == []
+    for record in records.values():
+        assert (
+            str(record.updated_at),
+            json.dumps(record.request.metadata, sort_keys=True, separators=(",", ":")),
+        ) == prior_record_snapshots[str(record.job_id)]
+
+    # The default remains write-enabled for a live/current candidate; only
+    # prior checkpoint reconstruction receives the read-only flag.
+    save_calls.clear()
+    live_checkpoint = next(
+        item
+        for item in checkpoints
+        if item.slot_key == "body.rear_full" and item.candidate_index == 2
+    )
+    host._character_card_candidate_and_review(  # noqa: SLF001
+        records[live_checkpoint.operation_id].job_id,
+        request_for("body.rear_full", 2),
+    )
+    assert save_calls
+
+
+def test_library_resume_passes_pointer_cursor_to_one_host_boundary_without_fanout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public resume entry must admit only the pointer's current cursor."""
+
+    lifecycle, host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    face_reference_output_ids = [
+        str(asset.character_card.face_slots[key].output_id or "")
+        for key in ("face.front", "face.profile", "face.rear_head")
+    ]
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=face_reference_output_ids,
+    )
+    state_store = BodyRefreshAttemptStateStore(tmp_path / "body-refresh-attempts")
+    state = state_store.begin(
+        visual_asset_id=asset.visual_asset_id,
+        attempt_identity=attempt,
+        analysis_context=context,
+        body_source_admission=admission,
+    ).model_copy(
+        update={
+            "status": "interrupted",
+            "next_slot_key": "body.rear_full",
+            "next_candidate_index": 3,
+        }
+    )
+    state_store._write(state)  # noqa: SLF001
+    lifecycle = VisualAssetLibraryLifecycleService(
+        lifecycle.catalog,
+        root_source_resolver=service.get_uploaded_asset,
+        character_card_stage_host=host,
+        body_refresh_attempt_state_store=state_store,
+    )
+    captured: list[dict[str, object]] = []
+
+    def resume_boundary(**kwargs):  # noqa: ANN001
+        captured.append(
+            {
+                "resume_slot_key": kwargs["resume_slot_key"],
+                "resume_candidate_index": kwargs["resume_candidate_index"],
+                "attempt_id": kwargs["body_refresh_attempt_identity"].attempt_id,
+                "source_digest": kwargs["body_source_admission"].source_evidence_id_digest(),
+            }
+        )
+        return SimpleNamespace(card=kwargs["card"], status="blocked")
+
+    monkeypatch.setattr(host, "resume_body_silhouette", resume_boundary)
+    monkeypatch.setattr(
+        service,
+        "create_professional_character_card_stage_job",
+        lambda *_args, **_kwargs: pytest.fail("resume must not enter a new create/plan boundary"),
+    )
+    request = BodySilhouettePublicRequest(
+        source_class="observed",
+        body_reference_asset_id=body_asset_ids[0],
+        body_reference_asset_ids=body_asset_ids,
+    )
+
+    lifecycle.resume_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        body_request=request,
+        generation_channel="mcp",
+    )
+
+    assert captured == [
+        {
+            "resume_slot_key": "body.rear_full",
+            "resume_candidate_index": 3,
+            "attempt_id": attempt.attempt_id,
+            "source_digest": admission.source_evidence_id_digest(),
+        }
+    ]
 
 
 def _card_with_formal_front_refresh_slot(
@@ -1291,7 +1405,7 @@ def test_library_formal_only_resume_reconstitutes_front_and_advances_cursor(
         lambda _request, operation_id: records_by_operation.get(operation_id)
     )
     host._character_card_candidate_and_review = (  # noqa: SLF001
-        lambda job_id, _request: candidates_by_job[job_id]
+        lambda job_id, _request, **_kwargs: candidates_by_job[job_id]
     )
     resumed_lifecycle = VisualAssetLibraryLifecycleService(
         lifecycle.catalog,
@@ -1527,17 +1641,17 @@ def test_new_host_reconstitution_missing_or_tampered_job_output_fails_closed(
         )
         fresh_host._mcp_resume_character_card_stage_job_record = lambda *_args: record  # noqa: SLF001
         if tamper == "review":
-            def missing_review(*_args):
+            def missing_review(*_args, **_kwargs):
                 raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_review_missing")
 
             fresh_host._character_card_candidate_and_review = missing_review  # noqa: SLF001
         elif tamper == "receipt":
-            fresh_host._character_card_candidate_and_review = lambda *_args: (
+            fresh_host._character_card_candidate_and_review = lambda *_args, **_kwargs: (
                 wrong_candidate,
                 _BodyReviewer().review(wrong_candidate),
             )
         else:
-            fresh_host._character_card_candidate_and_review = lambda *_args: (
+            fresh_host._character_card_candidate_and_review = lambda *_args, **_kwargs: (
                 wrong_candidate,
                 SimpleNamespace(status="pass"),
             )  # noqa: SLF001

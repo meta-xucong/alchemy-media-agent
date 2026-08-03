@@ -1507,7 +1507,11 @@ class ProductApiAnchorPackPreparationHost:
                 raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_face_chain_mismatch")
             if record_admission.source_evidence_id_digest() != body_source_admission.source_evidence_id_digest():
                 raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_source_digest_mismatch")
-            candidate, review = self._character_card_candidate_and_review(record.job_id, prior_request)
+            candidate, review = self._character_card_candidate_and_review(
+                record.job_id,
+                prior_request,
+                persist_lifecycle_checkpoints=False,
+            )
             if str(candidate.output_id or "").strip() != checkpoint_output_id:
                 raise CharacterCardRuntimeUnavailable("body_refresh_prior_candidate_output_mismatch")
             if int(candidate.candidate_index) != checkpoint_index:
@@ -2838,8 +2842,14 @@ class ProductApiAnchorPackPreparationHost:
         self,
         job_id: str,
         request: CharacterCardCandidateRequest,
+        *,
+        persist_lifecycle_checkpoints: bool = True,
     ) -> tuple[CharacterCardCandidateResult, AnchorReviewDecision]:
-        self._record_character_card_candidate_lifecycle_checkpoint(
+        def record_checkpoint(**kwargs: Any) -> None:
+            if persist_lifecycle_checkpoints:
+                self._record_character_card_candidate_lifecycle_checkpoint(**kwargs)
+
+        record_checkpoint(
             job_id=job_id,
             request=request,
             lifecycle_phase="review_extraction",
@@ -2848,7 +2858,7 @@ class ProductApiAnchorPackPreparationHost:
         record = self.product_service.get_job_record(job_id)
         result = record.generation_result if record is not None else None
         if result is None:
-            self._record_character_card_candidate_lifecycle_checkpoint(
+            record_checkpoint(
                 job_id=job_id,
                 request=request,
                 lifecycle_phase="review_extraction",
@@ -2867,7 +2877,7 @@ class ProductApiAnchorPackPreparationHost:
         ]
         outputs = self.product_service.output_store.list_by_job(job_id)
         if not outputs or not inspections:
-            self._record_character_card_candidate_lifecycle_checkpoint(
+            record_checkpoint(
                 job_id=job_id,
                 request=request,
                 lifecycle_phase="review_extraction",
@@ -2885,7 +2895,7 @@ class ProductApiAnchorPackPreparationHost:
         }
         reviewed = [item for item in outputs if item.output_id in by_output]
         if not reviewed:
-            self._record_character_card_candidate_lifecycle_checkpoint(
+            record_checkpoint(
                 job_id=job_id,
                 request=request,
                 lifecycle_phase="review_extraction",
@@ -2896,7 +2906,7 @@ class ProductApiAnchorPackPreparationHost:
             raise self._character_card_candidate_review_boundary(
                 "candidate_review_output_binding_missing"
             )
-        self._record_character_card_candidate_lifecycle_checkpoint(
+        record_checkpoint(
             job_id=job_id,
             request=request,
             lifecycle_phase="review_extraction",
