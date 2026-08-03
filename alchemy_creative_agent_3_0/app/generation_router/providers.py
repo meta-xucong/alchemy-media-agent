@@ -6051,6 +6051,12 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                     self._safe_body_silhouette_backdrop_presentation_contract(metadata)
                 )
                 if source_mode == "reference_assisted":
+                    safe_context = metadata.get("professional_body_refresh_analysis_context")
+                    if isinstance(safe_context, dict):
+                        contract["slot_key"] = metadata.get("professional_character_card_slot")
+                        contract["candidate_index"] = metadata.get("professional_character_card_candidate_index")
+                        contract["candidate_count"] = metadata.get("professional_character_card_candidate_count")
+                        contract["professional_body_refresh_analysis_context"] = safe_context
                     contract["body_morphology_profile"] = self._body_morphology_rendering_contract(
                         request,
                         metadata,

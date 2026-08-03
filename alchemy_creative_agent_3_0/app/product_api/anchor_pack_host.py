@@ -2276,17 +2276,51 @@ class ProductApiAnchorPackPreparationHost:
                 operation_id,
                 durable_handoff_payload,
             )
+            submitted_generated_checkpoint_current = (
+                self._character_card_submitted_generated_mcp_checkpoint_current(
+                    request,
+                    record,
+                    operation_id,
+                    durable_handoff_payload,
+                )
+            )
             planning_metadata_current = self._character_card_planning_metadata_current(
                 request,
                 record,
                 operation_id,
                 requested_refs,
             )
-            if not planning_metadata_current and not generated_checkpoint_current:
+            if (
+                not planning_metadata_current
+                and not generated_checkpoint_current
+                and not submitted_generated_checkpoint_current
+            ):
+                if (
+                    request.module == "body_silhouette"
+                    and request.body_refresh_source_mode == "reference_assisted"
+                    and getattr(record, "generation_result", None) is not None
+                    and isinstance(materialization, dict)
+                    and str(materialization.get("status") or "").strip().lower() == "submitted"
+                ):
+                    raise AnchorCandidateUnavailable(
+                        "mcp_materialization_checkpoint_mismatch",
+                        mcp_handoff_id=handoff_id or requested_handoff or None,
+                    )
                 continue
             if requested_handoff:
                 if isinstance(materialization, dict):
                     if str(materialization.get("handoff_id") or "").strip() != requested_handoff:
+                        if (
+                            request.module == "body_silhouette"
+                            and request.body_refresh_source_mode == "reference_assisted"
+                            and getattr(record, "generation_result", None) is not None
+                            and str(materialization.get("status") or "").strip().lower()
+                            == "submitted"
+                        ):
+                            raise AnchorCandidateUnavailable(
+                                "mcp_materialization_reference_mismatch",
+                                mcp_handoff_id=requested_handoff or None,
+                            )
                         continue
                 elif getattr(record, "generation_result", None) is not None:
                     handoff_payload = requested_handoff_payload
@@ -2309,6 +2343,192 @@ class ProductApiAnchorPackPreparationHost:
                 mcp_handoff_id=requested_handoff or None,
             )
         return matches[0] if matches else None
+
+    def _character_card_submitted_generated_mcp_checkpoint_current(
+        self,
+        request: CharacterCardCandidateRequest,
+        record: Any,
+        operation_id: str,
+        handoff_payload: dict[str, Any] | None,
+    ) -> bool:
+        """Admit one strict Body submitted artifact directly to shared review.
+
+        ``job_checkpointed`` remains the durable checkpoint authority.  This
+        separate predicate is only for the narrow state produced when a
+        submitted artifact already populated ``generation_result`` but the
+        official job checkpoint projection did not run.  Every server-owned
+        identity must still agree before the normal generator can enter the
+        existing directed review path; pending/no-output records never match.
+        """
+
+        if (
+            request.module != "body_silhouette"
+            or request.generation_channel != "mcp"
+            or request.body_refresh_source_mode != "reference_assisted"
+            or request.body_refresh_contract_required is not True
+        ):
+            return False
+        if not isinstance(request.body_source_admission, BodySourceAdmission):
+            return False
+        if not isinstance(request.body_refresh_analysis_context, BodyRefreshAnalysisContext):
+            return False
+        generation_result = getattr(record, "generation_result", None)
+        if generation_result is None or not isinstance(handoff_payload, dict):
+            return False
+        if str(handoff_payload.get("status") or "").strip().lower() != "submitted":
+            return False
+        if not self._character_card_mcp_handoff_current(request, handoff_payload):
+            return False
+
+        metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+        materialization = metadata.get("mcp_materialization")
+        if not isinstance(materialization, dict):
+            return False
+        handoff_id = str(handoff_payload.get("handoff_id") or "").strip()
+        if not handoff_id or str(materialization.get("handoff_id") or "").strip() != handoff_id:
+            return False
+        requested_handoff = str(request.mcp_handoff_id or "").strip()
+        if requested_handoff and requested_handoff != handoff_id:
+            return False
+        if str(materialization.get("status") or "").strip().lower() != "submitted":
+            return False
+        if str(handoff_payload.get("operation_id") or "").strip() != str(operation_id or "").strip():
+            return False
+        if str(metadata.get("mcp_operation_id") or "").strip() != str(operation_id or "").strip():
+            return False
+        if metadata.get("professional_character_card_preparation") is not True:
+            return False
+        expected_metadata = {
+            "generation_channel": "mcp",
+            "professional_character_card_stage": request.module,
+            "professional_character_card_slot": request.slot_key,
+            "professional_character_card_candidate_index": request.candidate_index,
+            "professional_character_card_candidate_count": request.candidate_count,
+            "professional_character_card_attempt_round": request.attempt_round,
+            "professional_character_card_source_class": request.source_class,
+            "professional_character_card_body_refresh_source_mode": request.body_refresh_source_mode,
+            "professional_character_card_body_model_context": request.body_model_context,
+            "professional_character_card_reference_output_ids": list(request.reference_output_ids),
+        }
+        for key, expected in expected_metadata.items():
+            if metadata.get(key) != expected:
+                return False
+        if metadata.get("professional_body_refresh_analysis_context") != (
+            request.body_refresh_analysis_context.safe_metadata()
+        ):
+            return False
+        try:
+            persisted_admission = BodySourceAdmission.model_validate(
+                metadata.get("professional_character_card_body_source_admission")
+            )
+        except (TypeError, ValueError):
+            return False
+        if persisted_admission.model_dump(mode="json") != request.body_source_admission.model_dump(mode="json"):
+            return False
+        if persisted_admission.face_reference_output_ids != list(request.reference_output_ids):
+            return False
+
+        contract = handoff_payload.get("rendering_contract")
+        if not isinstance(contract, dict):
+            return False
+        if contract.get("body_refresh_source_mode") != request.body_refresh_source_mode:
+            return False
+        for key, expected in (
+            ("slot_key", request.slot_key),
+            ("candidate_index", request.candidate_index),
+            ("candidate_count", request.candidate_count),
+            ("professional_body_refresh_analysis_context", request.body_refresh_analysis_context.safe_metadata()),
+        ):
+            if key not in contract or contract.get(key) != expected:
+                return False
+        morphology = contract.get("body_morphology_profile")
+        if not isinstance(morphology, dict):
+            return False
+        if str(morphology.get("schema_version") or "").strip() != "body_morphology_evidence_profile_v2":
+            return False
+        if str(morphology.get("profile_digest") or "").strip() != request.body_refresh_analysis_context.profile_digest:
+            return False
+        partition = contract.get("body_mcp_reference_partition")
+        if not isinstance(partition, dict):
+            return False
+        body_channel = partition.get("body_proportion_reference")
+        face_channel = partition.get("face_identity_reference")
+        if not isinstance(body_channel, dict) or not isinstance(face_channel, dict):
+            return False
+        if (
+            body_channel.get("asset_count") != len(persisted_admission.body_evidence_ids)
+            or body_channel.get("role") != "body_proportion_reference"
+            or body_channel.get("truth_layer") != "body_proportion_truth"
+            or not isinstance(body_channel.get("asset_hashes"), list)
+            or len(body_channel["asset_hashes"]) != len(persisted_admission.body_evidence_ids)
+        ):
+            return False
+        if (
+            type(face_channel.get("asset_count")) is not int
+            or face_channel.get("asset_count") < 1
+            or not isinstance(face_channel.get("asset_hashes"), list)
+            or len(face_channel["asset_hashes"]) != face_channel.get("asset_count")
+            or face_channel.get("role") != "face_identity_reference"
+        ):
+            return False
+
+        identity = self._character_card_generation_result_mcp_identity(generation_result)
+        output_id = str(identity.get("output_id") or "").strip()
+        candidate_id = str(identity.get("candidate_id") or "").strip()
+        if not output_id or not candidate_id or identity.get("handoff_id") != handoff_id:
+            return False
+        output_getter = getattr(getattr(self.product_service, "output_store", None), "get_output", None)
+        output = output_getter(output_id) if callable(output_getter) else None
+        if output is None:
+            return False
+        job_id = str(getattr(record, "job_id", "") or "").strip()
+        output_asset_id = str(getattr(output, "asset_id", "") or "").strip()
+        if (
+            str(getattr(output, "output_id", "") or "").strip() != output_id
+            or str(getattr(output, "job_id", "") or "").strip() != job_id
+            or str(getattr(output, "candidate_id", "") or "").strip() != candidate_id
+            or not output_asset_id
+        ):
+            return False
+        package = (
+            generation_result.metadata.get("post_generation_review_package")
+            if isinstance(getattr(generation_result, "metadata", None), dict)
+            else None
+        )
+        inspections = package.get("inspections") if isinstance(package, dict) else None
+        if not isinstance(inspections, list):
+            return False
+        matching_inspections = [
+            item
+            for item in inspections
+            if isinstance(item, dict)
+            and str(item.get("output_id") or "").strip() == output_id
+            and str(item.get("job_id") or "").strip() == job_id
+            and str(item.get("candidate_id") or "").strip() == candidate_id
+            and str(item.get("asset_id") or "").strip() == output_asset_id
+        ]
+        if len(matching_inspections) != 1:
+            return False
+        file_resolver = getattr(getattr(self.product_service, "output_store", None), "file_for_variant", None)
+        if not callable(file_resolver):
+            return False
+        try:
+            file_binding = file_resolver(output_id, "download")
+            file_path = Path(str(file_binding[0])) if file_binding else None
+            if file_path is None or not file_path.is_file():
+                return False
+            artifact_sha256 = str(handoff_payload.get("artifact_sha256") or "").strip().lower()
+            if len(artifact_sha256) != 64 or hashlib.sha256(file_path.read_bytes()).hexdigest() != artifact_sha256:
+                return False
+        except (IndexError, OSError, TypeError, ValueError):
+            return False
+        output_metadata = getattr(output, "metadata", None)
+        if isinstance(output_metadata, dict):
+            for key in ("artifact_sha256", "content_sha256"):
+                declared = str(output_metadata.get(key) or "").strip().lower()
+                if declared and declared != str(handoff_payload.get("artifact_sha256") or "").strip().lower():
+                    return False
+        return True
 
     def _mcp_review_only_character_card_stage_job_record(
         self,

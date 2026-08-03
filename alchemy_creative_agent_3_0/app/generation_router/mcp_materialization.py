@@ -1291,6 +1291,75 @@ class McpMaterializationHandoffStore:
             # do not emit intent, Body truth, or other strict fields.
             return safe
         safe["body_refresh_source_mode"] = raw_source_mode
+
+        identity_contract = {
+            "slot_key": raw.get("slot_key"),
+            "candidate_index": raw.get("candidate_index"),
+            "candidate_count": raw.get("candidate_count"),
+        }
+        identity_missing = [key for key, value in identity_contract.items() if value is None]
+        identity_binding_required = (
+            raw_source_mode == "reference_assisted"
+            and raw.get("professional_body_refresh_analysis_context") is not None
+        )
+        if identity_missing and require_body_rendering_contract and identity_binding_required:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_rendering_identity_binding_missing"},
+            )
+        if not identity_missing:
+            if (
+                type(identity_contract["slot_key"]) is not str
+                or identity_contract["slot_key"] not in {"body.front_full", "body.side_full", "body.rear_full"}
+                or type(identity_contract["candidate_index"]) is not int
+                or identity_contract["candidate_index"] not in {1, 2, 3}
+                or type(identity_contract["candidate_count"]) is not int
+                or identity_contract["candidate_count"] != 3
+            ):
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_rendering_identity_binding_invalid"},
+                )
+            safe.update(identity_contract)
+
+        raw_context = raw.get("professional_body_refresh_analysis_context")
+        if raw_source_mode == "reference_assisted":
+            if raw_context is not None:
+                expected_context_keys = {
+                    "contract_version",
+                    "schema_version",
+                    "source_mode",
+                    "attempt_id",
+                    "append_only_revision",
+                    "source_binding_digest",
+                    "source_evidence_id_digest",
+                    "profile_digest",
+                }
+                if (
+                    type(raw_context) is not dict
+                    or set(raw_context) != expected_context_keys
+                    or raw_context.get("contract_version") != "body_refresh_analysis_context_v2"
+                    or raw_context.get("schema_version") != "body_morphology_evidence_profile_v2"
+                    or raw_context.get("source_mode") != raw_source_mode
+                    or type(raw_context.get("append_only_revision")) is not int
+                    or raw_context.get("append_only_revision") < 1
+                    or any(
+                        type(raw_context.get(key)) is not str
+                        or len(str(raw_context.get(key))) != 64
+                        or any(char not in "0123456789abcdef" for char in str(raw_context.get(key)).lower())
+                        for key in ("source_binding_digest", "source_evidence_id_digest", "profile_digest")
+                    )
+                ):
+                    raise McpMaterializationError(
+                        "mcp_materialization_body_rendering_contract_invalid",
+                        detail={"failure_code": "body_refresh_analysis_context_invalid"},
+                    )
+                safe["professional_body_refresh_analysis_context"] = dict(raw_context)
+        elif raw_context is not None:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_refresh_analysis_context_forbidden_for_inference"},
+            )
         raw_partition = raw.get("body_mcp_reference_partition")
         if raw_source_mode == "reference_assisted":
             if raw_partition is None:
