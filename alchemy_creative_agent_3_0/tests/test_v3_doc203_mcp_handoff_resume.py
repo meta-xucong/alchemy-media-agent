@@ -3073,6 +3073,388 @@ def test_doc263_submitted_consumer_projects_persisted_output_record_before_share
     assert Path(generated.file_path).is_file()
 
 
+def test_doc263_existing_generated_body_resume_projects_submitted_artifact_before_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generated legacy result must not bypass the submitted-artifact projection."""
+
+    job_id = "job_doc263_existing_generated"
+    operation_id = "visual_asset_doc263_existing_generated:body_silhouette:body.rear_full:3"
+    prompt = "closed Body Silhouette MCP existing generated projection prompt"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    body_contract = _doc203_body_frozen_contract_fields()
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract={
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "1024x1536",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_generate",
+            "input_fidelity": "high",
+            "input_fidelity_required": False,
+            "size_normalization": "white_matte_contain_to_contract_size",
+            **body_contract,
+        },
+        require_body_rendering_contract=True,
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=_png_bytes((180, 212, 236)),
+        **_renderer_submit_hashes(handoff_store, pending),
+    )
+    assert submitted["status"] == "submitted"
+
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        stage="body_silhouette",
+        slot_key="body.rear_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 3,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_contract[
+                "body_refresh_presentation_intent"
+            ],
+            "mcp_materialization": {
+                "handoff_id": pending["handoff_id"],
+                "status": "submitted",
+                "generation_channel": "mcp",
+                "resume_required": True,
+            },
+            "llm_brain": {
+                "canonical_provider_prompts": [
+                    {"output_index": 1, "prompt": prompt, "review_status": "approved"}
+                ]
+            },
+        }
+    )
+    submitted_contract = handoff_store.get(pending["handoff_id"])
+    assert submitted_contract is not None
+    planning_metadata["mcp_materialization"].update(
+        {
+            "nonce": submitted_contract["nonce"],
+            "prompt_sha256": submitted_contract["prompt_sha256"],
+            "reference_asset_hashes": list(submitted_contract["reference_asset_hashes"]),
+            "reference_semantic_fingerprint": submitted_contract["reference_semantic_fingerprint"],
+            "rendering_contract_fingerprint": submitted_contract["rendering_contract_fingerprint"],
+        }
+    )
+    planning = _minimal_planning_result(job_id, generation_metadata=planning_metadata)
+    candidate_id = "candidate_doc263_existing_generated"
+    existing_asset = planning.asset_pack.assets[0].model_copy(
+        update={
+            "metadata": {
+                "planning_only": True,
+                "selected_candidate_id": candidate_id,
+                "selected_candidate_provider": "mcp_materialization",
+                "selected_candidate_is_mock": False,
+                "candidate_metadata": {"planning_only": True},
+            }
+        }
+    )
+    existing_result = planning.model_copy(
+        update={
+            "asset_pack": planning.asset_pack.model_copy(
+                update={"assets": [existing_asset], "planning_only": False}
+            ),
+            "metadata": {"selected_candidate_id": candidate_id},
+        }
+    )
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="existing generated submitted MCP projection checkpoint",
+            metadata={**planning_metadata, "project_id": "project_doc263_existing_generated"},
+        ),
+        status=ProductJobStatusValue.GENERATED,
+        job_id_value=job_id,
+        planning_result=planning,
+        generation_result=existing_result,
+    )
+    job_store.save(record)
+    handoff_store.job_store = job_store
+
+    review_observed: list[dict[str, object]] = []
+
+    class _NoProviderRouter:
+        def generate(self, request):  # noqa: ANN001
+            raise AssertionError("existing generated resume must not call provider")
+
+    runtime = SimpleNamespace(
+        generation_router=_NoProviderRouter(),
+        scenario_registry=ScenarioRuntime().scenario_registry,
+    )
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+
+    def fake_review(existing_record, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        asset = existing_record.generation_result.asset_pack.assets[0]
+        review_observed.append(
+            {
+                "output_id": asset.metadata.get("output_id"),
+                "file_path": asset.file_path,
+                "uri": asset.uri,
+            }
+        )
+        return service._status_from_record(existing_record)  # noqa: SLF001
+
+    monkeypatch.setattr(service, "_resume_finalizing_generation_review", fake_review)
+
+    original_handoff = handoff_store.get(pending["handoff_id"])
+    assert original_handoff is not None
+    for field, bad_value in (
+        ("nonce", "tampered-nonce"),
+        ("prompt_sha256", "0" * 64),
+        ("reference_asset_hashes", ["0" * 64]),
+        ("reference_semantic_fingerprint", "0" * 64),
+        ("rendering_contract_fingerprint", "0" * 64),
+        ("artifact_sha256", "0" * 64),
+    ):
+        mutated_handoff = json.loads(json.dumps(original_handoff))
+        mutated_handoff[field] = bad_value
+        handoff_store._write(  # noqa: SLF001
+            handoff_store._record_path(pending["handoff_id"]),  # noqa: SLF001
+            mutated_handoff,
+        )
+        with pytest.raises(RuntimeError, match="mcp_materialization_output_projection_missing"):
+            service._ensure_submitted_body_mcp_projection_for_existing_result(record)  # noqa: SLF001
+        handoff_store._write(  # noqa: SLF001
+            handoff_store._record_path(pending["handoff_id"]),  # noqa: SLF001
+            original_handoff,
+        )
+
+    original_metadata = dict(record.request.metadata)
+    for key, bad_value in (
+        ("professional_character_card_candidate_index", 2),
+        ("professional_character_card_candidate_count", 2),
+        ("professional_character_card_slot", "body.side_full"),
+    ):
+        record.request.metadata = {**original_metadata, key: bad_value}
+        with pytest.raises(RuntimeError, match="mcp_materialization_output_projection_missing"):
+            service._ensure_submitted_body_mcp_projection_for_existing_result(record)  # noqa: SLF001
+    record.request.metadata = original_metadata
+
+    wrong_candidate_asset = record.generation_result.asset_pack.assets[0].model_copy(
+        update={
+            "metadata": {
+                **dict(record.generation_result.asset_pack.assets[0].metadata),
+                "selected_candidate_id": "candidate_wrong_server_binding",
+            }
+        }
+    )
+    record.generation_result = record.generation_result.model_copy(
+        update={
+            "asset_pack": record.generation_result.asset_pack.model_copy(
+                update={"assets": [wrong_candidate_asset]}
+            )
+        }
+    )
+    with pytest.raises(RuntimeError, match="mcp_materialization_output_projection_missing"):
+        service._ensure_submitted_body_mcp_projection_for_existing_result(record)  # noqa: SLF001
+    record.generation_result = existing_result
+
+    # Historical records may not carry the submit-time hashes in job metadata;
+    # the submitted server-owned handoff remains the authority for those fields.
+    record.request.metadata = {
+        **original_metadata,
+        "mcp_materialization": {
+            "handoff_id": pending["handoff_id"],
+            "status": "submitted",
+            "generation_channel": "mcp",
+            "resume_required": True,
+        },
+    }
+    frozen_generation_plan = planning.generation_plans[0].model_copy(
+        update={
+            "metadata": {
+                **dict(planning.generation_plans[0].metadata),
+                "mcp_materialization": dict(record.request.metadata["mcp_materialization"]),
+            }
+        }
+    )
+    record.planning_result = planning.model_copy(
+        update={"generation_plans": [frozen_generation_plan]}
+    )
+
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert status.status == ProductJobStatusValue.GENERATED
+    assert len(review_observed) == 1
+    assert review_observed[0]["output_id"]
+    assert review_observed[0]["file_path"]
+    assert review_observed[0]["uri"]
+    updated = job_store.get(job_id)
+    assert updated is not None and updated.generation_result is not None
+    projected = updated.generation_result.asset_pack.assets[0]
+    assert projected.metadata.get("output_id")
+    assert projected.file_path and Path(projected.file_path).is_file()
+    assert projected.uri
+    assert len(output_store.list_by_job(job_id)) == 1
+
+
+def test_doc263_existing_generated_body_resume_missing_artifact_is_closed_without_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Existing generated strict Body results cannot review without a valid handoff artifact."""
+
+    job_id = "job_doc263_existing_generated_missing_artifact"
+    operation_id = "visual_asset_doc263_existing_generated_missing_artifact:body_silhouette:body.rear_full:3"
+    prompt = "closed Body Silhouette MCP missing submitted artifact"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    body_contract = _doc203_body_frozen_contract_fields()
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=[],
+        rendering_contract={
+            "renderer": "codex_builtin_imagegen",
+            "model": "gpt-image-2",
+            "size": "1024x1536",
+            "quality": "high",
+            "output_format": "png",
+            "count": 1,
+            "api_operation": "image_generate",
+            "input_fidelity": "high",
+            "input_fidelity_required": False,
+            "size_normalization": "white_matte_contain_to_contract_size",
+            **body_contract,
+        },
+        require_body_rendering_contract=True,
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=[],
+        artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
+    )
+    submitted_record = handoff_store.get(pending["handoff_id"])
+    assert submitted_record is not None
+    Path(str(submitted_record["artifact_file"])).unlink()
+
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        stage="body_silhouette",
+        slot_key="body.rear_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "brain_inferred",
+            "professional_character_card_body_refresh_source_mode": "inference_first",
+            "professional_character_card_body_model_context": "system_inferred_body_model_scene_neutral_v1",
+            "professional_character_card_candidate_index": 3,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_contract[
+                "body_refresh_presentation_intent"
+            ],
+            "mcp_materialization": {
+                "handoff_id": pending["handoff_id"],
+                "status": "submitted",
+                "generation_channel": "mcp",
+                "resume_required": True,
+            },
+        }
+    )
+    planning = _minimal_planning_result(job_id, generation_metadata=planning_metadata)
+    existing_result = planning.model_copy(
+        update={
+            "asset_pack": planning.asset_pack.model_copy(
+                update={
+                    "assets": [
+                        planning.asset_pack.assets[0].model_copy(
+                            update={
+                                "metadata": {
+                                    "planning_only": True,
+                                    "selected_candidate_id": "candidate_doc263_missing_artifact",
+                                    "candidate_metadata": {"planning_only": True},
+                                }
+                            }
+                        )
+                    ],
+                    "planning_only": False,
+                }
+            )
+        }
+    )
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="existing generated missing artifact checkpoint",
+            metadata={**planning_metadata, "project_id": "project_doc263_missing_artifact"},
+        ),
+        status=ProductJobStatusValue.GENERATED,
+        job_id_value=job_id,
+        planning_result=planning,
+        generation_result=existing_result,
+    )
+    job_store.save(record)
+    handoff_store.job_store = job_store
+    runtime = SimpleNamespace(
+        generation_router=SimpleNamespace(
+            generate=lambda request: (_ for _ in ()).throw(AssertionError("provider must not run"))
+        ),
+        scenario_registry=ScenarioRuntime().scenario_registry,
+    )
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+    review_called = False
+
+    def fake_review(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal review_called
+        review_called = True
+        return service._status_from_record(record)  # noqa: SLF001
+
+    monkeypatch.setattr(service, "_resume_finalizing_generation_review", fake_review)
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert status.status == ProductJobStatusValue.BLOCKED
+    assert not review_called
+    updated = job_store.get(job_id)
+    assert updated is not None
+    failure = updated.request.metadata.get("generation_lifecycle_failure")
+    assert failure["failure_code"] == "mcp_materialization_output_projection_missing"
+    assert len(output_store.list_by_job(job_id)) == 0
+
+
 def test_doc263_generating_body_resume_reconciles_submitted_handoff_before_consumer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import base64
 import hashlib
 import json
 import math
@@ -2389,6 +2390,11 @@ class V3ProductApiService:
             and record.generation_result is not None
         ):
             if resume_finalizing_review:
+                if self._is_professional_character_card_body_mcp_generation(record):
+                    try:
+                        self._ensure_submitted_body_mcp_projection_for_existing_result(record)
+                    except Exception as exc:
+                        return self._blocked_existing_submitted_body_mcp_projection(record, exc)
                 return self._resume_finalizing_generation_review(
                     record,
                     generate_request,
@@ -2690,6 +2696,314 @@ class V3ProductApiService:
         if type(candidate_index) is not int or not 1 <= candidate_index <= 3:
             return False
         return bool(str(metadata.get("mcp_operation_id") or "").strip())
+
+    def _ensure_submitted_body_mcp_projection_for_existing_result(self, record: ProductJobRecord) -> bool:
+        """Project a submitted Body artifact onto an already-generated result."""
+
+        if record.generation_result is None or record.planning_result is None:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        metadata = dict(record.request.metadata or {})
+        materialization = metadata.get("mcp_materialization")
+        if not isinstance(materialization, dict) or str(materialization.get("status") or "").strip() != "submitted":
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        handoff_id = str(materialization.get("handoff_id") or "").strip()
+        operation_id = str(metadata.get("mcp_operation_id") or "").strip()
+        if not handoff_id or not operation_id:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        handoff = self.mcp_materialization_store.get(handoff_id)
+        if not isinstance(handoff, dict) or str(handoff.get("status") or "").strip() != "submitted":
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if str(handoff.get("operation_id") or "").strip() != operation_id:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        contract = handoff.get("rendering_contract")
+        if not isinstance(contract, dict):
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if contract.get("body_silhouette_mcp_materialization_channel_contract") != (
+            body_silhouette_mcp_materialization_channel_contract()
+        ):
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        source_mode = str(metadata.get("professional_character_card_body_refresh_source_mode") or "").strip()
+        if source_mode not in {"inference_first", "reference_assisted"}:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if contract.get("body_refresh_source_mode") != source_mode:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if contract.get("body_refresh_presentation_intent") != metadata.get(
+            "professional_character_card_body_refresh_presentation_intent"
+        ):
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if source_mode == "reference_assisted" and not isinstance(
+            contract.get("body_mcp_reference_partition"), dict
+        ):
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        for metadata_key, handoff_key in (
+            ("nonce", "nonce"),
+            ("prompt_sha256", "prompt_sha256"),
+            ("reference_asset_hashes", "reference_asset_hashes"),
+            ("reference_semantic_fingerprint", "reference_semantic_fingerprint"),
+            ("rendering_contract_fingerprint", "rendering_contract_fingerprint"),
+        ):
+            expected = materialization.get(metadata_key)
+            if expected is not None and expected != handoff.get(handoff_key):
+                raise RuntimeError("mcp_materialization_output_projection_missing")
+        try:
+            frozen_reference_assets = list(handoff.get("reference_assets") or [])
+            frozen_reference_hashes = self.mcp_materialization_store._reference_hashes(
+                frozen_reference_assets
+            )
+            frozen_reference_fingerprint = self.mcp_materialization_store._reference_semantic_fingerprint(
+                frozen_reference_assets,
+                frozen_reference_hashes,
+            )
+            frozen_rendering_fingerprint = self.mcp_materialization_store._rendering_contract_fingerprint(
+                contract
+            )
+        except (OSError, TypeError, ValueError):
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if list(handoff.get("reference_asset_hashes") or []) != frozen_reference_hashes:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if str(handoff.get("reference_semantic_fingerprint") or "") != frozen_reference_fingerprint:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if str(handoff.get("rendering_contract_fingerprint") or "") != frozen_rendering_fingerprint:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+
+        candidate_index = metadata.get("professional_character_card_candidate_index")
+        candidate_count = metadata.get("professional_character_card_candidate_count")
+        slot_key = str(metadata.get("professional_character_card_slot") or "").strip()
+        if type(candidate_index) is not int or candidate_index not in {1, 2, 3} or candidate_count != 3:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if slot_key not in {"body.front_full", "body.side_full", "body.rear_full"}:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        frozen_plan = next(
+            (
+                item
+                for item in record.planning_result.generation_plans
+                if item.asset_id == record.generation_result.asset_pack.assets[0].asset_id
+            ),
+            None,
+        )
+        if frozen_plan is not None:
+            frozen_plan_metadata = dict(frozen_plan.metadata or {})
+            for key in (
+                "mcp_operation_id",
+                "professional_character_card_slot",
+                "professional_character_card_candidate_index",
+                "professional_character_card_candidate_count",
+                "professional_character_card_body_refresh_source_mode",
+                "professional_character_card_body_model_context",
+            ):
+                if key in frozen_plan_metadata and frozen_plan_metadata.get(key) != metadata.get(key):
+                    raise RuntimeError("mcp_materialization_output_projection_missing")
+        for checkpoint_key in ("mcp_checkpoint", "job_checkpoint", "output_checkpoint"):
+            checkpoint = handoff.get(checkpoint_key)
+            if not isinstance(checkpoint, dict) or not checkpoint:
+                continue
+            for key, expected in (
+                ("job_id", record.job_id),
+                ("candidate_index", candidate_index),
+                ("candidate_count", candidate_count),
+                ("slot", slot_key),
+                ("asset_id", record.generation_result.asset_pack.assets[0].asset_id),
+            ):
+                if key in checkpoint and checkpoint.get(key) != expected:
+                    raise RuntimeError("mcp_materialization_output_projection_missing")
+
+        if source_mode == "reference_assisted":
+            face_partition = contract.get("body_mcp_reference_partition")
+            face_channel = face_partition.get("face_identity_reference") if isinstance(face_partition, dict) else None
+            semantic_count = face_channel.get("asset_count") if isinstance(face_channel, dict) else None
+            semantic_hashes = face_channel.get("asset_hashes") if isinstance(face_channel, dict) else None
+            if (
+                type(semantic_count) is not int
+                or semantic_count <= 0
+                or type(semantic_hashes) is not list
+                or len(semantic_hashes) != semantic_count
+                or any(type(item) is not str or not item.strip() for item in semantic_hashes)
+            ):
+                raise RuntimeError("mcp_materialization_output_projection_missing")
+            face_binding = metadata.get("professional_character_card_face_view_binding")
+            view_kind = {
+                "body.front_full": "front_full",
+                "body.side_full": "side_full",
+                "body.rear_full": "rear_full",
+            }.get(slot_key)
+            binding = face_binding.get(view_kind) if isinstance(face_binding, dict) and view_kind else None
+            if not isinstance(binding, dict):
+                raise RuntimeError("mcp_materialization_output_projection_missing")
+            binding_source_id = str(binding.get("source_asset_id") or "").strip()
+            if not binding_source_id:
+                source_ids = [
+                    str(item).strip()
+                    for item in (binding.get("source_asset_ids") or [])
+                    if str(item).strip()
+                ]
+                if len(source_ids) != 1:
+                    raise RuntimeError("mcp_materialization_output_projection_missing")
+                binding_source_id = source_ids[0]
+            physical_source_ids: list[str] = []
+            for reference in frozen_reference_assets:
+                if not isinstance(reference, dict):
+                    raise RuntimeError("mcp_materialization_output_projection_missing")
+                reference_metadata = (
+                    reference.get("metadata") if isinstance(reference.get("metadata"), dict) else {}
+                )
+                role = str(
+                    reference.get("role")
+                    or reference.get("source_type")
+                    or reference_metadata.get("role")
+                    or ""
+                ).strip().lower()
+                if role not in {"face_reference", "portrait_identity"}:
+                    raise RuntimeError("mcp_materialization_output_projection_missing")
+                if str(reference_metadata.get("reference_truth_layer") or "").strip() == "body_proportion_truth":
+                    raise RuntimeError("mcp_materialization_output_projection_missing")
+                source_asset_id = str(
+                    reference.get("source_asset_id")
+                    or reference_metadata.get("source_asset_id")
+                    or ""
+                ).strip()
+                if not source_asset_id or source_asset_id != binding_source_id:
+                    raise RuntimeError("mcp_materialization_output_projection_missing")
+                physical_source_ids.append(source_asset_id)
+            if len(set(physical_source_ids)) != semantic_count:
+                raise RuntimeError("mcp_materialization_output_projection_missing")
+
+        artifact_file = Path(str(handoff.get("artifact_file") or ""))
+        artifact_sha256 = str(handoff.get("artifact_sha256") or "").strip().lower()
+        if len(artifact_sha256) != 64 or not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if not artifact_file.is_file():
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        try:
+            artifact_bytes = artifact_file.read_bytes()
+        except OSError as exc:
+            raise RuntimeError("mcp_materialization_output_projection_missing") from exc
+        if hashlib.sha256(artifact_bytes).hexdigest() != artifact_sha256:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+
+        assets = list(record.generation_result.asset_pack.assets or [])
+        planning_assets = list(record.planning_result.asset_pack.assets or [])
+        if len(assets) != 1 or len(planning_assets) != 1 or assets[0].asset_id != planning_assets[0].asset_id:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        asset = assets[0]
+        asset_metadata = dict(asset.metadata or {})
+        candidate_metadata = dict(asset_metadata.get("candidate_metadata") or {})
+        candidate_id = str(
+            asset_metadata.get("selected_candidate_id")
+            or candidate_metadata.get("candidate_id")
+            or ""
+        ).strip()
+        if not candidate_id:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        if candidate_metadata.get("candidate_id") not in {None, candidate_id}:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        server_candidate_id = str(
+            dict(record.generation_result.metadata or {}).get("selected_candidate_id") or ""
+        ).strip()
+        if server_candidate_id and server_candidate_id != candidate_id:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+
+        output_id = "v3_output_" + hashlib.sha256(
+            "|".join(
+                (
+                    "submitted_body_mcp_projection",
+                    record.job_id,
+                    candidate_id,
+                    asset.asset_id,
+                    artifact_sha256,
+                )
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        existing = self.output_store.get_output(output_id)
+        if existing is None:
+            existing = self.output_store.save_base64_output(
+                job_id=record.job_id,
+                candidate_id=candidate_id,
+                asset_id=asset.asset_id,
+                provider="mcp_materialization",
+                model=str(contract.get("model") or "gpt-image-2"),
+                encoded_image=base64.b64encode(artifact_bytes).decode("ascii"),
+                output_id=output_id,
+                mime_type=str(handoff.get("artifact_mime_type") or "image/png"),
+                output_format=str(handoff.get("artifact_format") or "png"),
+                metadata={"submitted_mcp_projection": True, "artifact_sha256": artifact_sha256},
+            )
+        if (
+            existing.job_id != record.job_id
+            or existing.candidate_id != candidate_id
+            or existing.asset_id != asset.asset_id
+            or not str(existing.file_path or "").strip()
+            or not Path(str(existing.file_path)).is_file()
+        ):
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+        output_uri = str(existing.thumbnail_url or existing.download_url or "").strip()
+        if not output_uri:
+            raise RuntimeError("mcp_materialization_output_projection_missing")
+
+        updated_candidate_metadata = {
+            **candidate_metadata,
+            "candidate_id": candidate_id,
+            "output_id": existing.output_id,
+            "file_path": existing.file_path,
+            "uri": output_uri,
+            "planning_only": False,
+        }
+        updated_asset = asset.model_copy(
+            update={
+                "file_path": existing.file_path,
+                "uri": output_uri,
+                "metadata": {
+                    **asset_metadata,
+                    "planning_only": False,
+                    "output_id": existing.output_id,
+                    "file_path": existing.file_path,
+                    "uri": output_uri,
+                    "candidate_metadata": updated_candidate_metadata,
+                },
+            }
+        )
+        updated_pack = record.generation_result.asset_pack.model_copy(
+            update={"assets": [updated_asset], "planning_only": False}
+        )
+        record.generation_result = record.generation_result.model_copy(
+            update={
+                "asset_pack": updated_pack,
+                "metadata": {
+                    **dict(record.generation_result.metadata or {}),
+                    "submitted_mcp_output_projection": {
+                        "output_id": existing.output_id,
+                        "artifact_sha256": artifact_sha256,
+                        "candidate_id": candidate_id,
+                    },
+                },
+            }
+        )
+        self.job_store.save(record)
+        return True
+
+    def _blocked_existing_submitted_body_mcp_projection(
+        self,
+        record: ProductJobRecord,
+        exc: Exception,
+    ) -> ProductJobStatus:
+        record.status = ProductJobStatusValue.BLOCKED
+        record.request.metadata = {
+            **dict(record.request.metadata or {}),
+            "generation_lifecycle_failure": {
+                "schema_version": "v3_generation_lifecycle_failure_v1",
+                "stage": "submitted_mcp_resume",
+                "status": "blocked",
+                "failure_family": "mcp_materialization",
+                "failure_code": "mcp_materialization_output_projection_missing",
+                "provider_request_started": False,
+                "remote_brain_request_started": False,
+            },
+        }
+        record.warnings.append(
+            "Submitted MCP Body artifact could not be projected onto the existing generated result."
+        )
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return self._status_from_record(record)
 
     def _blocked_body_mcp_planning_required(
         self,
