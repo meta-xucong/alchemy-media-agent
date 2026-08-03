@@ -1855,7 +1855,25 @@ class ProductApiAnchorPackPreparationHost:
             )
             if getattr(resume_record, "generation_result", None) is not None:
                 try:
-                    candidate, review = self._character_card_candidate_and_review(status_job_id, request)
+                    if request.module == "body_silhouette":
+                        identity = self._character_card_generation_result_mcp_identity(
+                            resume_record.generation_result
+                        )
+                        expected_output_id = str(identity.get("output_id") or "").strip()
+                        if not expected_output_id:
+                            raise AnchorCandidateUnavailable(
+                                "mcp_review_output_identity_missing"
+                            )
+                        candidate, review = self._character_card_candidate_and_review(
+                            status_job_id,
+                            request,
+                            expected_output_id=expected_output_id,
+                        )
+                    else:
+                        candidate, review = self._character_card_candidate_and_review(
+                            status_job_id,
+                            request,
+                        )
                 except AnchorCandidateUnavailable as exc:
                     if exc.failure_code != "mcp_review_pending":
                         raise

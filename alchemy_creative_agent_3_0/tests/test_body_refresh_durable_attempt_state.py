@@ -49,6 +49,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardStageResult,
 )
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorCandidateUnavailable
 from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
     mark_formal_slot_receipt_reload_public_projection_verified,
 )
@@ -866,6 +867,7 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
     assert durable_job_ids_before_resume - durable_job_ids_after_resume == set()
     assert durable_job_ids_after_resume == durable_job_ids_before_resume
     assert save_calls == []
+
     for record in records.values():
         assert (
             str(record.updated_at),
@@ -909,6 +911,262 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
             exc_info.value.candidate_lifecycle_failure_code
             == "candidate_review_extraction_unbound"
         )
+
+
+def test_generated_resume_record_uses_result_output_identity_before_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generated resume record must use its output identity, not list_by_job."""
+
+    lifecycle, _old_host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    face_reference_output_ids = [
+        str(asset.character_card.face_slots[key].output_id or "")
+        for key in ("face.front", "face.profile", "face.rear_head")
+    ]
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=face_reference_output_ids,
+    )
+    host = ProductApiAnchorPackPreparationHost(service)
+    request = CharacterCardCandidateRequest(
+        project_id=f"visual_asset_{asset.visual_asset_id}",
+        people_asset_id=asset.visual_asset_id,
+        card_version_id=asset.character_card.card_version_id,
+        module="body_silhouette",
+        slot_key="body.rear_full",
+        candidate_index=3,
+        attempt_round=1,
+        reference_output_ids=face_reference_output_ids,
+        user_intent="reference-assisted Body refresh",
+        source_class="observed",
+        consent_provenance_id="server-consent-reference",
+        body_source_admission=admission,
+        body_refresh_source_mode="reference_assisted",
+        body_model_context="similar_person_body_reference_assisted_v1",
+        body_refresh_contract_required=True,
+        generation_channel="mcp",
+        body_refresh_attempt_identity=attempt,
+        body_refresh_analysis_context=context,
+        mcp_handoff_id="mcp_handoff_rear3_directed",
+        review_only_resume=True,
+    )
+    operation_id = host._character_card_candidate_mcp_operation_id(request)  # noqa: SLF001
+    output_id = "v3_output_rear3_directed"
+    candidate_id = "candidate_rear3_directed"
+    asset_id = f"asset_{asset.visual_asset_id}"
+    output_path = tmp_path / "rear3-directed.png"
+    output_path.write_bytes(b"directed-resume-output")
+    inspection = {
+        "job_id": "job_rear3_directed",
+        "candidate_id": candidate_id,
+        "asset_id": asset_id,
+        "output_id": output_id,
+        "status": "pass",
+        "mode": "vision_model",
+        "verification_state": "verified",
+        "score_card": {
+            "same_person_readability": 0.95,
+            "distinctive_feature_readability": 0.95,
+            "human_realism": 0.95,
+            "pose_compliance": 0.95,
+            "visual_quality": 0.95,
+            "ai_overperfection_penalty": 0.95,
+            "overall": 0.95,
+            "body_chain_coherence": 0.95,
+            "stage_aware_proportion": 0.95,
+            "head_neck_shoulder_continuity": 0.95,
+            "torso_limb_joint_plausibility": 0.95,
+            "stance_ground_contact": 0.95,
+        },
+        "issue_codes": [],
+    }
+    output_metadata = {
+        "provider_prompt_sha256": "a" * 64,
+        "prompt_compilation_id": "compiled_rear3_directed",
+        "provider_reference_image_count": 3,
+        "provider_reference_assets": ["face_front", "face_profile", "face_rear"],
+    }
+    output = SimpleNamespace(
+        output_id=output_id,
+        job_id="job_rear3_directed",
+        candidate_id=candidate_id,
+        asset_id=asset_id,
+        file_path=str(output_path),
+        metadata=output_metadata,
+    )
+    generation_result = SimpleNamespace(
+        metadata={"post_generation_review_package": {"inspections": [inspection]}},
+        asset_pack=SimpleNamespace(
+            assets=[
+                SimpleNamespace(
+                    metadata={
+                        "candidate_metadata": {
+                            "output_id": output_id,
+                            "candidate_id": candidate_id,
+                            "mcp_materialization": {
+                                "handoff_id": "mcp_handoff_rear3_directed",
+                            },
+                        }
+                    }
+                )
+            ]
+        ),
+    )
+    record = SimpleNamespace(
+        job_id="job_rear3_directed",
+        request=SimpleNamespace(
+            metadata={
+                "professional_body_refresh_analysis_context": context.safe_metadata(),
+                "professional_character_card_body_source_admission": admission.model_dump(mode="json"),
+                "professional_character_card_slot": "body.rear_full",
+                "professional_character_card_candidate_index": 3,
+                "professional_character_card_candidate_count": 3,
+                "professional_character_card_attempt_round": 1,
+                "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
+                "mcp_operation_id": operation_id,
+            }
+        ),
+        generation_result=generation_result,
+    )
+    monkeypatch.setattr(
+        host,
+        "_mcp_resume_character_card_stage_job_record",
+        lambda _request, requested_operation_id: (
+            record if requested_operation_id == operation_id else None
+        ),
+    )
+    monkeypatch.setattr(service, "get_job_record", lambda _job_id: record)
+    get_output_calls: list[str] = []
+
+    def directed_get_output(requested_output_id: str):
+        get_output_calls.append(str(requested_output_id))
+        return output if requested_output_id == output_id else None
+
+    list_by_job_calls: list[str] = []
+    monkeypatch.setattr(service.output_store, "get_output", directed_get_output)
+    monkeypatch.setattr(
+        service.output_store,
+        "file_for_variant",
+        lambda _output_id, _variant: (str(output_path),),
+    )
+    monkeypatch.setattr(
+        service.output_store,
+        "list_by_job",
+        lambda job_id: pytest.fail(
+            list_by_job_calls.append(str(job_id))
+            or "generated resume must use the result output identity"
+        ),
+    )
+    monkeypatch.setattr(
+        host,
+        "_record_character_card_candidate_lifecycle_checkpoint",
+        lambda **_kwargs: None,
+    )
+
+    candidate = host._generate_character_card_candidate(request)  # noqa: SLF001
+
+    assert candidate.output_id == output_id
+    assert get_output_calls == [output_id]
+    assert list_by_job_calls == []
+
+
+def test_generated_resume_record_without_output_identity_fails_closed_before_output_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generated resume result without a server-owned output ID is closed."""
+
+    lifecycle, _old_host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    face_reference_output_ids = [
+        str(asset.character_card.face_slots[key].output_id or "")
+        for key in ("face.front", "face.profile", "face.rear_head")
+    ]
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=face_reference_output_ids,
+    )
+    host = ProductApiAnchorPackPreparationHost(service)
+    request = CharacterCardCandidateRequest(
+        project_id=f"visual_asset_{asset.visual_asset_id}",
+        people_asset_id=asset.visual_asset_id,
+        card_version_id=asset.character_card.card_version_id,
+        module="body_silhouette",
+        slot_key="body.rear_full",
+        candidate_index=3,
+        reference_output_ids=face_reference_output_ids,
+        user_intent="reference-assisted Body refresh",
+        source_class="observed",
+        consent_provenance_id="server-consent-reference",
+        body_source_admission=admission,
+        body_refresh_source_mode="reference_assisted",
+        body_model_context="similar_person_body_reference_assisted_v1",
+        body_refresh_contract_required=True,
+        generation_channel="mcp",
+        body_refresh_attempt_identity=attempt,
+        body_refresh_analysis_context=context,
+        mcp_handoff_id="mcp_handoff_rear3_missing_output",
+        review_only_resume=True,
+    )
+    operation_id = host._character_card_candidate_mcp_operation_id(request)  # noqa: SLF001
+    record = SimpleNamespace(
+        job_id="job_rear3_missing_output",
+        request=SimpleNamespace(
+            metadata={
+                "professional_body_refresh_analysis_context": context.safe_metadata(),
+            }
+        ),
+        generation_result=SimpleNamespace(
+            metadata={},
+            asset_pack=SimpleNamespace(
+                assets=[
+                    SimpleNamespace(
+                        metadata={
+                            "candidate_metadata": {
+                                "candidate_id": "candidate_rear3_missing_output",
+                                "mcp_materialization": {
+                                    "handoff_id": "mcp_handoff_rear3_missing_output",
+                                },
+                            }
+                        }
+                    )
+                ]
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        host,
+        "_mcp_resume_character_card_stage_job_record",
+        lambda _request, requested_operation_id: (
+            record if requested_operation_id == operation_id else None
+        ),
+    )
+    monkeypatch.setattr(service, "get_job_record", lambda _job_id: record)
+    monkeypatch.setattr(
+        service.output_store,
+        "list_by_job",
+        lambda _job_id: pytest.fail("missing output identity must fail before list_by_job"),
+    )
+
+    with pytest.raises(AnchorCandidateUnavailable) as exc_info:
+        host._generate_character_card_candidate(request)  # noqa: SLF001
+
+    assert exc_info.value.failure_code == "mcp_review_output_identity_missing"
 
 
 def test_library_resume_passes_pointer_cursor_to_one_host_boundary_without_fanout(
