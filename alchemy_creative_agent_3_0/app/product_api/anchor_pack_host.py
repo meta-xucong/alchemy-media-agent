@@ -715,6 +715,12 @@ class ProductApiAnchorPackPreparationHost:
         if not operation:
             return []
         job_store = getattr(self.product_service, "job_store", None)
+        directed_finder = getattr(job_store, "get_mcp_operation_records", None)
+        if callable(directed_finder):
+            try:
+                return list(directed_finder(operation))
+            except Exception:
+                return []
         finder = getattr(job_store, "list_mcp_operation_records", None)
         if not callable(finder):
             return []

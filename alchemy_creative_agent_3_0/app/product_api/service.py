@@ -585,19 +585,20 @@ class InMemoryProductJobStore:
         bounded_limit = max(1, min(int(limit or 20), 100))
         return sorted(self._records.values(), key=lambda record: record.updated_at, reverse=True)[:bounded_limit]
 
-    def list_mcp_operation_records(self, operation_id: str) -> list[ProductJobRecord]:
+    def get_mcp_operation_records(self, operation_id: str) -> list[ProductJobRecord]:
         operation = str(operation_id or "").strip()
         if not operation:
             return []
-        matches: list[ProductJobRecord] = []
-        for record in self._records.values():
-            metadata = dict(record.request.metadata or {})
-            if str(metadata.get("generation_channel") or "").strip().lower() != "mcp":
-                continue
-            if str(metadata.get("mcp_operation_id") or "").strip() != operation:
-                continue
-            matches.append(record)
+        matches = [
+            record
+            for record in self._records.values()
+            if str(record.request.metadata.get("generation_channel") or "").strip().lower() == "mcp"
+            and str(record.request.metadata.get("mcp_operation_id") or "").strip() == operation
+        ]
         return sorted(matches, key=lambda record: record.updated_at, reverse=True)
+
+    def list_mcp_operation_records(self, operation_id: str) -> list[ProductJobRecord]:
+        return self.get_mcp_operation_records(operation_id)
 
     def delete_many(self, job_ids: list[str]) -> int:
         deleted = 0
@@ -611,6 +612,7 @@ class InMemoryProductJobStore:
 
 
 _PRODUCT_JOB_ID_PATTERN = re.compile(r"^job_[A-Za-z0-9_-]{1,128}$")
+_MCP_OPERATION_INDEX_SCHEMA = "v3_mcp_operation_index_v1"
 
 
 class PersistentProductJobStore(InMemoryProductJobStore):
@@ -629,10 +631,14 @@ class PersistentProductJobStore(InMemoryProductJobStore):
     def __init__(self, storage_root: str | Path | None = None) -> None:
         super().__init__()
         self.storage_root = Path(storage_root) if storage_root else _default_product_job_storage_root()
+        self._mcp_operation_index: dict[str, set[str]] = {}
+        self._mcp_operation_index_loaded = False
+        self._mcp_operation_index_complete = False
 
     def save(self, record: ProductJobRecord) -> ProductJobRecord:
         saved = super().save(record)
         self._write_record(saved)
+        self._index_mcp_operation_record(saved)
         return saved
 
     def get(self, job_id: str) -> ProductJobRecord | None:
@@ -657,9 +663,38 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         self._load_all_records()
         return super().list_recent(limit)
 
+    def get_mcp_operation_records(self, operation_id: str) -> list[ProductJobRecord]:
+        operation = str(operation_id or "").strip()
+        if not operation:
+            return []
+        self._ensure_mcp_operation_index(operation)
+        operation_key = _mcp_operation_index_key(operation)
+        job_ids = set(self._mcp_operation_index.get(operation_key, set()))
+        # Records created in the current process are already typed in memory;
+        # include their exact operation binding without consulting the legacy
+        # catalog. Durable IDs from the private index are re-read one at a time.
+        for job_id, record in self._records.items():
+            metadata = dict(record.request.metadata or {})
+            if (
+                str(metadata.get("generation_channel") or "").strip().lower() == "mcp"
+                and str(metadata.get("mcp_operation_id") or "").strip() == operation
+            ):
+                job_ids.add(job_id)
+        matches: list[ProductJobRecord] = []
+        for job_id in sorted(job_ids):
+            record = self.get(job_id)
+            if record is None:
+                continue
+            metadata = dict(record.request.metadata or {})
+            if (
+                str(metadata.get("generation_channel") or "").strip().lower() == "mcp"
+                and str(metadata.get("mcp_operation_id") or "").strip() == operation
+            ):
+                matches.append(record)
+        return sorted(matches, key=lambda record: record.updated_at, reverse=True)
+
     def list_mcp_operation_records(self, operation_id: str) -> list[ProductJobRecord]:
-        self._load_all_records()
-        return super().list_mcp_operation_records(operation_id)
+        return self.get_mcp_operation_records(operation_id)
 
     def delete_many(self, job_ids: list[str]) -> int:
         deleted = super().delete_many(job_ids)
@@ -679,6 +714,94 @@ class PersistentProductJobStore(InMemoryProductJobStore):
             restored = self._read_record(path.stem)
             if restored is not None:
                 self._records[restored.job_id] = restored
+
+    @property
+    def _mcp_operation_index_path(self) -> Path:
+        return self.storage_root / "mcp_operation_index.json"
+
+    def _ensure_mcp_operation_index(self, operation_id: str) -> None:
+        self._load_mcp_operation_index()
+        operation_key = _mcp_operation_index_key(operation_id)
+        if self._mcp_operation_index_complete or operation_key in self._mcp_operation_index:
+            return
+        # Migrate pre-index stores in a bounded streaming pass. Each legacy
+        # job JSON is parsed, filtered, and released immediately; the old
+        # _load_all_records path retained the full catalog and could consume
+        # gigabytes during a durable Body resume.
+        if not self.storage_root.exists():
+            self._mcp_operation_index_complete = True
+            self._write_mcp_operation_index()
+            return
+        for path in self.storage_root.glob("job_*.json"):
+            restored = self._read_record(path.stem)
+            if restored is None:
+                continue
+            metadata = dict(restored.request.metadata or {})
+            if str(metadata.get("generation_channel") or "").strip().lower() != "mcp":
+                continue
+            operation = str(metadata.get("mcp_operation_id") or "").strip()
+            if not operation:
+                continue
+            self._mcp_operation_index.setdefault(_mcp_operation_index_key(operation), set()).add(
+                restored.job_id
+            )
+        self._mcp_operation_index_complete = True
+        self._write_mcp_operation_index()
+
+    def _load_mcp_operation_index(self) -> None:
+        if self._mcp_operation_index_loaded:
+            return
+        self._mcp_operation_index_loaded = True
+        path = self._mcp_operation_index_path
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict) or payload.get("schema_version") != _MCP_OPERATION_INDEX_SCHEMA:
+            return
+        operations = payload.get("operations")
+        if not isinstance(operations, dict):
+            return
+        for key, job_ids in operations.items():
+            if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key):
+                continue
+            if not isinstance(job_ids, list):
+                continue
+            valid_ids = {
+                str(job_id).strip()
+                for job_id in job_ids
+                if _valid_product_job_id(str(job_id).strip())
+            }
+            if valid_ids:
+                self._mcp_operation_index[key] = valid_ids
+        self._mcp_operation_index_complete = payload.get("catalog_scan_complete") is True
+
+    def _index_mcp_operation_record(self, record: ProductJobRecord) -> None:
+        metadata = dict(record.request.metadata or {})
+        if str(metadata.get("generation_channel") or "").strip().lower() != "mcp":
+            return
+        operation = str(metadata.get("mcp_operation_id") or "").strip()
+        if not operation:
+            return
+        self._load_mcp_operation_index()
+        self._mcp_operation_index.setdefault(_mcp_operation_index_key(operation), set()).add(record.job_id)
+        self._write_mcp_operation_index()
+
+    def _write_mcp_operation_index(self) -> None:
+        self.storage_root.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": _MCP_OPERATION_INDEX_SCHEMA,
+            "catalog_scan_complete": self._mcp_operation_index_complete,
+            "operations": {
+                key: sorted(job_ids)
+                for key, job_ids in sorted(self._mcp_operation_index.items())
+                if job_ids
+            },
+        }
+        path = self._mcp_operation_index_path
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+        temporary.replace(path)
 
     def _read_record(self, job_id: str) -> ProductJobRecord | None:
         if not _valid_product_job_id(job_id):
@@ -785,6 +908,10 @@ def _model_json(value: Any) -> dict[str, Any] | None:
 
 def _valid_product_job_id(job_id: str) -> bool:
     return bool(_PRODUCT_JOB_ID_PATTERN.match(str(job_id or "")))
+
+
+def _mcp_operation_index_key(operation_id: str) -> str:
+    return hashlib.sha256(str(operation_id or "").strip().encode("utf-8")).hexdigest()
 
 
 def _default_product_job_storage_root() -> Path:

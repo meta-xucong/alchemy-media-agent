@@ -49,11 +49,115 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardStageResult,
 )
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
+from alchemy_creative_agent_3_0.app.product_api.service import (
+    CreateCreativeJobRequest,
+    PersistentProductJobStore,
+    ProductJobRecord,
+    ProductJobStatusValue,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorCandidateUnavailable
 from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
     mark_formal_slot_receipt_reload_public_projection_verified,
 )
 from test_v3_doc245_body_formal_slot_receipt_seam import _BodyReviewer, _body_attempt
+
+
+class _DirectedOperationJobStore:
+    def __init__(self, records: list[object]) -> None:
+        self.records = list(records)
+        self.direct_calls: list[str] = []
+        self.full_scan_calls: list[str] = []
+
+    def get_mcp_operation_records(self, operation_id: str) -> list[object]:
+        self.direct_calls.append(operation_id)
+        return list(self.records)
+
+    def list_mcp_operation_records(self, operation_id: str) -> list[object]:
+        self.full_scan_calls.append(operation_id)
+        raise AssertionError("resume operation lookup must not scan the full job catalog")
+
+
+def test_body_resume_operation_lookup_uses_direct_store_reader_without_full_scan() -> None:
+    operation_id = "visual_asset_body_silhouette_body.rear_full_3"
+    target = SimpleNamespace(job_id="job_rear3")
+    store = _DirectedOperationJobStore([target])
+    service = SimpleNamespace(job_store=store, visual_asset_catalog=None)
+    host = ProductApiAnchorPackPreparationHost(service)
+
+    records = host._mcp_operation_job_records(operation_id)  # noqa: SLF001
+
+    assert records == [target]
+    assert store.direct_calls == [operation_id]
+    assert store.full_scan_calls == []
+
+
+def test_persistent_operation_index_streams_legacy_records_and_rejects_wrong_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = "visual_asset_body_silhouette_body.rear_full_3"
+    wrong_operation_id = "visual_asset_body_silhouette_body.front_full_1"
+    store = PersistentProductJobStore(tmp_path / "v3-jobs")
+
+    def record(job_id: str, operation: str) -> ProductJobRecord:
+        return ProductJobRecord(
+            request=CreateCreativeJobRequest(
+                user_input="durable Body resume",
+                metadata={
+                    "generation_channel": "mcp",
+                    "mcp_operation_id": operation,
+                },
+            ),
+            status=ProductJobStatusValue.PLANNED,
+            job_id_value=job_id,
+        )
+
+    # Write pre-index records directly to model an existing V3 job directory;
+    # the production lookup must migrate it without _load_all_records().
+    store._write_record(record("job_rear3", operation_id))  # noqa: SLF001
+    store._write_record(record("job_front1", wrong_operation_id))  # noqa: SLF001
+    monkeypatch.setattr(
+        store,
+        "_load_all_records",
+        lambda: pytest.fail("operation lookup must not load the full job catalog"),
+    )
+
+    matches = store.get_mcp_operation_records(operation_id)
+
+    assert [item.job_id for item in matches] == ["job_rear3"]
+    assert store.get_mcp_operation_records(wrong_operation_id)[0].job_id == "job_front1"
+
+
+def test_persistent_operation_index_is_maintained_on_save_and_reopen(tmp_path: Path) -> None:
+    operation_id = "visual_asset_body_silhouette_body.rear_full_3"
+    store = PersistentProductJobStore(tmp_path / "v3-jobs")
+    store.save(
+        ProductJobRecord(
+            request=CreateCreativeJobRequest(
+                user_input="durable Body resume",
+                metadata={
+                    "generation_channel": "mcp",
+                    "mcp_operation_id": operation_id,
+                },
+            ),
+            status=ProductJobStatusValue.PLANNED,
+            job_id_value="job_rear3",
+        )
+    )
+    index_payload = json.loads(
+        (tmp_path / "v3-jobs" / "mcp_operation_index.json").read_text(encoding="utf-8")
+    )
+    assert operation_id not in json.dumps(index_payload, ensure_ascii=True)
+    assert hashlib.sha256(operation_id.encode("utf-8")).hexdigest() in index_payload["operations"]
+
+    reopened = PersistentProductJobStore(tmp_path / "v3-jobs")
+    reopened._load_all_records = lambda: pytest.fail(  # type: ignore[method-assign]  # noqa: SLF001
+        "reopened operation lookup must use the private index"
+    )
+
+    matches = reopened.get_mcp_operation_records(operation_id)
+
+    assert [item.job_id for item in matches] == ["job_rear3"]
 
 
 class _InterruptAfterReviewedCandidate(_RefreshFanoutGenerator):
