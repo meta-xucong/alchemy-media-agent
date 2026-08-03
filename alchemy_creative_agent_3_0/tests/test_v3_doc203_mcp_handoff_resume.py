@@ -3176,7 +3176,19 @@ def test_doc263_existing_generated_body_resume_projects_submitted_artifact_befor
             "asset_pack": planning.asset_pack.model_copy(
                 update={"assets": [existing_asset], "planning_only": False}
             ),
-            "metadata": {"selected_candidate_id": candidate_id},
+            "metadata": {
+                "selected_candidate_id": candidate_id,
+                "post_generation_review_package": {
+                    "inspections": [
+                        {
+                            "status": "manual_review",
+                            "verification_state": "unverified",
+                            "issue_codes": [{"code": "file_missing"}],
+                        }
+                    ],
+                    "real_review_signal_package": {"issue_summary": {"file_missing": 1}},
+                },
+            },
         }
     )
     record = ProductJobRecord(
@@ -3192,7 +3204,7 @@ def test_doc263_existing_generated_body_resume_projects_submitted_artifact_befor
     job_store.save(record)
     handoff_store.job_store = job_store
 
-    review_observed: list[dict[str, object]] = []
+    review_calls: list[dict[str, object]] = []
 
     class _NoProviderRouter:
         def generate(self, request):  # noqa: ANN001
@@ -3209,18 +3221,29 @@ def test_doc263_existing_generated_body_resume_projects_submitted_artifact_befor
         mcp_materialization_store=handoff_store,
     )
 
-    def fake_review(existing_record, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def fake_attach(existing_record, generation_result, generate_request):  # noqa: ANN001
         asset = existing_record.generation_result.asset_pack.assets[0]
-        review_observed.append(
+        review_calls.append(
             {
                 "output_id": asset.metadata.get("output_id"),
                 "file_path": asset.file_path,
                 "uri": asset.uri,
             }
         )
-        return service._status_from_record(existing_record)  # noqa: SLF001
+        return generation_result.model_copy(
+            update={
+                "metadata": {
+                    **dict(generation_result.metadata),
+                    "post_generation_review_package": {
+                        "inspections": [
+                            {"status": "verified", "verification_state": "verified"}
+                        ]
+                    },
+                }
+            }
+        )
 
-    monkeypatch.setattr(service, "_resume_finalizing_generation_review", fake_review)
+    monkeypatch.setattr(service, "_attach_post_generation_review", fake_attach)
 
     original_handoff = handoff_store.get(pending["handoff_id"])
     assert original_handoff is not None
@@ -3304,10 +3327,10 @@ def test_doc263_existing_generated_body_resume_projects_submitted_artifact_befor
     )
 
     assert status.status == ProductJobStatusValue.GENERATED
-    assert len(review_observed) == 1
-    assert review_observed[0]["output_id"]
-    assert review_observed[0]["file_path"]
-    assert review_observed[0]["uri"]
+    assert len(review_calls) == 1
+    assert review_calls[0]["output_id"]
+    assert review_calls[0]["file_path"]
+    assert review_calls[0]["uri"]
     updated = job_store.get(job_id)
     assert updated is not None and updated.generation_result is not None
     projected = updated.generation_result.asset_pack.assets[0]
@@ -3315,6 +3338,16 @@ def test_doc263_existing_generated_body_resume_projects_submitted_artifact_befor
     assert projected.file_path and Path(projected.file_path).is_file()
     assert projected.uri
     assert len(output_store.list_by_job(job_id)) == 1
+    assert not updated.generation_result.metadata.get("post_generation_review_recheck_required")
+
+    # A stable verified package remains terminal and must not trigger a second
+    # review-only pass on a later exact resume.
+    second_status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+    assert second_status.status == ProductJobStatusValue.GENERATED
+    assert len(review_calls) == 1
 
 
 def test_doc263_existing_generated_body_resume_missing_artifact_is_closed_without_review(

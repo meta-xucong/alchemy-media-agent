@@ -2702,6 +2702,18 @@ class V3ProductApiService:
 
         if record.generation_result is None or record.planning_result is None:
             raise RuntimeError("mcp_materialization_output_projection_missing")
+        existing_assets = list(record.generation_result.asset_pack.assets or [])
+        previous_asset_file_backed = bool(
+            len(existing_assets) == 1
+            and str(existing_assets[0].file_path or "").strip()
+            and str(existing_assets[0].uri or "").strip()
+            and Path(str(existing_assets[0].file_path)).is_file()
+        )
+        previous_review_package = record.generation_result.metadata.get("post_generation_review_package")
+        file_missing_review_requires_recheck = bool(
+            not previous_asset_file_backed
+            and self._post_generation_review_package_has_issue_code(previous_review_package, "file_missing")
+        )
         metadata = dict(record.request.metadata or {})
         materialization = metadata.get("mcp_materialization")
         if not isinstance(materialization, dict) or str(materialization.get("status") or "").strip() != "submitted":
@@ -2974,6 +2986,14 @@ class V3ProductApiService:
                         "artifact_sha256": artifact_sha256,
                         "candidate_id": candidate_id,
                     },
+                    **(
+                        {
+                            "post_generation_review_recheck_required": True,
+                            "post_generation_review_recheck_reason": "submitted_artifact_file_backed_projection",
+                        }
+                        if file_missing_review_requires_recheck
+                        else {}
+                    ),
                 },
             }
         )
@@ -3592,12 +3612,22 @@ class V3ProductApiService:
         if generation_result is None:
             return self._status_from_record(record)
         existing_package = generation_result.metadata.get("post_generation_review_package")
-        if isinstance(existing_package, dict) and not self._post_generation_review_package_requires_resume(
-            existing_package
+        review_recheck_required = bool(
+            generation_result.metadata.get("post_generation_review_recheck_required")
+        )
+        if (
+            isinstance(existing_package, dict)
+            and not review_recheck_required
+            and not self._post_generation_review_package_requires_resume(existing_package)
         ):
             return self._status_from_record(record)
         provider_strategy = self._provider_strategy_for_generate(record, generate_request)
         generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        if review_recheck_required:
+            generation_metadata = dict(generation_result.metadata)
+            generation_metadata.pop("post_generation_review_recheck_required", None)
+            generation_metadata.pop("post_generation_review_recheck_reason", None)
+            generation_result = generation_result.model_copy(update={"metadata": generation_metadata})
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         self._clear_superseded_pre_generation_review_warning(record, generation_result)
@@ -3895,6 +3925,21 @@ class V3ProductApiService:
                 if isinstance(signal, dict):
                     issue_codes.update(V3ProductApiService._review_issue_codes(signal))
         return issue_codes
+
+    @staticmethod
+    def _post_generation_review_package_has_issue_code(package: Any, issue_code: str) -> bool:
+        if not isinstance(package, dict):
+            return False
+        normalized_code = str(issue_code or "").strip()
+        if not normalized_code:
+            return False
+        issue_summary = package.get("real_review_signal_package", {}).get("issue_summary")
+        if isinstance(issue_summary, dict) and normalized_code in issue_summary:
+            return True
+        for inspection in package.get("inspections", []):
+            if isinstance(inspection, dict) and normalized_code in V3ProductApiService._review_issue_codes(inspection):
+                return True
+        return normalized_code in V3ProductApiService._post_generation_review_package_issue_codes(package)
 
     @staticmethod
     def _review_issue_codes(payload: dict[str, Any]) -> set[str]:
