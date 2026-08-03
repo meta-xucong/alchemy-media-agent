@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -5722,3 +5723,240 @@ def test_doc203_character_card_plan_result_is_durable_at_stage_creation_boundary
     assert durable is not None
     assert durable.planning_result is not None
     assert durable.generation_result is None
+
+
+def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_partition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A submitted strict Body handoff must be replayed with its frozen Face refs.
+
+    The real rear candidate3 boundary had two physical Face references frozen in
+    the handoff, while the resume reconstruction rebuilt only one from the
+    durable generation plan.  The consumer must not silently reinterpret that
+    handoff as a different provider request.
+    """
+
+    job_id = "job_doc263_reference_assisted_rear3"
+    operation_id = "visual_asset_doc263_reference_assisted:body_silhouette:body.rear_full:3"
+    prompt = "closed reference-assisted Body rear candidate three renderer prompt"
+    prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    job_store = PersistentProductJobStore(tmp_path / "jobs")
+    handoff_store = McpMaterializationHandoffStore(tmp_path / "handoffs")
+
+    from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+        body_silhouette_mcp_materialization_channel_contract,
+    )
+    from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+        default_body_refresh_presentation_intent,
+    )
+
+    body_intent = default_body_refresh_presentation_intent().model_dump(mode="json")
+    physical_face_refs = [
+        {
+            "asset_id": "face_rear_feature_detail",
+            "source_asset_id": "face_rear_source",
+            "sha256": "1" * 64,
+            "role": "portrait_identity",
+            "derivative_kind": "feature_detail",
+        },
+        {
+            "asset_id": "face_rear_head_geometry",
+            "source_asset_id": "face_rear_source",
+            "sha256": "2" * 64,
+            "role": "portrait_identity",
+            "derivative_kind": "portrait_identity_pose_geometry_crop",
+        },
+    ]
+    body_partition = {
+        "contract_version": "body_mcp_reference_partition_v1",
+        "body_proportion_reference": {
+            "role": "body_proportion_reference",
+            "truth_layer": "body_proportion_truth",
+            "asset_count": 5,
+            "asset_hashes": ["3" * 64] * 5,
+        },
+        "face_identity_reference": {
+            "role": "face_identity_reference",
+            "truth_layer": "identity_continuity",
+            "identity_continuity_only": True,
+            "asset_count": 2,
+            "asset_hashes": ["1" * 64, "2" * 64],
+        },
+    }
+    morphology_bands = {
+        "relative_head_to_stature": "proportional",
+        "shoulder_to_head": "proportional",
+        "torso_to_leg": "proportional",
+        "arm_to_leg": "proportional",
+        "build": "medium",
+        "neck_shoulder": "proportional_transition",
+        "developmental_stage_context": "unknown_stage_context",
+        "stance_ground": "grounded_full_contact",
+        "cross_view_support": "multi_view_supported",
+    }
+    morphology_digest = hashlib.sha256(
+        json.dumps(morphology_bands, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    rendering_contract = {
+        "renderer": "codex_builtin_imagegen",
+        "model": "gpt-image-2",
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_edit",
+        "input_fidelity": "high",
+        "input_fidelity_required": False,
+        "size_normalization": "white_matte_contain_to_contract_size",
+        **_doc203_body_frozen_contract_fields(),
+        "body_refresh_source_mode": "reference_assisted",
+        "body_mcp_reference_partition": body_partition,
+        "body_morphology_profile": {
+            "schema_version": "body_morphology_evidence_profile_v2",
+            "profile_digest": "a" * 64,
+            "bands_digest": morphology_digest,
+            "bands": morphology_bands,
+        },
+    }
+    pending = handoff_store.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha,
+        reference_assets=physical_face_refs,
+        rendering_contract=rendering_contract,
+        require_body_rendering_contract=True,
+    )
+    submitted = handoff_store.submit(
+        pending["handoff_id"],
+        nonce=pending["nonce"],
+        prompt_sha256=prompt_sha,
+        reference_asset_hashes=pending["reference_asset_hashes"],
+        artifact_bytes=_png_bytes(),
+        **_renderer_submit_hashes(handoff_store, pending),
+    )
+    assert submitted["status"] == "submitted"
+
+    planning_metadata = _current_character_card_planning_metadata(
+        operation_id=operation_id,
+        refs=["face_rear_source"],
+        stage="body_silhouette",
+        slot_key="body.rear_full",
+        attempt_round=1,
+        handoff=None,
+    )
+    planning_metadata.update(
+        {
+            "professional_character_card_source_class": "observed",
+            "professional_character_card_body_refresh_source_mode": "reference_assisted",
+            "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
+            "professional_character_card_candidate_index": 3,
+            "professional_character_card_candidate_count": 3,
+            "professional_character_card_body_refresh_presentation_intent": body_intent,
+            "mcp_materialization": {
+                "handoff_id": pending["handoff_id"],
+                "status": "pending",
+                "generation_channel": "mcp",
+                "resume_required": True,
+                "nonce": pending["nonce"],
+                "prompt_sha256": prompt_sha,
+                "reference_asset_hashes": pending["reference_asset_hashes"],
+            },
+        }
+    )
+    generation_metadata = {
+        **planning_metadata,
+        # This deliberately models the observed replay defect: the frozen
+        # handoff owns two Face derivatives, but the reconstructed plan owns
+        # only one.  The fix must project the handoff's exact pair before the
+        # provider request/capability boundary.
+        "reference_assets": [physical_face_refs[0]],
+        "llm_brain": {
+            "canonical_provider_prompts": [
+                {"output_index": 1, "prompt": prompt, "review_status": "approved"}
+            ]
+        },
+    }
+    record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="strict Body submitted resume with frozen Face partition",
+            metadata={**planning_metadata, "project_id": "project_doc263_reference_assisted"},
+        ),
+        status=ProductJobStatusValue.GENERATING,
+        job_id_value=job_id,
+        planning_result=_minimal_planning_result(
+            job_id,
+            generation_metadata=generation_metadata,
+        ),
+        generation_result=None,
+        balance_estimate={"credits_required": 0},
+    )
+    job_store.save(record)
+    handoff_store.job_store = job_store
+
+    artifact_path = tmp_path / "generated.png"
+    artifact_path.write_bytes(_png_bytes())
+    output_id = "v3_output_doc263_reference_assisted_rear3"
+
+    class _RecordingRouter:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request):  # noqa: ANN001
+            self.requests.append(request)
+            return SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        candidate_id="candidate_doc263_reference_assisted_rear3",
+                        provider="mcp_materialization",
+                        file_path=str(artifact_path),
+                        uri=str(artifact_path),
+                        prompt_compilation_id="prompt_doc263_reference_assisted_rear3",
+                        metadata={
+                            "output_id": output_id,
+                            "mcp_materialization": {
+                                "handoff_id": pending["handoff_id"],
+                                "expected_checkpoint": {
+                                    "candidate_id": "candidate_doc263_reference_assisted_rear3",
+                                    "output_id": output_id,
+                                },
+                            },
+                        },
+                    )
+                ],
+                provider_metadata={"test_only": True},
+            )
+
+    router = _RecordingRouter()
+    runtime = SimpleNamespace(
+        generation_router=router,
+        scenario_registry=ScenarioRuntime().scenario_registry,
+    )
+    service = V3ProductApiService(
+        scenario_runtime=runtime,  # type: ignore[arg-type]
+        job_store=job_store,
+        output_store=output_store,
+        mcp_materialization_store=handoff_store,
+    )
+    monkeypatch.setattr(service, "_checkpoint_mcp_generation_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        service,
+        "_resume_finalizing_generation_review",
+        lambda current, *_args, **_kwargs: service._status_from_record(current),
+    )
+
+    status = service.generate_asset_series(
+        job_id,
+        {"quality_mode": "strict", "metadata": {"_v3_resume_finalizing_review": True}},
+    )
+
+    assert router.requests, (
+        "strict submitted Body resume must reach the frozen consumer; current code "
+        "rejects the handoff before provider request construction"
+    )
+    assert len(router.requests[0].metadata["reference_assets"]) == len(physical_face_refs)
+    assert status.status == ProductJobStatusValue.FINALIZING
+    updated = job_store.get(job_id)
+    assert updated is not None
+    assert updated.generation_result is not None

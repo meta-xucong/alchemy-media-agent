@@ -2994,9 +2994,62 @@ class V3ProductApiService:
             "professional_character_card_body_refresh_presentation_intent"
         ):
             return None
-        expected_reference_hashes = self.mcp_materialization_store._reference_hashes(
-            list(generation_request.metadata.get("reference_assets") or [])
-        )
+        source_mode = str(metadata.get("professional_character_card_body_refresh_source_mode") or "").strip()
+        if source_mode == "reference_assisted":
+            frozen_physical_references = handoff.get("reference_assets")
+            if not isinstance(frozen_physical_references, list) or not frozen_physical_references:
+                return None
+            try:
+                frozen_reference_hashes = self.mcp_materialization_store._reference_hashes(
+                    list(frozen_physical_references)
+                )
+            except (OSError, ValueError, TypeError):
+                return None
+            if list(handoff.get("reference_asset_hashes") or []) != frozen_reference_hashes:
+                return None
+            face_partition = handoff_contract.get("body_mcp_reference_partition")
+            if not isinstance(face_partition, dict):
+                return None
+            face_channel = face_partition.get("face_identity_reference")
+            if not isinstance(face_channel, dict):
+                return None
+            if face_channel.get("asset_count") != len(frozen_physical_references):
+                return None
+            if list(face_channel.get("asset_hashes") or []) != frozen_reference_hashes:
+                return None
+            for reference in frozen_physical_references:
+                if not isinstance(reference, dict):
+                    return None
+                item = dict(reference or {})
+                reference_metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                role = str(
+                    item.get("role")
+                    or item.get("source_type")
+                    or reference_metadata.get("role")
+                    or ""
+                ).strip().lower()
+                if role not in {"face_reference", "portrait_identity"}:
+                    return None
+                if str(reference_metadata.get("reference_truth_layer") or "").strip() == "body_proportion_truth":
+                    return None
+            plan_metadata["reference_assets"] = list(frozen_physical_references)
+            generation_request = build_provider_generation_request(
+                asset_spec=asset,
+                layout_plan=layout,
+                prompt_compilation=prompt,
+                condition_plan=condition,
+                generation_plan=frozen_generation_plan.model_copy(update={"metadata": plan_metadata}),
+                job_id=record.job_id,
+            )
+            expected_reference_hashes = self.mcp_materialization_store._reference_hashes(
+                list(generation_request.metadata.get("reference_assets") or [])
+            )
+            if expected_reference_hashes != frozen_reference_hashes:
+                return None
+        else:
+            expected_reference_hashes = self.mcp_materialization_store._reference_hashes(
+                list(generation_request.metadata.get("reference_assets") or [])
+            )
         if list(handoff.get("reference_asset_hashes") or []) != expected_reference_hashes:
             return None
         frozen_llm_brain = plan_metadata.get("llm_brain")
