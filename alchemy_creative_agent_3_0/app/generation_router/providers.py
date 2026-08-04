@@ -37,6 +37,7 @@ from ..visual_assets.body_silhouette_source_standard import (
 )
 from ..visual_assets.character_card import (
     BodySilhouetteBackdropPresentationContract,
+    default_body_silhouette_garment_continuity_contract,
     BodySilhouetteHairContinuityContract,
     BodyRefreshPresentationIntent,
     unspecified_body_refresh_presentation_intent,
@@ -6104,9 +6105,14 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                             "fallback": "blocked",
                         },
                     )
-                contract["body_refresh_presentation_intent"] = (
-                    self._safe_body_refresh_presentation_intent(metadata)
+                body_refresh_presentation_intent = self._safe_body_refresh_presentation_intent(
+                    metadata
                 )
+                contract["body_refresh_presentation_intent"] = body_refresh_presentation_intent
+                if body_refresh_presentation_intent != unspecified_body_refresh_presentation_intent():
+                    contract["body_silhouette_garment_continuity_contract"] = (
+                        default_body_silhouette_garment_continuity_contract()
+                    )
                 contract["body_silhouette_hair_continuity_contract"] = (
                     self._safe_body_silhouette_hair_continuity_contract(metadata)
                 )

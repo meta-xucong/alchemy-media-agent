@@ -95,10 +95,12 @@ from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     CharacterCardState,
     BodyRefreshPresentationIntent,
     BodySilhouetteBackdropPresentationContract,
+    BodySilhouetteGarmentContinuityContract,
     BodySilhouetteHairContinuityContract,
     BodySilhouettePublicRequest,
     character_card_formal_slot_receipt_public_summary,
     default_body_refresh_presentation_intent,
+    default_body_silhouette_garment_continuity_contract,
     project_character_card_slot_success_receipt,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
@@ -1536,6 +1538,10 @@ def _doc245_body_backdrop_presentation_contract() -> dict[str, object]:
     }
 
 
+def _doc245_body_garment_continuity_contract() -> dict[str, object]:
+    return default_body_silhouette_garment_continuity_contract()
+
+
 def test_doc245_body_stage_metadata_projects_executable_hair_and_backdrop_contracts() -> None:
     metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="body_silhouette",
@@ -1582,6 +1588,9 @@ def test_doc245_body_mcp_handoff_projects_hair_backdrop_and_existing_presentatio
     ]
     assert rendering_contract["body_silhouette_hair_continuity_contract"] == (
         body_source_contract["hair_continuity_contract"]
+    )
+    assert rendering_contract["body_silhouette_garment_continuity_contract"] == (
+        _doc245_body_garment_continuity_contract()
     )
     assert rendering_contract["body_silhouette_backdrop_presentation_contract"] == (
         _doc245_body_backdrop_presentation_contract()
@@ -1733,6 +1742,7 @@ def test_doc245_body_hair_backdrop_contract_does_not_leak_to_expression_or_ordin
     for body_owned_key in (
         "body_silhouette_mcp_materialization_channel_contract",
         "body_refresh_presentation_intent",
+        "body_silhouette_garment_continuity_contract",
         "body_silhouette_hair_continuity_contract",
         "body_silhouette_backdrop_presentation_contract",
     ):
@@ -1765,6 +1775,7 @@ def test_doc245_body_handoff_store_preserves_typed_hair_backdrop_and_fingerprint
             body_silhouette_integrated_whole_person_synthesis_contract()
         ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "body_silhouette_garment_continuity_contract": _doc245_body_garment_continuity_contract(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
             "hair_continuity_contract"
         ],
@@ -1781,6 +1792,9 @@ def test_doc245_body_handoff_store_preserves_typed_hair_backdrop_and_fingerprint
     )
     assert safe["body_silhouette_hair_continuity_contract"] == (
         body_source_contract["hair_continuity_contract"]
+    )
+    assert safe["body_silhouette_garment_continuity_contract"] == (
+        _doc245_body_garment_continuity_contract()
     )
     assert safe["body_silhouette_backdrop_presentation_contract"] == backdrop_contract
     for forbidden_key in ("raw_prompt", "provider_payload", "asset_path", "output_id"):
@@ -1815,6 +1829,7 @@ def test_doc245_body_handoff_store_preserves_typed_hair_backdrop_and_fingerprint
         }
     )
     assert "body_silhouette_hair_continuity_contract" not in ordinary_safe
+    assert "body_silhouette_garment_continuity_contract" not in ordinary_safe
     assert "body_silhouette_backdrop_presentation_contract" not in ordinary_safe
 
 
@@ -1876,6 +1891,7 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
             body_silhouette_integrated_whole_person_synthesis_contract()
         ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "body_silhouette_garment_continuity_contract": _doc245_body_garment_continuity_contract(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
             "hair_continuity_contract"
         ],
@@ -1915,6 +1931,9 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
     public_contract = public["rendering_contract"]
     assert public_contract["body_silhouette_hair_continuity_contract"] == (
         body_source_contract["hair_continuity_contract"]
+    )
+    assert public_contract["body_silhouette_garment_continuity_contract"] == (
+        _doc245_body_garment_continuity_contract()
     )
     assert public_contract["body_silhouette_backdrop_presentation_contract"] == (
         body_source_contract["backdrop_presentation_contract"]
@@ -1973,6 +1992,7 @@ def test_doc245_body_host_public_view_consumer_reads_typed_hair_backdrop_contrac
             body_silhouette_integrated_whole_person_synthesis_contract()
         ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "body_silhouette_garment_continuity_contract": _doc245_body_garment_continuity_contract(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
             "hair_continuity_contract"
         ],
@@ -1998,6 +2018,9 @@ def test_doc245_body_host_public_view_consumer_reads_typed_hair_backdrop_contrac
     host_context = public_view["rendering_contract"]
     assert host_context["body_silhouette_hair_continuity_contract"] == (
         body_source_contract["hair_continuity_contract"]
+    )
+    assert host_context["body_silhouette_garment_continuity_contract"] == (
+        _doc245_body_garment_continuity_contract()
     )
     assert host_context["body_silhouette_backdrop_presentation_contract"] == (
         body_source_contract["backdrop_presentation_contract"]
@@ -2213,6 +2236,7 @@ def _doc245_body_frozen_contract_fields() -> dict[str, object]:
             body_silhouette_integrated_whole_person_synthesis_contract()
         ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+        "body_silhouette_garment_continuity_contract": _doc245_body_garment_continuity_contract(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
             "hair_continuity_contract"
         ],
@@ -2255,6 +2279,9 @@ def test_doc245_mcp_handoff_store_persists_body_rendering_contract_and_intent(
     )
     assert persisted["body_refresh_presentation_intent"] == (
         _doc245_body_refresh_presentation_intent()
+    )
+    assert persisted["body_silhouette_garment_continuity_contract"] == (
+        _doc245_body_garment_continuity_contract()
     )
     serialized = repr(persisted).lower()
     for forbidden in (
@@ -2724,6 +2751,7 @@ def test_doc245_body_refresh_presentation_intent_unspecified_when_not_declared()
         "scope": "modeling_card_presentation_only",
         "status": "unspecified",
     }
+    assert "body_silhouette_garment_continuity_contract" not in rendering_contract
     serialized = repr(rendering_contract).lower()
     for fixed_value in ("short_sleeve_top", "shorts", "plain_white_ankle_socks"):
         assert fixed_value not in serialized

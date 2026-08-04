@@ -83,6 +83,7 @@ def _doc203_body_frozen_contract_fields() -> dict[str, object]:
     from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
         default_body_refresh_presentation_intent,
         default_body_silhouette_backdrop_presentation_contract,
+        default_body_silhouette_garment_continuity_contract,
         default_body_silhouette_hair_continuity_contract,
     )
 
@@ -96,6 +97,9 @@ def _doc203_body_frozen_contract_fields() -> dict[str, object]:
         ),
         "body_refresh_presentation_intent": (
             default_body_refresh_presentation_intent().model_dump(mode="json")
+        ),
+        "body_silhouette_garment_continuity_contract": (
+            default_body_silhouette_garment_continuity_contract()
         ),
         "body_silhouette_hair_continuity_contract": (
             default_body_silhouette_hair_continuity_contract()

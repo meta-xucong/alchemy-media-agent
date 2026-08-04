@@ -36,6 +36,7 @@ from ..visual_assets.body_proportion_evidence_profile import (
 )
 from ..visual_assets.character_card import (
     BodySilhouetteBackdropPresentationContract,
+    BodySilhouetteGarmentContinuityContract,
     BodySilhouetteHairContinuityContract,
     BodyRefreshPresentationIntent,
     unspecified_body_refresh_presentation_intent,
@@ -138,6 +139,7 @@ def _build_body_renderer_execution_directive(
 
     intent = dict(rendering_contract.get("body_refresh_presentation_intent") or {})
     backdrop = dict(rendering_contract.get("body_silhouette_backdrop_presentation_contract") or {})
+    garment = dict(rendering_contract.get("body_silhouette_garment_continuity_contract") or {})
     hair = dict(rendering_contract.get("body_silhouette_hair_continuity_contract") or {})
     channel = dict(
         rendering_contract.get("body_silhouette_mcp_materialization_channel_contract") or {}
@@ -220,6 +222,17 @@ def _build_body_renderer_execution_directive(
         },
         "integrated_whole_person_synthesis": integrated,
     }
+    if garment:
+        directive["garment_continuity"] = {
+            "top_presentation": garment.get("top_presentation"),
+            "bottom_presentation": garment.get("bottom_presentation"),
+            "footwear_presentation": garment.get("footwear_presentation"),
+            "exact_same_garments_across_views": garment.get("exact_same_garments_across_views"),
+            "required_continuity": list(garment.get("required_continuity") or []),
+            "allowed_variation": list(garment.get("allowed_variation") or []),
+            "forbidden": list(garment.get("forbidden") or []),
+            "scope": garment.get("scope"),
+        }
     if morphology is not None:
         directive["body_morphology_profile"] = morphology
     try:
@@ -245,6 +258,14 @@ def _build_body_renderer_execution_directive(
         "contact. Never paste, swap, or composite a head onto a body; never use a "
         "mannequin or cardboard stance."
     )
+    if garment:
+        directive["materialization_prompt"] += (
+            " Treat the current front/side/rear Body refresh as one exact same-garment series: "
+            "keep the same top garment identity, the same shorts identity, and the same plain "
+            "white ankle socks across views. Do not change garment colorway, material, cut, "
+            "graphics, logos, or added layers between views; only view angle, pose, lighting, "
+            "natural fabric fold, and natural occlusion may vary."
+        )
     if isinstance(morphology, dict):
         bands = morphology["bands"]
         try:
@@ -1615,6 +1636,28 @@ class McpMaterializationHandoffStore:
                 raise McpMaterializationError(
                     "mcp_materialization_body_rendering_contract_invalid",
                     detail={"failure_code": "body_hair_continuity_contract_invalid"},
+                ) from None
+        require_garment_continuity_contract = (
+            safe.get("body_refresh_presentation_intent") is not None
+            and safe.get("body_refresh_presentation_intent") != unspecified
+        )
+        raw_garment = raw.get("body_silhouette_garment_continuity_contract")
+        if raw_garment is None and require_body_rendering_contract and require_garment_continuity_contract:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_garment_continuity_contract_missing"},
+            )
+        if raw_garment is not None:
+            try:
+                safe["body_silhouette_garment_continuity_contract"] = (
+                    BodySilhouetteGarmentContinuityContract.model_validate(raw_garment).model_dump(
+                        mode="json"
+                    )
+                )
+            except Exception:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_garment_continuity_contract_invalid"},
                 ) from None
         raw_backdrop = raw.get("body_silhouette_backdrop_presentation_contract")
         if raw_backdrop is None and require_body_rendering_contract:

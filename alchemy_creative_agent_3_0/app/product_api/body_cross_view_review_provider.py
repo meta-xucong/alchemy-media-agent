@@ -332,7 +332,11 @@ def _build_body_cross_view_review_instructions(response_schema: Mapping[str, Any
         "torso-limb body chain, front/side/rear body volume consistency, garment "
         "continuity, pure white backdrop consistency, hair continuity, and whether "
         "the person is synthesized as one natural body rather than a head-body "
-        "composite. Return only strict JSON matching this schema; do not include "
+        "composite. For garment continuity, require the exact same top, bottom, "
+        "and footwear identity across front/side/rear: category match alone is "
+        "not enough, and any colorway, material, cut, graphics, logo, or added-"
+        "layer drift must fail `garment_consistency`. Return only strict JSON "
+        "matching this schema; do not include "
         "raw observations, paths, IDs, measurements, biometric vectors, or prose: "
         + json.dumps(dict(response_schema), sort_keys=True, separators=(",", ":"))
     )

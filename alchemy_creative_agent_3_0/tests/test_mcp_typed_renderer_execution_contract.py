@@ -21,6 +21,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standar
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     default_body_refresh_presentation_intent,
     default_body_silhouette_backdrop_presentation_contract,
+    default_body_silhouette_garment_continuity_contract,
     default_body_silhouette_hair_continuity_contract,
 )
 
@@ -92,6 +93,7 @@ def _strict_contract() -> dict:
         "body_mcp_reference_partition": _partition(),
         "body_morphology_profile": _morphology_profile(),
         "body_refresh_presentation_intent": default_body_refresh_presentation_intent().model_dump(mode="json"),
+        "body_silhouette_garment_continuity_contract": default_body_silhouette_garment_continuity_contract(),
         "body_silhouette_hair_continuity_contract": default_body_silhouette_hair_continuity_contract(),
         "body_silhouette_backdrop_presentation_contract": default_body_silhouette_backdrop_presentation_contract(),
     }
@@ -141,6 +143,7 @@ def test_strict_body_public_view_exposes_closed_renderer_directive_without_chang
         "footwear": "plain_white_ankle_socks",
     }
     assert directive["backdrop"] == "solid_white"
+    assert directive["garment_continuity"]["exact_same_garments_across_views"] is True
     assert directive["hair_continuity"]["source"] == "current_project_confirmed_face_identity_references"
     assert directive["physical_reference_policy"] == "face_identity_only"
     assert directive["materialization_prompt"]
@@ -171,11 +174,18 @@ def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_
     assert directive["presentation"]["bottom"] == "shorts"
     assert directive["presentation"]["footwear"] == "plain_white_ankle_socks"
     assert directive["backdrop"] == "solid_white"
+    assert directive["garment_continuity"]["top_presentation"] == "short_sleeve_top"
+    assert directive["garment_continuity"]["bottom_presentation"] == "shorts"
+    assert directive["garment_continuity"]["footwear_presentation"] == "plain_white_ankle_socks"
     assert directive["hair_continuity"]["scope"] == "body_silhouette_only"
     assert directive["physical_reference_policy"] == "face_identity_only"
     assert "plain short-sleeve top" in captured["renderer_prompt"]
     assert "shorts with legs visible" in captured["renderer_prompt"]
     assert "plain white ankle socks with visible ankle and ground contact" in captured["renderer_prompt"]
+    assert "exact same-garment series" in captured["renderer_prompt"]
+    assert "do not change garment colorway, material, cut, graphics, logos, or added layers" in captured[
+        "renderer_prompt"
+    ].lower()
     assert "barefoot" not in captured["renderer_prompt"].lower()
     assert "no shoes or socks" not in captured["renderer_prompt"].lower()
     assert "perfectly uniform pure solid white backdrop, no gray, no gradient, no floor, no shadow" in captured["renderer_prompt"]
