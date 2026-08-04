@@ -1364,15 +1364,22 @@ class ProductApiAnchorPackPreparationHost:
                 source_evidence_id_digest=body_source_admission.source_evidence_id_digest(),
                 view_output_ids=view_output_ids,
             )
-        raw_receipt = review(
-            asset=asset,
-            card=card,
-            attempt_identity=attempt_identity,
-            body_refresh_analysis_context=body_refresh_analysis_context,
-            body_source_admission=body_source_admission,
-            formal_receipts=formal_receipts,
-            view_output_ids=view_output_ids,
-        )
+        try:
+            raw_receipt = review(
+                asset=asset,
+                card=card,
+                attempt_identity=attempt_identity,
+                body_refresh_analysis_context=body_refresh_analysis_context,
+                body_source_admission=body_source_admission,
+                formal_receipts=formal_receipts,
+                view_output_ids=view_output_ids,
+            )
+        except Exception:
+            return build_body_cross_view_unavailable_receipt(
+                attempt_id=attempt_identity.attempt_id,
+                source_evidence_id_digest=body_source_admission.source_evidence_id_digest(),
+                view_output_ids=view_output_ids,
+            )
         receipt = (
             raw_receipt
             if isinstance(raw_receipt, BodyCrossViewReviewReceipt)
