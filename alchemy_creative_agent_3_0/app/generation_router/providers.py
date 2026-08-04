@@ -5993,7 +5993,54 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
     def _select_provider(self, reference_assets: list[dict[str, Any]]) -> str:
         return "codex_builtin_imagegen"
 
+    def _submitted_body_handoff_reference_assets(
+        self,
+        metadata: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        """Return the frozen physical refs for an exact submitted Body resume."""
+
+        if not self._is_character_card_body_mcp_materialization(metadata):
+            return None
+        materialization = metadata.get("mcp_materialization")
+        if not isinstance(materialization, dict):
+            return None
+        handoff_id = str(materialization.get("handoff_id") or "").strip()
+        if not handoff_id:
+            return None
+        handoff = self.handoff_store.get(handoff_id)
+        if not isinstance(handoff, dict):
+            return None
+        if str(handoff.get("status") or "").strip().lower() not in {
+            "submitted",
+            "job_checkpointed",
+        }:
+            return None
+        frozen = handoff.get("reference_assets")
+        if not isinstance(frozen, list):
+            return None
+        return [dict(item or {}) for item in frozen]
+
     def _build_app_request(self, request: GenerationRequest):
+        metadata = self._generation_request_metadata(request)
+        frozen_handoff_references = self._submitted_body_handoff_reference_assets(metadata)
+        if frozen_handoff_references is not None:
+            # The submitted handoff owns the exact physical files and hashes.
+            # Do not let the generic provider resolver replace them with a
+            # newer derivative selected by the same asset id.
+            request_metadata = dict(request.metadata or {})
+            request_metadata["reference_assets"] = frozen_handoff_references
+            request_metadata["uploaded_assets"] = []
+            generation_plan_metadata = dict(request.generation_plan.metadata or {})
+            generation_plan_metadata["reference_assets"] = frozen_handoff_references
+            generation_plan_metadata["uploaded_assets"] = []
+            request = request.model_copy(
+                update={
+                    "metadata": request_metadata,
+                    "generation_plan": request.generation_plan.model_copy(
+                        update={"metadata": generation_plan_metadata}
+                    ),
+                }
+            )
         app_request, provider_name, reference_assets = super()._build_app_request(request)
         variables = dict(getattr(app_request.prompt_plan, "variables", {}) or {})
         metadata = self._generation_request_metadata(request)

@@ -575,8 +575,22 @@ def test_submitted_reference_assisted_handoff_reuses_frozen_morphology_without_p
             reference_asset_hashes=renderer_request["reference_asset_hashes"],
         ),
     )
+    stale_face_assets = []
+    for index, item in enumerate(face_assets):
+        stale_path = tmp_path / f"stale-face-{index}.png"
+        Image.new("RGB", (32, 32), (180 + index, 180, 180)).save(stale_path, format="PNG")
+        stale_face_assets.append(
+            {
+                **item,
+                "file_path": str(stale_path),
+            }
+        )
     resumed_metadata = {
         **request.metadata,
+        # Same asset ids, different resolved files: a submitted handoff must
+        # keep its frozen paths and hashes instead of accepting this newer
+        # provider-side derivative.
+        "reference_assets": [*body_assets, *stale_face_assets],
         "mcp_materialization": {
             "handoff_id": pending["handoff_id"],
             "status": "submitted",
@@ -595,6 +609,7 @@ def test_submitted_reference_assisted_handoff_reuses_frozen_morphology_without_p
 
     resumed_context = resumed_app_request.prompt_plan.variables["mcp_materialization_context"]
     assert resumed_context["resume_from_handoff"] is True
+    assert resumed_context["reference_assets"] == pending["reference_assets"]
     assert resumed_context["rendering_contract"]["body_morphology_profile"] == (
         pending["rendering_contract"]["body_morphology_profile"]
     )
