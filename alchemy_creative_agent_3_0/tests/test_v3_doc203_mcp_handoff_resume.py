@@ -6495,6 +6495,10 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
         # only one.  The fix must project the handoff's exact pair before the
         # provider request/capability boundary.
         "reference_assets": [physical_face_refs[0]],
+        # The historical plan may also carry a third uploaded/anchor asset.
+        # A submitted handoff must suppress that stale physical channel
+        # instead of letting the provider combine it with the frozen pair.
+        "uploaded_assets": [physical_face_refs[0]],
         "llm_brain": {
             "canonical_provider_prompts": [
                 {"output_index": 1, "prompt": prompt, "review_status": "approved"}
@@ -6588,6 +6592,7 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
         "rejects the handoff before provider request construction"
     )
     assert len(router.requests[0].metadata["reference_assets"]) == len(physical_face_refs)
+    assert router.requests[0].metadata["uploaded_assets"] == []
     assert status.status == ProductJobStatusValue.FINALIZING
     updated = job_store.get(job_id)
     assert updated is not None

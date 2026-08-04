@@ -3477,6 +3477,11 @@ class V3ProductApiService:
                 plan_metadata[key] = metadata[key]
         plan_metadata["job_id"] = record.job_id
         plan_metadata["mcp_materialization"] = dict(materialization)
+        # A submitted handoff is the sole physical-renderer authority for
+        # this resume.  Historical planning records may still carry
+        # uploaded/anchor assets from the original admission; forwarding
+        # them would combine stale inputs with the frozen handoff refs.
+        plan_metadata["uploaded_assets"] = []
         # Submitted pixels are consumed through the MCP materialization
         # provider.  The durable planning record can legitimately retain its
         # historical planning-only strategy, so project only this transient
