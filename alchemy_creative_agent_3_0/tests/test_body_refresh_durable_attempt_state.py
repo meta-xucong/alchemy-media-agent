@@ -2406,6 +2406,15 @@ def test_library_activate_pending_body_refresh_promotes_formal_winners_without_g
     )
     asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
     store = BodyRefreshAttemptStateStore(tmp_path / "activate-refresh-state")
+    lifecycle.catalog.save(
+        asset.model_copy(
+            update={
+                "character_card": asset.character_card.model_copy(
+                    update={"body_activation_confirmed": False}
+                )
+            }
+        )
+    )
     lifecycle = VisualAssetLibraryLifecycleService(
         lifecycle.catalog,
         root_source_resolver=service.get_uploaded_asset,

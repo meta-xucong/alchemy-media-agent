@@ -4342,8 +4342,14 @@ class CharacterCardPreparationService:
 
         if not confirmed:
             raise ValueError("explicit Body Silhouette refresh activation confirmation is required")
-        if card.body_silhouette_status != "active" or not card.body_activation_confirmed:
+        # Historical active cards can predate persistence of the explicit
+        # body_activation_confirmed flag.  The authoritative readback here is
+        # the active module status plus all three active Body slots; the flag
+        # is repaired as part of this explicit refresh activation.
+        if card.body_silhouette_status != "active":
             raise ValueError("Body Silhouette refresh activation requires an active Body module")
+        if any(slot.state != "active" for slot in card.body_slots.values()):
+            raise ValueError("Body Silhouette refresh activation requires active Body slots")
         if card.body_silhouette_refresh_status != "reviewing":
             raise ValueError("Body Silhouette refresh is not ready for activation")
         if not card.body_silhouette_refresh_version_id:
