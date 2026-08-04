@@ -35,11 +35,12 @@ from ..visual_assets.body_proportion_evidence_profile import (
     BodyMorphologyEvidenceProfile,
 )
 from ..visual_assets.character_card import (
+    BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION,
     BodySilhouetteBackdropPresentationContract,
-    BodySilhouetteGarmentContinuityContract,
     BodySilhouetteHairContinuityContract,
     BodyRefreshPresentationIntent,
     unspecified_body_refresh_presentation_intent,
+    validate_body_silhouette_garment_continuity_contract,
 )
 
 
@@ -223,7 +224,8 @@ def _build_body_renderer_execution_directive(
         "integrated_whole_person_synthesis": integrated,
     }
     if garment:
-        directive["garment_continuity"] = {
+        garment_directive = {
+            "contract_version": garment.get("contract_version"),
             "top_presentation": garment.get("top_presentation"),
             "bottom_presentation": garment.get("bottom_presentation"),
             "footwear_presentation": garment.get("footwear_presentation"),
@@ -233,6 +235,20 @@ def _build_body_renderer_execution_directive(
             "forbidden": list(garment.get("forbidden") or []),
             "scope": garment.get("scope"),
         }
+        if garment.get("contract_version") == BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION:
+            garment_directive.update(
+                {
+                    "top_garment_identity": garment.get("top_garment_identity"),
+                    "top_material": garment.get("top_material"),
+                    "top_cut": garment.get("top_cut"),
+                    "bottom_garment_identity": garment.get("bottom_garment_identity"),
+                    "bottom_material": garment.get("bottom_material"),
+                    "bottom_cut": garment.get("bottom_cut"),
+                    "footwear_identity": garment.get("footwear_identity"),
+                    "surface_treatment": garment.get("surface_treatment"),
+                }
+            )
+        directive["garment_continuity"] = garment_directive
     if morphology is not None:
         directive["body_morphology_profile"] = morphology
     try:
@@ -259,13 +275,26 @@ def _build_body_renderer_execution_directive(
         "mannequin or cardboard stance."
     )
     if garment:
-        directive["materialization_prompt"] += (
-            " Treat the current front/side/rear Body refresh as one exact same-garment series: "
-            "keep the same top garment identity, the same shorts identity, and the same plain "
-            "white ankle socks across views. Do not change garment colorway, material, cut, "
-            "graphics, logos, or added layers between views; only view angle, pose, lighting, "
-            "natural fabric fold, and natural occlusion may vary."
-        )
+        if garment.get("contract_version") == BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION:
+            directive["materialization_prompt"] += (
+                " Treat the current front/side/rear Body refresh as one exact same-garment "
+                "series with one frozen same garment identity: use a plain white short-sleeve "
+                "cotton top with a crew-neck cut, light-blue lightweight denim shorts with "
+                "a straight mid-thigh cut, and plain white ankle socks. Keep these exact "
+                "identities across views. The surface must remain graphic-free with no "
+                "logos, patterns, or added layers. Do not change garment colorway, "
+                "material, cut, graphics, logos, or added layers between views; only "
+                "view angle, pose, lighting, natural fabric fold, and natural occlusion "
+                "may vary."
+            )
+        else:
+            directive["materialization_prompt"] += (
+                " Treat the current front/side/rear Body refresh as one exact same-garment series: "
+                "keep the same top garment identity, the same shorts identity, and the same plain "
+                "white ankle socks across views. Do not change garment colorway, material, cut, "
+                "graphics, logos, or added layers between views; only view angle, pose, lighting, "
+                "natural fabric fold, and natural occlusion may vary."
+            )
     if isinstance(morphology, dict):
         bands = morphology["bands"]
         try:
@@ -1650,8 +1679,11 @@ class McpMaterializationHandoffStore:
         if raw_garment is not None:
             try:
                 safe["body_silhouette_garment_continuity_contract"] = (
-                    BodySilhouetteGarmentContinuityContract.model_validate(raw_garment).model_dump(
-                        mode="json"
+                    validate_body_silhouette_garment_continuity_contract(
+                        raw_garment,
+                        require_identity=(
+                            require_body_rendering_contract and require_garment_continuity_contract
+                        ),
                     )
                 )
             except Exception:

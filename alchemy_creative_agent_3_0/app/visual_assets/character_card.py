@@ -267,6 +267,9 @@ BODY_SILHOUETTE_HAIR_CONTINUITY_CONTRACT_VERSION = (
     "professional_body_silhouette_hair_continuity_v1"
 )
 BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION = (
+    "professional_body_silhouette_garment_continuity_v2"
+)
+BODY_SILHOUETTE_GARMENT_CONTINUITY_LEGACY_CONTRACT_VERSION = (
     "professional_body_silhouette_garment_continuity_v1"
 )
 BODY_SILHOUETTE_BACKDROP_PRESENTATION_CONTRACT_VERSION = (
@@ -394,11 +397,11 @@ class BodySilhouetteHairContinuityContract(_CharacterCardModel):
         return self
 
 
-class BodySilhouetteGarmentContinuityContract(_CharacterCardModel):
-    """Closed, neutral same-garment continuity for Body materialization."""
+class BodySilhouetteGarmentContinuityContractV1(_CharacterCardModel):
+    """Historical category-only garment contract kept readable for old handoffs."""
 
     contract_version: Literal["professional_body_silhouette_garment_continuity_v1"] = (
-        BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION
+        BODY_SILHOUETTE_GARMENT_CONTINUITY_LEGACY_CONTRACT_VERSION
     )
     applies: Literal[True] = True
     owner: Literal["professional_character_card_body_silhouette_refresh_request"] = (
@@ -467,7 +470,7 @@ class BodySilhouetteGarmentContinuityContract(_CharacterCardModel):
     not_age_truth: Literal[True] = True
 
     @model_validator(mode="after")
-    def require_closed_lists(self) -> "BodySilhouetteGarmentContinuityContract":
+    def require_closed_lists(self) -> "BodySilhouetteGarmentContinuityContractV1":
         if self.required_continuity != [
             "same_top_garment_identity",
             "same_bottom_garment_identity",
@@ -498,6 +501,155 @@ class BodySilhouetteGarmentContinuityContract(_CharacterCardModel):
         return self
 
 
+class BodySilhouetteGarmentContinuityContractV2(_CharacterCardModel):
+    """Closed, exact same-garment identity for new Body materializations."""
+
+    contract_version: Literal["professional_body_silhouette_garment_continuity_v2"] = (
+        BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION
+    )
+    applies: Literal[True] = True
+    owner: Literal["professional_character_card_body_silhouette_refresh_request"] = (
+        BODY_REFRESH_PRESENTATION_INTENT_OWNER
+    )
+    scope: Literal["professional_character_card_body_silhouette_mcp_materialization_only"] = (
+        "professional_character_card_body_silhouette_mcp_materialization_only"
+    )
+    top_presentation: Literal["short_sleeve_top"] = "short_sleeve_top"
+    top_garment_identity: Literal["plain_white_short_sleeve_top"] = (
+        "plain_white_short_sleeve_top"
+    )
+    top_material: Literal["plain_cotton_jersey"] = "plain_cotton_jersey"
+    top_cut: Literal["crew_neck_short_sleeve"] = "crew_neck_short_sleeve"
+    bottom_presentation: Literal["shorts"] = "shorts"
+    bottom_garment_identity: Literal["light_blue_denim_shorts"] = (
+        "light_blue_denim_shorts"
+    )
+    bottom_material: Literal["lightweight_light_blue_denim"] = (
+        "lightweight_light_blue_denim"
+    )
+    bottom_cut: Literal["straight_mid_thigh_shorts"] = "straight_mid_thigh_shorts"
+    footwear_presentation: Literal["plain_white_ankle_socks"] = (
+        "plain_white_ankle_socks"
+    )
+    footwear_identity: Literal["plain_white_ankle_socks"] = "plain_white_ankle_socks"
+    surface_treatment: Literal["graphic_free"] = "graphic_free"
+    exact_same_garments_across_views: Literal[True] = True
+    required_continuity: list[
+        Literal[
+            "same_top_garment_identity",
+            "same_top_material_and_cut",
+            "same_bottom_garment_identity",
+            "same_bottom_material_and_cut",
+            "same_footwear_identity",
+            "same_colorway_between_views",
+            "same_graphic_free_surface_between_views",
+        ]
+    ] = Field(
+        default_factory=lambda: [
+            "same_top_garment_identity",
+            "same_top_material_and_cut",
+            "same_bottom_garment_identity",
+            "same_bottom_material_and_cut",
+            "same_footwear_identity",
+            "same_colorway_between_views",
+            "same_graphic_free_surface_between_views",
+        ]
+    )
+    allowed_variation: list[
+        Literal["view_angle", "pose", "lighting", "natural_fabric_fold", "natural_occlusion"]
+    ] = Field(
+        default_factory=lambda: [
+            "view_angle",
+            "pose",
+            "lighting",
+            "natural_fabric_fold",
+            "natural_occlusion",
+        ]
+    )
+    forbidden: list[
+        Literal[
+            "top_garment_swap_between_views",
+            "top_material_or_cut_change_between_views",
+            "bottom_garment_swap_between_views",
+            "bottom_material_or_cut_change_between_views",
+            "footwear_swap_between_views",
+            "colorway_change_between_views",
+            "graphic_logo_or_pattern_appears",
+            "extra_layer_added_or_removed_between_views",
+        ]
+    ] = Field(
+        default_factory=lambda: [
+            "top_garment_swap_between_views",
+            "top_material_or_cut_change_between_views",
+            "bottom_garment_swap_between_views",
+            "bottom_material_or_cut_change_between_views",
+            "footwear_swap_between_views",
+            "colorway_change_between_views",
+            "graphic_logo_or_pattern_appears",
+            "extra_layer_added_or_removed_between_views",
+        ]
+    )
+    not_body_proportion_truth: Literal[True] = True
+    not_identity_truth: Literal[True] = True
+    not_age_truth: Literal[True] = True
+
+    @model_validator(mode="after")
+    def require_closed_lists(self) -> "BodySilhouetteGarmentContinuityContractV2":
+        if self.required_continuity != [
+            "same_top_garment_identity",
+            "same_top_material_and_cut",
+            "same_bottom_garment_identity",
+            "same_bottom_material_and_cut",
+            "same_footwear_identity",
+            "same_colorway_between_views",
+            "same_graphic_free_surface_between_views",
+        ]:
+            raise ValueError("Body garment continuity required fields are not closed")
+        if self.allowed_variation != [
+            "view_angle",
+            "pose",
+            "lighting",
+            "natural_fabric_fold",
+            "natural_occlusion",
+        ]:
+            raise ValueError("Body garment continuity variation fields are not closed")
+        if self.forbidden != [
+            "top_garment_swap_between_views",
+            "top_material_or_cut_change_between_views",
+            "bottom_garment_swap_between_views",
+            "bottom_material_or_cut_change_between_views",
+            "footwear_swap_between_views",
+            "colorway_change_between_views",
+            "graphic_logo_or_pattern_appears",
+            "extra_layer_added_or_removed_between_views",
+        ]:
+            raise ValueError("Body garment continuity forbidden fields are not closed")
+        return self
+
+
+# Keep the established import name pointed at the new contract.
+BodySilhouetteGarmentContinuityContract = BodySilhouetteGarmentContinuityContractV2
+
+
+def validate_body_silhouette_garment_continuity_contract(
+    raw: Any,
+    *,
+    require_identity: bool = False,
+) -> dict[str, Any]:
+    """Validate a new contract or read a historical category-only handoff."""
+
+    if not isinstance(raw, dict):
+        raise ValueError("Body garment continuity contract must be an object")
+    version = raw.get("contract_version")
+    if version == BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION:
+        return BodySilhouetteGarmentContinuityContractV2.model_validate(raw).model_dump(mode="json")
+    if version == BODY_SILHOUETTE_GARMENT_CONTINUITY_LEGACY_CONTRACT_VERSION and not require_identity:
+        return BodySilhouetteGarmentContinuityContractV1.model_validate(raw).model_dump(mode="json")
+    if version == BODY_SILHOUETTE_GARMENT_CONTINUITY_LEGACY_CONTRACT_VERSION:
+        raise ValueError("Body garment continuity identity contract required")
+    raise ValueError("Body garment continuity contract version invalid")
+
+
 class BodySilhouetteBackdropPresentationContract(_CharacterCardModel):
     """Closed presentation backdrop intent, never Body or identity truth."""
 
@@ -522,7 +674,7 @@ def default_body_silhouette_hair_continuity_contract() -> dict[str, Any]:
 
 
 def default_body_silhouette_garment_continuity_contract() -> dict[str, Any]:
-    return BodySilhouetteGarmentContinuityContract().model_dump(mode="json")
+    return BodySilhouetteGarmentContinuityContractV2().model_dump(mode="json")
 
 
 def default_body_silhouette_backdrop_presentation_contract() -> dict[str, Any]:
