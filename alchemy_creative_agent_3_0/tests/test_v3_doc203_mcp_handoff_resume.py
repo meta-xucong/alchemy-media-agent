@@ -6485,7 +6485,8 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
             },
             "mcp_materialization": {
                 "handoff_id": pending["handoff_id"],
-                "status": "pending",
+                "status": "failed",
+                "failure_code": "mcp_materialization_reference_mismatch",
                 "generation_channel": "mcp",
                 "resume_required": True,
                 "nonce": pending["nonce"],
@@ -6525,7 +6526,7 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
             user_input="strict Body submitted resume with frozen Face partition",
             metadata={**planning_metadata, "project_id": "project_doc263_reference_assisted"},
         ),
-        status=ProductJobStatusValue.GENERATING,
+        status=ProductJobStatusValue.BLOCKED,
         job_id_value=job_id,
         planning_result=_minimal_planning_result(
             job_id,

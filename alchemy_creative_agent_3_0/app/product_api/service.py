@@ -3285,7 +3285,12 @@ class V3ProductApiService:
         materialization = metadata.get("mcp_materialization")
         if not isinstance(materialization, dict):
             return False
-        if str(materialization.get("status") or "").strip() not in {"pending", "submitted"}:
+        materialization_status = str(materialization.get("status") or "").strip()
+        if materialization_status not in {"pending", "submitted", "failed"}:
+            return False
+        if materialization_status == "failed" and str(
+            materialization.get("failure_code") or ""
+        ).strip() != "mcp_materialization_reference_mismatch":
             return False
         handoff_id = str(materialization.get("handoff_id") or "").strip()
         operation_id = str(metadata.get("mcp_operation_id") or "").strip()
