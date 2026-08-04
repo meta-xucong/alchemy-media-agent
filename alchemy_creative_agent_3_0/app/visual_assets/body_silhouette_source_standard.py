@@ -120,6 +120,7 @@ _BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS = {
         "shirt",
         "shorts",
         "shoes",
+        "socks",
         "barefoot",
         "bare feet",
     ),

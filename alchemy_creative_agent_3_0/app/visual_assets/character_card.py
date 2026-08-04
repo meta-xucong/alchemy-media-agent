@@ -260,7 +260,7 @@ BodyRefreshBodyModelContext = Literal[
     "similar_person_body_reference_assisted_v1",
     "system_inferred_body_model_scene_neutral_v1",
 ]
-BODY_REFRESH_PRESENTATION_INTENT_CONTRACT_VERSION = "professional_body_refresh_presentation_intent_v1"
+BODY_REFRESH_PRESENTATION_INTENT_CONTRACT_VERSION = "professional_body_refresh_presentation_intent_v2"
 BODY_REFRESH_PRESENTATION_INTENT_OWNER = "professional_character_card_body_silhouette_refresh_request"
 BODY_REFRESH_PRESENTATION_INTENT_SCOPE = "modeling_card_presentation_only"
 BODY_SILHOUETTE_HAIR_CONTINUITY_CONTRACT_VERSION = (
@@ -302,7 +302,7 @@ class BodyRefreshPresentationIntent(_CharacterCardModel):
     reviving the superseded global wardrobe contract.
     """
 
-    contract_version: Literal["professional_body_refresh_presentation_intent_v1"] = (
+    contract_version: Literal["professional_body_refresh_presentation_intent_v2"] = (
         BODY_REFRESH_PRESENTATION_INTENT_CONTRACT_VERSION
     )
     owner: Literal["professional_character_card_body_silhouette_refresh_request"] = (
@@ -311,7 +311,7 @@ class BodyRefreshPresentationIntent(_CharacterCardModel):
     scope: Literal["modeling_card_presentation_only"] = BODY_REFRESH_PRESENTATION_INTENT_SCOPE
     top_presentation: Literal["short_sleeve_top"] = "short_sleeve_top"
     bottom_presentation: Literal["shorts"] = "shorts"
-    footwear_presentation: Literal["barefoot"] = "barefoot"
+    footwear_presentation: Literal["plain_white_ankle_socks"] = "plain_white_ankle_socks"
     not_body_proportion_truth: Literal[True] = True
     not_identity_truth: Literal[True] = True
     not_age_truth: Literal[True] = True

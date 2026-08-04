@@ -206,7 +206,7 @@ The corrected authority model is:
 6. The earlier `professional_body_silhouette_wardrobe_v1` runtime contract is
    superseded for new Body Silhouette source-standard candidates.  New Body
    stage metadata, bounded recovery prompts, and shared review projection must
-   not require or emit fixed white top, shorts, barefoot, skirt/dress
+   not require or emit fixed white top, shorts, socks, shoes, barefoot, skirt/dress
    prohibition, or any other wardrobe recipe.  Body source visibility may be
    requested only in scene-neutral terms needed to review body chain,
    stage-aware proportion, head-neck-shoulder continuity, torso/limb/joint
@@ -511,7 +511,7 @@ modeling-card presentation still needs a stable neutral display convention when
 the user is reviewing front/side/rear body structure.
 
 The closed contract is `body_refresh_presentation_intent` with
-`contract_version=professional_body_refresh_presentation_intent_v1`.  It is
+`contract_version=professional_body_refresh_presentation_intent_v2`.  It is
 server-owned and may only be injected by the strict Professional Body
 Silhouette refresh request/lifecycle.  Client metadata, raw body facts,
 arbitrary dictionaries, unknown fields, wrong types, or the superseded
@@ -522,7 +522,7 @@ The only currently allowed declared values are:
 
 - `top_presentation=short_sleeve_top`;
 - `bottom_presentation=shorts`;
-- `footwear_presentation=barefoot`.
+- `footwear_presentation=plain_white_ankle_socks`.
 
 These values are modeling-card presentation controls only.  They are not Body
 proportion truth, not Face Identity truth, not age truth, not observed source

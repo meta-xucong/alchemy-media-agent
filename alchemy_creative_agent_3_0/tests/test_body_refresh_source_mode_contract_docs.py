@@ -288,10 +288,10 @@ def test_body_refresh_presentation_intent_is_request_scoped_not_body_truth() -> 
     squashed = _squash(intent)
 
     assert "body_refresh_presentation_intent" in intent
-    assert "professional_body_refresh_presentation_intent_v1" in intent
+    assert "professional_body_refresh_presentation_intent_v2" in intent
     assert "server-owned" in intent
     assert "strict Professional Body Silhouette refresh request/lifecycle" in squashed
-    for value in ("short_sleeve_top", "shorts", "barefoot"):
+    for value in ("short_sleeve_top", "shorts", "plain_white_ankle_socks"):
         assert value in intent
 
     assert "status=unspecified" in intent

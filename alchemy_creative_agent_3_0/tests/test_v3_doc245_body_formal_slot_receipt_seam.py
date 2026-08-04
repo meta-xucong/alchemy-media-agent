@@ -145,7 +145,7 @@ BODY_SCENE_NEUTRAL_FORBIDDEN_TERMS = (
     "simple white short-sleeve top",
     "plain solid shorts",
     "bare feet",
-    "barefoot",
+    "plain_white_ankle_socks",
     "skirt_or_dress",
     "body wardrobe contract",
     "body_wardrobe_contract_application",
@@ -1511,12 +1511,12 @@ def test_doc245_body_mcp_build_app_request_blocks_stale_prompt_before_handoff_cr
 
 def _doc245_body_refresh_presentation_intent() -> dict[str, object]:
     return {
-        "contract_version": "professional_body_refresh_presentation_intent_v1",
+        "contract_version": "professional_body_refresh_presentation_intent_v2",
         "owner": "professional_character_card_body_silhouette_refresh_request",
         "scope": "modeling_card_presentation_only",
         "top_presentation": "short_sleeve_top",
         "bottom_presentation": "shorts",
-        "footwear_presentation": "barefoot",
+        "footwear_presentation": "plain_white_ankle_socks",
         "not_body_proportion_truth": True,
         "not_identity_truth": True,
         "not_age_truth": True,
@@ -2276,7 +2276,7 @@ def test_doc245_mcp_handoff_store_rendering_fingerprint_includes_body_intent(
         **_doc245_body_frozen_contract_fields(),
     }
     second_intent = {
-        "contract_version": "professional_body_refresh_presentation_intent_v1",
+        "contract_version": "professional_body_refresh_presentation_intent_v2",
         "owner": "professional_character_card_body_silhouette_refresh_request",
         "scope": "modeling_card_presentation_only",
         "status": "unspecified",
@@ -2323,12 +2323,12 @@ def test_doc245_mcp_handoff_store_rendering_fingerprint_includes_body_intent(
         (None, "body_refresh_presentation_intent_missing"),
         (
             {
-                "contract_version": "professional_body_refresh_presentation_intent_v1",
+                "contract_version": "professional_body_refresh_presentation_intent_v2",
                 "owner": "professional_character_card_body_silhouette_refresh_request",
                 "scope": "modeling_card_presentation_only",
                 "top_presentation": "short_sleeve_top",
                 "bottom_presentation": "shorts",
-                "footwear_presentation": "barefoot",
+                "footwear_presentation": "plain_white_ankle_socks",
                 "not_body_proportion_truth": True,
                 "not_identity_truth": True,
                 "not_age_truth": True,
@@ -2719,13 +2719,13 @@ def test_doc245_body_refresh_presentation_intent_unspecified_when_not_declared()
     context = app_request.prompt_plan.variables["mcp_materialization_context"]
     rendering_contract = context["rendering_contract"]
     assert rendering_contract["body_refresh_presentation_intent"] == {
-        "contract_version": "professional_body_refresh_presentation_intent_v1",
+        "contract_version": "professional_body_refresh_presentation_intent_v2",
         "owner": "professional_character_card_body_silhouette_refresh_request",
         "scope": "modeling_card_presentation_only",
         "status": "unspecified",
     }
     serialized = repr(rendering_contract).lower()
-    for fixed_value in ("short_sleeve_top", "shorts", "barefoot"):
+    for fixed_value in ("short_sleeve_top", "shorts", "plain_white_ankle_socks"):
         assert fixed_value not in serialized
 
 
@@ -2795,12 +2795,13 @@ def test_doc245_body_refresh_presentation_intent_does_not_leak_to_expression_or_
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("contract_version", "professional_body_refresh_presentation_intent_v2"),
+        ("contract_version", "professional_body_refresh_presentation_intent_v1"),
         ("owner", "client_supplied_owner"),
         ("scope", "body_source_truth"),
         ("top_presentation", "white_t_shirt"),
         ("bottom_presentation", "jeans"),
         ("footwear_presentation", "sneakers"),
+        ("footwear_presentation", "barefoot"),
         ("not_body_proportion_truth", False),
         ("not_identity_truth", False),
         ("not_age_truth", False),
@@ -2837,27 +2838,27 @@ def test_doc245_body_refresh_presentation_intent_rejects_wrong_closed_values(
 @pytest.mark.parametrize(
     "payload",
     [
-        "short_sleeve_top/shorts/barefoot",
-        ["short_sleeve_top", "shorts", "barefoot"],
+        "short_sleeve_top/shorts/plain_white_ankle_socks",
+        ["short_sleeve_top", "shorts", "plain_white_ankle_socks"],
         {
-            "contract_version": "professional_body_refresh_presentation_intent_v1",
+            "contract_version": "professional_body_refresh_presentation_intent_v2",
             "owner": "professional_character_card_body_silhouette_refresh_request",
             "scope": "modeling_card_presentation_only",
             "top_presentation": "short_sleeve_top",
             "bottom_presentation": "shorts",
-            "footwear_presentation": "barefoot",
+            "footwear_presentation": "plain_white_ankle_socks",
             "not_body_proportion_truth": True,
             "not_identity_truth": True,
             "not_age_truth": True,
             "raw_prompt": "secret wardrobe prompt",
         },
         {
-            "contract_version": "professional_body_refresh_presentation_intent_v1",
+            "contract_version": "professional_body_refresh_presentation_intent_v2",
             "owner": "professional_character_card_body_silhouette_refresh_request",
             "scope": "modeling_card_presentation_only",
             "top_presentation": "short_sleeve_top",
             "bottom_presentation": "shorts",
-            "footwear_presentation": "barefoot",
+            "footwear_presentation": "plain_white_ankle_socks",
             "not_body_proportion_truth": True,
             "not_identity_truth": True,
             "not_age_truth": True,

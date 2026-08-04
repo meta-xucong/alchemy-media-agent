@@ -56,7 +56,7 @@ _BODY_RENDERER_EXECUTION_RECEIPT_SCHEMA = "v3_body_mcp_renderer_execution_receip
 _BODY_RENDERER_PRESENTATION_PHRASES = {
     "short_sleeve_top": "plain short-sleeve top",
     "shorts": "shorts with legs visible",
-    "barefoot": "completely barefoot, no shoes or socks",
+    "plain_white_ankle_socks": "plain white ankle socks with visible ankle and ground contact",
 }
 _BODY_RENDERER_BACKDROP_PHRASES = {
     "solid_white": (

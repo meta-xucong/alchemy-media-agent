@@ -1,7 +1,7 @@
 """Red tests for strict Body MCP clothing-absence prompt containment.
 
 Correction model:
-the typed Body presentation contract owns short sleeves/shorts/barefoot, while
+the typed Body presentation contract owns short sleeves/shorts/plain white ankle socks, while
 the Brain canonical prompt must never positively request an unclothed subject
 or take over scene/wardrobe authority.  The guard belongs at the Body MCP
 canonical-prompt/handoff boundary.  It must not leak into Expression or
@@ -29,7 +29,7 @@ POSITIVE_CLOTHING_ABSENCE_PROMPT = (
 
 SAFE_PRESENTATION_PROMPT = (
     "Full-body front-view Body Silhouette materialization. Not nude; wearing short sleeves "
-    "and shorts, completely barefoot."
+    "and shorts, with plain white ankle socks."
 )
 
 

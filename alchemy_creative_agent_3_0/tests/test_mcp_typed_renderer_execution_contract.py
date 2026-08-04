@@ -138,7 +138,7 @@ def test_strict_body_public_view_exposes_closed_renderer_directive_without_chang
     assert directive["presentation"] == {
         "top": "short_sleeve_top",
         "bottom": "shorts",
-        "footwear": "barefoot",
+        "footwear": "plain_white_ankle_socks",
     }
     assert directive["backdrop"] == "solid_white"
     assert directive["hair_continuity"]["source"] == "current_project_confirmed_face_identity_references"
@@ -169,13 +169,15 @@ def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_
 
     assert directive["presentation"]["top"] == "short_sleeve_top"
     assert directive["presentation"]["bottom"] == "shorts"
-    assert directive["presentation"]["footwear"] == "barefoot"
+    assert directive["presentation"]["footwear"] == "plain_white_ankle_socks"
     assert directive["backdrop"] == "solid_white"
     assert directive["hair_continuity"]["scope"] == "body_silhouette_only"
     assert directive["physical_reference_policy"] == "face_identity_only"
     assert "plain short-sleeve top" in captured["renderer_prompt"]
     assert "shorts with legs visible" in captured["renderer_prompt"]
-    assert "completely barefoot, no shoes or socks" in captured["renderer_prompt"]
+    assert "plain white ankle socks with visible ankle and ground contact" in captured["renderer_prompt"]
+    assert "barefoot" not in captured["renderer_prompt"].lower()
+    assert "no shoes or socks" not in captured["renderer_prompt"].lower()
     assert "perfectly uniform pure solid white backdrop, no gray, no gradient, no floor, no shadow" in captured["renderer_prompt"]
     assert "same hairstyle category" in captured["renderer_prompt"]
     assert "same hair length tier" in captured["renderer_prompt"]
