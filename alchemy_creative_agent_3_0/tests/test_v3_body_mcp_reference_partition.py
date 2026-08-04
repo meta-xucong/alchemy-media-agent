@@ -72,6 +72,7 @@ from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRunt
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     default_body_refresh_presentation_intent,
     default_body_silhouette_backdrop_presentation_contract,
+    default_body_silhouette_garment_continuity_contract,
     default_body_silhouette_hair_continuity_contract,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.asset_binding_planner import (
@@ -298,6 +299,9 @@ def test_mcp_body_handoff_public_view_preserves_typed_body_face_partition(tmp_pa
         ),
         "body_refresh_presentation_intent": default_body_refresh_presentation_intent().model_dump(
             mode="json"
+        ),
+        "body_silhouette_garment_continuity_contract": (
+            default_body_silhouette_garment_continuity_contract()
         ),
         "body_silhouette_hair_continuity_contract": (
             default_body_silhouette_hair_continuity_contract()

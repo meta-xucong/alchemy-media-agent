@@ -228,6 +228,24 @@ def _build_body_renderer_execution_directive(
             "bottom_presentation": garment.get("bottom_presentation"),
             "footwear_presentation": garment.get("footwear_presentation"),
             "exact_same_garments_across_views": garment.get("exact_same_garments_across_views"),
+            "canonical_identity": {
+                "top": {
+                    "colorway": garment.get("top_colorway"),
+                    "material": garment.get("top_material"),
+                    "cut": garment.get("top_cut"),
+                },
+                "bottom": {
+                    "colorway": garment.get("bottom_colorway"),
+                    "material": garment.get("bottom_material"),
+                    "cut": garment.get("bottom_cut"),
+                },
+                "footwear": {
+                    "colorway": garment.get("footwear_colorway"),
+                    "material": garment.get("footwear_material"),
+                    "cut": garment.get("footwear_cut"),
+                },
+                "surface_policy": garment.get("surface_policy"),
+            },
             "required_continuity": list(garment.get("required_continuity") or []),
             "allowed_variation": list(garment.get("allowed_variation") or []),
             "forbidden": list(garment.get("forbidden") or []),
@@ -264,7 +282,11 @@ def _build_body_renderer_execution_directive(
             "keep the same top garment identity, the same shorts identity, and the same plain "
             "white ankle socks across views. Do not change garment colorway, material, cut, "
             "graphics, logos, or added layers between views; only view angle, pose, lighting, "
-            "natural fabric fold, and natural occlusion may vary."
+            "natural fabric fold, and natural occlusion may vary. The canonical garment "
+            "identity is locked across every view: use a plain soft-white matte cotton-jersey "
+            "crew-neck short-sleeve top, mid-blue matte cotton-denim relaxed knee-length "
+            "shorts, and plain white ribbed-cotton ankle socks. Keep every garment "
+            "graphic-free and logo-free."
         )
     if isinstance(morphology, dict):
         bands = morphology["bands"]

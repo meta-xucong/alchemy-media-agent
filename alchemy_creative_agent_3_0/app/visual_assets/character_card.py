@@ -267,7 +267,7 @@ BODY_SILHOUETTE_HAIR_CONTINUITY_CONTRACT_VERSION = (
     "professional_body_silhouette_hair_continuity_v1"
 )
 BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION = (
-    "professional_body_silhouette_garment_continuity_v1"
+    "professional_body_silhouette_garment_continuity_v2"
 )
 BODY_SILHOUETTE_BACKDROP_PRESENTATION_CONTRACT_VERSION = (
     "professional_body_silhouette_backdrop_presentation_v1"
@@ -395,9 +395,9 @@ class BodySilhouetteHairContinuityContract(_CharacterCardModel):
 
 
 class BodySilhouetteGarmentContinuityContract(_CharacterCardModel):
-    """Closed, neutral same-garment continuity for Body materialization."""
+    """Closed canonical same-garment continuity for Body materialization."""
 
-    contract_version: Literal["professional_body_silhouette_garment_continuity_v1"] = (
+    contract_version: Literal["professional_body_silhouette_garment_continuity_v2"] = (
         BODY_SILHOUETTE_GARMENT_CONTINUITY_CONTRACT_VERSION
     )
     applies: Literal[True] = True
@@ -411,11 +411,25 @@ class BodySilhouetteGarmentContinuityContract(_CharacterCardModel):
     bottom_presentation: Literal["shorts"] = "shorts"
     footwear_presentation: Literal["plain_white_ankle_socks"] = "plain_white_ankle_socks"
     exact_same_garments_across_views: Literal[True] = True
+    top_colorway: Literal["plain_soft_white"]
+    top_material: Literal["matte_cotton_jersey"]
+    top_cut: Literal["simple_crew_neck_short_sleeve"]
+    bottom_colorway: Literal["mid_blue"]
+    bottom_material: Literal["matte_cotton_denim"]
+    bottom_cut: Literal["relaxed_knee_length_shorts"]
+    footwear_colorway: Literal["plain_white"]
+    footwear_material: Literal["ribbed_cotton"]
+    footwear_cut: Literal["ankle_length"]
+    surface_policy: Literal["graphic_free_logo_free"]
+    canonical_identity_locked: Literal[True] = True
     required_continuity: list[
         Literal[
             "same_top_garment_identity",
             "same_bottom_garment_identity",
             "same_footwear_identity",
+            "same_canonical_top_identity",
+            "same_canonical_bottom_identity",
+            "same_canonical_footwear_identity",
             "same_colorway_between_views",
             "same_material_and_cut_between_views",
             "same_graphic_free_surface_between_views",
@@ -425,6 +439,9 @@ class BodySilhouetteGarmentContinuityContract(_CharacterCardModel):
             "same_top_garment_identity",
             "same_bottom_garment_identity",
             "same_footwear_identity",
+            "same_canonical_top_identity",
+            "same_canonical_bottom_identity",
+            "same_canonical_footwear_identity",
             "same_colorway_between_views",
             "same_material_and_cut_between_views",
             "same_graphic_free_surface_between_views",
@@ -472,6 +489,9 @@ class BodySilhouetteGarmentContinuityContract(_CharacterCardModel):
             "same_top_garment_identity",
             "same_bottom_garment_identity",
             "same_footwear_identity",
+            "same_canonical_top_identity",
+            "same_canonical_bottom_identity",
+            "same_canonical_footwear_identity",
             "same_colorway_between_views",
             "same_material_and_cut_between_views",
             "same_graphic_free_surface_between_views",
@@ -522,7 +542,18 @@ def default_body_silhouette_hair_continuity_contract() -> dict[str, Any]:
 
 
 def default_body_silhouette_garment_continuity_contract() -> dict[str, Any]:
-    return BodySilhouetteGarmentContinuityContract().model_dump(mode="json")
+    return BodySilhouetteGarmentContinuityContract(
+        top_colorway="plain_soft_white",
+        top_material="matte_cotton_jersey",
+        top_cut="simple_crew_neck_short_sleeve",
+        bottom_colorway="mid_blue",
+        bottom_material="matte_cotton_denim",
+        bottom_cut="relaxed_knee_length_shorts",
+        footwear_colorway="plain_white",
+        footwear_material="ribbed_cotton",
+        footwear_cut="ankle_length",
+        surface_policy="graphic_free_logo_free",
+    ).model_dump(mode="json")
 
 
 def default_body_silhouette_backdrop_presentation_contract() -> dict[str, Any]:

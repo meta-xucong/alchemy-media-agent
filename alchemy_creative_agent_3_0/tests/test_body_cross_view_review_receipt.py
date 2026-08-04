@@ -242,6 +242,10 @@ def test_openai_compatible_cross_view_provider_builds_pass_receipt_from_three_ou
     assert "colorway, material, cut, graphics, logo, or added-layer drift" in transport.calls[0][
         "instructions"
     ]
+    assert "canonical garment identity" in transport.calls[0]["instructions"].lower()
+    assert "mid-blue matte cotton-denim relaxed knee-length shorts" in transport.calls[0][
+        "instructions"
+    ]
 
 
 def test_openai_compatible_cross_view_provider_fails_closed_when_output_missing(

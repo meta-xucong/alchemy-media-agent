@@ -30,6 +30,7 @@ from ..visual_assets.body_cross_view_review import (
     build_body_cross_view_review_receipt,
     build_body_cross_view_unavailable_receipt,
 )
+from ..visual_assets.character_card import default_body_silhouette_garment_continuity_contract
 from .outputs import V3GeneratedOutputStore
 
 
@@ -324,6 +325,19 @@ def create_configured_body_cross_view_review_provider(
 
 
 def _build_body_cross_view_review_instructions(response_schema: Mapping[str, Any]) -> str:
+    garment = default_body_silhouette_garment_continuity_contract()
+    canonical_fields = {
+        "top_colorway": garment["top_colorway"],
+        "top_material": garment["top_material"],
+        "top_cut": garment["top_cut"],
+        "bottom_colorway": garment["bottom_colorway"],
+        "bottom_material": garment["bottom_material"],
+        "bottom_cut": garment["bottom_cut"],
+        "footwear_colorway": garment["footwear_colorway"],
+        "footwear_material": garment["footwear_material"],
+        "footwear_cut": garment["footwear_cut"],
+        "surface_policy": garment["surface_policy"],
+    }
     return (
         "Review exactly these three generated Body Silhouette outputs together: "
         "front_full, side_full, and rear_full. Decide only whether they can be "
@@ -335,7 +349,13 @@ def _build_body_cross_view_review_instructions(response_schema: Mapping[str, Any
         "composite. For garment continuity, require the exact same top, bottom, "
         "and footwear identity across front/side/rear: category match alone is "
         "not enough, and any colorway, material, cut, graphics, logo, or added-"
-        "layer drift must fail `garment_consistency`. Return only strict JSON "
+        "layer drift must fail `garment_consistency`. The canonical garment "
+        "identity is locked across every view: use a plain soft-white matte "
+        "cotton-jersey crew-neck short-sleeve top, mid-blue matte cotton-denim "
+        "relaxed knee-length shorts, and plain white ribbed-cotton ankle socks; "
+        "keep the surface graphic-free and logo-free. Closed identity fields: "
+        + json.dumps(canonical_fields, sort_keys=True, separators=(",", ":"))
+        + ". Return only strict JSON "
         "matching this schema; do not include "
         "raw observations, paths, IDs, measurements, biometric vectors, or prose: "
         + json.dumps(dict(response_schema), sort_keys=True, separators=(",", ":"))

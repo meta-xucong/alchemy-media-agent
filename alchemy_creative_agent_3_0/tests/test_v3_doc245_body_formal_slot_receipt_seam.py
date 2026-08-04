@@ -1709,6 +1709,64 @@ def test_doc245_body_hair_backdrop_contract_models_are_closed_and_typed() -> Non
         )
 
 
+def test_doc245_body_garment_contract_requires_canonical_identity_fields() -> None:
+    garment = _doc245_body_garment_continuity_contract()
+
+    assert garment["contract_version"] == "professional_body_silhouette_garment_continuity_v2"
+    assert garment["top_colorway"] == "plain_soft_white"
+    assert garment["top_material"] == "matte_cotton_jersey"
+    assert garment["top_cut"] == "simple_crew_neck_short_sleeve"
+    assert garment["bottom_colorway"] == "mid_blue"
+    assert garment["bottom_material"] == "matte_cotton_denim"
+    assert garment["bottom_cut"] == "relaxed_knee_length_shorts"
+    assert garment["footwear_colorway"] == "plain_white"
+    assert garment["footwear_material"] == "ribbed_cotton"
+    assert garment["footwear_cut"] == "ankle_length"
+    assert garment["surface_policy"] == "graphic_free_logo_free"
+
+    with pytest.raises(ValueError):
+        BodySilhouetteGarmentContinuityContract.model_validate(
+            {key: value for key, value in garment.items() if key != "bottom_colorway"}
+        )
+
+    old_category_only_contract = {
+        key: value
+        for key, value in garment.items()
+        if key
+        not in {
+            "contract_version",
+            "top_colorway",
+            "top_material",
+            "top_cut",
+            "bottom_colorway",
+            "bottom_material",
+            "bottom_cut",
+            "footwear_colorway",
+            "footwear_material",
+            "footwear_cut",
+            "surface_policy",
+        }
+    }
+    with pytest.raises(McpMaterializationError):
+        McpMaterializationHandoffStore._safe_rendering_contract(  # noqa: SLF001
+            {
+                "renderer": "codex_builtin_imagegen",
+                "model": "gpt-image-2",
+                "size": "1024x1536",
+                "quality": "high",
+                "output_format": "png",
+                "count": 1,
+                "api_operation": "image_edit",
+                "body_refresh_source_mode": "inference_first",
+                "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
+                "body_silhouette_garment_continuity_contract": old_category_only_contract,
+                "body_silhouette_hair_continuity_contract": garment,
+                "body_silhouette_backdrop_presentation_contract": _doc245_body_backdrop_presentation_contract(),
+            },
+            require_body_rendering_contract=True,
+        )
+
+
 def test_doc245_body_hair_backdrop_contract_does_not_leak_to_expression_or_ordinary_mcp() -> None:
     stage_metadata = ProfessionalModeRuntimeBridge.character_card_stage_metadata(
         stage="body_silhouette",

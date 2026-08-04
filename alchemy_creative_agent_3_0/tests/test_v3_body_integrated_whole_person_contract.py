@@ -48,6 +48,9 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profi
     BodyRefreshAnalysisContext,
     BodySourceAnalysisAssetEnvelope,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+    default_body_silhouette_garment_continuity_contract,
+)
 from alchemy_creative_agent_3_0.tests.test_v3_doc245_body_formal_slot_receipt_seam import (
     _body_review_metadata_for_vision,
     _doc245_body_refresh_presentation_intent,
@@ -431,6 +434,25 @@ def test_general_adult_reference_assisted_profile_is_schema_legal() -> None:
     )
     assert profile.developmental_stage_context == "adult_stage_context"
     assert not any("child" in value for value in profile.model_dump(mode="json").values() if isinstance(value, str))
+
+
+def test_canonical_garment_identity_is_presentation_only_and_not_an_adult_age_signal() -> None:
+    garment = default_body_silhouette_garment_continuity_contract()
+    serialized = json.dumps(garment, sort_keys=True)
+
+    assert garment["not_body_proportion_truth"] is True
+    assert garment["not_identity_truth"] is True
+    assert garment["not_age_truth"] is True
+    assert "age_6_child_only" not in serialized
+    assert "adult_stage_context" not in serialized
+    assert "teen" not in serialized.lower()
+
+    adult_profile = {
+        "developmental_stage_context": "adult_stage_context",
+        "age_scope": "current_request_age_owned",
+    }
+    assert "age_6_child_only" not in json.dumps(adult_profile)
+    assert "canonical_identity" not in json.dumps(adult_profile)
 
 
 def test_body_contract_declares_one_integrated_whole_person_synthesis_authority() -> None:
