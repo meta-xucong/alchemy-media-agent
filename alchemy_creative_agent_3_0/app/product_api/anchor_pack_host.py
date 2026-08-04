@@ -3260,6 +3260,12 @@ class ProductApiAnchorPackPreparationHost:
             and str(inspection.get("verification_state") or "").strip().lower() == "verified"
         )
         output_metadata = dict(selected.metadata or {})
+        output_metadata = self._character_card_submitted_body_review_metadata_projection(
+            request=request,
+            record=record,
+            selected_output=selected,
+            output_metadata=output_metadata,
+        )
         parity = self._character_card_prompt_reference_parity_verified(
             output_metadata,
             fallback_expected_reference_count=(
@@ -3429,6 +3435,257 @@ class ProductApiAnchorPackPreparationHost:
         if isinstance(request_metadata, dict):
             metadata.update({key: value for key, value in request_metadata.items() if key not in metadata})
         return metadata
+
+    def _character_card_submitted_body_review_metadata_projection(
+        self,
+        *,
+        request: CharacterCardCandidateRequest,
+        record: Any,
+        selected_output: Any,
+        output_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Recover old submitted Body parity metadata for one review read.
+
+        Early MCP submit consumers persisted the artifact and review package
+        without copying the renderer-facing parity fields onto the output
+        record.  The submitted handoff is the frozen renderer authority and
+        the same job's planning result is the prompt-compilation authority.
+        Project those fields only in memory, and only after the complete
+        strict Body identity, operation, reference-channel, and hash chain
+        agrees.  Nothing is written back to the output, handoff, or job.
+        """
+
+        if (
+            request.module != "body_silhouette"
+            or request.generation_channel != "mcp"
+            or request.body_refresh_source_mode != "reference_assisted"
+            or request.body_refresh_contract_required is not True
+        ):
+            return output_metadata
+        if not isinstance(request.body_source_admission, BodySourceAdmission):
+            raise AnchorCandidateUnavailable("mcp_materialization_checkpoint_mismatch")
+
+        metadata = self._character_card_job_metadata(record)
+        request_metadata = getattr(getattr(record, "request", None), "metadata", None)
+        request_metadata = request_metadata if isinstance(request_metadata, dict) else {}
+        materialization = request_metadata.get("mcp_materialization")
+        if not isinstance(materialization, dict) or str(materialization.get("status") or "").strip().lower() != "submitted":
+            return output_metadata
+        handoff_id = str(materialization.get("handoff_id") or "").strip()
+        requested_handoff = str(request.mcp_handoff_id or "").strip()
+        if not handoff_id or (requested_handoff and requested_handoff != handoff_id):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=requested_handoff or handoff_id,
+            )
+        handoff = self._mcp_materialization_payload(handoff_id)
+        if not isinstance(handoff, dict) or str(handoff.get("status") or "").strip().lower() != "submitted":
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+
+        operation_id = self._character_card_candidate_mcp_operation_id(request)
+        if str(handoff.get("operation_id") or "").strip() != operation_id:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+
+        contract = handoff.get("rendering_contract")
+        if not isinstance(contract, dict):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        if contract.get("body_refresh_source_mode") != request.body_refresh_source_mode:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        partition = contract.get("body_mcp_reference_partition")
+        body_partition = partition.get("body_proportion_reference") if isinstance(partition, dict) else None
+        face_partition = partition.get("face_identity_reference") if isinstance(partition, dict) else None
+        if not isinstance(body_partition, dict) or not isinstance(face_partition, dict):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        if (
+            body_partition.get("role") != "body_proportion_reference"
+            or body_partition.get("truth_layer") != "body_proportion_truth"
+            or type(body_partition.get("asset_count")) is not int
+            or body_partition.get("asset_count") != len(request.body_source_admission.body_evidence_ids)
+            or not isinstance(body_partition.get("asset_hashes"), list)
+            or len(body_partition["asset_hashes"]) != body_partition.get("asset_count")
+            or face_partition.get("role") != "face_identity_reference"
+            or type(face_partition.get("asset_count")) is not int
+            or face_partition.get("asset_count") < 1
+            or not isinstance(face_partition.get("asset_hashes"), list)
+            or len(face_partition["asset_hashes"]) != face_partition.get("asset_count")
+        ):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+
+        def _hash(value: Any) -> str:
+            return str(value or "").strip().lower().removeprefix("sha256:")
+
+        def _is_sha256(value: str) -> bool:
+            if len(value) != 64:
+                return False
+            try:
+                int(value, 16)
+            except ValueError:
+                return False
+            return True
+
+        prompt_hash = _hash(handoff.get("prompt_sha256"))
+        canonical_prompt = str(handoff.get("canonical_prompt") or "")
+        if not _is_sha256(prompt_hash) or hashlib.sha256(canonical_prompt.encode("utf-8")).hexdigest() != prompt_hash:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        renderer_prompt_hash = _hash(handoff.get("renderer_prompt_sha256"))
+        directive_hash = _hash(handoff.get("renderer_execution_directive_sha256"))
+        rendering_fingerprint = _hash(handoff.get("rendering_contract_fingerprint"))
+        if not _is_sha256(renderer_prompt_hash) or not _is_sha256(directive_hash) or not _is_sha256(rendering_fingerprint):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        directive = handoff.get("renderer_execution_directive")
+        if not isinstance(directive, dict):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        if (
+            _hash(directive.get("directive_sha256")) != directive_hash
+            or _hash(directive.get("canonical_prompt_sha256")) != prompt_hash
+            or _hash(directive.get("rendering_contract_fingerprint")) != rendering_fingerprint
+        ):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        expected_renderer_prompt_hash = hashlib.sha256(
+            (
+                canonical_prompt
+                + "\n\n"
+                + str(directive.get("materialization_prompt") or "")
+            ).encode("utf-8")
+        ).hexdigest()
+        if expected_renderer_prompt_hash != renderer_prompt_hash:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        store = getattr(self.product_service, "mcp_materialization_store", None)
+        fingerprint = getattr(store, "_rendering_contract_fingerprint", None)
+        if not callable(fingerprint) or _hash(fingerprint(contract)) != rendering_fingerprint:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+
+        physical_hashes = [_hash(item) for item in (handoff.get("reference_asset_hashes") or [])]
+        physical_assets = handoff.get("reference_assets")
+        if not isinstance(physical_assets, list) or not physical_assets or len(physical_assets) != len(physical_hashes):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        body_hashes = {_hash(item) for item in body_partition.get("asset_hashes", [])}
+        face_partition_hashes = {_hash(item) for item in face_partition.get("asset_hashes", [])}
+        if (
+            len(body_hashes) != body_partition.get("asset_count")
+            or not all(_is_sha256(item) for item in body_hashes)
+            or len(face_partition_hashes) != face_partition.get("asset_count")
+            or not all(_is_sha256(item) for item in face_partition_hashes)
+            or not all(_is_sha256(item) for item in physical_hashes)
+            or body_hashes.intersection(physical_hashes)
+        ):
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_checkpoint_mismatch",
+                mcp_handoff_id=handoff_id,
+            )
+        for index, item in enumerate(physical_assets):
+            if not isinstance(item, dict):
+                raise AnchorCandidateUnavailable(
+                    "mcp_materialization_checkpoint_mismatch",
+                    mcp_handoff_id=handoff_id,
+                )
+            item_hash = _hash(item.get("sha256") or item.get("content_sha256"))
+            role = str(item.get("role") or "").strip().lower()
+            truth_layer = str(item.get("reference_truth_layer") or "").strip().lower()
+            identity_scope = str(item.get("identity_evidence_scope") or "").strip().lower()
+            if (
+                item_hash != physical_hashes[index]
+                or role.startswith("body")
+                or truth_layer == "body_proportion_truth"
+                or not identity_scope
+            ):
+                raise AnchorCandidateUnavailable(
+                    "mcp_materialization_checkpoint_mismatch",
+                    mcp_handoff_id=handoff_id,
+                )
+
+        planning_result = getattr(record, "planning_result", None)
+        planning_assets = getattr(getattr(planning_result, "asset_pack", None), "assets", None)
+        selected_asset_id = str(getattr(selected_output, "asset_id", "") or "").strip()
+        matching_planning_assets = [
+            item
+            for item in (planning_assets or [])
+            if str(getattr(item, "asset_id", "") or "").strip() == selected_asset_id
+        ]
+        if not matching_planning_assets:
+            raise AnchorCandidateUnavailable(
+                "professional_character_card_prompt_reference_parity_unverified",
+                output_id=str(getattr(selected_output, "output_id", "") or "").strip() or None,
+                candidate_id=str(getattr(selected_output, "candidate_id", "") or "").strip() or None,
+            )
+        compilation_ids = {
+            str(getattr(item, "prompt_compilation_id", "") or "").strip()
+            for item in matching_planning_assets
+            if str(getattr(item, "prompt_compilation_id", "") or "").strip()
+        }
+        if len(compilation_ids) != 1:
+            raise AnchorCandidateUnavailable(
+                "professional_character_card_prompt_reference_parity_unverified",
+                output_id=str(getattr(selected_output, "output_id", "") or "").strip() or None,
+                candidate_id=str(getattr(selected_output, "candidate_id", "") or "").strip() or None,
+            )
+        prompt_compilation_id = next(iter(compilation_ids))
+        provider_count = len(physical_assets)
+        projected = dict(output_metadata)
+        for key, value in {
+            "provider_prompt_sha256": prompt_hash,
+            "prompt_compilation_id": prompt_compilation_id,
+            "provider_reference_image_count": provider_count,
+            "reference_asset_count": provider_count,
+            "provider_reference_assets": [dict(item) for item in physical_assets],
+            "reference_asset_ids": [str(item.get("asset_id") or "").strip() for item in physical_assets],
+            "reference_input_execution": {
+                "reference_count": provider_count,
+                "operation_outcome": "submitted",
+                "physical_reference_policy": "face_identity_only",
+            },
+            "renderer_prompt_sha256": renderer_prompt_hash,
+            "renderer_execution_directive_sha256": directive_hash,
+            "rendering_contract_fingerprint": rendering_fingerprint,
+        }.items():
+            existing = projected.get(key)
+            if existing is not None and existing != value:
+                raise AnchorCandidateUnavailable(
+                    "professional_character_card_prompt_reference_parity_unverified",
+                    output_id=str(getattr(selected_output, "output_id", "") or "").strip() or None,
+                    candidate_id=str(getattr(selected_output, "candidate_id", "") or "").strip() or None,
+                )
+            projected[key] = value
+        return projected
 
     @staticmethod
     def _character_card_round_id(metadata: dict[str, Any]) -> str | None:

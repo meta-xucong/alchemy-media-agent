@@ -1354,44 +1354,92 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
     record = SimpleNamespace(
         job_id="job_rear3_submitted_generated",
         request=SimpleNamespace(metadata=record_metadata),
-        planning_result=SimpleNamespace(generation_plans=[]),
+        planning_result=SimpleNamespace(
+            generation_plans=[],
+            asset_pack=SimpleNamespace(
+                assets=[
+                    SimpleNamespace(
+                        asset_id=output_asset_id,
+                        prompt_compilation_id="compiled_rear3_submitted_generated",
+                    )
+                ]
+            ),
+        ),
         generation_result=generation_result,
     )
+    canonical_prompt = "frozen body renderer prompt"
+    face_hash_1 = hashlib.sha256(b"face-physical-1").hexdigest()
+    face_hash_2 = hashlib.sha256(b"face-physical-2").hexdigest()
+    body_hashes = [hashlib.sha256(f"body-hash-{index}".encode("utf-8")).hexdigest() for index in range(5)]
+    face_partition_hash = hashlib.sha256(b"face-semantic-hash").hexdigest()
+    renderer_prompt_sha256 = hashlib.sha256(
+        (canonical_prompt + "\n\nrenderer directive").encode("utf-8")
+    ).hexdigest()
+    rendering_contract = {
+        "body_refresh_source_mode": "reference_assisted",
+        "slot_key": "body.rear_full",
+        "candidate_index": 3,
+        "candidate_count": 3,
+        "professional_body_refresh_analysis_context": context.safe_metadata(),
+        "body_morphology_profile": {
+            "schema_version": "body_morphology_evidence_profile_v2",
+            "profile_digest": context.profile_digest,
+        },
+        "body_mcp_reference_partition": {
+            "body_proportion_reference": {
+                "asset_count": 5,
+                "asset_hashes": body_hashes,
+                "role": "body_proportion_reference",
+                "truth_layer": "body_proportion_truth",
+            },
+            "face_identity_reference": {
+                "asset_count": 1,
+                "asset_hashes": [face_partition_hash],
+                "identity_continuity_only": True,
+                "role": "face_identity_reference",
+                "truth_layer": "identity_continuity",
+            },
+        },
+    }
+    rendering_contract_fingerprint = service.mcp_materialization_store._rendering_contract_fingerprint(
+        rendering_contract
+    )
+    renderer_directive = {
+        "directive_sha256": "d" * 64,
+        "canonical_prompt_sha256": hashlib.sha256(canonical_prompt.encode("utf-8")).hexdigest(),
+        "rendering_contract_fingerprint": rendering_contract_fingerprint,
+        "materialization_prompt": "renderer directive",
+    }
     handoff_payload = {
         "handoff_id": handoff_id,
         "status": "submitted",
         "operation_id": operation_id,
         "artifact_sha256": artifact_sha256,
-        "reference_asset_hashes": ["face-physical-hash-1", "face-physical-hash-2"],
+        "prompt_sha256": hashlib.sha256(canonical_prompt.encode("utf-8")).hexdigest(),
+        "canonical_prompt": canonical_prompt,
+        "renderer_prompt_sha256": renderer_prompt_sha256,
+        "renderer_execution_directive_sha256": "d" * 64,
+        "renderer_execution_directive": renderer_directive,
+        "reference_asset_hashes": [face_hash_1, face_hash_2],
+        "reference_assets": [
+            {
+                "asset_id": "face-physical-1",
+                "sha256": face_hash_1,
+                "role": "portrait_identity",
+                "reference_truth_layer": "portrait_identity_truth",
+                "identity_evidence_scope": "feature_detail",
+            },
+            {
+                "asset_id": "face-physical-2",
+                "sha256": face_hash_2,
+                "role": "portrait_identity",
+                "reference_truth_layer": "portrait_identity_truth",
+                "identity_evidence_scope": "pose_geometry",
+            },
+        ],
         "reference_semantic_fingerprint": "face-semantic-fingerprint",
-        "rendering_contract_fingerprint": "c" * 64,
-        "canonical_prompt": "frozen body renderer prompt",
-        "rendering_contract": {
-            "body_refresh_source_mode": "reference_assisted",
-            "slot_key": "body.rear_full",
-            "candidate_index": 3,
-            "candidate_count": 3,
-            "professional_body_refresh_analysis_context": context.safe_metadata(),
-            "body_morphology_profile": {
-                "schema_version": "body_morphology_evidence_profile_v2",
-                "profile_digest": context.profile_digest,
-            },
-            "body_mcp_reference_partition": {
-                "body_proportion_reference": {
-                    "asset_count": 5,
-                    "asset_hashes": [f"body-hash-{index}" for index in range(5)],
-                    "role": "body_proportion_reference",
-                    "truth_layer": "body_proportion_truth",
-                },
-                "face_identity_reference": {
-                    "asset_count": 1,
-                    "asset_hashes": ["face-semantic-hash"],
-                    "identity_continuity_only": True,
-                    "role": "face_identity_reference",
-                    "truth_layer": "identity_continuity",
-                },
-            },
-        },
+        "rendering_contract_fingerprint": rendering_contract_fingerprint,
+        "rendering_contract": rendering_contract,
     }
     candidate = CharacterCardCandidateResult(
         candidate_id=candidate_id,
@@ -1426,8 +1474,9 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
 
     def direct_review(_job_id, _request, **kwargs):
         review_calls.append((str(kwargs.get("expected_output_id") or ""), str(_request.mcp_handoff_id or "")))
-        return candidate, review
+        return real_review(_job_id, _request, **kwargs)
 
+    real_review = host._character_card_candidate_and_review
     monkeypatch.setattr(host, "_character_card_candidate_and_review", direct_review)
     monkeypatch.setattr(
         service,
@@ -1445,10 +1494,15 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
         lambda *_args, **_kwargs: pytest.fail("submitted generated target must not create a job"),
     )
 
+    original_output_metadata = dict(output.metadata)
     resolved = host._generate_character_card_candidate(request)  # noqa: SLF001
 
     assert resolved.output_id == output_id
     assert review_calls == [(output_id, handoff_id)]
+    assert output.metadata == original_output_metadata
+    assert "rendering_contract_fingerprint" not in output.metadata
+    assert "provider_reference_assets" not in output.metadata
+    assert "prompt_compilation_id" not in output.metadata
 
     generation_asset_metadata = generation_result.asset_pack.assets[0].metadata
     generation_asset_metadata["candidate_metadata"]["mcp_materialization"] = {
@@ -1493,6 +1547,59 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
     with pytest.raises(AnchorCandidateUnavailable) as conflict_exc:
         host._generate_character_card_candidate(request)  # noqa: SLF001
     assert conflict_exc.value.failure_code == "mcp_materialization_checkpoint_mismatch"
+
+    bad_prompt_handoff = dict(legacy_handoff)
+    bad_prompt_handoff["prompt_sha256"] = "0" * 64
+    monkeypatch.setattr(
+        host,
+        "_mcp_materialization_payload",
+        lambda _handoff_id, payload=bad_prompt_handoff: payload,
+    )
+    with pytest.raises(AnchorCandidateUnavailable) as bad_prompt_exc:
+        host._generate_character_card_candidate(request)  # noqa: SLF001
+    assert bad_prompt_exc.value.failure_code == "mcp_materialization_checkpoint_mismatch"
+
+    missing_planning_asset_record = SimpleNamespace(
+        job_id=record.job_id,
+        request=record.request,
+        planning_result=SimpleNamespace(
+            generation_plans=[],
+            asset_pack=SimpleNamespace(
+                assets=[
+                    SimpleNamespace(
+                        asset_id="asset_for_another_output",
+                        prompt_compilation_id="compiled_rear3_submitted_generated",
+                    )
+                ]
+            ),
+            ),
+        generation_result=record.generation_result,
+    )
+    monkeypatch.setattr(host, "_mcp_operation_job_records", lambda _operation_id: [missing_planning_asset_record])
+    monkeypatch.setattr(service, "get_job_record", lambda _job_id: missing_planning_asset_record)
+    monkeypatch.setattr(
+        host,
+        "_mcp_materialization_payload",
+        lambda _handoff_id, payload=legacy_handoff: payload,
+    )
+    with pytest.raises(AnchorCandidateUnavailable) as missing_planning_asset_exc:
+        host._generate_character_card_candidate(request)  # noqa: SLF001
+    assert missing_planning_asset_exc.value.failure_code == (
+        "professional_character_card_prompt_reference_parity_unverified"
+    )
+    monkeypatch.setattr(service, "get_job_record", lambda _job_id: record)
+
+    body_mixed_handoff = dict(legacy_handoff)
+    body_mixed_handoff["reference_asset_hashes"] = [body_hashes[0], face_hash_2]
+    monkeypatch.setattr(
+        host,
+        "_mcp_materialization_payload",
+        lambda _handoff_id, payload=body_mixed_handoff: payload,
+    )
+    monkeypatch.setattr(host, "_mcp_operation_job_records", lambda _operation_id: [record])
+    with pytest.raises(AnchorCandidateUnavailable) as body_mixed_exc:
+        host._generate_character_card_candidate(request)  # noqa: SLF001
+    assert body_mixed_exc.value.failure_code == "mcp_materialization_checkpoint_mismatch"
 
     missing_metadata = dict(record_metadata)
     missing_metadata.pop("professional_body_refresh_analysis_context")
