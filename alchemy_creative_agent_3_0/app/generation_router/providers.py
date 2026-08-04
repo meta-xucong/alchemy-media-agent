@@ -6044,6 +6044,8 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         app_request, provider_name, reference_assets = super()._build_app_request(request)
         variables = dict(getattr(app_request.prompt_plan, "variables", {}) or {})
         metadata = self._generation_request_metadata(request)
+        if frozen_handoff_references is not None:
+            reference_assets = frozen_handoff_references
         contract = {
             "renderer": "codex_builtin_imagegen",
             "model": "gpt-image-2",
