@@ -2328,6 +2328,8 @@ class CharacterCardPreparationService:
     @staticmethod
     def _body_silhouette_cross_view_parity_failure(
         formal_slot_receipts: dict[str, FormalSlotReceipt],
+        *,
+        stage_cross_view_evidence: bool = False,
     ) -> str | None:
         if set(formal_slot_receipts) != set(BODY_SLOT_KEYS):
             return "body_silhouette_cross_view_parity_receipts_missing"
@@ -2335,14 +2337,76 @@ class CharacterCardPreparationService:
             selected = [candidate for candidate in receipt.candidates if candidate.selected_as_winner]
             if len(selected) != 1:
                 return "body_silhouette_cross_view_parity_winner_missing"
-            if BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE not in set(
-                selected[0].shared_review.evidence_codes
-            ):
-                return "body_silhouette_cross_view_parity_evidence_missing"
             issue_codes = set(selected[0].shared_review.issue_codes)
             if issue_codes.intersection(BODY_SILHOUETTE_CROSS_VIEW_PARITY_BLOCKING_ISSUE_CODES):
                 return "body_silhouette_cross_view_parity_mismatch"
+            if BODY_SILHOUETTE_CROSS_VIEW_PARITY_EVIDENCE_CODE not in set(
+                selected[0].shared_review.evidence_codes
+            ) and not stage_cross_view_evidence:
+                return "body_silhouette_cross_view_parity_evidence_missing"
         return None
+
+    @staticmethod
+    def _body_silhouette_reference_assisted_stage_cross_view_evidence(
+        formal_slot_receipts: dict[str, FormalSlotReceipt],
+        *,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext | None,
+        body_refresh_attempt_identity: BodyRefreshAttemptIdentity | None,
+        body_source_admission: BodySourceAdmission | None,
+    ) -> bool:
+        """Return true when the completed refresh owns stage-level parity proof.
+
+        Real candidate review is single-image: it can verify source-standard
+        body structure but cannot honestly carry cross-view evidence before
+        all three views exist.  For strict reference-assisted refreshes, the
+        three formal receipts plus one frozen five-source morphology context
+        provide the stage-level boundary.  Ordinary Body preparation and any
+        missing/forged context still require per-review cross-view evidence.
+        """
+
+        if set(formal_slot_receipts) != set(BODY_SLOT_KEYS):
+            return False
+        if not isinstance(body_refresh_analysis_context, BodyRefreshAnalysisContext):
+            return False
+        if not isinstance(body_refresh_attempt_identity, BodyRefreshAttemptIdentity):
+            return False
+        if not isinstance(body_source_admission, BodySourceAdmission):
+            return False
+        if body_refresh_analysis_context.source_mode != "reference_assisted":
+            return False
+        if (
+            body_refresh_analysis_context.attempt_id != body_refresh_attempt_identity.attempt_id
+            or body_refresh_analysis_context.append_only_revision
+            != body_refresh_attempt_identity.append_only_revision
+        ):
+            return False
+        if len(body_source_admission.body_evidence_ids) != 5:
+            return False
+        if (
+            body_refresh_analysis_context.source_evidence_id_digest
+            != body_source_admission.source_evidence_id_digest()
+        ):
+            return False
+        required_single_view_evidence = {
+            BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES[dimension]
+            for dimension in BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS
+        }
+        for receipt in formal_slot_receipts.values():
+            selected = [candidate for candidate in receipt.candidates if candidate.selected_as_winner]
+            if len(selected) != 1:
+                return False
+            shared_review = selected[0].shared_review
+            if not shared_review.passed:
+                return False
+            evidence_codes = set(shared_review.evidence_codes)
+            issue_codes = set(shared_review.issue_codes)
+            if not required_single_view_evidence.issubset(evidence_codes):
+                return False
+            if issue_codes.intersection(BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES):
+                return False
+            if issue_codes.intersection(BODY_SILHOUETTE_CROSS_VIEW_PARITY_BLOCKING_ISSUE_CODES):
+                return False
+        return True
 
     def prepare_expression_slot(
         self,
@@ -2782,7 +2846,16 @@ class CharacterCardPreparationService:
             if formal_receipt is not None:
                 formal_slot_receipts[slot_key] = formal_receipt
             winners[slot_key] = winner.output_id
-        parity_failure_code = self._body_silhouette_cross_view_parity_failure(formal_slot_receipts)
+        stage_cross_view_evidence = self._body_silhouette_reference_assisted_stage_cross_view_evidence(
+            formal_slot_receipts,
+            body_refresh_analysis_context=body_refresh_analysis_context,
+            body_refresh_attempt_identity=body_refresh_attempt_identity,
+            body_source_admission=body_source_admission,
+        )
+        parity_failure_code = self._body_silhouette_cross_view_parity_failure(
+            formal_slot_receipts,
+            stage_cross_view_evidence=stage_cross_view_evidence,
+        )
         if parity_failure_code:
             failure = CharacterCardFailureEvent(
                 module="body_silhouette",

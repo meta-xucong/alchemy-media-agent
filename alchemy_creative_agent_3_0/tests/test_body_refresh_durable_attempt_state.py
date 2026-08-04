@@ -37,6 +37,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_refresh_attempt_state imp
     BodyRefreshAttemptStateStore,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+    BODY_SLOT_KEYS,
     BodyRefreshAttemptIdentity,
     BodySourceAdmission,
     CharacterCardPreparationService,
@@ -59,7 +60,13 @@ from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorCandi
 from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
     mark_formal_slot_receipt_reload_public_projection_verified,
 )
-from test_v3_doc245_body_formal_slot_receipt_seam import _BodyReviewer, _body_attempt
+from test_v3_doc245_body_formal_slot_receipt_seam import (
+    _BodyGenerator,
+    _BodyReviewer,
+    _active_body_card,
+    _body_attempt,
+    _review,
+)
 
 
 class _DirectedOperationJobStore:
@@ -2421,6 +2428,43 @@ def test_library_cross_view_failure_does_not_project_pending_refresh(tmp_path: P
     state = store.load_current(visual_asset_id=asset.visual_asset_id)
     assert state.status == "awaiting_cross_view"
     assert state.cross_view_parity_digest is None
+
+
+def test_reference_assisted_refresh_uses_stage_cross_view_parity_after_three_formal_slots() -> None:
+    class _SingleViewBodyReviewer:
+        def review(self, candidate: CharacterCardCandidateResult):
+            return _review(
+                candidate.candidate_index,
+                include_cross_view_parity_evidence=False,
+            )
+
+    body_asset_ids = [f"body-source-{index}" for index in range(5)]
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    service = CharacterCardPreparationService(
+        generator=_BodyGenerator(),
+        reviewer=_SingleViewBodyReviewer(),
+    )
+
+    result = service.refresh_body_silhouette(
+        _active_body_card(),
+        face_reference_output_ids=[
+            "face_front_output",
+            "face_profile_output",
+            "face_rear_output",
+        ],
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        consent_provenance_id="server-consent-reference",
+        user_intent="reference-assisted body refresh with frozen morphology profile",
+        generation_channel="mcp",
+        body_refresh_analysis_context=context,
+        body_refresh_attempt_identity=attempt,
+    )
+
+    assert result.status == "review"
+    assert set(result.formal_slot_receipts) == set(BODY_SLOT_KEYS)
+    assert result.failure_codes == []
+    assert result.card.body_silhouette_refresh_status == "reviewing"
 
 
 def test_formal_authority_rejects_status_only_reconstituted_review() -> None:

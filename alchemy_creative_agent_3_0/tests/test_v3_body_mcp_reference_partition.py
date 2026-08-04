@@ -524,6 +524,10 @@ def test_submitted_reference_assisted_handoff_reuses_frozen_morphology_without_p
     request.metadata.update(
         {
             "professional_character_card_body_refresh_contract_required": True,
+            "professional_character_card_stage": "body_silhouette",
+            "professional_character_card_slot": "body.front_full",
+            "professional_character_card_candidate_index": 1,
+            "professional_character_card_candidate_count": 3,
             "professional_character_card_body_refresh_presentation_intent": (
                 default_body_refresh_presentation_intent().model_dump(mode="json")
             ),
