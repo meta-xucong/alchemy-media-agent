@@ -1323,7 +1323,6 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
                         "candidate_metadata": {
                             "output_id": output_id,
                             "candidate_id": candidate_id,
-                            "mcp_materialization": {"handoff_id": handoff_id},
                         }
                     }
                 )
@@ -1450,6 +1449,15 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
 
     assert resolved.output_id == output_id
     assert review_calls == [(output_id, handoff_id)]
+
+    generation_asset_metadata = generation_result.asset_pack.assets[0].metadata
+    generation_asset_metadata["candidate_metadata"]["mcp_materialization"] = {
+        "handoff_id": "mcp_handoff_wrong"
+    }
+    with pytest.raises(AnchorCandidateUnavailable) as generation_handoff_conflict_exc:
+        host._generate_character_card_candidate(request)  # noqa: SLF001
+    assert generation_handoff_conflict_exc.value.failure_code == "mcp_materialization_checkpoint_mismatch"
+    generation_asset_metadata["candidate_metadata"].pop("mcp_materialization")
 
     legacy_handoff = dict(handoff_payload)
     legacy_contract = dict(handoff_payload["rendering_contract"])

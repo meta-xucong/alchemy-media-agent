@@ -2499,7 +2499,15 @@ class ProductApiAnchorPackPreparationHost:
         identity = self._character_card_generation_result_mcp_identity(generation_result)
         output_id = str(identity.get("output_id") or "").strip()
         candidate_id = str(identity.get("candidate_id") or "").strip()
-        if not output_id or not candidate_id or identity.get("handoff_id") != handoff_id:
+        generation_handoff_id = str(identity.get("handoff_id") or "").strip()
+        metadata_handoff_id = str(materialization.get("handoff_id") or "").strip()
+        if (
+            not output_id
+            or not candidate_id
+            or not metadata_handoff_id
+            or metadata_handoff_id != handoff_id
+            or (generation_handoff_id and generation_handoff_id != handoff_id)
+        ):
             return False
         output_getter = getattr(getattr(self.product_service, "output_store", None), "get_output", None)
         output = output_getter(output_id) if callable(output_getter) else None
