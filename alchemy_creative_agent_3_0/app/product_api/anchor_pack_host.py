@@ -2305,6 +2305,7 @@ class ProductApiAnchorPackPreparationHost:
             and self._character_card_mcp_handoff_current(request, requested_handoff_payload)
         )
         matches: list[Any] = []
+        authoritative_generated_matches: list[Any] = []
         for record in candidates:
             if getattr(record, "planning_result", None) is None:
                 continue
@@ -2415,7 +2416,16 @@ class ProductApiAnchorPackPreparationHost:
             if getattr(record, "generation_result", None) is None and not isinstance(materialization, dict):
                 if not self._is_interrupted_mcp_materialization_checkpoint(record):
                     continue
+            if generated_checkpoint_current:
+                authoritative_generated_matches.append(record)
             matches.append(record)
+        if len(authoritative_generated_matches) > 1:
+            raise AnchorCandidateUnavailable(
+                "mcp_materialization_operation_ambiguous",
+                mcp_handoff_id=requested_handoff or None,
+            )
+        if authoritative_generated_matches:
+            return authoritative_generated_matches[0]
         if len(matches) > 1:
             raise AnchorCandidateUnavailable(
                 "mcp_materialization_operation_ambiguous",

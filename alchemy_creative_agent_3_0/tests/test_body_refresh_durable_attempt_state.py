@@ -174,6 +174,92 @@ def test_persistent_operation_index_is_maintained_on_save_and_reopen(tmp_path: P
     assert [item.job_id for item in matches] == ["job_rear3"]
 
 
+def test_body_resume_prefers_one_authoritative_generated_checkpoint_over_stale_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation_id = "visual_asset_body_silhouette_body.front_full_2"
+    generated = SimpleNamespace(
+        job_id="job_generated",
+        planning_result=object(),
+        generation_result=object(),
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "body_silhouette",
+                "professional_character_card_slot": "body.front_full",
+                "professional_character_card_reference_output_ids": ["face_ref"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {"handoff_id": "mcp_handoff_current", "status": "job_checkpointed"},
+            }
+        ),
+    )
+    stale_retry = SimpleNamespace(
+        job_id="job_stale_retry",
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "body_silhouette",
+                "professional_character_card_slot": "body.front_full",
+                "professional_character_card_reference_output_ids": ["face_ref"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {"handoff_id": "mcp_handoff_current", "status": "pending"},
+            }
+        ),
+    )
+
+    class _Store:
+        def get_mcp_operation_records(self, requested_operation_id: str) -> list[object]:
+            assert requested_operation_id == operation_id
+            return [stale_retry, generated]
+
+    host = ProductApiAnchorPackPreparationHost(
+        SimpleNamespace(
+            job_store=_Store(),
+            visual_asset_catalog=None,
+            mcp_materialization_store=SimpleNamespace(),
+        )
+    )
+    monkeypatch.setattr(
+        host,
+        "_mcp_materialization_payload",
+        lambda _handoff_id: {"handoff_id": "mcp_handoff_current", "status": "job_checkpointed"},
+    )
+    monkeypatch.setattr(host, "_character_card_mcp_handoff_current", lambda _request, _payload: True)
+    monkeypatch.setattr(
+        host,
+        "_character_card_planning_metadata_current",
+        lambda _request, _record, _operation_id, _requested_refs: True,
+    )
+    monkeypatch.setattr(
+        host,
+        "_character_card_generated_mcp_checkpoint_current",
+        lambda _request, record, _operation_id, _payload: record is generated,
+    )
+    monkeypatch.setattr(
+        host,
+        "_character_card_submitted_generated_mcp_checkpoint_current",
+        lambda _request, _record, _operation_id, _payload: False,
+    )
+
+    request = SimpleNamespace(
+        reference_output_ids=["face_ref"],
+        mcp_handoff_id="mcp_handoff_current",
+        review_only_resume=False,
+        module="body_silhouette",
+        slot_key="body.front_full",
+        body_refresh_source_mode="reference_assisted",
+        body_refresh_contract_required=True,
+    )
+
+    result = host._mcp_resume_character_card_stage_job_record(request, operation_id)  # noqa: SLF001
+
+    assert result is generated
+
+
 def test_incomplete_operation_index_merges_legacy_and_new_same_operation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
