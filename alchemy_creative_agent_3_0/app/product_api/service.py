@@ -3477,7 +3477,16 @@ class V3ProductApiService:
                 plan_metadata[key] = metadata[key]
         plan_metadata["job_id"] = record.job_id
         plan_metadata["mcp_materialization"] = dict(materialization)
-        frozen_generation_plan = generation_plan.model_copy(update={"metadata": plan_metadata})
+        # Submitted pixels are consumed through the MCP materialization
+        # provider.  The durable planning record can legitimately retain its
+        # historical planning-only strategy, so project only this transient
+        # resume request to the server-owned MCP consumer.
+        frozen_generation_plan = generation_plan.model_copy(
+            update={
+                "metadata": plan_metadata,
+                "provider_strategy": ProviderStrategy.MCP_MATERIALIZATION,
+            }
+        )
         generation_request = build_provider_generation_request(
             asset_spec=asset,
             layout_plan=layout,

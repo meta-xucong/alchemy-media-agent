@@ -2826,6 +2826,19 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
             },
         }
     )
+    frozen_planning = _minimal_planning_result(
+        job_id,
+        generation_metadata=planning_metadata,
+    )
+    frozen_planning = frozen_planning.model_copy(
+        update={
+            "generation_plans": [
+                frozen_planning.generation_plans[0].model_copy(
+                    update={"provider_strategy": ProviderStrategy.PLANNING_ONLY}
+                )
+            ]
+        }
+    )
     record = ProductJobRecord(
         request=CreateCreativeJobRequest(
             user_input="body submitted consumer checkpoint",
@@ -2834,7 +2847,7 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
                 "project_id": "project_doc263_body",
                     "mcp_materialization": {
                     "handoff_id": pending["handoff_id"],
-                    "status": "pending",
+                    "status": "submitted",
                     "generation_channel": "mcp",
                         "resume_required": True,
                     },
@@ -2843,12 +2856,9 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
                     "provider_failure_retry": {"final_failure_code": "stale_provider_failure"},
                 },
         ),
-        status=ProductJobStatusValue.GENERATING,
+        status=ProductJobStatusValue.BLOCKED,
         job_id_value=job_id,
-        planning_result=_minimal_planning_result(
-            job_id,
-            generation_metadata=planning_metadata,
-        ),
+        planning_result=frozen_planning,
         generation_result=None,
         balance_estimate={"credits_required": 0},
     )
@@ -2880,6 +2890,7 @@ def test_doc263_submitted_body_resume_uses_core_consumer_before_generate_stage(
         output_store=output_store,
         mcp_materialization_store=handoff_store,
     )
+    assert service._is_submitted_body_mcp_resume(record)  # noqa: SLF001
     status = service.generate_asset_series(
         job_id,
         {
