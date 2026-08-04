@@ -2398,6 +2398,71 @@ def test_library_full_review_projects_cross_view_parity_to_pending_refresh(
     assert host._body_refresh_formal_receipt_callback is None  # noqa: SLF001
 
 
+def test_library_activate_pending_body_refresh_promotes_formal_winners_without_generation(
+    tmp_path: Path,
+) -> None:
+    lifecycle, host, service, body_asset_ids, analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    store = BodyRefreshAttemptStateStore(tmp_path / "activate-refresh-state")
+    lifecycle = VisualAssetLibraryLifecycleService(
+        lifecycle.catalog,
+        root_source_resolver=service.get_uploaded_asset,
+        character_card_stage_host=host,
+        body_refresh_attempt_state_store=store,
+    )
+    request = BodySilhouettePublicRequest(
+        source_class="observed",
+        body_reference_asset_id=body_asset_ids[0],
+        body_reference_asset_ids=body_asset_ids,
+    )
+    refreshed = lifecycle.refresh_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        body_request=request,
+        generation_channel="mcp",
+    )
+    pending_state = store.load_current(visual_asset_id=asset.visual_asset_id)
+    pending_version = refreshed.character_card.body_silhouette_refresh_version_id
+    pending_winners = {
+        slot_key: slot.output_id
+        for slot_key, slot in refreshed.character_card.body_silhouette_refresh_slots.items()
+    }
+    generated_request_count = len(host.generator.requests)
+
+    activated = lifecycle.activate_character_card_module(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        module="body_silhouette",
+        confirm_activation=True,
+    )
+
+    assert pending_state.status == "pending_refresh"
+    assert activated.character_card.body_silhouette_status == "active"
+    assert activated.character_card.body_activation_confirmed is True
+    assert activated.character_card.body_silhouette_version_id == pending_version
+    assert activated.character_card.active_version_id == pending_version
+    assert activated.character_card.body_silhouette_refresh_status == "empty"
+    assert activated.character_card.body_silhouette_refresh_version_id is None
+    assert activated.character_card.body_silhouette_refresh_slots == {}
+    assert {
+        slot_key: slot.output_id
+        for slot_key, slot in activated.character_card.body_slots.items()
+    } == pending_winners
+    assert all(slot.state == "active" for slot in activated.character_card.body_slots.values())
+    assert all(
+        slot.formal_slot_receipt is not None and slot.formal_slot_receipt.activation_eligible
+        for slot in activated.character_card.body_slots.values()
+    )
+    activated_state = store.load_current(visual_asset_id=asset.visual_asset_id)
+    assert activated_state.status == "activated"
+    assert activated_state.activation_digest is not None
+    assert activated_state.cross_view_parity_digest == pending_state.cross_view_parity_digest
+    assert len(host.generator.requests) == generated_request_count
+    assert len(analyzer.calls) == 1
+
+
 def test_library_cross_view_failure_does_not_project_pending_refresh(tmp_path: Path) -> None:
     lifecycle, host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
         tmp_path=tmp_path,

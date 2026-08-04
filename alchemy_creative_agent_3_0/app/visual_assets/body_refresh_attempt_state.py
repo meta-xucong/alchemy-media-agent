@@ -96,9 +96,11 @@ class BodyRefreshAttemptState(V3BaseModel):
         "awaiting_slot_acceptance",
         "awaiting_cross_view",
         "pending_refresh",
+        "activated",
     ] = "in_progress"
     formal_receipt_digests: tuple[StrictStr, ...] = ()
     cross_view_parity_digest: StrictStr | None = None
+    activation_digest: StrictStr | None = None
     updated_at: StrictStr
 
     @model_validator(mode="after")
@@ -131,6 +133,12 @@ class BodyRefreshAttemptState(V3BaseModel):
             _require_digest(digest, "formal receipt digest")
         if self.cross_view_parity_digest is not None:
             _require_digest(self.cross_view_parity_digest, "cross-view parity digest")
+        if self.activation_digest is not None:
+            _require_digest(self.activation_digest, "activation digest")
+            if self.status != "activated":
+                raise ValueError("body_refresh_attempt_state_activation_status_invalid")
+        if self.status == "activated" and self.activation_digest is None:
+            raise ValueError("body_refresh_attempt_state_activation_digest_required")
         return self
 
     @property
@@ -154,6 +162,7 @@ class BodyRefreshAttemptState(V3BaseModel):
             "reviewed_candidate_count": self.reviewed_candidate_count,
             "analyzer_call_count": self.analyzer_call_count,
             "status": self.status,
+            "activation_digest": self.activation_digest,
         }
 
 
@@ -459,6 +468,27 @@ class BodyRefreshAttemptStateStore:
             update={
                 "cross_view_parity_digest": parity_digest,
                 "status": "pending_refresh",
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        self._write(updated)
+        return updated
+
+    def record_activation(
+        self,
+        state: BodyRefreshAttemptState,
+        *,
+        activation_digest: str,
+    ) -> BodyRefreshAttemptState:
+        _require_digest(activation_digest, "activation digest")
+        if state.status != "pending_refresh":
+            raise BodyRefreshAttemptStateError("body refresh activation boundary mismatch")
+        if state.cross_view_parity_digest is None:
+            raise BodyRefreshAttemptStateError("body refresh activation requires cross-view parity")
+        updated = state.model_copy(
+            update={
+                "activation_digest": activation_digest,
+                "status": "activated",
                 "updated_at": datetime.now(UTC).isoformat(),
             }
         )

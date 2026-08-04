@@ -1592,6 +1592,83 @@ class VisualAssetLibraryLifecycleService:
             parity_digest=parity_digest,
         )
 
+    def _require_pending_body_refresh_activation_state(
+        self,
+        *,
+        visual_asset_id: str,
+        card: CharacterCardState,
+    ) -> BodyRefreshAttemptState:
+        state = self.body_refresh_attempt_state_store.load_current(
+            visual_asset_id=visual_asset_id,
+        )
+        if state.status != "pending_refresh":
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation requires pending refresh state"
+            )
+        if state.cross_view_parity_digest is None:
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation requires cross-view parity"
+            )
+        if card.body_silhouette_refresh_version_id != state.attempt_identity.attempt_id:
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation attempt binding mismatch"
+            )
+        if len(state.candidate_checkpoints) != len(BODY_SLOT_KEYS) * 3:
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation requires nine reviewed candidates"
+            )
+        if len(state.formal_receipt_digests) != len(BODY_SLOT_KEYS):
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation requires three formal receipts"
+            )
+        expected_candidate_keys = {
+            (slot_key, candidate_index)
+            for slot_key in BODY_SLOT_KEYS
+            for candidate_index in (1, 2, 3)
+        }
+        actual_candidate_keys = {
+            (checkpoint.slot_key, checkpoint.candidate_index)
+            for checkpoint in state.candidate_checkpoints
+        }
+        if actual_candidate_keys != expected_candidate_keys:
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation candidate coverage mismatch"
+            )
+        return state
+
+    @staticmethod
+    def _body_refresh_activation_digest(
+        *,
+        card: CharacterCardState,
+        state: BodyRefreshAttemptState,
+    ) -> str:
+        slot_payload: list[dict[str, Any]] = []
+        for slot_key in BODY_SLOT_KEYS:
+            slot = card.body_slots[slot_key]
+            receipt = validate_formal_slot_receipt_for_activation(
+                FormalSlotReceipt.model_validate(slot.formal_slot_receipt)
+            )
+            slot_payload.append(
+                {
+                    "slot_key": slot_key,
+                    "output_id": slot.output_id,
+                    "receipt": receipt.model_dump(mode="json"),
+                }
+            )
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "attempt_id": state.attempt_identity.attempt_id,
+                    "cross_view_parity_digest": state.cross_view_parity_digest,
+                    "formal_receipt_digests": list(state.formal_receipt_digests),
+                    "slots": slot_payload,
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
     @staticmethod
     def _expression_mcp_resume_requires_review_only(
         card: CharacterCardState,
@@ -2024,6 +2101,27 @@ class VisualAssetLibraryLifecycleService:
         if not confirm_activation:
             raise ValueError("character_card_module_activation_confirmation_required")
         asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        if module == "body_silhouette" and asset.character_card.body_silhouette_refresh_slots:
+            state = self._require_pending_body_refresh_activation_state(
+                visual_asset_id=visual_asset_id,
+                card=asset.character_card,
+            )
+            card = CharacterCardPreparationService.activate_body_silhouette_refresh(
+                asset.character_card,
+                confirmed=True,
+            )
+            saved = self.catalog.save(
+                asset.model_copy(update={"character_card": card, "updated_at": _utc_now()})
+            )
+            activation_digest = self._body_refresh_activation_digest(
+                card=saved.character_card,
+                state=state,
+            )
+            self.body_refresh_attempt_state_store.record_activation(
+                state,
+                activation_digest=activation_digest,
+            )
+            return saved
         card = CharacterCardPreparationService.activate_module(
             asset.character_card,
             module=module,

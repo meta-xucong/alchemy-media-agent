@@ -4333,6 +4333,75 @@ class CharacterCardPreparationService:
             raise ValueError("Character Card module activation requires standard three-candidate slot receipts")
 
     @staticmethod
+    def activate_body_silhouette_refresh(
+        card: CharacterCardState,
+        *,
+        confirmed: bool,
+    ) -> CharacterCardState:
+        """Promote a reviewed Body refresh into the active Body slots."""
+
+        if not confirmed:
+            raise ValueError("explicit Body Silhouette refresh activation confirmation is required")
+        if card.body_silhouette_status != "active" or not card.body_activation_confirmed:
+            raise ValueError("Body Silhouette refresh activation requires an active Body module")
+        if card.body_silhouette_refresh_status != "reviewing":
+            raise ValueError("Body Silhouette refresh is not ready for activation")
+        if not card.body_silhouette_refresh_version_id:
+            raise ValueError("Body Silhouette refresh activation requires a refresh version")
+        if set(card.body_silhouette_refresh_slots) != set(BODY_SLOT_KEYS):
+            raise ValueError("Body Silhouette refresh activation requires all Body slots")
+
+        activated_slots: dict[str, CharacterCardSlot] = {}
+        for slot_key in BODY_SLOT_KEYS:
+            slot = card.body_silhouette_refresh_slots[slot_key]
+            if slot.state != "winner_selected":
+                raise ValueError("Body Silhouette refresh activation requires pending winners")
+            if slot.module != "body_silhouette" or slot.slot_key != slot_key:
+                raise ValueError("Body Silhouette refresh activation slot mismatch")
+            if slot.formal_slot_receipt is None:
+                raise ValueError("Body Silhouette refresh activation requires formal slot receipts")
+            receipt = validate_formal_slot_receipt_for_activation(slot.formal_slot_receipt)
+            if receipt.module != "body_silhouette":
+                raise ValueError("Body Silhouette refresh formal receipt module mismatch")
+            if receipt.slot_key != slot_key:
+                raise ValueError("Body Silhouette refresh formal receipt slot mismatch")
+            if receipt.winner_output_id != slot.output_id:
+                raise ValueError("Body Silhouette refresh formal receipt output mismatch")
+            activated_slots[slot_key] = CharacterCardSlot.model_validate(
+                slot.model_copy(
+                    update={
+                        "state": "active",
+                        "formal_slot_receipt": receipt,
+                    }
+                ).model_dump(mode="python")
+            )
+
+        refresh_version_id = card.body_silhouette_refresh_version_id
+        return card.model_copy(
+            update={
+                "body_slots": activated_slots,
+                "body_silhouette_status": "active",
+                "body_silhouette_version_id": refresh_version_id,
+                "body_activation_confirmed": True,
+                "user_activation_confirmed": True,
+                "active_version_id": refresh_version_id,
+                "body_silhouette_refresh_status": "empty",
+                "body_silhouette_refresh_version_id": None,
+                "body_silhouette_refresh_slots": {},
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_details": None,
+                "last_failure_attempt_count": 0,
+                "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
+                "resume_available": False,
+                "pending_mcp_handoff_ids": [],
+                "append_only_revision": card.append_only_revision + 1,
+            }
+        )
+
+    @staticmethod
     def activate_module(
         card: CharacterCardState,
         *,
