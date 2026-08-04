@@ -3482,6 +3482,9 @@ class V3ProductApiService:
         # uploaded/anchor assets from the original admission; forwarding
         # them would combine stale inputs with the frozen handoff refs.
         plan_metadata["uploaded_assets"] = []
+        plan_metadata["reference_assets"] = [
+            dict(item or {}) for item in (handoff.get("reference_assets") or [])
+        ]
         # Submitted pixels are consumed through the MCP materialization
         # provider.  The durable planning record can legitimately retain its
         # historical planning-only strategy, so project only this transient

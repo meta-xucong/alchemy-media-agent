@@ -3924,7 +3924,13 @@ def test_doc263_submitted_body_resume_preserves_two_face_identity_reference_proj
         def generate(self, request):  # noqa: ANN001, ANN201
             self.requests.append(dict(request.metadata))
             projected_refs = list(request.metadata.get("reference_assets") or [])
-            assert projected_refs == reference_assets
+            assert [
+                (item.get("asset_id"), item.get("sha256"))
+                for item in projected_refs
+            ] == [
+                (item.get("asset_id"), item.get("sha256"))
+                for item in reference_assets
+            ]
             assert request.metadata["professional_character_card_candidate_count"] == 3
             assert request.metadata["professional_character_card_candidate_index"] == 1
             assert request.metadata["mcp_operation_id"] == operation_id
@@ -6492,9 +6498,18 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
         **planning_metadata,
         # This deliberately models the observed replay defect: the frozen
         # handoff owns two Face derivatives, but the reconstructed plan owns
-        # only one.  The fix must project the handoff's exact pair before the
-        # provider request/capability boundary.
-        "reference_assets": [physical_face_refs[0]],
+        # three stale physical references.  The fix must project the handoff's
+        # exact pair before the provider request/capability boundary.
+        "reference_assets": [
+            *physical_face_refs,
+            {
+                "asset_id": "stale_planning_reference",
+                "source_asset_id": "stale_planning_source",
+                "sha256": "8" * 64,
+                "role": "portrait_identity",
+                "derivative_kind": "portrait_identity_pose_geometry_crop",
+            },
+        ],
         # The historical plan may also carry a third uploaded/anchor asset.
         # A submitted handoff must suppress that stale physical channel
         # instead of letting the provider combine it with the frozen pair.
