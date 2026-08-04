@@ -36,6 +36,12 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_refresh_attempt_state imp
     BodyRefreshAttemptStateError,
     BodyRefreshAttemptStateStore,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.body_cross_view_review import (
+    BODY_CROSS_VIEW_DIMENSION_EVIDENCE_CODES,
+    BODY_CROSS_VIEW_DIMENSIONS,
+    BODY_CROSS_VIEW_PIXEL_EVIDENCE_CODE,
+    build_body_cross_view_review_receipt,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BODY_SLOT_KEYS,
     BodyRefreshAttemptIdentity,
@@ -58,6 +64,7 @@ from alchemy_creative_agent_3_0.app.product_api.service import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.anchor_pack import AnchorCandidateUnavailable
 from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    FormalSlotReceipt,
     mark_formal_slot_receipt_reload_public_projection_verified,
 )
 from test_v3_doc245_body_formal_slot_receipt_seam import (
@@ -2472,6 +2479,80 @@ def test_library_activate_pending_body_refresh_promotes_formal_winners_without_g
     assert len(analyzer.calls) == 1
 
 
+def test_library_activation_rejects_refresh_slot_drift_after_cross_view_receipt(
+    tmp_path: Path,
+) -> None:
+    lifecycle, host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    store = BodyRefreshAttemptStateStore(tmp_path / "drift-refresh-state")
+    lifecycle = VisualAssetLibraryLifecycleService(
+        lifecycle.catalog,
+        root_source_resolver=service.get_uploaded_asset,
+        character_card_stage_host=host,
+        body_refresh_attempt_state_store=store,
+    )
+    refreshed = lifecycle.refresh_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        body_request=BodySilhouettePublicRequest(
+            source_class="observed",
+            body_reference_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=body_asset_ids,
+        ),
+        generation_channel="mcp",
+    )
+    state = store.load_current(visual_asset_id=asset.visual_asset_id)
+    assert state.status == "pending_refresh"
+
+    slots = dict(refreshed.character_card.body_silhouette_refresh_slots)
+    front_slot = slots["body.front_full"]
+    front_receipt = FormalSlotReceipt.model_validate(front_slot.formal_slot_receipt)
+    alternate = next(
+        candidate for candidate in front_receipt.candidates if candidate.candidate_index == 2
+    )
+    drifted_candidates = [
+        candidate.model_copy(
+            update={"selected_as_winner": candidate.candidate_id == alternate.candidate_id}
+        )
+        for candidate in front_receipt.candidates
+    ]
+    drifted_receipt = FormalSlotReceipt.model_validate(
+        front_receipt.model_copy(
+            update={
+                "candidates": drifted_candidates,
+                "winner_candidate_id": alternate.candidate_id,
+                "winner_output_id": alternate.output_id,
+                "winner_shared_review": alternate.shared_review,
+            }
+        ).model_dump(mode="python")
+    )
+    slots["body.front_full"] = front_slot.model_copy(
+        update={
+            "output_id": alternate.output_id,
+            "formal_slot_receipt": drifted_receipt,
+        }
+    )
+    lifecycle.catalog.save(
+        refreshed.model_copy(
+            update={
+                "character_card": refreshed.character_card.model_copy(
+                    update={"body_silhouette_refresh_slots": slots}
+                )
+            }
+        )
+    )
+
+    with pytest.raises(BodyRefreshAttemptStateError, match="cross-view receipt output mismatch"):
+        lifecycle.activate_character_card_module(
+            owner_scope="owner",
+            visual_asset_id=asset.visual_asset_id,
+            module="body_silhouette",
+            confirm_activation=True,
+        )
+
+
 def test_library_cross_view_failure_does_not_project_pending_refresh(tmp_path: Path) -> None:
     lifecycle, host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
         tmp_path=tmp_path,
@@ -2591,9 +2672,25 @@ def test_nine_candidate_cursor_reaches_three_formal_receipts_and_pending_refresh
     assert len(set(operation_ids)) == 9
     assert len(set(output_ids)) == 9
 
-    state = store.record_cross_view_parity(
+    state = store.record_cross_view_review(
         state,
-        parity_digest=hashlib.sha256(b"front-side-rear-parity").hexdigest(),
+        receipt=build_body_cross_view_review_receipt(
+            attempt_id=state.attempt_identity.attempt_id,
+            source_evidence_id_digest=state.body_source_admission.source_evidence_id_digest(),
+            view_output_ids={
+                "body.front_full": "v3_output_body_front_full_3",
+                "body.side_full": "v3_output_body_side_full_3",
+                "body.rear_full": "v3_output_body_rear_full_3",
+            },
+            status="pass",
+            dimensions={dimension: "pass" for dimension in BODY_CROSS_VIEW_DIMENSIONS},
+            evidence_codes=[
+                BODY_CROSS_VIEW_PIXEL_EVIDENCE_CODE,
+                *BODY_CROSS_VIEW_DIMENSION_EVIDENCE_CODES.values(),
+            ],
+            issue_codes=[],
+            real_pixel_review_verified=True,
+        ),
     )
     assert state.status == "pending_refresh"
     assert state.cross_view_parity_digest is not None

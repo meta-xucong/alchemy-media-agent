@@ -17,6 +17,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 )
 from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
     McpMaterializationHandoffStore,
+    build_body_renderer_execution_receipt,
 )
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
@@ -191,15 +192,25 @@ def _png_bytes(color: tuple[int, int, int] = (224, 236, 255)) -> bytes:
     return buffer.getvalue()
 
 
-def _renderer_submit_hashes(store: McpMaterializationHandoffStore, handoff: dict) -> dict[str, str]:
+def _renderer_submit_hashes(store: McpMaterializationHandoffStore, handoff: dict) -> dict[str, object]:
     payload = McpMaterializationHandoffStore.get(store, handoff["handoff_id"])
     assert payload is not None
     public = McpMaterializationHandoffStore._public_view_from_payload(payload)  # noqa: SLF001
     request = McpMaterializationHandoffStore._renderer_request_from_public_view(public)  # noqa: SLF001
-    return {
+    values: dict[str, object] = {
         "renderer_prompt_sha256": request["renderer_prompt_sha256"],
         "renderer_execution_directive_sha256": request["renderer_execution_directive_sha256"],
     }
+    if isinstance(request.get("renderer_execution_directive"), dict):
+        values["renderer_execution_receipt"] = build_body_renderer_execution_receipt(
+            renderer_prompt_sha256=request["renderer_prompt_sha256"],
+            renderer_execution_directive_sha256=request["renderer_execution_directive_sha256"],
+            canonical_prompt_sha256=request["canonical_prompt_sha256"],
+            rendering_contract_fingerprint=request["rendering_contract_fingerprint"],
+            nonce_sha256=request["renderer_execution_directive"]["nonce_sha256"],
+            reference_asset_hashes=request["reference_asset_hashes"],
+        )
+    return values
 
 
 def _current_laugh_handoff_prompt(*, suffix: str = "") -> str:

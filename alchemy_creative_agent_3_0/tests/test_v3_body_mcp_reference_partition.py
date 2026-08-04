@@ -53,6 +53,7 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc245_body_formal_slot_receipt_se
 )
 from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
     McpMaterializationHandoffStore,
+    build_body_renderer_execution_receipt,
 )
 from alchemy_creative_agent_3_0.app.creative_core.mcp_reference_partition import (
     McpBodyReferencePartition,
@@ -560,6 +561,16 @@ def test_submitted_reference_assisted_handoff_reuses_frozen_morphology_without_p
         renderer_execution_directive_sha256=renderer_request[
             "renderer_execution_directive_sha256"
         ],
+        renderer_execution_receipt=build_body_renderer_execution_receipt(
+            renderer_prompt_sha256=renderer_request["renderer_prompt_sha256"],
+            renderer_execution_directive_sha256=renderer_request[
+                "renderer_execution_directive_sha256"
+            ],
+            canonical_prompt_sha256=renderer_request["canonical_prompt_sha256"],
+            rendering_contract_fingerprint=renderer_request["rendering_contract_fingerprint"],
+            nonce_sha256=renderer_request["renderer_execution_directive"]["nonce_sha256"],
+            reference_asset_hashes=renderer_request["reference_asset_hashes"],
+        ),
     )
     resumed_metadata = {
         **request.metadata,

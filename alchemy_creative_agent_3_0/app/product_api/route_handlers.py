@@ -780,6 +780,7 @@ class V3ProductRouteHandlers:
             "reference_asset_hashes",
             "renderer_prompt_sha256",
             "renderer_execution_directive_sha256",
+            "renderer_execution_receipt",
             "artifact_base64",
             "artifact_path",
         }
@@ -818,6 +819,11 @@ class V3ProductRouteHandlers:
             renderer_execution_directive_sha256=(
                 str(payload.get("renderer_execution_directive_sha256") or "")
                 if "renderer_execution_directive_sha256" in payload
+                else None
+            ),
+            renderer_execution_receipt=(
+                dict(payload.get("renderer_execution_receipt"))
+                if isinstance(payload.get("renderer_execution_receipt"), dict)
                 else None
             ),
         )

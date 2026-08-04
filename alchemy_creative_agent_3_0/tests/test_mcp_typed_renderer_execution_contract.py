@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import base64
+import hashlib
 from io import BytesIO
 
 import pytest
@@ -10,9 +11,11 @@ from PIL import Image
 from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
     McpMaterializationError,
     McpMaterializationHandoffStore,
+    build_body_renderer_execution_receipt,
 )
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+    body_silhouette_integrated_whole_person_synthesis_contract,
     body_silhouette_mcp_materialization_channel_contract,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
@@ -47,6 +50,28 @@ def _png_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _morphology_profile() -> dict:
+    bands = {
+        "relative_head_to_stature": "larger",
+        "shoulder_to_head": "narrower",
+        "torso_to_leg": "shorter_torso",
+        "arm_to_leg": "proportional",
+        "build": "slender",
+        "neck_shoulder": "narrow_transition",
+        "developmental_stage_context": "middle_stage_context",
+        "stance_ground": "grounded_full_contact",
+        "cross_view_support": "multi_view_supported",
+    }
+    canonical = json.dumps(bands, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    bands_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return {
+        "schema_version": "body_morphology_evidence_profile_v2",
+        "profile_digest": "a" * 64,
+        "bands_digest": bands_digest,
+        "bands": bands,
+    }
+
+
 def _strict_contract() -> dict:
     return {
         "renderer": "codex_builtin_imagegen",
@@ -59,7 +84,11 @@ def _strict_contract() -> dict:
         "size_normalization": "white_matte_contain_to_contract_size",
         "body_refresh_source_mode": "reference_assisted",
         "body_silhouette_mcp_materialization_channel_contract": body_silhouette_mcp_materialization_channel_contract(),
+        "body_silhouette_integrated_whole_person_synthesis_contract": (
+            body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
         "body_mcp_reference_partition": _partition(),
+        "body_morphology_profile": _morphology_profile(),
         "body_refresh_presentation_intent": default_body_refresh_presentation_intent().model_dump(mode="json"),
         "body_silhouette_hair_continuity_contract": default_body_silhouette_hair_continuity_contract(),
         "body_silhouette_backdrop_presentation_contract": default_body_silhouette_backdrop_presentation_contract(),
@@ -79,6 +108,17 @@ def _ensure(
         reference_assets=[],
         rendering_contract=contract or _strict_contract(),
         require_body_rendering_contract=require_body_rendering_contract,
+    )
+
+
+def _renderer_execution_receipt(request: dict) -> dict:
+    return build_body_renderer_execution_receipt(
+        renderer_prompt_sha256=request["renderer_prompt_sha256"],
+        renderer_execution_directive_sha256=request["renderer_execution_directive_sha256"],
+        canonical_prompt_sha256=request["canonical_prompt_sha256"],
+        rendering_contract_fingerprint=request["rendering_contract_fingerprint"],
+        nonce_sha256=request["renderer_execution_directive"]["nonce_sha256"],
+        reference_asset_hashes=request["reference_asset_hashes"],
     )
 
 
@@ -199,6 +239,22 @@ def test_strict_submit_requires_host_request_hashes_and_accepts_matching_hashes(
         "mcp_materialization_renderer_execution_directive_hash_mismatch"
     )
 
+    with pytest.raises(McpMaterializationError) as missing_execution_receipt:
+        store.submit(
+            handoff["handoff_id"],
+            nonce=handoff["nonce"],
+            prompt_sha256=handoff["prompt_sha256"],
+            reference_asset_hashes=handoff["reference_asset_hashes"],
+            artifact_bytes=_png_bytes(),
+            renderer_prompt_sha256=host_request["renderer_prompt_sha256"],
+            renderer_execution_directive_sha256=host_request[
+                "renderer_execution_directive_sha256"
+            ],
+        )
+    assert missing_execution_receipt.value.code == (
+        "mcp_materialization_renderer_execution_receipt_required"
+    )
+
     submitted = store.submit(
         handoff["handoff_id"],
         nonce=handoff["nonce"],
@@ -209,6 +265,7 @@ def test_strict_submit_requires_host_request_hashes_and_accepts_matching_hashes(
         renderer_execution_directive_sha256=host_request[
             "renderer_execution_directive_sha256"
         ],
+        renderer_execution_receipt=_renderer_execution_receipt(host_request),
     )
     assert submitted["status"] == "submitted"
 
@@ -257,6 +314,7 @@ def test_route_handler_forwards_renderer_hashes_to_store(tmp_path) -> None:
             "reference_asset_hashes": ["face-hash"],
             "renderer_prompt_sha256": "renderer-prompt-hash",
             "renderer_execution_directive_sha256": "directive-hash",
+            "renderer_execution_receipt": {"schema_version": "test_receipt"},
             "artifact_base64": base64.b64encode(b"typed-artifact").decode("ascii"),
         },
     )
@@ -264,6 +322,7 @@ def test_route_handler_forwards_renderer_hashes_to_store(tmp_path) -> None:
     assert result == {"status": "submitted"}
     assert captured["renderer_prompt_sha256"] == "renderer-prompt-hash"
     assert captured["renderer_execution_directive_sha256"] == "directive-hash"
+    assert captured["renderer_execution_receipt"] == {"schema_version": "test_receipt"}
 
 
 def test_strict_consume_requires_persisted_renderer_receipt_and_fingerprint(tmp_path) -> None:
@@ -280,19 +339,20 @@ def test_strict_consume_requires_persisted_renderer_receipt_and_fingerprint(tmp_
         renderer_execution_directive_sha256=host_request[
             "renderer_execution_directive_sha256"
         ],
+        renderer_execution_receipt=_renderer_execution_receipt(host_request),
     )
     public = store.public_view(handoff["handoff_id"])
     assert public["renderer_prompt_sha256"] == host_request["renderer_prompt_sha256"]
 
     path = tmp_path / "handoffs" / f"{handoff['handoff_id']}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload.pop("renderer_prompt_sha256", None)
+    payload.pop("renderer_execution_receipt", None)
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(McpMaterializationError) as missing_receipt:
         store.consume(handoff["handoff_id"])
-    assert missing_receipt.value.code == "mcp_materialization_renderer_prompt_hash_missing"
+    assert missing_receipt.value.code == "mcp_materialization_renderer_execution_receipt_required"
 
-    payload["renderer_prompt_sha256"] = host_request["renderer_prompt_sha256"]
+    payload["renderer_execution_receipt"] = _renderer_execution_receipt(host_request)
     payload["rendering_contract_fingerprint"] = "0" * 64
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(McpMaterializationError) as bad_fingerprint:

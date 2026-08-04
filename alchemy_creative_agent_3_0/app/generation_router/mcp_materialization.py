@@ -48,6 +48,7 @@ def _sha256(content: bytes) -> str:
 
 
 _BODY_RENDERER_EXECUTION_DIRECTIVE_SCHEMA = "v3_body_mcp_renderer_execution_directive_v1"
+_BODY_RENDERER_EXECUTION_RECEIPT_SCHEMA = "v3_body_mcp_renderer_execution_receipt_v1"
 
 _BODY_RENDERER_PRESENTATION_PHRASES = {
     "short_sleeve_top": "plain short-sleeve top",
@@ -252,6 +253,39 @@ def _build_body_renderer_execution_directive(
         )
     directive["directive_sha256"] = _canonical_json_sha256(directive)
     return directive
+
+
+def build_body_renderer_execution_receipt(
+    *,
+    renderer_prompt_sha256: str,
+    renderer_execution_directive_sha256: str,
+    canonical_prompt_sha256: str,
+    rendering_contract_fingerprint: str,
+    nonce_sha256: str,
+    reference_asset_hashes: list[str],
+) -> dict[str, Any]:
+    """Return the typed host receipt required by strict Body MCP submit."""
+
+    receipt = {
+        "schema_version": _BODY_RENDERER_EXECUTION_RECEIPT_SCHEMA,
+        "status": "executed",
+        "execution_scope": "professional_character_card_body_silhouette_mcp_materialization_only",
+        "renderer_prompt_sha256": str(renderer_prompt_sha256).strip().lower(),
+        "renderer_execution_directive_sha256": str(renderer_execution_directive_sha256).strip().lower(),
+        "canonical_prompt_sha256": str(canonical_prompt_sha256).strip().lower(),
+        "rendering_contract_fingerprint": str(rendering_contract_fingerprint).strip().lower(),
+        "nonce_sha256": str(nonce_sha256).strip().lower(),
+        "physical_reference_policy": "face_identity_only",
+        "reference_asset_hashes": [str(item).strip().lower() for item in reference_asset_hashes],
+        "consumed_renderer_prompt": True,
+        "consumed_renderer_execution_directive": True,
+        "applied_body_presentation_contract": True,
+        "applied_body_hair_continuity_contract": True,
+        "applied_body_backdrop_contract": True,
+        "applied_integrated_whole_person_contract": True,
+    }
+    receipt["receipt_sha256"] = _canonical_json_sha256(receipt)
+    return receipt
 
 
 def _validate_image(content: bytes) -> tuple[int | None, int | None]:
@@ -666,6 +700,45 @@ class McpMaterializationHandoffStore:
             )
         return stored
 
+    @classmethod
+    def _validated_renderer_execution_receipt(
+        cls,
+        payload: dict[str, Any],
+        directive: dict[str, Any] | None,
+        *,
+        renderer_prompt_sha256: str | None = None,
+        receipt: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if directive is None:
+            return None
+        public = cls._public_view_from_payload(payload)
+        expected_request = cls._renderer_request_from_public_view(public)
+        stored_prompt_hash = str(
+            renderer_prompt_sha256 or payload.get("renderer_prompt_sha256") or ""
+        ).strip().lower()
+        expected = build_body_renderer_execution_receipt(
+            renderer_prompt_sha256=stored_prompt_hash,
+            renderer_execution_directive_sha256=str(directive["directive_sha256"]),
+            canonical_prompt_sha256=str(payload.get("prompt_sha256") or ""),
+            rendering_contract_fingerprint=str(payload.get("rendering_contract_fingerprint") or ""),
+            nonce_sha256=str(directive.get("nonce_sha256") or ""),
+            reference_asset_hashes=list(payload.get("reference_asset_hashes") or []),
+        )
+        raw_receipt = receipt if receipt is not None else payload.get("renderer_execution_receipt")
+        if not isinstance(raw_receipt, dict):
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_execution_receipt_required"
+            )
+        if stored_prompt_hash != str(expected_request["renderer_prompt_sha256"]).lower():
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_prompt_hash_mismatch"
+            )
+        if raw_receipt != expected:
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_execution_receipt_mismatch"
+            )
+        return dict(expected)
+
     @staticmethod
     def _public_view_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         # The endpoint is local-only, but still return only the fields Codex
@@ -692,6 +765,8 @@ class McpMaterializationHandoffStore:
             view["renderer_execution_directive_sha256"] = directive["directive_sha256"]
             if payload.get("renderer_prompt_sha256"):
                 view["renderer_prompt_sha256"] = payload["renderer_prompt_sha256"]
+            if isinstance(payload.get("renderer_execution_receipt"), dict):
+                view["renderer_execution_receipt"] = dict(payload["renderer_execution_receipt"])
         return view
 
     def submit(
@@ -704,6 +779,7 @@ class McpMaterializationHandoffStore:
         artifact_bytes: bytes,
         renderer_prompt_sha256: str | None = None,
         renderer_execution_directive_sha256: str | None = None,
+        renderer_execution_receipt: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._transaction_lock():
             payload = self._read(handoff_id)
@@ -734,6 +810,14 @@ class McpMaterializationHandoffStore:
                     raise McpMaterializationError(
                         "mcp_materialization_renderer_execution_directive_hash_mismatch"
                     )
+                safe_renderer_execution_receipt = self._validated_renderer_execution_receipt(
+                    payload,
+                    directive,
+                    renderer_prompt_sha256=str(renderer_prompt_sha256).strip().lower(),
+                    receipt=renderer_execution_receipt,
+                )
+            else:
+                safe_renderer_execution_receipt = None
             if str(nonce or "") != str(payload.get("nonce") or ""):
                 raise McpMaterializationError("mcp_materialization_nonce_invalid")
             if str(prompt_sha256 or "").strip().lower() != str(payload.get("prompt_sha256") or ""):
@@ -804,6 +888,7 @@ class McpMaterializationHandoffStore:
             }:
                 if str(payload.get("artifact_sha256") or "") == artifact_sha256:
                     self._validate_submitted_renderer_prompt_hash(payload, directive)
+                    self._validated_renderer_execution_receipt(payload, directive)
                     return self._public_view_from_payload(payload)
                 raise McpMaterializationError("mcp_materialization_artifact_conflict")
             if status != "pending":
@@ -824,6 +909,11 @@ class McpMaterializationHandoffStore:
                 **(
                     {"renderer_prompt_sha256": str(renderer_prompt_sha256).strip().lower()}
                     if directive is not None
+                    else {}
+                ),
+                **(
+                    {"renderer_execution_receipt": safe_renderer_execution_receipt}
+                    if safe_renderer_execution_receipt is not None
                     else {}
                 ),
                 **(
@@ -854,6 +944,7 @@ class McpMaterializationHandoffStore:
             }:
                 raise McpMaterializationError("mcp_materialization_pending")
             self._validate_submitted_renderer_prompt_hash(payload, directive)
+            self._validated_renderer_execution_receipt(payload, directive)
             artifact_file = Path(str(payload.get("artifact_file") or ""))
             if not artifact_file.is_file():
                 raise McpMaterializationError("mcp_materialization_artifact_missing")
