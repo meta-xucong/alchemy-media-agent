@@ -38,6 +38,7 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
 from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
     McpMaterializationError,
     McpMaterializationHandoffStore,
+    build_body_renderer_execution_receipt,
 )
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
@@ -179,12 +180,22 @@ def _tiny_png_b64() -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def _renderer_submit_hashes(store: McpMaterializationHandoffStore, handoff: dict) -> dict[str, str]:
+def _renderer_submit_hashes(store: McpMaterializationHandoffStore, handoff: dict) -> dict[str, object]:
     request = store.public_renderer_request(handoff["handoff_id"])
-    return {
+    values: dict[str, object] = {
         "renderer_prompt_sha256": request["renderer_prompt_sha256"],
         "renderer_execution_directive_sha256": request["renderer_execution_directive_sha256"],
     }
+    if isinstance(request.get("renderer_execution_directive"), dict):
+        values["renderer_execution_receipt"] = build_body_renderer_execution_receipt(
+            renderer_prompt_sha256=request["renderer_prompt_sha256"],
+            renderer_execution_directive_sha256=request["renderer_execution_directive_sha256"],
+            canonical_prompt_sha256=request["canonical_prompt_sha256"],
+            rendering_contract_fingerprint=request["rendering_contract_fingerprint"],
+            nonce_sha256=request["renderer_execution_directive"]["nonce_sha256"],
+            reference_asset_hashes=request["reference_asset_hashes"],
+        )
+    return values
 
 
 def _body_slot_delta_runtime_request(slot_key: str = "body.front_full") -> ScenarioRuntimeRequest:

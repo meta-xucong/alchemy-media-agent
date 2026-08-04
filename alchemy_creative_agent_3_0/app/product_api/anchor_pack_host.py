@@ -67,8 +67,14 @@ from ..visual_assets.character_card import (
     CharacterCardState,
     SlotAcceptanceCore,
 )
-from ..visual_assets.body_proportion_evidence_profile import BodyRefreshAnalysisContext
-from ..visual_assets.body_proportion_evidence_profile import BODY_REFRESH_REFERENCE_AGE_SCOPE
+from ..visual_assets.body_proportion_evidence_profile import (
+    BODY_REFRESH_REFERENCE_AGE_SCOPE,
+    BodyRefreshAnalysisContext,
+)
+from ..visual_assets.body_cross_view_review import (
+    BodyCrossViewReviewReceipt,
+    build_body_cross_view_unavailable_receipt,
+)
 from ..visual_assets.contracts import (
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
@@ -1326,6 +1332,72 @@ class ProductApiAnchorPackPreparationHost:
         if context.source_evidence_id_digest != admission.source_evidence_id_digest():
             raise ValueError("body_refresh_source_admission_digest_mismatch")
         return admission, context
+
+    def review_body_refresh_cross_view(
+        self,
+        *,
+        asset: Any,
+        card: CharacterCardState,
+        attempt_identity: BodyRefreshAttemptIdentity,
+        body_refresh_analysis_context: BodyRefreshAnalysisContext,
+        body_source_admission: BodySourceAdmission,
+        formal_receipts: dict[str, Any],
+        view_output_ids: dict[str, str],
+    ) -> BodyCrossViewReviewReceipt:
+        """Run the configured shared Vision joint Body review, or fail closed.
+
+        This host owns only the call boundary.  It does not infer visual
+        consistency locally and it does not turn formal slot receipts into a
+        three-view pixel verdict.
+        """
+
+        if not isinstance(attempt_identity, BodyRefreshAttemptIdentity):
+            raise ValueError("body_cross_view_attempt_untrusted")
+        if not isinstance(body_refresh_analysis_context, BodyRefreshAnalysisContext):
+            raise ValueError("body_cross_view_context_untrusted")
+        if not isinstance(body_source_admission, BodySourceAdmission):
+            raise ValueError("body_cross_view_source_admission_untrusted")
+        if (
+            body_refresh_analysis_context.attempt_id != attempt_identity.attempt_id
+            or body_refresh_analysis_context.source_evidence_id_digest
+            != body_source_admission.source_evidence_id_digest()
+        ):
+            raise ValueError("body_cross_view_context_binding_mismatch")
+        provider = getattr(self.product_service, "body_cross_view_review_provider", None)
+        review = getattr(provider, "review_body_cross_view", None)
+        if not callable(review):
+            return build_body_cross_view_unavailable_receipt(
+                attempt_id=attempt_identity.attempt_id,
+                source_evidence_id_digest=body_source_admission.source_evidence_id_digest(),
+                view_output_ids=view_output_ids,
+            )
+        try:
+            raw_receipt = review(
+                asset=asset,
+                card=card,
+                attempt_identity=attempt_identity,
+                body_refresh_analysis_context=body_refresh_analysis_context,
+                body_source_admission=body_source_admission,
+                formal_receipts=formal_receipts,
+                view_output_ids=view_output_ids,
+            )
+        except Exception:
+            return build_body_cross_view_unavailable_receipt(
+                attempt_id=attempt_identity.attempt_id,
+                source_evidence_id_digest=body_source_admission.source_evidence_id_digest(),
+                view_output_ids=view_output_ids,
+            )
+        receipt = (
+            raw_receipt
+            if isinstance(raw_receipt, BodyCrossViewReviewReceipt)
+            else BodyCrossViewReviewReceipt.model_validate(raw_receipt)
+        )
+        receipt.require_binding(
+            attempt_id=attempt_identity.attempt_id,
+            source_evidence_id_digest=body_source_admission.source_evidence_id_digest(),
+            view_output_ids=view_output_ids,
+        )
+        return receipt
 
     def refresh_body_silhouette(
         self,

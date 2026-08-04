@@ -59,6 +59,10 @@ from .body_proportion_evidence_profile import (
     BODY_REFRESH_REFERENCE_AGE_SCOPE,
     BodyRefreshAnalysisContext,
 )
+from .body_cross_view_review import (
+    BodyCrossViewReviewReceipt,
+    build_body_cross_view_unavailable_receipt,
+)
 from .body_refresh_attempt_state import (
     BodyRefreshAttemptState,
     BodyRefreshAttemptStateError,
@@ -1354,10 +1358,28 @@ class VisualAssetLibraryLifecycleService:
                 )
             )
         if getattr(result, "status", None) == "review":
-            self._record_body_refresh_cross_view_parity_after_review(
+            cross_view_failure_code = self._record_body_refresh_cross_view_parity_after_review(
                 visual_asset_id=visual_asset_id,
                 saved_asset=saved_asset,
             )
+            if cross_view_failure_code:
+                blocked_card = saved_asset.character_card.model_copy(
+                    update={
+                        "body_silhouette_refresh_status": "blocked",
+                        "last_failed_module": "body_silhouette",
+                        "last_failed_slot_key": "body.front_full",
+                        "last_failure_code": cross_view_failure_code,
+                        "last_failure_details": None,
+                        "last_failure_attempt_count": 3,
+                        "resume_available": False,
+                        "append_only_revision": saved_asset.character_card.append_only_revision + 1,
+                    }
+                )
+                saved_asset = self.catalog.save(
+                    saved_asset.model_copy(
+                        update={"character_card": blocked_card, "updated_at": _utc_now()}
+                    )
+                )
         return saved_asset
 
     def resume_character_card_body_silhouette(
@@ -1523,10 +1545,28 @@ class VisualAssetLibraryLifecycleService:
                 )
             )
         if getattr(result, "status", None) == "review":
-            self._record_body_refresh_cross_view_parity_after_review(
+            cross_view_failure_code = self._record_body_refresh_cross_view_parity_after_review(
                 visual_asset_id=visual_asset_id,
                 saved_asset=saved,
             )
+            if cross_view_failure_code:
+                blocked_card = saved.character_card.model_copy(
+                    update={
+                        "body_silhouette_refresh_status": "blocked",
+                        "last_failed_module": "body_silhouette",
+                        "last_failed_slot_key": "body.front_full",
+                        "last_failure_code": cross_view_failure_code,
+                        "last_failure_details": None,
+                        "last_failure_attempt_count": 3,
+                        "resume_available": False,
+                        "append_only_revision": saved.character_card.append_only_revision + 1,
+                    }
+                )
+                saved = self.catalog.save(
+                    saved.model_copy(
+                        update={"character_card": blocked_card, "updated_at": _utc_now()}
+                    )
+                )
         return saved
 
     def _record_body_refresh_cross_view_parity_after_review(
@@ -1534,8 +1574,8 @@ class VisualAssetLibraryLifecycleService:
         *,
         visual_asset_id: str,
         saved_asset: VisualAsset,
-    ) -> None:
-        """Project the existing Character Card parity result into private state."""
+    ) -> str | None:
+        """Project a real three-view review receipt into private state."""
 
         try:
             state = self.body_refresh_attempt_state_store.load_current(
@@ -1550,7 +1590,7 @@ class VisualAssetLibraryLifecycleService:
                 "body refresh attempt state missing",
                 "body refresh current pointer missing",
             }:
-                return
+                return None
             raise
         if state.status != "awaiting_cross_view":
             raise BodyRefreshAttemptStateError(
@@ -1565,7 +1605,7 @@ class VisualAssetLibraryLifecycleService:
             raise BodyRefreshAttemptStateError(
                 "body refresh cross-view formal slots missing"
             )
-        receipt_payload: list[dict[str, Any]] = []
+        view_output_ids: dict[str, str] = {}
         for slot_key in BODY_SLOT_KEYS:
             slot = card.body_silhouette_refresh_slots[slot_key]
             if slot.state != "winner_selected" or slot.formal_slot_receipt is None:
@@ -1575,29 +1615,55 @@ class VisualAssetLibraryLifecycleService:
             receipt = validate_formal_slot_receipt_for_activation(
                 FormalSlotReceipt.model_validate(slot.formal_slot_receipt)
             )
-            receipt_payload.append(
-                {
-                    "slot_key": slot_key,
-                    "winner_output_id": receipt.winner_output_id,
-                    "receipt": receipt.model_dump(mode="json"),
-                }
-            )
-        parity_digest = hashlib.sha256(
-            json.dumps(
-                {
-                    "attempt_id": state.attempt_identity.attempt_id,
-                    "body_refresh_version_id": card.body_silhouette_refresh_version_id,
-                    "formal_receipts": receipt_payload,
+            if not str(receipt.winner_output_id or "").strip():
+                raise BodyRefreshAttemptStateError(
+                    "body refresh cross-view formal winner missing"
+                )
+            view_output_ids[slot_key] = str(receipt.winner_output_id)
+        review_method = getattr(self.character_card_stage_host, "review_body_refresh_cross_view", None)
+        if callable(review_method):
+            raw_receipt = review_method(
+                asset=saved_asset,
+                card=card,
+                attempt_identity=state.attempt_identity,
+                body_refresh_analysis_context=state.analysis_context,
+                body_source_admission=state.body_source_admission,
+                formal_receipts={
+                    slot_key: FormalSlotReceipt.model_validate(
+                        card.body_silhouette_refresh_slots[slot_key].formal_slot_receipt
+                    )
+                    for slot_key in BODY_SLOT_KEYS
                 },
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        self.body_refresh_attempt_state_store.record_cross_view_parity(
+                view_output_ids=view_output_ids,
+            )
+        else:
+            raw_receipt = build_body_cross_view_unavailable_receipt(
+                attempt_id=state.attempt_identity.attempt_id,
+                source_evidence_id_digest=state.body_source_admission.source_evidence_id_digest(),
+                view_output_ids=view_output_ids,
+            )
+        try:
+            receipt = (
+                raw_receipt
+                if isinstance(raw_receipt, BodyCrossViewReviewReceipt)
+                else BodyCrossViewReviewReceipt.model_validate(raw_receipt)
+            )
+            receipt.require_binding(
+                attempt_id=state.attempt_identity.attempt_id,
+                source_evidence_id_digest=state.body_source_admission.source_evidence_id_digest(),
+                view_output_ids=view_output_ids,
+            )
+        except Exception as exc:
+            raise BodyRefreshAttemptStateError(
+                "body refresh cross-view review receipt invalid"
+            ) from exc
+        updated_state = self.body_refresh_attempt_state_store.record_cross_view_review(
             state,
-            parity_digest=parity_digest,
+            receipt=receipt,
         )
+        if not updated_state.cross_view_parity_digest:
+            return "body_silhouette_cross_view_review_failed"
+        return None
 
     def _require_pending_body_refresh_activation_state(
         self,
@@ -1641,6 +1707,39 @@ class VisualAssetLibraryLifecycleService:
             raise BodyRefreshAttemptStateError(
                 "body refresh activation candidate coverage mismatch"
             )
+        if state.cross_view_review_receipt is None:
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation requires cross-view review receipt"
+            )
+        if set(card.body_silhouette_refresh_slots) != set(BODY_SLOT_KEYS):
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation formal slots missing"
+            )
+        view_output_ids: dict[str, str] = {}
+        for slot_key in BODY_SLOT_KEYS:
+            slot = card.body_silhouette_refresh_slots[slot_key]
+            if slot.state != "winner_selected" or slot.formal_slot_receipt is None:
+                raise BodyRefreshAttemptStateError(
+                    "body refresh activation formal slot invalid"
+                )
+            receipt = validate_formal_slot_receipt_for_activation(
+                FormalSlotReceipt.model_validate(slot.formal_slot_receipt)
+            )
+            if receipt.winner_output_id != slot.output_id:
+                raise BodyRefreshAttemptStateError(
+                    "body refresh activation formal winner mismatch"
+                )
+            view_output_ids[slot_key] = str(receipt.winner_output_id)
+        try:
+            state.cross_view_review_receipt.require_binding(
+                attempt_id=state.attempt_identity.attempt_id,
+                source_evidence_id_digest=state.body_source_admission.source_evidence_id_digest(),
+                view_output_ids=view_output_ids,
+            )
+        except Exception as exc:
+            raise BodyRefreshAttemptStateError(
+                "body refresh activation cross-view receipt output mismatch"
+            ) from exc
         return state
 
     @staticmethod

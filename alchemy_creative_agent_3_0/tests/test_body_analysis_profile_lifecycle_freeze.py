@@ -37,6 +37,12 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_proportion_evidence_profi
     BodyProportionEvidenceProfile,
     BodySourceAnalysisAssetEnvelope,
 )
+from alchemy_creative_agent_3_0.app.visual_assets.body_cross_view_review import (
+    BODY_CROSS_VIEW_DIMENSION_EVIDENCE_CODES,
+    BODY_CROSS_VIEW_DIMENSIONS,
+    BODY_CROSS_VIEW_PIXEL_EVIDENCE_CODE,
+    build_body_cross_view_review_receipt,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
     BodySourceAdmission,
     BodyRefreshAttemptIdentity,
@@ -437,6 +443,23 @@ class _LibraryOwnedBodyHost(ProductApiAnchorPackPreparationHost):
             reviewer=_BodyReviewer(),
         )
         self.prepared_admissions: list[BodySourceAdmission] = []
+
+    def review_body_refresh_cross_view(self, **kwargs):  # noqa: ANN001
+        admission = kwargs["body_source_admission"]
+        attempt = kwargs["attempt_identity"]
+        return build_body_cross_view_review_receipt(
+            attempt_id=attempt.attempt_id,
+            source_evidence_id_digest=admission.source_evidence_id_digest(),
+            view_output_ids=dict(kwargs["view_output_ids"]),
+            status="pass",
+            dimensions={dimension: "pass" for dimension in BODY_CROSS_VIEW_DIMENSIONS},
+            evidence_codes=[
+                BODY_CROSS_VIEW_PIXEL_EVIDENCE_CODE,
+                *BODY_CROSS_VIEW_DIMENSION_EVIDENCE_CODES.values(),
+            ],
+            issue_codes=[],
+            real_pixel_review_verified=True,
+        )
 
     def set_body_refresh_candidate_checkpoint_callback(self, callback: Any | None) -> None:
         super().set_body_refresh_candidate_checkpoint_callback(callback)

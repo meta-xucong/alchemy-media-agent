@@ -56,6 +56,8 @@ from ..visual_assets.body_proportion_evidence_profile import (
     BodySourceAnalysisProvider,
     create_configured_body_source_analysis_provider,
 )
+from . import body_cross_view_review_provider as body_cross_view_review_provider_module
+from .body_cross_view_review_provider import BodyCrossViewReviewProvider
 from ..shared_capabilities import CapabilityRunResult
 from ..shared_capabilities.apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
 from ..shared_capabilities.visual_cluster import (
@@ -945,6 +947,7 @@ class V3ProductApiService:
         visual_asset_catalog: InMemoryVisualAssetCatalog | None = None,
         mcp_materialization_store: McpMaterializationHandoffStore | None = None,
         body_proportion_source_analyzer: BodySourceAnalysisProvider | None = None,
+        body_cross_view_review_provider: BodyCrossViewReviewProvider | None = None,
     ) -> None:
         self.brand_profile_service = brand_profile_service or BrandProfileService()
         self.balance_adapter = balance_adapter or V3BalanceAdapter()
@@ -978,6 +981,13 @@ class V3ProductApiService:
         self.vision_inspector = vision_inspector or VisionOutputInspector()
         self.review_merger = review_merger or OutputQualityReviewMerger()
         self.mode_role_director = mode_role_director or ModeAwareRoleDirector()
+        self.body_cross_view_review_provider = (
+            body_cross_view_review_provider
+            if body_cross_view_review_provider is not None
+            else body_cross_view_review_provider_module.create_configured_body_cross_view_review_provider(
+                output_store=self.output_store
+            )
+        )
         self.photographer_profile_region_resolver = photographer_profile_region_resolver or (lambda: None)
         self.visual_asset_catalog = visual_asset_catalog or InMemoryVisualAssetCatalog()
 

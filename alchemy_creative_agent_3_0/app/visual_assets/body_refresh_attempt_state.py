@@ -23,6 +23,7 @@ from pydantic import ConfigDict, Field, StrictInt, StrictStr, field_validator, m
 
 from ..schemas.models import V3BaseModel
 from .body_proportion_evidence_profile import BodyRefreshAnalysisContext
+from .body_cross_view_review import BodyCrossViewReviewReceipt
 from .character_card import (
     BODY_SLOT_KEYS,
     BodyRefreshAttemptIdentity,
@@ -100,6 +101,7 @@ class BodyRefreshAttemptState(V3BaseModel):
     ] = "in_progress"
     formal_receipt_digests: tuple[StrictStr, ...] = ()
     cross_view_parity_digest: StrictStr | None = None
+    cross_view_review_receipt: BodyCrossViewReviewReceipt | None = None
     activation_digest: StrictStr | None = None
     updated_at: StrictStr
 
@@ -133,6 +135,22 @@ class BodyRefreshAttemptState(V3BaseModel):
             _require_digest(digest, "formal receipt digest")
         if self.cross_view_parity_digest is not None:
             _require_digest(self.cross_view_parity_digest, "cross-view parity digest")
+            if self.cross_view_review_receipt is None:
+                raise ValueError("body_refresh_cross_view_review_receipt_required")
+            if not self.cross_view_review_receipt.activation_eligible:
+                raise ValueError("body_refresh_cross_view_review_receipt_not_eligible")
+            if self.cross_view_parity_digest != self.cross_view_review_receipt.receipt_digest:
+                raise ValueError("body_refresh_cross_view_parity_receipt_mismatch")
+            if self.status not in {"pending_refresh", "activated"}:
+                raise ValueError("body_refresh_cross_view_parity_status_invalid")
+        if self.cross_view_review_receipt is not None:
+            if self.cross_view_review_receipt.attempt_id != self.attempt_identity.attempt_id:
+                raise ValueError("body_refresh_cross_view_receipt_attempt_mismatch")
+            if (
+                self.cross_view_review_receipt.source_evidence_id_digest
+                != self.body_source_admission.source_evidence_id_digest()
+            ):
+                raise ValueError("body_refresh_cross_view_receipt_source_mismatch")
         if self.activation_digest is not None:
             _require_digest(self.activation_digest, "activation digest")
             if self.status != "activated":
@@ -162,6 +180,16 @@ class BodyRefreshAttemptState(V3BaseModel):
             "reviewed_candidate_count": self.reviewed_candidate_count,
             "analyzer_call_count": self.analyzer_call_count,
             "status": self.status,
+            "cross_view_review_receipt_digest": (
+                self.cross_view_review_receipt.receipt_digest
+                if self.cross_view_review_receipt is not None
+                else None
+            ),
+            "cross_view_review_status": (
+                self.cross_view_review_receipt.status
+                if self.cross_view_review_receipt is not None
+                else None
+            ),
             "activation_digest": self.activation_digest,
         }
 
@@ -455,6 +483,47 @@ class BodyRefreshAttemptStateStore:
         self._write(updated)
         return updated
 
+    def record_cross_view_review(
+        self,
+        state: BodyRefreshAttemptState,
+        *,
+        receipt: BodyCrossViewReviewReceipt,
+    ) -> BodyRefreshAttemptState:
+        if not isinstance(receipt, BodyCrossViewReviewReceipt):
+            raise BodyRefreshAttemptStateError("typed cross-view review receipt required")
+        if state.status != "awaiting_cross_view":
+            raise BodyRefreshAttemptStateError("cross-view parity boundary mismatch")
+        try:
+            receipt.require_binding(
+                attempt_id=state.attempt_identity.attempt_id,
+                source_evidence_id_digest=state.body_source_admission.source_evidence_id_digest(),
+                view_output_ids=dict(receipt.view_output_ids),
+            )
+        except Exception as exc:
+            raise BodyRefreshAttemptStateError("cross-view review receipt binding mismatch") from exc
+        for slot_key, output_id in receipt.view_output_ids.items():
+            if not any(
+                checkpoint.slot_key == slot_key and checkpoint.output_id == output_id
+                for checkpoint in state.candidate_checkpoints
+            ):
+                raise BodyRefreshAttemptStateError("cross-view review output checkpoint mismatch")
+        update: dict[str, Any] = {
+            "cross_view_review_receipt": receipt,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        if receipt.activation_eligible:
+            update.update(
+                {
+                    "cross_view_parity_digest": receipt.receipt_digest,
+                    "status": "pending_refresh",
+                }
+            )
+        updated = state.model_copy(
+            update=update
+        )
+        self._write(updated)
+        return updated
+
     def record_cross_view_parity(
         self,
         state: BodyRefreshAttemptState,
@@ -462,17 +531,9 @@ class BodyRefreshAttemptStateStore:
         parity_digest: str,
     ) -> BodyRefreshAttemptState:
         _require_digest(parity_digest, "cross-view parity digest")
-        if state.status != "awaiting_cross_view":
-            raise BodyRefreshAttemptStateError("cross-view parity boundary mismatch")
-        updated = state.model_copy(
-            update={
-                "cross_view_parity_digest": parity_digest,
-                "status": "pending_refresh",
-                "updated_at": datetime.now(UTC).isoformat(),
-            }
+        raise BodyRefreshAttemptStateError(
+            "body refresh cross-view parity requires typed joint review receipt"
         )
-        self._write(updated)
-        return updated
 
     def record_activation(
         self,
@@ -483,8 +544,10 @@ class BodyRefreshAttemptStateStore:
         _require_digest(activation_digest, "activation digest")
         if state.status != "pending_refresh":
             raise BodyRefreshAttemptStateError("body refresh activation boundary mismatch")
-        if state.cross_view_parity_digest is None:
-            raise BodyRefreshAttemptStateError("body refresh activation requires cross-view parity")
+        if state.cross_view_parity_digest is None or state.cross_view_review_receipt is None:
+            raise BodyRefreshAttemptStateError("body refresh activation requires cross-view review receipt")
+        if not state.cross_view_review_receipt.activation_eligible:
+            raise BodyRefreshAttemptStateError("body refresh activation requires passing cross-view review")
         updated = state.model_copy(
             update={
                 "activation_digest": activation_digest,
