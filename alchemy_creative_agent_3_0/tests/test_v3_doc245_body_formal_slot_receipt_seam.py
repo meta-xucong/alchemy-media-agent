@@ -1856,6 +1856,7 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
         "count": 1,
         "api_operation": "image_edit",
         "body_refresh_source_mode": "reference_assisted",
+        "target_age_scope": "age_6_child_only",
         "size_normalization": "white_matte_contain_to_contract_size",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
@@ -2182,6 +2183,7 @@ def _doc245_body_morphology_contract() -> dict[str, object]:
         "profile_digest": canonical(profile),
         "bands_digest": canonical(bands),
         "bands": bands,
+        "target_age_scope": "age_6_child_only",
     }
 
 

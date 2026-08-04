@@ -68,6 +68,7 @@ from ..visual_assets.character_card import (
     SlotAcceptanceCore,
 )
 from ..visual_assets.body_proportion_evidence_profile import BodyRefreshAnalysisContext
+from ..visual_assets.body_proportion_evidence_profile import BODY_REFRESH_REFERENCE_AGE_SCOPE
 from ..visual_assets.contracts import (
     IdentityAnchorPackVersion,
     IdentityScoreSummary,
@@ -1276,6 +1277,7 @@ class ProductApiAnchorPackPreparationHost:
         body_source_admission: dict[str, Any],
         face_reference_output_ids: list[str],
         attempt_identity: BodyRefreshAttemptIdentity,
+        target_age_scope: str = BODY_REFRESH_REFERENCE_AGE_SCOPE,
     ) -> BodyRefreshAnalysisContext:
         """Freeze one resolver/analyzer result before Character Card fan-out."""
 
@@ -1287,6 +1289,7 @@ class ProductApiAnchorPackPreparationHost:
             face_reference_output_ids=list(face_reference_output_ids),
             attempt_id=attempt_identity.attempt_id,
             append_only_revision=attempt_identity.append_only_revision,
+            target_age_scope=target_age_scope,
         )
 
     def prepare_body_refresh_analysis_context_for_refresh(
@@ -1317,6 +1320,8 @@ class ProductApiAnchorPackPreparationHost:
             body_source_admission=admission.model_dump(mode="json"),
             face_reference_output_ids=face_reference_output_ids,
             attempt_identity=attempt_identity,
+            target_age_scope=getattr(request, "target_age_scope", None)
+            or BODY_REFRESH_REFERENCE_AGE_SCOPE,
         )
         if context.source_evidence_id_digest != admission.source_evidence_id_digest():
             raise ValueError("body_refresh_source_admission_digest_mismatch")
@@ -1467,6 +1472,7 @@ class ProductApiAnchorPackPreparationHost:
                 source_class="observed",
                 body_source_admission=body_source_admission,
                 body_refresh_source_mode="reference_assisted",
+                body_refresh_target_age_scope=body_refresh_analysis_context.target_age_scope,
                 body_model_context="similar_person_body_reference_assisted_v1",
                 body_refresh_contract_required=True,
                 body_refresh_presentation_intent=body_refresh_presentation_intent,
@@ -1835,6 +1841,7 @@ class ProductApiAnchorPackPreparationHost:
                 candidate_count=CharacterCardPreparationService.CANDIDATE_COUNT,
                 source_class=request.source_class,
                 body_refresh_source_mode=request.body_refresh_source_mode,
+                body_refresh_target_age_scope=request.body_refresh_target_age_scope,
                 body_model_context=request.body_model_context,
                 body_refresh_contract_required=request.body_refresh_contract_required,
                 body_source_admission=(
@@ -2407,6 +2414,9 @@ class ProductApiAnchorPackPreparationHost:
             "professional_character_card_attempt_round": request.attempt_round,
             "professional_character_card_source_class": request.source_class,
             "professional_character_card_body_refresh_source_mode": request.body_refresh_source_mode,
+            "professional_character_card_body_refresh_target_age_scope": (
+                request.body_refresh_analysis_context.target_age_scope
+            ),
             "professional_character_card_body_model_context": request.body_model_context,
             "professional_character_card_reference_output_ids": list(request.reference_output_ids),
         }
@@ -2433,6 +2443,8 @@ class ProductApiAnchorPackPreparationHost:
             return False
         if contract.get("body_refresh_source_mode") != request.body_refresh_source_mode:
             return False
+        if contract.get("target_age_scope") not in {None, request.body_refresh_analysis_context.target_age_scope}:
+            return False
         # Older submitted handoffs predate these four rendering-contract
         # projections. The durable job request metadata is the authority for
         # a compatibility read, but only when it already passed the exact
@@ -2455,6 +2467,11 @@ class ProductApiAnchorPackPreparationHost:
                 "professional_body_refresh_analysis_context",
                 "professional_body_refresh_analysis_context",
                 request.body_refresh_analysis_context.safe_metadata(),
+            ),
+            (
+                "target_age_scope",
+                "professional_character_card_body_refresh_target_age_scope",
+                request.body_refresh_analysis_context.target_age_scope,
             ),
         ):
             if metadata.get(metadata_key) != expected:

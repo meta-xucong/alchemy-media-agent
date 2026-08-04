@@ -91,6 +91,7 @@ from ..visual_assets import (
     VisualAssetBindingSet,
 )
 from ..visual_assets.body_proportion_evidence_profile import (
+    BODY_REFRESH_REFERENCE_AGE_SCOPE,
     BodyProportionAnalysisError,
     BodyMorphologyEvidenceProfile,
     BodyProportionEvidenceProfile,
@@ -6195,6 +6196,13 @@ class ScenarioRuntime:
         if frozen_context is not None:
             if not isinstance(frozen_context, BodyRefreshAnalysisContext):
                 raise CapabilityActivationError("body_refresh_analysis_context_untrusted")
+            requested_age_scope = str(
+                metadata.get("professional_character_card_body_refresh_target_age_scope") or ""
+            ).strip()
+            if requested_age_scope and requested_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                raise CapabilityActivationError("body_refresh_target_age_scope_mismatch")
+            if frozen_context.target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                raise CapabilityActivationError("body_refresh_target_age_scope_mismatch")
             safe_context = metadata.get("professional_body_refresh_analysis_context")
             if not isinstance(safe_context, dict) or safe_context != frozen_context.safe_metadata():
                 raise CapabilityActivationError("body_proportion_analysis_context_mismatch")
@@ -6205,6 +6213,13 @@ class ScenarioRuntime:
                     raise CapabilityActivationError(str(exc)) from exc
             return frozen_context.profile
         if raw_receipt is not None:
+            requested_age_scope = str(
+                metadata.get("professional_character_card_body_refresh_target_age_scope") or ""
+            ).strip()
+            if requested_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                raise CapabilityActivationError("body_refresh_target_age_scope_mismatch")
+            if context_is_fresh_candidate:
+                raise CapabilityActivationError("body_proportion_analysis_context_missing")
             if not isinstance(
                 raw_receipt,
                 (BodyProportionEvidenceProfile, BodyMorphologyEvidenceProfile),

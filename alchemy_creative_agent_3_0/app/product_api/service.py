@@ -50,6 +50,7 @@ from ..visual_assets import (
 from ..visual_assets.body_silhouette_source_standard import body_silhouette_mcp_materialization_channel_contract
 from ..visual_assets.character_card import BodyRefreshPresentationIntent, BodySourceAdmission
 from ..visual_assets.body_proportion_evidence_profile import (
+    BODY_REFRESH_REFERENCE_AGE_SCOPE,
     BodyRefreshAnalysisContext,
     BodySourceAnalysisAssetEnvelope,
     BodySourceAnalysisProvider,
@@ -1151,6 +1152,7 @@ class V3ProductApiService:
         professional_character_card_reference_output_ids: list[str] | None = None,
         professional_character_card_source_class: str | None = None,
         professional_character_card_body_refresh_source_mode: str | None = None,
+        professional_character_card_body_refresh_target_age_scope: str | None = None,
         professional_character_card_body_model_context: str | None = None,
         professional_character_card_body_refresh_contract_required: bool = False,
         professional_character_card_body_source_admission: dict[str, Any] | None = None,
@@ -1178,6 +1180,18 @@ class V3ProductApiService:
             and professional_character_card_body_refresh_source_mode != "reference_assisted"
         ):
             raise ValueError("body_proportion_analysis_context_source_mode_invalid")
+        if (
+            professional_character_card_body_refresh_target_age_scope is not None
+            and professional_character_card_body_refresh_target_age_scope
+            != BODY_REFRESH_REFERENCE_AGE_SCOPE
+        ):
+            raise ValueError("body_refresh_target_age_scope_mismatch")
+        if (
+            professional_character_card_body_refresh_analysis_context is not None
+            and professional_character_card_body_refresh_analysis_context.target_age_scope
+            != BODY_REFRESH_REFERENCE_AGE_SCOPE
+        ):
+            raise ValueError("body_refresh_target_age_scope_mismatch")
         self._reject_legacy_professional_mode_forward_write(
             create_request,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
@@ -1298,6 +1312,11 @@ class V3ProductApiService:
                         != typed_admission.source_evidence_id_digest()
                     ):
                         raise ValueError("body_refresh_source_admission_digest_mismatch")
+                    if (
+                        professional_character_card_body_refresh_analysis_context.target_age_scope
+                        != BODY_REFRESH_REFERENCE_AGE_SCOPE
+                    ):
+                        raise ValueError("body_refresh_target_age_scope_mismatch")
                 presentation_intent_contract = (
                     self._safe_professional_character_card_body_refresh_presentation_intent(
                         professional_character_card_body_refresh_presentation_intent,
@@ -1337,6 +1356,15 @@ class V3ProductApiService:
                 **(
                     {
                         "professional_body_refresh_analysis_context": professional_character_card_body_refresh_analysis_context.safe_metadata()
+                    }
+                    if professional_character_card_body_refresh_analysis_context is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "professional_character_card_body_refresh_target_age_scope": (
+                            professional_character_card_body_refresh_analysis_context.target_age_scope
+                        )
                     }
                     if professional_character_card_body_refresh_analysis_context is not None
                     else {}
@@ -1585,6 +1613,7 @@ class V3ProductApiService:
         candidate_count: int = 3,
         source_class: str | None = None,
         body_refresh_source_mode: str | None = None,
+        body_refresh_target_age_scope: str | None = None,
         body_model_context: str | None = None,
         body_refresh_contract_required: bool = False,
         body_source_admission: dict[str, Any] | None = None,
@@ -1607,6 +1636,7 @@ class V3ProductApiService:
             professional_character_card_candidate_count=candidate_count,
             professional_character_card_source_class=source_class,
             professional_character_card_body_refresh_source_mode=body_refresh_source_mode,
+            professional_character_card_body_refresh_target_age_scope=body_refresh_target_age_scope,
             professional_character_card_body_model_context=body_model_context,
             professional_character_card_body_refresh_contract_required=body_refresh_contract_required,
             professional_character_card_body_source_admission=body_source_admission,
@@ -2055,8 +2085,12 @@ class V3ProductApiService:
         face_reference_output_ids: list[str],
         attempt_id: str,
         append_only_revision: int,
+        target_age_scope: str = BODY_REFRESH_REFERENCE_AGE_SCOPE,
     ) -> BodyRefreshAnalysisContext:
         """Analyze one server-resolved Body binding before candidate fan-out."""
+
+        if target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+            raise ValueError("body_refresh_target_age_scope_mismatch")
 
         envelopes = self._professional_character_card_body_source_analysis_assets(
             body_source_admission,
@@ -2077,6 +2111,7 @@ class V3ProductApiService:
             append_only_revision=append_only_revision,
             admitted_body_assets=envelopes,
             profile=profile,
+            target_age_scope=target_age_scope,
         )
 
     @staticmethod
@@ -3414,6 +3449,7 @@ class V3ProductApiService:
             "professional_character_card_slot",
             "professional_character_card_source_class",
             "professional_character_card_body_refresh_source_mode",
+            "professional_character_card_body_refresh_target_age_scope",
             "professional_character_card_body_model_context",
             "professional_character_card_body_refresh_contract_required",
             "professional_character_card_body_refresh_presentation_intent",
@@ -4432,6 +4468,12 @@ class V3ProductApiService:
             != "similar_person_body_reference_assisted_v1"
         ):
             raise ValueError("body_refresh_analysis_context_stage_invalid")
+        if metadata.get("professional_character_card_body_refresh_target_age_scope") != (
+            BODY_REFRESH_REFERENCE_AGE_SCOPE
+        ):
+            raise ValueError("body_refresh_target_age_scope_mismatch")
+        if body_refresh_analysis_context.target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+            raise ValueError("body_refresh_target_age_scope_mismatch")
         slot_key = str(metadata.get("professional_character_card_slot") or "").strip()
         if slot_key not in {"body.front_full", "body.side_full", "body.rear_full"}:
             raise ValueError("body_refresh_analysis_context_stage_invalid")
@@ -10668,6 +10710,7 @@ class V3ProductApiService:
             "professional_character_card_candidate_lifecycle_checkpoints",
             "professional_character_card_source_class",
             "professional_character_card_body_refresh_source_mode",
+            "professional_character_card_body_refresh_target_age_scope",
             "professional_character_card_body_model_context",
             "professional_character_card_body_refresh_contract_required",
             "professional_character_card_body_refresh_presentation_intent",
@@ -10692,6 +10735,7 @@ class V3ProductApiService:
             "professional_character_card_face_view_binding",
             "professional_body_proportion_analysis_receipt",
             "professional_body_refresh_analysis_context",
+            "professional_character_card_body_refresh_target_age_scope",
         }
     )
 

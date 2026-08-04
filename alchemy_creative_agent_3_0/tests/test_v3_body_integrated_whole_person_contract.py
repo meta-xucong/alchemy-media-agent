@@ -312,7 +312,10 @@ def test_brain_receives_exact_typed_morphology_bands_with_verified_digest() -> N
             "professional_body_proportion_server_context": {
                 "body_proportion_evidence_profile": payload
             },
-            "professional_body_refresh_analysis_context": {"profile_digest": digest},
+            "professional_body_refresh_analysis_context": {
+                "profile_digest": digest,
+                "target_age_scope": "age_6_child_only",
+            },
         }
     )
 
@@ -321,6 +324,7 @@ def test_brain_receives_exact_typed_morphology_bands_with_verified_digest() -> N
     assert compact == {
         "schema_version": "body_morphology_evidence_profile_v2",
         "profile_digest": digest,
+        "target_age_scope": "age_6_child_only",
         "bands": {
             "relative_head_to_stature": "larger",
             "shoulder_to_head": "narrower",

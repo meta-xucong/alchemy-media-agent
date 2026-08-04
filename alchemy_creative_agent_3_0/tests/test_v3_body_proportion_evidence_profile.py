@@ -145,6 +145,7 @@ def _reference_assisted_metadata() -> dict[str, Any]:
         "professional_character_card_stage": "body_silhouette",
         "professional_character_card_slot": "body.front_full",
         "professional_character_card_body_refresh_source_mode": "reference_assisted",
+        "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
         "professional_character_card_body_model_context": (
             "similar_person_body_reference_assisted_v1"
         ),

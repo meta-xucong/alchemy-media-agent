@@ -165,6 +165,7 @@ def _request_metadata() -> dict[str, Any]:
         "professional_character_card_slot": "body.front_full",
         "professional_character_card_source_class": "observed",
         "professional_character_card_body_refresh_source_mode": "reference_assisted",
+        "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
         "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
         "professional_character_card_reference_output_ids": list(_FACE_IDS),
         "professional_character_card_body_source_admission": admission.model_dump(mode="json"),

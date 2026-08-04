@@ -6399,12 +6399,14 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
         "size_normalization": "white_matte_contain_to_contract_size",
         **_doc203_body_frozen_contract_fields(),
         "body_refresh_source_mode": "reference_assisted",
+        "target_age_scope": "age_6_child_only",
         "body_mcp_reference_partition": body_partition,
         "body_morphology_profile": {
             "schema_version": "body_morphology_evidence_profile_v2",
             "profile_digest": "a" * 64,
             "bands_digest": morphology_digest,
             "bands": morphology_bands,
+            "target_age_scope": "age_6_child_only",
         },
     }
     pending = handoff_store.ensure_pending(
@@ -6437,6 +6439,7 @@ def test_doc263_reference_assisted_submitted_resume_reuses_frozen_physical_face_
         {
             "professional_character_card_source_class": "observed",
             "professional_character_card_body_refresh_source_mode": "reference_assisted",
+            "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
             "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
             "professional_character_card_candidate_index": 3,
             "professional_character_card_candidate_count": 3,

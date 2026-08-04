@@ -6,6 +6,7 @@ import hashlib
 import json
 
 from .contracts import BrainRunRequest
+from ..visual_assets.body_proportion_evidence_profile import BODY_REFRESH_REFERENCE_AGE_SCOPE
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS
 from ..shared_capabilities.visual_cluster.expression_review import LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION
 from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
@@ -575,9 +576,17 @@ def _compact_body_morphology_server_context(
     ).hexdigest()
     if computed_digest != profile_digest:
         raise ValueError("body_proportion_analysis_context_mismatch")
+    if str(safe_context.get("target_age_scope") or "").strip() != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+        raise ValueError("body_refresh_target_age_scope_mismatch")
+    if str(metadata.get("professional_character_card_body_refresh_target_age_scope") or "").strip() not in {
+        "",
+        BODY_REFRESH_REFERENCE_AGE_SCOPE,
+    }:
+        raise ValueError("body_refresh_target_age_scope_mismatch")
     return {
         "schema_version": "body_morphology_evidence_profile_v2",
         "profile_digest": profile_digest,
+        "target_age_scope": BODY_REFRESH_REFERENCE_AGE_SCOPE,
         "bands": {
             field_name: getattr(profile, field_name)
             for field_name in _BODY_MORPHOLOGY_REMOTE_FIELDS

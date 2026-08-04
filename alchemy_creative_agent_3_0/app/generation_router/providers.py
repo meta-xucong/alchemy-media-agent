@@ -42,6 +42,7 @@ from ..visual_assets.character_card import (
     unspecified_body_refresh_presentation_intent,
 )
 from ..visual_assets.body_proportion_evidence_profile import (
+    BODY_REFRESH_REFERENCE_AGE_SCOPE,
     BodyMorphologyEvidenceProfile,
     BodyRefreshAnalysisContext,
     require_current_body_refresh_analysis_context,
@@ -6029,6 +6030,19 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                     )
                 contract["body_refresh_source_mode"] = source_mode
                 if source_mode == "reference_assisted":
+                    safe_context = metadata.get("professional_body_refresh_analysis_context")
+                    if not isinstance(safe_context, dict) or safe_context.get(
+                        "target_age_scope"
+                    ) != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                        raise ReferenceInputAdmissionError(
+                            "Strict Body MCP requires the closed six-year evidence scope.",
+                            provider=self.provider_name,
+                            detail={
+                                "reference_input_failure_code": "body_refresh_target_age_scope_mismatch",
+                                "fallback": "blocked",
+                            },
+                        )
+                    contract["target_age_scope"] = BODY_REFRESH_REFERENCE_AGE_SCOPE
                     contract["body_mcp_reference_partition"] = McpBodyReferencePartition.model_validate(
                         metadata.get("body_mcp_reference_partition")
                     ).model_dump(mode="json")
@@ -6153,6 +6167,15 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                     "fallback": "blocked",
                 },
             ) from exc
+        if current_context.target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+            raise ReferenceInputAdmissionError(
+                "Strict reference-assisted Body MCP requires the six-year evidence scope.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "body_refresh_target_age_scope_mismatch",
+                    "fallback": "blocked",
+                },
+            )
         safe_context = metadata.get("professional_body_refresh_analysis_context")
         if not isinstance(safe_context, dict) or safe_context != current_context.safe_metadata():
             raise ReferenceInputAdmissionError(
@@ -6190,6 +6213,7 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         return {
             "schema_version": "body_morphology_evidence_profile_v2",
             "profile_digest": current_context.profile_digest,
+            "target_age_scope": current_context.target_age_scope,
             "bands_digest": hashlib.sha256(
                 json.dumps(
                     morphology_bands,

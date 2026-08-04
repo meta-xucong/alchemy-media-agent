@@ -257,6 +257,7 @@ def test_library_resume_after_reviewed_candidate_one_starts_candidate_two(
     host.resume_body_silhouette = resume_body_silhouette  # type: ignore[attr-defined]
     request = BodySilhouettePublicRequest(
         source_class="observed",
+        target_age_scope="age_6_child_only",
         body_reference_asset_id=body_asset_ids[0],
         body_reference_asset_ids=body_asset_ids,
     )
@@ -360,6 +361,7 @@ def test_library_resume_rejects_changed_face_reference_chain_before_host(
             visual_asset_id=asset.visual_asset_id,
             body_request=BodySilhouettePublicRequest(
                 source_class="observed",
+                target_age_scope="age_6_child_only",
                 body_reference_asset_id=body_asset_ids[0],
                 body_reference_asset_ids=body_asset_ids,
             ),
@@ -460,6 +462,7 @@ def test_durable_resume_missing_method_or_callback_preserves_private_callbacks(
             visual_asset_id=asset.visual_asset_id,
             body_request=BodySilhouettePublicRequest(
                 source_class="observed",
+                target_age_scope="age_6_child_only",
                 body_reference_asset_id=body_asset_ids[0],
                 body_reference_asset_ids=body_asset_ids,
             ),
@@ -500,6 +503,7 @@ def test_fresh_strict_mcp_missing_callback_fails_before_state_begin(
             visual_asset_id=asset.visual_asset_id,
             body_request=BodySilhouettePublicRequest(
                 source_class="observed",
+                target_age_scope="age_6_child_only",
                 body_reference_asset_id=body_asset_ids[0],
                 body_reference_asset_ids=body_asset_ids,
             ),
@@ -669,6 +673,7 @@ def test_new_host_reconstitutes_front_candidate_and_reaches_formal_receipt(
                 "professional_character_card_candidate_count": 3,
                 "professional_character_card_attempt_round": 1,
                 "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
                 "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
                 "mcp_operation_id": operation_id,
             }
@@ -713,6 +718,7 @@ def test_new_host_reconstitutes_front_candidate_and_reaches_formal_receipt(
         card=asset.character_card,
         request=BodySilhouettePublicRequest(
             source_class="observed",
+            target_age_scope="age_6_child_only",
             body_reference_asset_id=body_asset_ids[0],
             body_reference_asset_ids=body_asset_ids,
         ),
@@ -799,6 +805,7 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
             source_class="observed",
             body_source_admission=admission,
             body_refresh_source_mode="reference_assisted",
+            body_refresh_target_age_scope="age_6_child_only",
             body_model_context="similar_person_body_reference_assisted_v1",
             body_refresh_contract_required=True,
             consent_provenance_id="server-consent-reference",
@@ -848,6 +855,7 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
             "professional_character_card_candidate_count": 3,
             "professional_character_card_attempt_round": 1,
             "professional_character_card_body_refresh_source_mode": "reference_assisted",
+            "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
             "professional_character_card_body_model_context": (
                 "similar_person_body_reference_assisted_v1"
             ),
@@ -994,6 +1002,7 @@ def test_resume_reconstitution_does_not_allocate_prior_records_and_only_current_
         card=asset.character_card,
         request=BodySilhouettePublicRequest(
             source_class="observed",
+            target_age_scope="age_6_child_only",
             body_reference_asset_id=body_asset_ids[0],
             body_reference_asset_ids=body_asset_ids,
         ),
@@ -1096,6 +1105,7 @@ def test_generated_resume_record_uses_result_output_identity_before_review(
         consent_provenance_id="server-consent-reference",
         body_source_admission=admission,
         body_refresh_source_mode="reference_assisted",
+        body_refresh_target_age_scope="age_6_child_only",
         body_model_context="similar_person_body_reference_assisted_v1",
         body_refresh_contract_required=True,
         generation_channel="mcp",
@@ -1177,6 +1187,7 @@ def test_generated_resume_record_uses_result_output_identity_before_review(
                 "professional_character_card_candidate_count": 3,
                 "professional_character_card_attempt_round": 1,
                 "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
                 "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
                 "mcp_operation_id": operation_id,
             }
@@ -1278,6 +1289,7 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
         consent_provenance_id="server-consent-reference",
         body_source_admission=admission,
         body_refresh_source_mode="reference_assisted",
+        body_refresh_target_age_scope="age_6_child_only",
         body_model_context="similar_person_body_reference_assisted_v1",
         body_refresh_contract_required=True,
         generation_channel="mcp",
@@ -1347,6 +1359,7 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
         "professional_character_card_attempt_round": 1,
         "professional_character_card_source_class": "observed",
         "professional_character_card_body_refresh_source_mode": "reference_assisted",
+        "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
         "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
         "professional_character_card_reference_output_ids": list(face_reference_output_ids),
         "professional_body_refresh_analysis_context": context.safe_metadata(),
@@ -1384,6 +1397,7 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
     ).hexdigest()
     rendering_contract = {
         "body_refresh_source_mode": "reference_assisted",
+        "target_age_scope": "age_6_child_only",
         "slot_key": "body.rear_full",
         "candidate_index": 3,
         "candidate_count": 3,
@@ -1391,6 +1405,7 @@ def test_submitted_generated_body_mcp_checkpoint_enters_direct_review_without_pr
         "body_morphology_profile": {
             "schema_version": "body_morphology_evidence_profile_v2",
             "profile_digest": context.profile_digest,
+            "target_age_scope": "age_6_child_only",
         },
         "body_mcp_reference_partition": {
             "body_proportion_reference": {
@@ -1735,6 +1750,7 @@ def test_generated_resume_record_without_output_identity_fails_closed_before_out
         consent_provenance_id="server-consent-reference",
         body_source_admission=admission,
         body_refresh_source_mode="reference_assisted",
+        body_refresh_target_age_scope="age_6_child_only",
         body_model_context="similar_person_body_reference_assisted_v1",
         body_refresh_contract_required=True,
         generation_channel="mcp",
@@ -1852,6 +1868,7 @@ def test_library_resume_passes_pointer_cursor_to_one_host_boundary_without_fanou
     )
     request = BodySilhouettePublicRequest(
         source_class="observed",
+        target_age_scope="age_6_child_only",
         body_reference_asset_id=body_asset_ids[0],
         body_reference_asset_ids=body_asset_ids,
     )
@@ -2015,6 +2032,7 @@ def test_library_resume_reconciles_persisted_formal_receipt_before_host(
         visual_asset_id=asset.visual_asset_id,
         body_request=BodySilhouettePublicRequest(
             source_class="observed",
+            target_age_scope="age_6_child_only",
             body_reference_asset_id=body_asset_ids[0],
             body_reference_asset_ids=body_asset_ids,
         ),
@@ -2084,6 +2102,7 @@ def test_library_marks_formal_receipt_when_later_slot_returns_blocked(
         visual_asset_id=asset.visual_asset_id,
         body_request=BodySilhouettePublicRequest(
             source_class="observed",
+            target_age_scope="age_6_child_only",
             body_reference_asset_id=body_asset_ids[0],
             body_reference_asset_ids=body_asset_ids,
         ),
@@ -2300,6 +2319,7 @@ def test_library_formal_only_resume_reconstitutes_front_and_advances_cursor(
                     "professional_character_card_candidate_count": 3,
                     "professional_character_card_attempt_round": 1,
                     "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                    "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
                     "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
                     "mcp_operation_id": operation_id,
                 }
@@ -2349,6 +2369,7 @@ def test_library_formal_only_resume_reconstitutes_front_and_advances_cursor(
         visual_asset_id=asset.visual_asset_id,
         body_request=BodySilhouettePublicRequest(
             source_class="observed",
+            target_age_scope="age_6_child_only",
             body_reference_asset_id=body_asset_ids[0],
             body_reference_asset_ids=body_asset_ids,
         ),
@@ -2380,6 +2401,7 @@ def test_library_full_review_projects_cross_view_parity_to_pending_refresh(
         visual_asset_id=asset.visual_asset_id,
         body_request=BodySilhouettePublicRequest(
             source_class="observed",
+            target_age_scope="age_6_child_only",
             body_reference_asset_id=body_asset_ids[0],
             body_reference_asset_ids=body_asset_ids,
         ),
@@ -2423,6 +2445,7 @@ def test_library_activate_pending_body_refresh_promotes_formal_winners_without_g
     )
     request = BodySilhouettePublicRequest(
         source_class="observed",
+        target_age_scope="age_6_child_only",
         body_reference_asset_id=body_asset_ids[0],
         body_reference_asset_ids=body_asset_ids,
     )
@@ -2492,6 +2515,7 @@ def test_library_cross_view_failure_does_not_project_pending_refresh(tmp_path: P
         visual_asset_id=asset.visual_asset_id,
         body_request=BodySilhouettePublicRequest(
             source_class="observed",
+            target_age_scope="age_6_child_only",
             body_reference_asset_id=body_asset_ids[0],
             body_reference_asset_ids=body_asset_ids,
         ),
@@ -2663,6 +2687,7 @@ def test_new_host_reconstitution_missing_or_tampered_job_output_fails_closed(
                         "professional_character_card_candidate_count": 3,
                         "professional_character_card_attempt_round": 1,
                         "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                        "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
                         "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
                         "mcp_operation_id": operation_id,
                     }
@@ -2703,6 +2728,7 @@ def test_new_host_reconstitution_missing_or_tampered_job_output_fails_closed(
             card=asset.character_card,
             request=BodySilhouettePublicRequest(
                 source_class="observed",
+                target_age_scope="age_6_child_only",
                 body_reference_asset_id=body_asset_ids[0],
                 body_reference_asset_ids=body_asset_ids,
             ),

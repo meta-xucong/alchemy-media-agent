@@ -39,7 +39,10 @@ from .body_silhouette_source_standard import (
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
 )
-from .body_proportion_evidence_profile import BodyRefreshAnalysisContext
+from .body_proportion_evidence_profile import (
+    BODY_REFRESH_REFERENCE_AGE_SCOPE,
+    BodyRefreshAnalysisContext,
+)
 from .expression_model_card_framing import compose_expression_model_card_enhanced_summary
 
 
@@ -252,6 +255,7 @@ CharacterCardModuleStatus = Literal[
 ]
 BodySourceClass = Literal["observed", "user_described", "brain_inferred"]
 BodyRefreshSourceMode = Literal["reference_assisted", "inference_first"]
+BodyRefreshTargetAgeScope = Literal["age_6_child_only", "current_request_age_owned"]
 BodyRefreshBodyModelContext = Literal[
     "similar_person_body_reference_assisted_v1",
     "system_inferred_body_model_scene_neutral_v1",
@@ -436,6 +440,10 @@ class BodySilhouettePublicRequest(_CharacterCardModel):
     """
 
     source_class: BodySourceClass
+    # The existing five-source observed Body contract is the user-approved
+    # six-year proportion evidence. Other ages must explicitly remain owned by
+    # the current request and therefore cannot consume that profile.
+    target_age_scope: BodyRefreshTargetAgeScope = "current_request_age_owned"
     body_reference_asset_id: str | None = None
     body_reference_asset_ids: list[StrictStr] = Field(default_factory=list)
     body_facts: str | None = Field(default=None, max_length=2000)
@@ -478,6 +486,11 @@ class BodySilhouettePublicRequest(_CharacterCardModel):
 
     @model_validator(mode="after")
     def enforce_source_truth(self) -> "BodySilhouettePublicRequest":
+        if self.target_age_scope not in {
+            BODY_REFRESH_REFERENCE_AGE_SCOPE,
+            "current_request_age_owned",
+        }:
+            raise ValueError("body_refresh_target_age_scope_invalid")
         if self.source_class == "observed":
             if self.body_facts is not None or (
                 not self.body_reference_asset_id and not self.body_reference_asset_ids
@@ -491,9 +504,17 @@ class BodySilhouettePublicRequest(_CharacterCardModel):
                     and self.body_reference_asset_id not in self.body_reference_asset_ids
                 ):
                     raise ValueError("body_reference_asset_primary_mismatch")
+            if self.target_age_scope == BODY_REFRESH_REFERENCE_AGE_SCOPE and len(
+                self.body_reference_asset_ids
+            ) != 5:
+                raise ValueError("body_refresh_target_age_scope_requires_five_sources")
         elif self.source_class == "user_described":
+            if self.target_age_scope == BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                raise ValueError("body_refresh_target_age_scope_requires_observed_reference")
             if self.body_reference_asset_id is not None or self.body_reference_asset_ids or not self.body_facts:
                 raise ValueError("user_described Body Silhouette requires natural-language facts")
+        elif self.target_age_scope == BODY_REFRESH_REFERENCE_AGE_SCOPE:
+            raise ValueError("body_refresh_target_age_scope_requires_observed_reference")
         elif self.body_reference_asset_id is not None or self.body_reference_asset_ids or self.body_facts is not None:
             raise ValueError("brain_inferred Body Silhouette accepts no observed body facts")
         return self
@@ -1107,6 +1128,7 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
     consent_provenance_id: str | None = None
     body_source_admission: BodySourceAdmission | None = None
     body_refresh_source_mode: BodyRefreshSourceMode | None = None
+    body_refresh_target_age_scope: Literal["age_6_child_only"] | None = None
     body_model_context: BodyRefreshBodyModelContext | None = None
     body_refresh_contract_required: StrictBool = False
     body_refresh_presentation_intent: BodyRefreshPresentationIntent | None = None
@@ -1158,6 +1180,8 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("Expression Set does not accept Body analysis context")
             if self.body_refresh_presentation_intent is not None:
                 raise ValueError("Expression Set does not accept body refresh presentation intent")
+            if self.body_refresh_target_age_scope is not None:
+                raise ValueError("Expression Set does not accept Body target age scope")
         else:
             if not self.slot_key.startswith("body."):
                 raise ValueError("Body Silhouette request has an invalid slot")
@@ -1167,6 +1191,8 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                 raise ValueError("Body Silhouette request requires a source class")
             if self.source_class == "observed" and not str(self.consent_provenance_id or "").strip():
                 raise ValueError("observed Body Silhouette request requires consent provenance")
+            if self.body_refresh_target_age_scope is not None and self.body_refresh_source_mode != "reference_assisted":
+                raise ValueError("body_refresh_target_age_scope_source_mode_invalid")
             source_mode_present = self.body_refresh_source_mode is not None or self.body_model_context is not None
             strict_refresh_contract = self.body_refresh_contract_required or source_mode_present
             if self.body_refresh_presentation_intent is not None and not strict_refresh_contract:
@@ -1222,6 +1248,10 @@ class CharacterCardCandidateRequest(_CharacterCardModel):
                     != self.body_source_admission.source_evidence_id_digest()
                 ):
                     raise ValueError("body_refresh_source_admission_digest_mismatch")
+                if self.body_refresh_analysis_context.target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                    raise ValueError("body_refresh_target_age_scope_mismatch")
+                if self.body_refresh_target_age_scope != self.body_refresh_analysis_context.target_age_scope:
+                    raise ValueError("body_refresh_target_age_scope_mismatch")
             elif self.body_refresh_analysis_context is not None:
                 raise ValueError("body_proportion_analysis_context_source_mode_invalid")
         return self
@@ -3160,6 +3190,11 @@ class CharacterCardPreparationService:
                 generation_channel=generation_channel,
                 body_refresh_attempt_identity=body_refresh_attempt_identity,
                 body_refresh_analysis_context=body_refresh_analysis_context,
+                body_refresh_target_age_scope=(
+                    body_refresh_analysis_context.target_age_scope
+                    if body_refresh_analysis_context is not None
+                    else None
+                ),
                 mcp_handoff_id=self._resumable_mcp_handoff_id(
                     card,
                     module=module,

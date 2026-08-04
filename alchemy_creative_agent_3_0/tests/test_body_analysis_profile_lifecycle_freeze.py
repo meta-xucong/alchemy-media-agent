@@ -123,6 +123,9 @@ def _candidate_request(candidate: CharacterCardCandidateRequest) -> SimpleNamesp
             "professional_character_card_body_model_context": (
                 "similar_person_body_reference_assisted_v1"
             ),
+            "professional_character_card_body_refresh_target_age_scope": (
+                candidate.body_refresh_target_age_scope
+            ),
             "professional_character_card_candidate_index": candidate.candidate_index,
             "professional_body_refresh_analysis_context": (
                 candidate.body_refresh_analysis_context.safe_metadata()
@@ -269,6 +272,9 @@ def _candidate_contract_kwargs(
         if source_class == "observed"
         else None,
         "body_refresh_source_mode": source_mode,
+        "body_refresh_target_age_scope": (
+            "age_6_child_only" if source_mode == "reference_assisted" else None
+        ),
         "body_model_context": (
             "similar_person_body_reference_assisted_v1"
             if source_mode == "reference_assisted"
@@ -285,6 +291,34 @@ def test_reference_assisted_body_candidate_requires_frozen_context() -> None:
     attempt, _context = _profile_context()
     with pytest.raises(ValueError, match="body_proportion_analysis_context_missing"):
         CharacterCardCandidateRequest(**_candidate_contract_kwargs(attempt=attempt))
+
+
+def test_six_year_profile_cannot_be_used_by_current_request_owned_age_candidate() -> None:
+    attempt, context = _profile_context()
+    kwargs = _candidate_contract_kwargs(attempt=attempt, context=context)
+    kwargs["body_refresh_target_age_scope"] = None
+    with pytest.raises(ValueError, match="body_refresh_target_age_scope_mismatch"):
+        CharacterCardCandidateRequest(**kwargs)
+
+
+def test_runtime_rejects_frozen_profile_when_request_owns_a_different_age() -> None:
+    _attempt, context = _profile_context()
+    runtime = ScenarioRuntime()
+    metadata = {
+        "professional_mode": True,
+        "professional_character_card_preparation": True,
+        "professional_character_card_stage": "body_silhouette",
+        "professional_character_card_slot": "body.front_full",
+        "professional_character_card_candidate_index": 1,
+        "professional_character_card_body_refresh_source_mode": "reference_assisted",
+        "professional_character_card_body_refresh_target_age_scope": "current_request_age_owned",
+        "professional_body_refresh_analysis_context": context.safe_metadata(),
+    }
+    with pytest.raises(Exception, match="body_refresh_target_age_scope_mismatch"):
+        runtime._body_proportion_profile_for_brain(  # noqa: SLF001
+            SimpleNamespace(metadata=metadata, body_refresh_analysis_context=context),
+            stage="plan",
+        )
 
 
 def test_public_dict_context_and_wrong_attempt_are_rejected() -> None:
@@ -382,6 +416,8 @@ def test_safe_refresh_context_has_no_raw_source_or_provider_fields() -> None:
         "source_binding_digest",
         "source_evidence_id_digest",
         "profile_digest",
+        "target_age_scope",
+        "target_age_scope_digest",
     }
     assert all(
         not any(marker in str(value).lower() for marker in ("path", "url", "base64", "provider_id"))
@@ -560,6 +596,7 @@ def test_visual_asset_library_entry_owns_one_analysis_before_nine_candidate_fano
         visual_asset_id=lifecycle.catalog._assets[("owner", next(iter(lifecycle.catalog._assets))[1])].visual_asset_id,
         body_request=BodySilhouettePublicRequest(
             source_class="observed",
+            target_age_scope="age_6_child_only",
             body_reference_asset_id=body_asset_ids[0],
             body_reference_asset_ids=body_asset_ids,
         ),
@@ -623,6 +660,7 @@ def test_product_api_stage_job_delivers_typed_context_to_plan_and_persists_only_
         face_reference_output_ids=face_ids,
         attempt_id=attempt.attempt_id,
         append_only_revision=attempt.append_only_revision,
+        target_age_scope="age_6_child_only",
     )
     runtime = service.scenario_runtime
     plan_payloads: list[Any] = []
@@ -693,6 +731,7 @@ def test_anchor_product_api_generation_delivers_same_ephemeral_context_to_genera
             ],
             "professional_character_card_source_class": "observed",
             "professional_character_card_body_refresh_source_mode": "reference_assisted",
+            "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
             "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
             "professional_character_card_body_source_admission": admission,
             "professional_body_refresh_analysis_context": context.safe_metadata(),
@@ -762,6 +801,7 @@ def test_product_api_generation_context_digest_mismatch_fails_before_runtime(
                     "professional_character_card_candidate_count": 3,
                     "professional_character_card_source_class": "observed",
                     "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                    "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
                     "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
                     "professional_character_card_reference_output_ids": [
                         "face.front",
@@ -812,6 +852,21 @@ def test_public_create_route_cannot_forge_body_refresh_context() -> None:
         )
 
 
+def test_public_create_route_cannot_forge_body_refresh_target_age_scope() -> None:
+    service = V3ProductApiService()
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_creative_job(
+            {
+                "user_input": "forged Body age scope",
+                "metadata": {
+                    "professional_character_card_body_refresh_target_age_scope": (
+                        "age_6_child_only"
+                    )
+                },
+            }
+        )
+
+
 def test_visual_asset_library_rejects_caller_supplied_typed_context(tmp_path: Path) -> None:
     lifecycle, _host, _service, body_asset_ids, _analyzer = _library_refresh_fixture(tmp_path=tmp_path)
     _attempt, forged_context = _profile_context()
@@ -822,6 +877,7 @@ def test_visual_asset_library_rejects_caller_supplied_typed_context(tmp_path: Pa
             visual_asset_id=visual_asset_id,
             body_request=BodySilhouettePublicRequest(
                 source_class="observed",
+                target_age_scope="age_6_child_only",
                 body_reference_asset_id=body_asset_ids[0],
                 body_reference_asset_ids=body_asset_ids,
             ),

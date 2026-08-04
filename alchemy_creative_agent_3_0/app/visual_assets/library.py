@@ -55,7 +55,10 @@ from .formal_slot_acceptance import (
     mark_formal_slot_receipt_reload_public_projection_verified,
     validate_formal_slot_receipt_for_activation,
 )
-from .body_proportion_evidence_profile import BodyRefreshAnalysisContext
+from .body_proportion_evidence_profile import (
+    BODY_REFRESH_REFERENCE_AGE_SCOPE,
+    BodyRefreshAnalysisContext,
+)
 from .body_refresh_attempt_state import (
     BodyRefreshAttemptState,
     BodyRefreshAttemptStateError,
@@ -1188,6 +1191,8 @@ class VisualAssetLibraryLifecycleService:
         if generation_channel == "mcp":
             method_kwargs["generation_channel"] = "mcp"
         if generation_channel == "mcp" and body_request.source_class == "observed":
+            if body_request.target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                raise ValueError("body_refresh_target_age_scope_mismatch")
             if len(body_request.body_reference_asset_ids) != 5:
                 raise ValueError("body_refresh_source_admission_five_sources_required")
             if (
@@ -1367,6 +1372,8 @@ class VisualAssetLibraryLifecycleService:
 
         if generation_channel != "mcp" or body_request.source_class != "observed":
             raise BodyRefreshAttemptStateError("body refresh durable resume requires observed MCP")
+        if body_request.target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+            raise BodyRefreshAttemptStateError("body_refresh_target_age_scope_mismatch")
         state = self.body_refresh_attempt_state_store.load_current(visual_asset_id=visual_asset_id)
         requested_ids = list(body_request.body_reference_asset_ids or [])
         if requested_ids != list(state.body_source_admission.body_evidence_ids):

@@ -240,6 +240,7 @@ class V3ProductRouteHandlers:
                 "resume",
                 "generation_channel",
                 "source_class",
+                "target_age_scope",
                 "body_reference_asset_id",
                 "body_reference_asset_ids",
                 "body_facts",

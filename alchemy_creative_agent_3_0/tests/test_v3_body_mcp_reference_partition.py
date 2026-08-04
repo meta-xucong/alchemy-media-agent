@@ -197,6 +197,7 @@ def _morphology_contract() -> dict[str, object]:
         "profile_digest": canonical(profile_payload),
         "bands_digest": canonical(bands),
         "bands": bands,
+        "target_age_scope": "age_6_child_only",
     }
 
 
@@ -221,6 +222,7 @@ def _current_body_context(body_assets: list[dict]) -> BodyRefreshAnalysisContext
         append_only_revision=1,
         admitted_body_assets=envelopes,
         profile=profile,
+        target_age_scope="age_6_child_only",
     )
 
 
@@ -286,6 +288,7 @@ def test_mcp_body_handoff_public_view_preserves_typed_body_face_partition(tmp_pa
         "count": 1,
         "api_operation": "image_edit",
         "body_refresh_source_mode": "reference_assisted",
+        "target_age_scope": "age_6_child_only",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),
@@ -866,6 +869,7 @@ def test_strict_body_handoff_missing_partition_fails_closed() -> None:
         "count": 1,
         "api_operation": "image_edit",
         "body_refresh_source_mode": "reference_assisted",
+        "target_age_scope": "age_6_child_only",
         "body_silhouette_mcp_materialization_channel_contract": (
             body_silhouette_mcp_materialization_channel_contract()
         ),

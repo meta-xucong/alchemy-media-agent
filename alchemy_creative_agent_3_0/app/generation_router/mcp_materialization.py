@@ -30,7 +30,10 @@ from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_prompt_findings,
     body_silhouette_integrated_whole_person_synthesis_contract,
 )
-from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
+from ..visual_assets.body_proportion_evidence_profile import (
+    BODY_REFRESH_REFERENCE_AGE_SCOPE,
+    BodyMorphologyEvidenceProfile,
+)
 from ..visual_assets.character_card import (
     BodySilhouetteBackdropPresentationContract,
     BodySilhouetteHairContinuityContract,
@@ -147,6 +150,10 @@ def _build_body_renderer_execution_directive(
         )
     morphology = rendering_contract.get("body_morphology_profile")
     if rendering_contract.get("body_refresh_source_mode") == "reference_assisted":
+        if rendering_contract.get("target_age_scope") != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+            raise McpMaterializationError(
+                "mcp_materialization_body_refresh_target_age_scope_invalid"
+            )
         if not isinstance(morphology, dict):
             raise McpMaterializationError(
                 "mcp_materialization_body_morphology_profile_missing"
@@ -172,6 +179,8 @@ def _build_body_renderer_execution_directive(
             bands_digest = _canonical_json_sha256(bands)
             if morphology.get("bands_digest") != bands_digest:
                 raise ValueError("bands digest")
+            if morphology.get("target_age_scope") != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                raise ValueError("target age scope")
         except Exception as exc:
             raise McpMaterializationError(
                 "mcp_materialization_body_morphology_profile_invalid"
@@ -187,6 +196,7 @@ def _build_body_renderer_execution_directive(
         "rendering_contract_fingerprint": str(rendering_contract_fingerprint),
         "nonce_sha256": _sha256(str(nonce).encode("utf-8")),
         "source_mode": rendering_contract.get("body_refresh_source_mode"),
+        "target_age_scope": rendering_contract.get("target_age_scope"),
         "physical_reference_policy": "face_identity_only",
         "presentation": {
             "top": intent.get("top_presentation"),
@@ -1291,6 +1301,19 @@ class McpMaterializationHandoffStore:
             # do not emit intent, Body truth, or other strict fields.
             return safe
         safe["body_refresh_source_mode"] = raw_source_mode
+        raw_target_age_scope = raw.get("target_age_scope")
+        if raw_source_mode == "reference_assisted":
+            if raw_target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "body_refresh_target_age_scope_invalid"},
+                )
+            safe["target_age_scope"] = BODY_REFRESH_REFERENCE_AGE_SCOPE
+        elif raw_target_age_scope is not None:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_refresh_target_age_scope_forbidden_for_inference"},
+            )
 
         identity_contract = {
             "slot_key": raw.get("slot_key"),
@@ -1334,6 +1357,8 @@ class McpMaterializationHandoffStore:
                     "source_binding_digest",
                     "source_evidence_id_digest",
                     "profile_digest",
+                    "target_age_scope",
+                    "target_age_scope_digest",
                 }
                 if (
                     type(raw_context) is not dict
@@ -1341,6 +1366,7 @@ class McpMaterializationHandoffStore:
                     or raw_context.get("contract_version") != "body_refresh_analysis_context_v2"
                     or raw_context.get("schema_version") != "body_morphology_evidence_profile_v2"
                     or raw_context.get("source_mode") != raw_source_mode
+                    or raw_context.get("target_age_scope") != BODY_REFRESH_REFERENCE_AGE_SCOPE
                     or type(raw_context.get("append_only_revision")) is not int
                     or raw_context.get("append_only_revision") < 1
                     or any(
@@ -1349,6 +1375,14 @@ class McpMaterializationHandoffStore:
                         or any(char not in "0123456789abcdef" for char in str(raw_context.get(key)).lower())
                         for key in ("source_binding_digest", "source_evidence_id_digest", "profile_digest")
                     )
+                    or type(raw_context.get("target_age_scope_digest")) is not str
+                    or len(str(raw_context.get("target_age_scope_digest"))) != 64
+                    or any(
+                        char not in "0123456789abcdef"
+                        for char in str(raw_context.get("target_age_scope_digest")).lower()
+                    )
+                    or raw_context.get("target_age_scope_digest")
+                    != hashlib.sha256(BODY_REFRESH_REFERENCE_AGE_SCOPE.encode("utf-8")).hexdigest()
                 ):
                     raise McpMaterializationError(
                         "mcp_materialization_body_rendering_contract_invalid",
@@ -1421,10 +1455,13 @@ class McpMaterializationHandoffStore:
                         "profile_digest",
                         "bands_digest",
                         "bands",
+                        "target_age_scope",
                     }:
                         raise ValueError("morphology fields")
                     if raw_morphology["schema_version"] != "body_morphology_evidence_profile_v2":
                         raise ValueError("morphology version")
+                    if raw_morphology["target_age_scope"] != BODY_REFRESH_REFERENCE_AGE_SCOPE:
+                        raise ValueError("morphology target age scope")
                     digest = raw_morphology["profile_digest"]
                     if (
                         type(digest) is not str
@@ -1460,6 +1497,7 @@ class McpMaterializationHandoffStore:
                         "profile_digest": digest.lower(),
                         "bands_digest": bands_digest.lower(),
                         "bands": dict(bands),
+                        "target_age_scope": BODY_REFRESH_REFERENCE_AGE_SCOPE,
                     }
                 except Exception:
                     raise McpMaterializationError(

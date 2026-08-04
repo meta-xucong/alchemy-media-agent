@@ -26,6 +26,7 @@ class BodyProportionAnalysisError(ValueError):
 
 
 BODY_REFRESH_ANALYSIS_CONTEXT_SCHEMA_VERSION = "body_refresh_analysis_context_v2"
+BODY_REFRESH_REFERENCE_AGE_SCOPE = "age_6_child_only"
 
 
 _CLOSED_ANALYSIS_ERROR_CODES = frozenset(
@@ -1241,6 +1242,8 @@ class BodyRefreshAnalysisContext(V3BaseModel):
     source_binding_digest: StrictStr
     source_evidence_id_digest: StrictStr
     profile_digest: StrictStr
+    target_age_scope: Literal["age_6_child_only"]
+    target_age_scope_digest: StrictStr
     profile: BodyProportionEvidenceProfile | BodyMorphologyEvidenceProfile
 
     @field_validator("attempt_id")
@@ -1260,7 +1263,12 @@ class BodyRefreshAnalysisContext(V3BaseModel):
             raise ValueError("body_refresh_analysis_revision_invalid")
         return value
 
-    @field_validator("source_binding_digest", "source_evidence_id_digest", "profile_digest")
+    @field_validator(
+        "source_binding_digest",
+        "source_evidence_id_digest",
+        "profile_digest",
+        "target_age_scope_digest",
+    )
     @classmethod
     def require_sha256_digest(cls, value: str) -> str:
         cleaned = value.strip().lower()
@@ -1294,6 +1302,11 @@ class BodyRefreshAnalysisContext(V3BaseModel):
         ).hexdigest()
         if self.profile_digest != expected_profile_digest:
             raise ValueError("body_refresh_analysis_profile_digest_mismatch")
+        expected_target_age_scope_digest = hashlib.sha256(
+            self.target_age_scope.encode("utf-8")
+        ).hexdigest()
+        if self.target_age_scope_digest != expected_target_age_scope_digest:
+            raise ValueError("body_refresh_analysis_target_age_scope_digest_mismatch")
         return self
 
     @classmethod
@@ -1304,6 +1317,7 @@ class BodyRefreshAnalysisContext(V3BaseModel):
         append_only_revision: int,
         admitted_body_assets: Sequence[BodySourceAnalysisAssetEnvelope],
         profile: BodyProportionEvidenceProfile | BodyMorphologyEvidenceProfile,
+        target_age_scope: str = BODY_REFRESH_REFERENCE_AGE_SCOPE,
     ) -> "BodyRefreshAnalysisContext":
         if len(admitted_body_assets) != 5:
             raise ValueError("body_refresh_analysis_source_count_invalid")
@@ -1325,6 +1339,9 @@ class BodyRefreshAnalysisContext(V3BaseModel):
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
+        target_age_scope_digest = hashlib.sha256(
+            target_age_scope.encode("utf-8")
+        ).hexdigest()
         is_morphology_v2 = isinstance(profile, BodyMorphologyEvidenceProfile)
         return cls(
             contract_version=(
@@ -1343,6 +1360,8 @@ class BodyRefreshAnalysisContext(V3BaseModel):
             source_binding_digest=source_binding_digest,
             source_evidence_id_digest=source_evidence_id_digest,
             profile_digest=profile_digest,
+            target_age_scope=target_age_scope,
+            target_age_scope_digest=target_age_scope_digest,
             profile=profile,
         )
 
@@ -1358,6 +1377,8 @@ class BodyRefreshAnalysisContext(V3BaseModel):
             "source_binding_digest": self.source_binding_digest,
             "source_evidence_id_digest": self.source_evidence_id_digest,
             "profile_digest": self.profile_digest,
+            "target_age_scope": self.target_age_scope,
+            "target_age_scope_digest": self.target_age_scope_digest,
         }
 
 
@@ -1380,6 +1401,7 @@ def require_current_body_refresh_analysis_context(
         context.contract_version != "body_refresh_analysis_context_v2"
         or context.schema_version != "body_morphology_evidence_profile_v2"
         or not isinstance(context.profile, BodyMorphologyEvidenceProfile)
+        or context.target_age_scope != BODY_REFRESH_REFERENCE_AGE_SCOPE
     ):
         raise ValueError("body_refresh_analysis_context_superseded")
     return context
