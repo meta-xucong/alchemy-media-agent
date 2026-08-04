@@ -3499,9 +3499,14 @@ def test_doc263_existing_generated_body_resume_missing_artifact_is_closed_withou
     assert len(output_store.list_by_job(job_id)) == 0
 
 
-def test_doc263_generating_body_resume_reconciles_submitted_handoff_before_consumer(
+@pytest.mark.parametrize(
+    "initial_status",
+    [ProductJobStatusValue.GENERATING, ProductJobStatusValue.BLOCKED],
+)
+def test_doc263_body_resume_reconciles_submitted_handoff_before_consumer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    initial_status: ProductJobStatusValue,
 ) -> None:
     """A submitted handoff must reconcile the job projection before the GENERATING guard."""
 
@@ -3583,7 +3588,7 @@ def test_doc263_generating_body_resume_reconciles_submitted_handoff_before_consu
             user_input="pending submitted Body handoff projection",
             metadata={**planning_metadata, "project_id": "project_doc263_pending_projection"},
         ),
-        status=ProductJobStatusValue.GENERATING,
+        status=initial_status,
         job_id_value=job_id,
         planning_result=_minimal_planning_result(job_id, generation_metadata=planning_metadata),
         generation_result=None,

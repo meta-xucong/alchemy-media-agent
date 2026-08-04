@@ -2587,7 +2587,7 @@ class V3ProductApiService:
             )
         submitted_body_resume_projection = False
         if (
-            record.status == ProductJobStatusValue.GENERATING
+            record.status in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.GENERATING}
             and not worker_claim
             and resume_finalizing_review
         ):
@@ -3259,7 +3259,7 @@ class V3ProductApiService:
         mismatches remain on the existing guard path.
         """
 
-        if record.status != ProductJobStatusValue.GENERATING:
+        if record.status not in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.GENERATING}:
             return False
         if record.generation_result is not None or record.planning_result is None:
             return False
