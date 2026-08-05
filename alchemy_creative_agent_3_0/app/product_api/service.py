@@ -2567,10 +2567,21 @@ class V3ProductApiService:
             if resume_finalizing_review:
                 self._project_review_resume_runtime_metadata(record, generate_request)
                 if self._is_professional_character_card_body_mcp_generation(record):
-                    try:
-                        self._ensure_submitted_body_mcp_projection_for_existing_result(record)
-                    except Exception as exc:
-                        return self._blocked_existing_submitted_body_mcp_projection(record, exc)
+                    materialization = record.request.metadata.get("mcp_materialization")
+                    materialization_status = (
+                        str(materialization.get("status") or "").strip()
+                        if isinstance(materialization, dict)
+                        else ""
+                    )
+                    # A checkpointed result already owns a durable artifact.
+                    # Its handoff/checkpoint identity is reconciled by the
+                    # review-resume projection below; only legacy submitted
+                    # results need the submit-time artifact projection.
+                    if materialization_status not in {"job_checkpointed", "output_checkpointed"}:
+                        try:
+                            self._ensure_submitted_body_mcp_projection_for_existing_result(record)
+                        except Exception as exc:
+                            return self._blocked_existing_submitted_body_mcp_projection(record, exc)
                 return self._resume_finalizing_generation_review(
                     record,
                     generate_request,
