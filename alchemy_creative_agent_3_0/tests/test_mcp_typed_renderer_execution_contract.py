@@ -253,11 +253,16 @@ def test_reference_assisted_body_renderer_enforces_age6_natural_single_person_an
     assert "do not elongate the legs" in renderer_prompt
     assert "same compact stature, body depth, shoulder width, and limb scale" in renderer_prompt
     assert "front view must look like one naturally photographed whole person" in renderer_prompt
-    assert "visible pasted-head seam" in renderer_prompt
-    assert "use face identity references as identity guidance, not as a face transplant" in renderer_prompt
+    assert "use face identity references as identity guidance for facial structure and hair continuity" in renderer_prompt
     assert "generate the face, head, neck, shoulders, torso, arms, legs, skin tone, and lighting as one continuous subject" in renderer_prompt
+    assert "smooth natural transition through the neck and shoulders" in renderer_prompt
+    assert "coherent skin texture, consistent lighting, and natural anatomical transitions" in renderer_prompt
     assert "same body envelope across views" in renderer_prompt
     assert "do not make side or rear views taller, thinner, older, or differently built than the front" in renderer_prompt
+    assert "face transplant" not in renderer_prompt
+    assert "pasted face" not in renderer_prompt
+    assert "head swap" not in renderer_prompt
+    assert "pasted-head" not in renderer_prompt
 
 
 def test_inference_first_body_renderer_does_not_inherit_age6_child_semantics(tmp_path) -> None:
