@@ -2473,7 +2473,10 @@ class ProductApiAnchorPackPreparationHost:
                     handoff_status = str(
                         handoff_payload.get("status") or materialization.get("status") or ""
                     ).strip().lower()
-                    if handoff_status == "pending":
+                    if (
+                        handoff_status in {"pending", "failed"}
+                        and getattr(record, "generation_result", None) is None
+                    ):
                         continue
                     raise AnchorCandidateUnavailable(
                         "mcp_materialization_reference_mismatch",

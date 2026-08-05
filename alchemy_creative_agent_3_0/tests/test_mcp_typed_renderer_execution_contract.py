@@ -263,6 +263,69 @@ def test_body_orphan_recovery_skips_stale_renderer_revision(
     assert host._character_card_mcp_handoff_current(request, current) is True  # noqa: SLF001
 
 
+def test_body_resume_skips_stale_failed_handoff_without_generated_pixels() -> None:
+    operation_id = "visual_asset_renderer_contract:body_silhouette:body.front_full:3"
+    failed_record = SimpleNamespace(
+        job_id="job_body_stale_failed_handoff",
+        planning_result=object(),
+        generation_result=None,
+        request=SimpleNamespace(
+            metadata={
+                "professional_character_card_preparation": True,
+                "professional_character_card_stage": "body_silhouette",
+                "professional_character_card_slot": "body.front_full",
+                "professional_character_card_reference_output_ids": ["face_front"],
+                "generation_channel": "mcp",
+                "mcp_operation_id": operation_id,
+                "mcp_materialization": {
+                    "handoff_id": "mcp_handoff_body_stale_failed",
+                    "status": "failed",
+                    "generation_channel": "mcp",
+                    "resume_required": True,
+                },
+            }
+        ),
+    )
+
+    class _Store:
+        def get_mcp_operation_records(self, _operation_id):  # noqa: ANN001, ANN201
+            return [failed_record]
+
+        def get(self, handoff_id):  # noqa: ANN001, ANN201
+            return {
+                "handoff_id": handoff_id,
+                "status": "failed",
+                "canonical_prompt": "current Body prompt",
+            }
+
+    class _Service:
+        visual_asset_catalog = None
+
+        def __init__(self) -> None:
+            self.job_store = _Store()
+            self.mcp_materialization_store = _Store()
+
+    request = SimpleNamespace(
+        module="body_silhouette",
+        generation_channel="mcp",
+        body_refresh_source_mode="reference_assisted",
+        body_refresh_contract_required=True,
+        slot_key="body.front_full",
+        reference_output_ids=["face_front"],
+        mcp_handoff_id=None,
+        review_only_resume=False,
+    )
+    host = ProductApiAnchorPackPreparationHost(_Service())
+    host._character_card_mcp_handoff_current = lambda *_args: False  # noqa: SLF001
+
+    resume = host._mcp_resume_character_card_stage_job_record(  # noqa: SLF001
+        request,
+        operation_id,
+    )
+
+    assert resume is None
+
+
 def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_or_raw_fields(tmp_path) -> None:
     store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
     handoff = _ensure(store)
