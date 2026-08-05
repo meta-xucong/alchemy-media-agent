@@ -8,6 +8,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
+import alchemy_creative_agent_3_0.app.generation_router.mcp_materialization as mcp_materialization_module
 from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
     McpMaterializationError,
     McpMaterializationHandoffStore,
@@ -170,6 +171,42 @@ def test_strict_body_public_view_exposes_closed_renderer_directive_without_chang
     assert directive["physical_reference_policy"] == "face_identity_only"
     assert directive["materialization_prompt"]
     assert directive["directive_sha256"]
+
+
+def test_pending_body_handoff_with_stale_renderer_directive_gets_new_revision(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
+    original_builder = mcp_materialization_module._build_body_renderer_execution_directive
+
+    def legacy_builder(**kwargs):
+        directive = original_builder(**kwargs)
+        directive["materialization_prompt"] += " Legacy compatibility wording."
+        directive["directive_sha256"] = mcp_materialization_module._canonical_json_sha256(directive)
+        return directive
+
+    monkeypatch.setattr(
+        mcp_materialization_module,
+        "_build_body_renderer_execution_directive",
+        legacy_builder,
+    )
+    stale = _ensure(store)
+
+    monkeypatch.setattr(
+        mcp_materialization_module,
+        "_build_body_renderer_execution_directive",
+        original_builder,
+    )
+    current = _ensure(store)
+
+    assert stale["status"] == "pending"
+    assert current["status"] == "pending"
+    assert current["revision"] == 2
+    assert current["handoff_id"] != stale["handoff_id"]
+    assert "Legacy compatibility wording" not in store.public_renderer_request(
+        current["handoff_id"]
+    )["renderer_prompt"]
 
 
 def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_or_raw_fields(tmp_path) -> None:

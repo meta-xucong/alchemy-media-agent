@@ -580,7 +580,19 @@ class McpMaterializationHandoffStore:
                 path = self._record_path(handoff_id)
                 existing = self._read(handoff_id)
                 if existing is not None:
-                    self._validated_renderer_execution_directive(existing)
+                    existing_status = str(existing.get("status") or "").strip().lower()
+                    try:
+                        self._validated_renderer_execution_directive(existing)
+                    except McpMaterializationError as exc:
+                        if (
+                            existing_status == "pending"
+                            and exc.code == "mcp_materialization_renderer_execution_directive_mismatch"
+                        ):
+                            # A pending handoff may outlive a renderer contract
+                            # update. Preserve it append-only, but never reuse
+                            # its stale execution directive for a new attempt.
+                            continue
+                        raise
                     if str(existing.get("prompt_sha256") or "") != prompt_hash:
                         raise McpMaterializationError("mcp_materialization_prompt_mismatch")
                     if existing.get("reference_asset_hashes") != hashes:
@@ -594,7 +606,6 @@ class McpMaterializationHandoffStore:
                         bool(existing_rendering_fingerprint)
                         and existing_rendering_fingerprint != rendering_fingerprint
                     )
-                    existing_status = str(existing.get("status") or "").strip().lower()
                     if contract_mismatch:
                         if existing_status == "pending":
                             continue
