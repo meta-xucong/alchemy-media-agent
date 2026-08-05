@@ -2552,6 +2552,7 @@ class V3ProductApiService:
             if checkpoint_status is not None:
                 return checkpoint_status
             if resume_finalizing_review:
+                self._project_review_resume_runtime_metadata(record, generate_request)
                 return self._resume_finalizing_generation_review(
                     record,
                     generate_request,
@@ -2564,6 +2565,7 @@ class V3ProductApiService:
             and record.generation_result is not None
         ):
             if resume_finalizing_review:
+                self._project_review_resume_runtime_metadata(record, generate_request)
                 if self._is_professional_character_card_body_mcp_generation(record):
                     try:
                         self._ensure_submitted_body_mcp_projection_for_existing_result(record)
@@ -4736,6 +4738,33 @@ class V3ProductApiService:
         ):
             cleaned.pop(key, None)
         return cleaned
+
+    @staticmethod
+    def _project_review_resume_runtime_metadata(
+        record: ProductJobRecord,
+        generate_request: GenerateJobRequest,
+    ) -> None:
+        """Carry one bounded review-runtime option into an existing job.
+
+        Review-only resumes take an early branch before the normal generation
+        metadata merge.  Keep the projection intentionally narrow: timeout is
+        an operational review setting, while prompts, references, routes, and
+        review contracts remain owned by the durable generation result.
+        """
+
+        raw_timeout = (generate_request.metadata or {}).get("vision_inspection_timeout_seconds")
+        if raw_timeout is None:
+            return
+        try:
+            timeout = float(raw_timeout)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(timeout) or not 0.05 <= timeout <= 300.0:
+            return
+        record.request.metadata = {
+            **dict(record.request.metadata or {}),
+            "vision_inspection_timeout_seconds": timeout,
+        }
 
     @staticmethod
     def _product_api_runtime_failure_from_exception(exc: Exception) -> dict[str, Any]:
