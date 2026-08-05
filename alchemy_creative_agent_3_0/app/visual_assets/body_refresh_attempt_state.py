@@ -98,11 +98,14 @@ class BodyRefreshAttemptState(V3BaseModel):
         "awaiting_cross_view",
         "pending_refresh",
         "activated",
+        "superseded",
     ] = "in_progress"
     formal_receipt_digests: tuple[StrictStr, ...] = ()
     cross_view_parity_digest: StrictStr | None = None
     cross_view_review_receipt: BodyCrossViewReviewReceipt | None = None
     activation_digest: StrictStr | None = None
+    supersession_code: StrictStr | None = None
+    superseded_at: StrictStr | None = None
     updated_at: StrictStr
 
     @model_validator(mode="after")
@@ -157,6 +160,13 @@ class BodyRefreshAttemptState(V3BaseModel):
                 raise ValueError("body_refresh_attempt_state_activation_status_invalid")
         if self.status == "activated" and self.activation_digest is None:
             raise ValueError("body_refresh_attempt_state_activation_digest_required")
+        if self.status == "superseded":
+            if self.next_slot_key is not None or self.next_candidate_index is not None:
+                raise ValueError("body_refresh_superseded_cursor_must_be_empty")
+            if not self.supersession_code or not self.superseded_at:
+                raise ValueError("body_refresh_supersession_receipt_required")
+        elif self.supersession_code is not None or self.superseded_at is not None:
+            raise ValueError("body_refresh_supersession_status_mismatch")
         return self
 
     @property
@@ -180,6 +190,7 @@ class BodyRefreshAttemptState(V3BaseModel):
             "reviewed_candidate_count": self.reviewed_candidate_count,
             "analyzer_call_count": self.analyzer_call_count,
             "status": self.status,
+            "supersession_code": self.supersession_code,
             "cross_view_review_receipt_digest": (
                 self.cross_view_review_receipt.receipt_digest
                 if self.cross_view_review_receipt is not None
@@ -295,6 +306,40 @@ class BodyRefreshAttemptStateStore:
         )
         self._write(state)
         return state
+
+    def supersede(
+        self,
+        state: BodyRefreshAttemptState,
+        *,
+        reason_code: str,
+    ) -> BodyRefreshAttemptState:
+        """Close an unrecoverable attempt without claiming completion.
+
+        The frozen profile, source admission, and reviewed candidate
+        checkpoints remain attached to the historical attempt.  Only the
+        cursor is closed so the official fresh entry can create a new
+        attempt after a server-owned stale-reference diagnosis.
+        """
+
+        if not isinstance(state, BodyRefreshAttemptState):
+            raise BodyRefreshAttemptStateError("typed Body refresh attempt state required")
+        if state.status not in {"in_progress", "interrupted"}:
+            raise BodyRefreshAttemptStateError("body refresh attempt cannot be superseded")
+        cleaned_code = str(reason_code or "").strip().lower()
+        if not cleaned_code or not re.fullmatch(r"[a-z0-9_:-]+", cleaned_code):
+            raise BodyRefreshAttemptStateError("closed Body refresh supersession code required")
+        updated = state.model_copy(
+            update={
+                "next_slot_key": None,
+                "next_candidate_index": None,
+                "status": "superseded",
+                "supersession_code": cleaned_code,
+                "superseded_at": datetime.now(UTC).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        self._write(updated)
+        return updated
 
     def _write(self, state: BodyRefreshAttemptState) -> None:
         path = self._path(state.visual_asset_id, state.attempt_identity.attempt_id)

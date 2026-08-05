@@ -1217,7 +1217,7 @@ class VisualAssetLibraryLifecycleService:
                 }:
                     raise
             else:
-                if current_state.status != "activated":
+                if current_state.status not in {"activated", "superseded"}:
                     raise BodyRefreshAttemptStateError(
                         "body refresh attempt already in progress"
                     )
@@ -1396,6 +1396,55 @@ class VisualAssetLibraryLifecycleService:
                     )
                 )
         return saved_asset
+
+    def supersede_current_body_refresh_attempt(
+        self,
+        *,
+        owner_scope: str,
+        visual_asset_id: str,
+        reason_code: str,
+    ) -> VisualAsset:
+        """Close one unrecoverable interrupted attempt before a fresh entry.
+
+        This is a server-owned lifecycle transition for stale handoff or
+        reference-chain failures.  It never promotes candidates and never
+        changes active Body slots.
+        """
+
+        asset = self.get(owner_scope=owner_scope, visual_asset_id=visual_asset_id)
+        state = self.body_refresh_attempt_state_store.load_current(
+            visual_asset_id=visual_asset_id,
+        )
+        superseded = self.body_refresh_attempt_state_store.supersede(
+            state,
+            reason_code=reason_code,
+        )
+        card = asset.character_card.model_copy(
+            update={
+                "body_silhouette_refresh_status": "blocked",
+                "body_silhouette_refresh_slots": {},
+                "body_silhouette_refresh_version_id": None,
+                "pending_mcp_handoff_ids": [],
+                "last_failed_module": "body_silhouette",
+                "last_failed_slot_key": state.next_slot_key,
+                "last_failure_code": superseded.supersession_code,
+                "last_failure_details": None,
+                "last_failure_attempt_count": max(
+                    int(asset.character_card.last_failure_attempt_count or 0),
+                    1,
+                ),
+                "resume_available": False,
+                "append_only_revision": asset.character_card.append_only_revision + 1,
+            }
+        )
+        return self.catalog.save(
+            asset.model_copy(
+                update={
+                    "character_card": card,
+                    "updated_at": _utc_now(),
+                }
+            )
+        )
 
     def resume_character_card_body_silhouette(
         self,
