@@ -1887,6 +1887,36 @@ class VisualAssetLibraryLifecycleService:
         return state
 
     @staticmethod
+    def _reconcile_stale_blocked_body_refresh_projection(
+        card: CharacterCardState,
+    ) -> CharacterCardState:
+        """Restore the review projection after durable cross-view acceptance.
+
+        A prior cross-view failure can leave the visible refresh status as
+        ``blocked`` even after the authoritative durable attempt has been
+        re-reviewed and moved to ``pending_refresh``.  This narrow repair is
+        only used after the full activation precondition audit above; other
+        unexpected statuses remain fail-closed in CharacterCard activation.
+        """
+
+        if card.body_silhouette_refresh_status != "blocked":
+            return card
+        return card.model_copy(
+            update={
+                "body_silhouette_refresh_status": "reviewing",
+                "last_failed_module": None,
+                "last_failed_slot_key": None,
+                "last_failure_code": None,
+                "last_failure_details": None,
+                "last_failure_attempt_count": 0,
+                "last_shared_runtime_failure": None,
+                "last_review_repair_context": None,
+                "resume_available": False,
+                "pending_mcp_handoff_ids": [],
+            }
+        )
+
+    @staticmethod
     def _body_refresh_activation_digest(
         *,
         card: CharacterCardState,
@@ -2356,8 +2386,11 @@ class VisualAssetLibraryLifecycleService:
                 visual_asset_id=visual_asset_id,
                 card=asset.character_card,
             )
+            activation_card = self._reconcile_stale_blocked_body_refresh_projection(
+                asset.character_card
+            )
             card = CharacterCardPreparationService.activate_body_silhouette_refresh(
-                asset.character_card,
+                activation_card,
                 confirmed=True,
             )
             saved = self.catalog.save(

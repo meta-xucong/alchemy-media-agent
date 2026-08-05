@@ -3032,6 +3032,71 @@ def test_library_activate_pending_body_refresh_promotes_formal_winners_without_g
     assert len(analyzer.calls) == 1
 
 
+def test_library_activation_reconciles_stale_blocked_refresh_projection(
+    tmp_path: Path,
+) -> None:
+    lifecycle, host, service, body_asset_ids, analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    store = BodyRefreshAttemptStateStore(tmp_path / "stale-blocked-refresh-state")
+    lifecycle = VisualAssetLibraryLifecycleService(
+        lifecycle.catalog,
+        root_source_resolver=service.get_uploaded_asset,
+        character_card_stage_host=host,
+        body_refresh_attempt_state_store=store,
+    )
+    request = BodySilhouettePublicRequest(
+        source_class="observed",
+        target_age_scope="age_6_child_only",
+        body_reference_asset_id=body_asset_ids[0],
+        body_reference_asset_ids=body_asset_ids,
+    )
+    refreshed = lifecycle.refresh_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        body_request=request,
+        generation_channel="mcp",
+    )
+    pending_winners = {
+        slot_key: slot.output_id
+        for slot_key, slot in refreshed.character_card.body_silhouette_refresh_slots.items()
+    }
+    lifecycle.catalog.save(
+        refreshed.model_copy(
+            update={
+                "character_card": refreshed.character_card.model_copy(
+                    update={
+                        "body_silhouette_refresh_status": "blocked",
+                        "last_failed_module": "body_silhouette",
+                        "last_failed_slot_key": "body.front_full",
+                        "last_failure_code": "stale_previous_cross_view_failure",
+                        "resume_available": False,
+                    }
+                )
+            }
+        )
+    )
+    generated_request_count = len(host.generator.requests)
+
+    activated = lifecycle.activate_character_card_module(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        module="body_silhouette",
+        confirm_activation=True,
+    )
+
+    assert activated.character_card.body_silhouette_refresh_status == "empty"
+    assert activated.character_card.body_activation_confirmed is True
+    assert {
+        slot_key: slot.output_id
+        for slot_key, slot in activated.character_card.body_slots.items()
+    } == pending_winners
+    assert all(slot.state == "active" for slot in activated.character_card.body_slots.values())
+    assert len(host.generator.requests) == generated_request_count
+    assert len(analyzer.calls) == 1
+
+
 def test_library_activation_rejects_refresh_slot_drift_after_cross_view_receipt(
     tmp_path: Path,
 ) -> None:
