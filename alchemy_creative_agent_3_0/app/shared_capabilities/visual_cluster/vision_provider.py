@@ -616,7 +616,11 @@ def _enforced_inspection_prompt(
                         "head_body_integration_artifact or pasted_head_body_boundary; fail elongated or "
                         "age-up body scale as model_like_limb_elongation or "
                         "target_age_body_proportion_drift. The front view must read as one natural whole "
-                        "person, not a pasted head on a separate body."
+                        "person, not a pasted head on a separate body. Treat Face references as identity "
+                        "guidance only; fail a front view that looks like a face transplant with "
+                        "face_reference_transplant_artifact. Inspect skin tone, lighting, edge transition, "
+                        "neck support, and shoulder relationship as continuous one-person evidence; fail "
+                        "visible mismatches with face_body_texture_lighting_mismatch."
                     )
             if body_silhouette_review.get("slot_key") == "body.rear_full":
                 lines.append(

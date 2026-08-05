@@ -57,6 +57,8 @@ BODY_CROSS_VIEW_BLOCKING_ISSUE_CODES = (
     "front_side_rear_stature_ratio_conflict",
     "view_specific_limb_length_drift",
     "view_specific_body_maturity_drift",
+    "same_body_envelope_conflict_between_views",
+    "front_face_body_integration_artifact",
     "garment_drift_between_views",
     "backdrop_not_consistent_pure_white",
     "hair_continuity_conflict_between_views",

@@ -243,12 +243,21 @@ def test_reference_assisted_body_renderer_enforces_age6_natural_single_person_an
     assert directive["age6_cross_view_naturalness"]["same_body_model_across_views"] is True
     assert directive["age6_cross_view_naturalness"]["front_head_body_integration_required"] is True
     assert directive["age6_cross_view_naturalness"]["forbid_teen_or_adult_model_elongation"] is True
+    assert (
+        directive["age6_cross_view_naturalness"]["face_identity_integration_mode"]
+        == "whole_person_regeneration_not_face_transplant"
+    )
+    assert directive["age6_cross_view_naturalness"]["same_body_envelope_across_views"] is True
     assert "approximately six-year-old school-age child body proportions" in renderer_prompt
     assert "not teen, adolescent, or adult fashion-model proportions" in renderer_prompt
     assert "do not elongate the legs" in renderer_prompt
     assert "same compact stature, body depth, shoulder width, and limb scale" in renderer_prompt
     assert "front view must look like one naturally photographed whole person" in renderer_prompt
     assert "visible pasted-head seam" in renderer_prompt
+    assert "use face identity references as identity guidance, not as a face transplant" in renderer_prompt
+    assert "generate the face, head, neck, shoulders, torso, arms, legs, skin tone, and lighting as one continuous subject" in renderer_prompt
+    assert "same body envelope across views" in renderer_prompt
+    assert "do not make side or rear views taller, thinner, older, or differently built than the front" in renderer_prompt
 
 
 def test_inference_first_body_renderer_does_not_inherit_age6_child_semantics(tmp_path) -> None:

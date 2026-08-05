@@ -241,6 +241,8 @@ def _build_body_renderer_execution_directive(
             "same_body_model_across_views": True,
             "front_head_body_integration_required": True,
             "forbid_teen_or_adult_model_elongation": True,
+            "face_identity_integration_mode": "whole_person_regeneration_not_face_transplant",
+            "same_body_envelope_across_views": True,
             "blocking_issue_codes": list(age6_naturalness["blocking_issue_codes"]),
         }
     if garment:
@@ -302,10 +304,17 @@ def _build_body_renderer_execution_directive(
             " Apply the age-6 Body naturalness contract only for this reference-assisted "
             "Body refresh: render approximately six-year-old school-age child body "
             "proportions, not teen, adolescent, or adult fashion-model proportions. "
+            "Use Face identity references as identity guidance, not as a face transplant "
+            "or pasted face layer; regenerate the full person in one pass from the "
+            "same camera-space body model. Generate the face, head, neck, shoulders, "
+            "torso, arms, legs, skin tone, and lighting as one continuous subject. "
             "Do not elongate the legs, slim the frame into a mature runway build, "
             "or age up the torso/shoulder/limb relationship. Keep the same compact "
             "stature, body depth, shoulder width, and limb scale across front, side, "
-            "and rear. The front view must look like one naturally photographed whole "
+            "and rear. Preserve the same body envelope across views: compact height "
+            "impression, shoulder width, torso depth, hip and shorts width, leg length, "
+            "and lower-leg thickness. Do not make side or rear views taller, thinner, "
+            "older, or differently built than the front. The front view must look like one naturally photographed whole "
             "person with continuous face, head, neck, shoulders, torso, and limbs; "
             "reject any visible pasted-head seam, head swap, hard neck join, or body "
             "assembled from separate parts."

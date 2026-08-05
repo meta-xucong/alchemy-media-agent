@@ -601,6 +601,8 @@ def test_body_visual_review_blocks_mannequin_and_pasted_head_findings_even_when_
         "cardboard_stance",
         "shoulder_width_incoherent",
         "head_body_integration_artifact",
+        "face_reference_transplant_artifact",
+        "face_body_texture_lighting_mismatch",
         "target_age_body_proportion_drift",
         "model_like_limb_elongation",
     ):
@@ -647,6 +649,9 @@ def test_body_review_prompt_requires_age6_naturalness_and_integration_evidence()
     assert "model_like_limb_elongation" in prompt
     assert "target_age_body_proportion_drift" in prompt
     assert "head_body_integration_artifact" in prompt
+    assert "face_reference_transplant_artifact" in prompt
+    assert "face_body_texture_lighting_mismatch" in prompt
+    assert "skin tone, lighting, edge transition, neck support, and shoulder relationship" in prompt
 
 
 def test_body_review_prompt_without_age6_context_does_not_inherit_child_specific_language() -> None:

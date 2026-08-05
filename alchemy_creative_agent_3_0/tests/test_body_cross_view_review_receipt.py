@@ -131,6 +131,8 @@ def test_cross_view_receipt_blocks_view_specific_age6_proportion_drift() -> None
         "view_specific_limb_length_drift",
         "view_specific_body_maturity_drift",
         "front_side_rear_stature_ratio_conflict",
+        "front_face_body_integration_artifact",
+        "same_body_envelope_conflict_between_views",
     ):
         receipt = _receipt(status="fail", issue_codes=[code])
         assert receipt.status == "fail"
@@ -258,6 +260,12 @@ def test_openai_compatible_cross_view_provider_builds_pass_receipt_from_three_ou
     assert "approximately six-year-old school-age child" in instructions
     assert "not teen, adolescent, or adult fashion-model proportions" in instructions
     assert "same compact stature, body depth, shoulder width, and limb scale" in instructions
+    assert "same body envelope" in instructions
+    assert "not merely the same age category" in instructions
+    assert "front face/head must not look transplanted" in instructions
+    assert "skin tone, lighting, edge transition, neck support, and shoulder relationship" in instructions
+    assert "same_body_envelope_conflict_between_views" in instructions
+    assert "front_face_body_integration_artifact" in instructions
     assert "front_side_rear_stature_ratio_conflict" in instructions
     assert "view_specific_limb_length_drift" in instructions
 

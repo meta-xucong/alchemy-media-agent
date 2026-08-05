@@ -356,10 +356,17 @@ def _build_body_cross_view_review_instructions(
             "same approximately six-year-old school-age child body: not teen, adolescent, "
             "or adult fashion-model proportions. The front, side, and rear views must "
             "preserve the same compact stature, body depth, shoulder width, and limb scale. "
+            "They must preserve the same body envelope, not merely the same age category: "
+            "compare compact height impression, head-to-body scale, shoulder width, torso depth, "
+            "hip and shorts width, leg length, calf thickness, and weight-bearing stance. "
+            "The front face/head must not look transplanted onto a separate body; inspect "
+            "skin tone, lighting, edge transition, neck support, and shoulder relationship "
+            "as one continuous subject. "
             "Fail side or rear view-specific leg elongation, slimming, maturity drift, or "
             "stature-ratio drift with view_specific_limb_length_drift, "
             "view_specific_body_maturity_drift, front_side_rear_stature_ratio_conflict, "
-            "age_stage_drift_between_views, or head_body_scale_conflict_between_views."
+            "same_body_envelope_conflict_between_views, age_stage_drift_between_views, "
+            "head_body_scale_conflict_between_views, or front_face_body_integration_artifact."
         )
     return (
         "Review exactly these three generated Body Silhouette outputs together: "
