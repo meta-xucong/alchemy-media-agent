@@ -3219,7 +3219,14 @@ class ProductApiAnchorPackPreparationHost:
         """
 
         public_view = getattr(store, "public_view", None)
+        validator = getattr(store, "_validated_renderer_execution_directive", None)
         handoff_id = str(payload.get("handoff_id") or "").strip()
+        if callable(validator):
+            try:
+                validator(payload)
+            except Exception:
+                return False
+            return True
         if not callable(public_view) or not handoff_id:
             return True
         try:
@@ -3238,6 +3245,10 @@ class ProductApiAnchorPackPreparationHost:
             str(payload.get("canonical_prompt") or ""),
         ):
             return False
+        if request.module == "body_silhouette":
+            store = getattr(self.product_service, "mcp_materialization_store", None)
+            if not self._character_card_mcp_renderer_directive_current(store, payload):
+                return False
         if request.module != "expression_set":
             return True
         return self._character_card_expression_handoff_reference_order_current(payload)

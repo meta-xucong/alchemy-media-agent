@@ -259,6 +259,8 @@ def test_body_orphan_recovery_skips_stale_renderer_revision(
     assert stale["revision"] == 1
     assert current["revision"] == 2
     assert recovered == current["handoff_id"]
+    assert host._character_card_mcp_handoff_current(request, stale) is False  # noqa: SLF001
+    assert host._character_card_mcp_handoff_current(request, current) is True  # noqa: SLF001
 
 
 def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_or_raw_fields(tmp_path) -> None:
