@@ -1983,6 +1983,244 @@ def test_library_resume_passes_pointer_cursor_to_one_host_boundary_without_fanou
     ]
 
 
+def test_library_resume_reconciles_generated_current_candidate_before_host_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A submitted/resumed MCP candidate must advance the private cursor once.
+
+    External materialization can make the authoritative ProductApi job
+    generated before the CharacterCard fan-out callback runs.  The official
+    library resume must checkpoint that already-reviewed candidate before it
+    asks Host to continue, otherwise it restarts candidate one.
+    """
+
+    lifecycle, host, service, body_asset_ids, _analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    face_reference_output_ids = [
+        str(asset.character_card.face_slots[key].output_id or "")
+        for key in ("face.front", "face.profile", "face.rear_head")
+    ]
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=face_reference_output_ids,
+    )
+    state_store = BodyRefreshAttemptStateStore(tmp_path / "generated-current-state")
+    initial_state = state_store.begin(
+        visual_asset_id=asset.visual_asset_id,
+        attempt_identity=attempt,
+        analysis_context=context,
+        body_source_admission=admission,
+    )
+    assert initial_state.next_slot_key == "body.front_full"
+    assert initial_state.next_candidate_index == 1
+    lifecycle = VisualAssetLibraryLifecycleService(
+        lifecycle.catalog,
+        root_source_resolver=service.get_uploaded_asset,
+        character_card_stage_host=host,
+        body_refresh_attempt_state_store=state_store,
+    )
+    candidate_request = CharacterCardCandidateRequest(
+        project_id=f"visual_asset_{asset.visual_asset_id}",
+        people_asset_id=asset.visual_asset_id,
+        card_version_id=asset.character_card.card_version_id,
+        module="body_silhouette",
+        slot_key="body.front_full",
+        candidate_index=1,
+        attempt_round=1,
+        reference_output_ids=face_reference_output_ids,
+        user_intent="reference-assisted Body refresh",
+        source_class="observed",
+        consent_provenance_id="server-consent-reference",
+        body_source_admission=admission,
+        body_refresh_source_mode="reference_assisted",
+        body_refresh_target_age_scope="age_6_child_only",
+        body_model_context="similar_person_body_reference_assisted_v1",
+        body_refresh_contract_required=True,
+        generation_channel="mcp",
+        body_refresh_attempt_identity=attempt,
+        body_refresh_analysis_context=context,
+    )
+    operation_id = host._character_card_candidate_mcp_operation_id(candidate_request)  # noqa: SLF001
+    output_id = "v3_output_body_front_generated_current"
+    candidate = CharacterCardCandidateResult(
+        candidate_id="candidate_body_front_generated_current",
+        output_id=output_id,
+        module="body_silhouette",
+        slot_key="body.front_full",
+        candidate_index=1,
+        operation_id=operation_id,
+        source_candidate_ids=["source_body_front_generated_current"],
+        source_output_ids=face_reference_output_ids,
+        canonical_prompt_hash="c" * 64,
+        prompt_compilation_id="compilation_front_generated_current",
+        prompt_reference_parity_verified=True,
+    )
+    review = _BodyReviewer().review(candidate)
+    record = SimpleNamespace(
+        job_id="job_body_front_generated_current",
+        generation_result=SimpleNamespace(
+            metadata={},
+            asset_pack=SimpleNamespace(
+                assets=[
+                    SimpleNamespace(
+                        metadata={
+                            "candidate_metadata": {
+                                "output_id": output_id,
+                                "candidate_id": candidate.candidate_id,
+                            }
+                        }
+                    )
+                ]
+            ),
+        ),
+        request=SimpleNamespace(
+            metadata={
+                "professional_body_refresh_analysis_context": context.safe_metadata(),
+                "professional_character_card_body_source_admission": admission.model_dump(mode="json"),
+                "professional_character_card_candidate_index": 1,
+                "professional_character_card_candidate_count": 3,
+                "professional_character_card_attempt_round": 1,
+                "professional_character_card_body_refresh_source_mode": "reference_assisted",
+                "professional_character_card_body_refresh_target_age_scope": "age_6_child_only",
+                "professional_character_card_body_model_context": "similar_person_body_reference_assisted_v1",
+                "mcp_operation_id": operation_id,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        host,
+        "_mcp_resume_character_card_stage_job_record",
+        lambda _request, requested_operation_id: (
+            record if requested_operation_id == operation_id else None
+        ),
+    )
+    review_calls: list[dict[str, object]] = []
+
+    def reconstitute_generated_candidate(_job_id, _request, **kwargs):
+        review_calls.append(
+            {
+                "job_id": _job_id,
+                "operation_id": _request.operation_id if hasattr(_request, "operation_id") else operation_id,
+                "expected_output_id": kwargs.get("expected_output_id"),
+                "persist": kwargs.get("persist_lifecycle_checkpoints", True),
+            }
+        )
+        return candidate, review
+
+    monkeypatch.setattr(host, "_character_card_candidate_and_review", reconstitute_generated_candidate)
+    captured: list[dict[str, object]] = []
+
+    def resume_boundary(**kwargs):
+        captured.append(
+            {
+                "resume_slot_key": kwargs["resume_slot_key"],
+                "resume_candidate_index": kwargs["resume_candidate_index"],
+                "checkpoint_count": len(kwargs["prior_reviewed_candidate_checkpoints"]),
+            }
+        )
+        return CharacterCardStageResult(
+            status="blocked",
+            card=kwargs["card"],
+            attempts=[],
+            winner_output_ids={},
+            failure_codes=["mcp_materialization_pending"],
+        )
+
+    monkeypatch.setattr(host, "resume_body_silhouette", resume_boundary)
+
+    lifecycle.resume_character_card_body_silhouette(
+        owner_scope="owner",
+        visual_asset_id=asset.visual_asset_id,
+        body_request=BodySilhouettePublicRequest(
+            source_class="observed",
+            target_age_scope="age_6_child_only",
+            body_reference_asset_id=body_asset_ids[0],
+            body_reference_asset_ids=body_asset_ids,
+        ),
+        generation_channel="mcp",
+    )
+
+    assert captured == [
+        {
+            "resume_slot_key": "body.front_full",
+            "resume_candidate_index": 2,
+            "checkpoint_count": 1,
+        }
+    ]
+    assert review_calls == [
+        {
+            "job_id": "job_body_front_generated_current",
+            "operation_id": operation_id,
+            "expected_output_id": output_id,
+            "persist": False,
+        }
+    ]
+    reconciled_state = state_store.load_current(visual_asset_id=asset.visual_asset_id)
+    assert reconciled_state.next_slot_key == "body.front_full"
+    assert reconciled_state.next_candidate_index == 2
+    assert reconciled_state.candidate_checkpoints[0].operation_id == operation_id
+    assert reconciled_state.candidate_checkpoints[0].output_id == output_id
+
+
+def test_fresh_observed_mcp_refresh_rejects_existing_current_attempt_before_overwrite(
+    tmp_path: Path,
+) -> None:
+    lifecycle, host, service, body_asset_ids, analyzer = _library_refresh_fixture(
+        tmp_path=tmp_path,
+    )
+    asset = next(iter(lifecycle.catalog._assets.values()))  # noqa: SLF001
+    attempt, context = _context_for_body_asset_ids(body_asset_ids)
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=body_asset_ids,
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=[
+            str(asset.character_card.face_slots[key].output_id or "")
+            for key in ("face.front", "face.profile", "face.rear_head")
+        ],
+    )
+    state_store = BodyRefreshAttemptStateStore(tmp_path / "fresh-overwrite-state")
+    state_store.begin(
+        visual_asset_id=asset.visual_asset_id,
+        attempt_identity=attempt,
+        analysis_context=context,
+        body_source_admission=admission,
+    )
+    lifecycle = VisualAssetLibraryLifecycleService(
+        lifecycle.catalog,
+        root_source_resolver=service.get_uploaded_asset,
+        character_card_stage_host=host,
+        body_refresh_attempt_state_store=state_store,
+    )
+
+    with pytest.raises(BodyRefreshAttemptStateError, match="already in progress"):
+        lifecycle.refresh_character_card_body_silhouette(
+            owner_scope="owner",
+            visual_asset_id=asset.visual_asset_id,
+            body_request=BodySilhouettePublicRequest(
+                source_class="observed",
+                target_age_scope="age_6_child_only",
+                body_reference_asset_id=body_asset_ids[0],
+                body_reference_asset_ids=body_asset_ids,
+            ),
+            generation_channel="mcp",
+        )
+
+    assert analyzer.asset_ids == []
+    assert (
+        state_store.load_current(visual_asset_id=asset.visual_asset_id).attempt_identity.attempt_id
+        == attempt.attempt_id
+    )
+
+
 def _card_with_formal_front_refresh_slot(
     asset,
     attempt,

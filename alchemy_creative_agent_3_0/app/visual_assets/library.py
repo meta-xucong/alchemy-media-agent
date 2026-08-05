@@ -1206,6 +1206,21 @@ class VisualAssetLibraryLifecycleService:
                 raise ValueError("body_refresh_source_admission_primary_mismatch")
             if body_refresh_analysis_context is not None:
                 raise ValueError("body_refresh_analysis_context_caller_injection_forbidden")
+            try:
+                current_state = self.body_refresh_attempt_state_store.load_current(
+                    visual_asset_id=visual_asset_id,
+                )
+            except BodyRefreshAttemptStateError as exc:
+                if str(exc) not in {
+                    "body refresh attempt state missing",
+                    "body refresh current pointer missing",
+                }:
+                    raise
+            else:
+                if current_state.status != "activated":
+                    raise BodyRefreshAttemptStateError(
+                        "body refresh attempt already in progress"
+                    )
             attempt_identity = BodyRefreshAttemptIdentity.create(
                 append_only_revision=card.append_only_revision + 1
             )
@@ -1433,6 +1448,20 @@ class VisualAssetLibraryLifecycleService:
             raise BodyRefreshAttemptStateError(
                 "body refresh resume face reference chain mismatch"
             )
+        state = self._reconcile_body_refresh_generated_current_candidate(
+            visual_asset_id=visual_asset_id,
+            asset=asset,
+            state=state,
+        )
+        formal_only_resume = (
+            state.status == "awaiting_slot_acceptance"
+            and state.next_slot_key is not None
+            and state.next_candidate_index is None
+        )
+        if state.next_slot_key is None or (
+            state.next_candidate_index is None and not formal_only_resume
+        ):
+            raise BodyRefreshAttemptStateError("body refresh attempt has no candidate cursor")
         method = getattr(self.character_card_stage_host, "resume_body_silhouette", None)
         if not callable(method):
             raise CharacterCardRuntimeUnavailable("body_refresh_durable_resume_unavailable")
@@ -1568,6 +1597,61 @@ class VisualAssetLibraryLifecycleService:
                     )
                 )
         return saved
+
+    def _reconcile_body_refresh_generated_current_candidate(
+        self,
+        *,
+        visual_asset_id: str,
+        asset: VisualAsset,
+        state: BodyRefreshAttemptState,
+    ) -> BodyRefreshAttemptState:
+        """Advance private cursor when the current MCP candidate already reviewed.
+
+        ProductApi materialization can generate and review the current
+        candidate outside the CharacterCard fan-out callback.  Before asking
+        Host to continue, reconstitute that exact generated job once and write
+        the same private cursor checkpoint the callback would have written.
+        """
+
+        if state.next_candidate_index is None or state.next_slot_key is None:
+            return state
+        method = getattr(
+            self.character_card_stage_host,
+            "reconstitute_body_refresh_generated_candidate_checkpoint",
+            None,
+        )
+        if not callable(method):
+            raise BodyRefreshAttemptStateError(
+                "body refresh generated candidate reconciliation unavailable"
+            )
+        checkpoint = method(
+            asset=asset,
+            card=asset.character_card,
+            body_refresh_presentation_intent=state.presentation_intent,
+            body_refresh_analysis_context=state.analysis_context,
+            body_source_admission=state.body_source_admission,
+            body_refresh_attempt_identity=state.attempt_identity,
+            slot_key=state.next_slot_key,
+            candidate_index=state.next_candidate_index,
+            attempt_round=1,
+        )
+        if checkpoint is None:
+            return state
+        updated = self.body_refresh_attempt_state_store.checkpoint_reviewed_candidate(
+            state,
+            slot_key=str(checkpoint["slot_key"]),
+            candidate_index=int(checkpoint["candidate_index"]),
+            attempt_round=int(checkpoint["attempt_round"]),
+            candidate_digest=str(checkpoint["candidate_digest"]),
+            review_status=str(checkpoint["review_status"]),
+            review_receipt_digest=str(checkpoint["review_receipt_digest"]),
+            operation_id=str(checkpoint["operation_id"]),
+            output_id=str(checkpoint["output_id"]),
+        )
+        return self.body_refresh_attempt_state_store.load(
+            visual_asset_id=visual_asset_id,
+            attempt_id=updated.attempt_identity.attempt_id,
+        )
 
     def _record_body_refresh_cross_view_parity_after_review(
         self,
