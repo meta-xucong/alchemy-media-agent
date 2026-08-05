@@ -671,6 +671,212 @@ def _private_front_checkpoint(
     )
 
 
+def test_review_checkpoint_reconciliation_updates_receipt_without_advancing_cursor(
+    tmp_path: Path,
+) -> None:
+    state_store = BodyRefreshAttemptStateStore(tmp_path / "state")
+    attempt, context = _context_for_body_asset_ids(
+        [
+            "body_source_1",
+            "body_source_2",
+            "body_source_3",
+            "body_source_4",
+            "body_source_5",
+        ]
+    )
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=[
+            "body_source_1",
+            "body_source_2",
+            "body_source_3",
+            "body_source_4",
+            "body_source_5",
+        ],
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=["face_front", "face_profile", "face_rear"],
+    )
+    state = state_store.begin(
+        visual_asset_id="visual_asset_review_reconciliation",
+        attempt_identity=attempt,
+        analysis_context=context,
+        body_source_admission=admission,
+    )
+    operation_id = "body_operation_front_1"
+    output_id = "v3_output_front_1"
+    state = _private_front_checkpoint(
+        state_store,
+        state,
+        operation_id=operation_id,
+        output_id=output_id,
+        review_receipt_digest="a" * 64,
+    )
+
+    updated = state_store.reconcile_reviewed_candidate(
+        state,
+        slot_key="body.front_full",
+        candidate_index=1,
+        attempt_round=1,
+        candidate_digest=hashlib.sha256(output_id.encode()).hexdigest(),
+        review_status="fail",
+        review_receipt_digest="b" * 64,
+        operation_id=operation_id,
+        output_id=output_id,
+    )
+
+    assert updated.next_slot_key == state.next_slot_key
+    assert updated.next_candidate_index == state.next_candidate_index
+    assert updated.status == state.status
+    assert len(updated.candidate_checkpoints) == 1
+    assert updated.candidate_checkpoints[0].review_status == "fail"
+    assert updated.candidate_checkpoints[0].review_receipt_digest == "b" * 64
+    assert state_store.load_current(
+        visual_asset_id="visual_asset_review_reconciliation"
+    ).candidate_checkpoints[0].review_receipt_digest == "b" * 64
+
+
+def test_review_checkpoint_reconciliation_rejects_identity_drift(tmp_path: Path) -> None:
+    state_store = BodyRefreshAttemptStateStore(tmp_path / "state")
+    attempt, context = _context_for_body_asset_ids(
+        [
+            "body_source_1",
+            "body_source_2",
+            "body_source_3",
+            "body_source_4",
+            "body_source_5",
+        ]
+    )
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=[
+            "body_source_1",
+            "body_source_2",
+            "body_source_3",
+            "body_source_4",
+            "body_source_5",
+        ],
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=["face_front", "face_profile", "face_rear"],
+    )
+    state = state_store.begin(
+        visual_asset_id="visual_asset_review_reconciliation",
+        attempt_identity=attempt,
+        analysis_context=context,
+        body_source_admission=admission,
+    )
+    state = _private_front_checkpoint(
+        state_store,
+        state,
+        operation_id="body_operation_front_1",
+        output_id="v3_output_front_1",
+        review_receipt_digest="a" * 64,
+    )
+
+    with pytest.raises(BodyRefreshAttemptStateError, match="checkpoint identity mismatch"):
+        state_store.reconcile_reviewed_candidate(
+            state,
+            slot_key="body.front_full",
+            candidate_index=1,
+            attempt_round=1,
+            candidate_digest=hashlib.sha256(b"wrong-output").hexdigest(),
+            review_status="pass",
+            review_receipt_digest="b" * 64,
+            operation_id="body_operation_front_1",
+            output_id="v3_output_front_1",
+        )
+
+
+def test_library_reconciles_prior_review_receipt_before_resume(
+    tmp_path: Path,
+) -> None:
+    state_store = BodyRefreshAttemptStateStore(tmp_path / "state")
+    attempt, context = _context_for_body_asset_ids(
+        [
+            "body_source_1",
+            "body_source_2",
+            "body_source_3",
+            "body_source_4",
+            "body_source_5",
+        ]
+    )
+    admission = BodySourceAdmission(
+        source_class="observed",
+        body_evidence_ids=[
+            "body_source_1",
+            "body_source_2",
+            "body_source_3",
+            "body_source_4",
+            "body_source_5",
+        ],
+        body_reference_role="body_proportion_reference",
+        body_reference_truth_layer="body_proportion_truth",
+        face_reference_output_ids=["face_front", "face_profile", "face_rear"],
+    )
+    visual_asset_id = "visual_asset_review_reconciliation"
+    state = state_store.begin(
+        visual_asset_id=visual_asset_id,
+        attempt_identity=attempt,
+        analysis_context=context,
+        body_source_admission=admission,
+    )
+    operation_id = "body_operation_front_1"
+    output_id = "v3_output_front_1"
+    state = _private_front_checkpoint(
+        state_store,
+        state,
+        operation_id=operation_id,
+        output_id=output_id,
+        review_receipt_digest="a" * 64,
+    )
+    state = state_store.reconcile_reviewed_candidate(
+        state,
+        slot_key="body.front_full",
+        candidate_index=1,
+        attempt_round=1,
+        candidate_digest=hashlib.sha256(output_id.encode()).hexdigest(),
+        review_status="fail",
+        review_receipt_digest="b" * 64,
+        operation_id=operation_id,
+        output_id=output_id,
+    )
+
+    class _Host:
+        calls: list[tuple[str, int]] = []
+
+        def reconstitute_body_refresh_generated_candidate_checkpoint(self, **kwargs):
+            self.calls.append((kwargs["slot_key"], kwargs["candidate_index"]))
+            return {
+                "slot_key": kwargs["slot_key"],
+                "candidate_index": kwargs["candidate_index"],
+                "attempt_round": kwargs["attempt_round"],
+                "candidate_digest": hashlib.sha256(output_id.encode()).hexdigest(),
+                "review_status": "pass",
+                "review_receipt_digest": "c" * 64,
+                "operation_id": operation_id,
+                "output_id": output_id,
+            }
+
+    host = _Host()
+    library = object.__new__(VisualAssetLibraryLifecycleService)
+    library.body_refresh_attempt_state_store = state_store
+    library.character_card_stage_host = host
+    asset = SimpleNamespace(character_card=SimpleNamespace())
+
+    updated = library._reconcile_body_refresh_prior_candidate_reviews(  # noqa: SLF001
+        visual_asset_id=visual_asset_id,
+        asset=asset,
+        state=state,
+    )
+
+    assert host.calls == [("body.front_full", 1)]
+    assert updated.next_slot_key == state.next_slot_key
+    assert updated.next_candidate_index == state.next_candidate_index
+    assert updated.candidate_checkpoints[0].review_status == "pass"
+    assert updated.candidate_checkpoints[0].review_receipt_digest == "c" * 64
+
+
 def _context_for_body_asset_ids(
     body_asset_ids: list[str],
 ) -> tuple[object, object]:

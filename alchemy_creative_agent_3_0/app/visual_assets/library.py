@@ -1448,6 +1448,12 @@ class VisualAssetLibraryLifecycleService:
             raise BodyRefreshAttemptStateError(
                 "body refresh resume face reference chain mismatch"
             )
+        if state.next_candidate_index is not None and state.candidate_checkpoints:
+            state = self._reconcile_body_refresh_prior_candidate_reviews(
+                visual_asset_id=visual_asset_id,
+                asset=asset,
+                state=state,
+            )
         state = self._reconcile_body_refresh_generated_current_candidate(
             visual_asset_id=visual_asset_id,
             asset=asset,
@@ -1597,6 +1603,60 @@ class VisualAssetLibraryLifecycleService:
                     )
                 )
         return saved
+
+    def _reconcile_body_refresh_prior_candidate_reviews(
+        self,
+        *,
+        visual_asset_id: str,
+        asset: VisualAsset,
+        state: BodyRefreshAttemptState,
+    ) -> BodyRefreshAttemptState:
+        """Refresh durable receipts for prior candidates before reconstitution."""
+
+        method = getattr(
+            self.character_card_stage_host,
+            "reconstitute_body_refresh_generated_candidate_checkpoint",
+            None,
+        )
+        if not callable(method):
+            raise BodyRefreshAttemptStateError(
+                "body refresh generated candidate reconciliation unavailable"
+            )
+        updated_state = state
+        for checkpoint in tuple(state.candidate_checkpoints):
+            current = method(
+                asset=asset,
+                card=asset.character_card,
+                body_refresh_presentation_intent=state.presentation_intent,
+                body_refresh_analysis_context=state.analysis_context,
+                body_source_admission=state.body_source_admission,
+                body_refresh_attempt_identity=state.attempt_identity,
+                slot_key=checkpoint.slot_key,
+                candidate_index=checkpoint.candidate_index,
+                attempt_round=checkpoint.attempt_round,
+            )
+            if current is None:
+                continue
+            if (
+                str(current["review_status"]) == checkpoint.review_status
+                and str(current["review_receipt_digest"]) == checkpoint.review_receipt_digest
+            ):
+                continue
+            updated_state = self.body_refresh_attempt_state_store.reconcile_reviewed_candidate(
+                updated_state,
+                slot_key=str(current["slot_key"]),
+                candidate_index=int(current["candidate_index"]),
+                attempt_round=int(current["attempt_round"]),
+                candidate_digest=str(current["candidate_digest"]),
+                review_status=str(current["review_status"]),
+                review_receipt_digest=str(current["review_receipt_digest"]),
+                operation_id=str(current["operation_id"]),
+                output_id=str(current["output_id"]),
+            )
+        return self.body_refresh_attempt_state_store.load(
+            visual_asset_id=visual_asset_id,
+            attempt_id=updated_state.attempt_identity.attempt_id,
+        )
 
     def _reconcile_body_refresh_generated_current_candidate(
         self,

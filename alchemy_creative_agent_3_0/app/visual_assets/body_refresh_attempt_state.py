@@ -434,6 +434,64 @@ class BodyRefreshAttemptStateStore:
         self._write(updated)
         return updated
 
+    def reconcile_reviewed_candidate(
+        self,
+        state: BodyRefreshAttemptState,
+        *,
+        slot_key: str,
+        candidate_index: int,
+        attempt_round: int,
+        candidate_digest: str,
+        review_status: str,
+        review_receipt_digest: str,
+        operation_id: str,
+        output_id: str,
+    ) -> BodyRefreshAttemptState:
+        """Refresh one existing candidate's review receipt without moving the cursor."""
+
+        if review_status not in {"pass", "fail"}:
+            raise BodyRefreshAttemptStateError("closed candidate review status required")
+        _require_digest(candidate_digest, "candidate digest")
+        _require_digest(review_receipt_digest, "review receipt digest")
+        if type(attempt_round) is not int or attempt_round < 1:
+            raise BodyRefreshAttemptStateError("candidate attempt round must be positive")
+        _require_private_identity(operation_id, "operation id")
+        _require_private_identity(output_id, "output id")
+        matching = [
+            item
+            for item in state.candidate_checkpoints
+            if item.slot_key == slot_key and item.candidate_index == candidate_index
+        ]
+        if len(matching) != 1:
+            raise BodyRefreshAttemptStateError("body refresh checkpoint identity mismatch")
+        existing = matching[0]
+        if (
+            existing.attempt_round != attempt_round
+            or existing.candidate_digest != candidate_digest
+            or existing.operation_id != operation_id
+            or existing.output_id != output_id
+        ):
+            raise BodyRefreshAttemptStateError("body refresh checkpoint identity mismatch")
+        updated_checkpoint = existing.model_copy(
+            update={
+                "review_status": review_status,
+                "review_receipt_digest": review_receipt_digest,
+            }
+        )
+        updated = state.model_copy(
+            update={
+                "candidate_checkpoints": tuple(
+                    updated_checkpoint
+                    if item.slot_key == slot_key and item.candidate_index == candidate_index
+                    else item
+                    for item in state.candidate_checkpoints
+                ),
+                "updated_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        self._write(updated)
+        return updated
+
     def record_formal_receipt(
         self,
         state: BodyRefreshAttemptState,
