@@ -36,12 +36,15 @@ BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES = frozenset(
     {
         "head_body_scale_mismatch",
         "pasted_head_body_boundary",
+        "head_body_integration_artifact",
         "doll_like_body_chain",
         "mannequin_body_chain",
         "body_chain_discontinuity",
         "stage_incoherent_body_proportion",
+        "target_age_body_proportion_drift",
         "over_infantilized_body",
         "accidental_adultification",
+        "model_like_limb_elongation",
         "generic_model_body_override",
         "compressed_neck_shoulders",
         "floating_head",
@@ -70,6 +73,9 @@ BODY_SILHOUETTE_CROSS_VIEW_PARITY_BLOCKING_ISSUE_CODES = frozenset(
         "front_side_body_depth_conflict",
         "rear_body_build_conflict",
         "view_specific_age_stage_drift",
+        "view_specific_limb_length_drift",
+        "view_specific_body_maturity_drift",
+        "front_side_rear_stature_ratio_conflict",
     }
 )
 
@@ -108,6 +114,12 @@ BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS = (
     "natural_body_chain",
     "natural_weight_bearing",
     "shoulder_head_proportion",
+    "head_body_blend_naturalism",
+    "target_age_body_proportion",
+)
+
+BODY_SILHOUETTE_AGE6_CROSS_VIEW_NATURALNESS_CONTRACT_VERSION = (
+    "professional_body_silhouette_age6_cross_view_naturalness_v1"
 )
 
 _BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS = {
@@ -215,6 +227,61 @@ def body_silhouette_integrated_whole_person_synthesis_contract() -> dict[str, An
             "cardboard_stance",
         ],
         "authority": "professional_body_silhouette_renderer_execution_directive",
+    }
+
+
+def body_silhouette_age6_cross_view_naturalness_contract() -> dict[str, Any]:
+    """Return the Body-only age-6 renderer and review guard.
+
+    The five admitted Body sources are analysis evidence for this one
+    reference-assisted Body refresh.  This contract must not become a global
+    child, teen, adult, Face, Expression, or ordinary image-generation rule.
+    """
+
+    return {
+        "contract_version": BODY_SILHOUETTE_AGE6_CROSS_VIEW_NATURALNESS_CONTRACT_VERSION,
+        "applies": True,
+        "scope": "reference_assisted_body_refresh_only",
+        "target_age_scope": "age_6_child_only",
+        "same_body_model_across_views": True,
+        "front_head_body_integration_required": True,
+        "forbid_teen_or_adult_model_elongation": True,
+        "required_renderer_obligations": [
+            "approximately_six_year_school_age_body_proportions",
+            "single_natural_head_neck_shoulder_torso_limb_synthesis",
+            "no_visible_head_body_join_or_composite_boundary",
+            "no_teen_adolescent_or_adult_fashion_model_elongation",
+            "same_compact_stature_body_depth_shoulder_width_and_limb_scale_across_views",
+        ],
+        "review_dimensions": [
+            "head_body_blend_naturalism",
+            "target_age_body_proportion",
+            "age_stage_consistency",
+            "head_body_scale_consistency",
+            "front_side_rear_volume_consistency",
+        ],
+        "blocking_issue_codes": sorted(
+            {
+                "pasted_head_body_boundary",
+                "head_body_integration_artifact",
+                "target_age_body_proportion_drift",
+                "accidental_adultification",
+                "model_like_limb_elongation",
+                "cross_view_body_parity_mismatch",
+                "front_side_body_depth_conflict",
+                "rear_body_build_conflict",
+                "view_specific_age_stage_drift",
+                "view_specific_limb_length_drift",
+                "view_specific_body_maturity_drift",
+                "front_side_rear_stature_ratio_conflict",
+            }
+        ),
+        "forbidden_runtime_authority": [
+            "global_child_prompt_rule",
+            "teen_or_adult_age_override",
+            "body_reference_physical_renderer_input",
+            "biometric_vector_or_measurement_storage",
+        ],
     }
 
 
@@ -457,6 +524,7 @@ __all__ = [
     "BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING",
     "BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE",
     "BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS",
+    "BODY_SILHOUETTE_AGE6_CROSS_VIEW_NATURALNESS_CONTRACT_VERSION",
     "BODY_SILHOUETTE_INTEGRATED_WHOLE_PERSON_CONTRACT_VERSION",
     "BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_FINDINGS",
     "BODY_SILHOUETTE_MCP_MATERIALIZATION_CHANNEL_CONTRACT_VERSION",
@@ -466,6 +534,7 @@ __all__ = [
     "BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR",
     "body_silhouette_mcp_materialization_channel_contract",
     "body_silhouette_mcp_materialization_prompt_findings",
+    "body_silhouette_age6_cross_view_naturalness_contract",
     "body_silhouette_integrated_whole_person_synthesis_contract",
     "body_silhouette_source_standard_contract",
     "evaluate_body_silhouette_visual_review",

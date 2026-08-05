@@ -482,6 +482,31 @@ def test_body_contract_declares_one_integrated_whole_person_synthesis_authority(
     } <= set(contract["forbidden_composition_modes"])
 
 
+def test_body_contract_declares_age6_naturalness_without_leaking_to_general_age_paths() -> None:
+    contract_builder = getattr(
+        body_contracts,
+        "body_silhouette_age6_cross_view_naturalness_contract",
+        None,
+    )
+    assert callable(contract_builder)
+    contract = contract_builder()
+
+    assert contract["target_age_scope"] == "age_6_child_only"
+    assert contract["scope"] == "reference_assisted_body_refresh_only"
+    assert contract["same_body_model_across_views"] is True
+    assert contract["front_head_body_integration_required"] is True
+    assert contract["forbid_teen_or_adult_model_elongation"] is True
+    assert "model_like_limb_elongation" in contract["blocking_issue_codes"]
+    assert "target_age_body_proportion_drift" in contract["blocking_issue_codes"]
+
+    adult_profile = {
+        "developmental_stage_context": "adult_stage_context",
+        "age_scope": "current_request_age_owned",
+    }
+    assert "age_6_child_only" not in json.dumps(adult_profile)
+    assert "school-age child" not in json.dumps(adult_profile)
+
+
 def test_strict_body_mcp_handoff_freezes_integrated_contract() -> None:
     app_request, _, _ = McpMaterializationProvider()._build_app_request(  # noqa: SLF001
         _mcp_body_generation_request(
@@ -575,6 +600,9 @@ def test_body_visual_review_blocks_mannequin_and_pasted_head_findings_even_when_
         "mannequin_body_chain",
         "cardboard_stance",
         "shoulder_width_incoherent",
+        "head_body_integration_artifact",
+        "target_age_body_proportion_drift",
+        "model_like_limb_elongation",
     ):
         result = evaluator(
             {
@@ -594,6 +622,39 @@ def test_body_visual_review_blocks_mannequin_and_pasted_head_findings_even_when_
     )
     assert missing_pixel_evidence["status"] == "blocked"
     assert missing_pixel_evidence["formal_eligible"] is False
+
+
+def test_body_review_prompt_requires_age6_naturalness_and_integration_evidence() -> None:
+    metadata = _body_review_metadata_for_vision()
+    metadata["professional_body_refresh_analysis_context"] = {
+        "contract_version": "body_refresh_analysis_context_v2",
+        "schema_version": "body_morphology_evidence_profile_v2",
+        "source_mode": "reference_assisted",
+        "attempt_id": "body_refresh_attempt_0123456789abcdef0123456789abcdef",
+        "append_only_revision": 1,
+        "source_binding_digest": "a" * 64,
+        "source_evidence_id_digest": "b" * 64,
+        "profile_digest": "c" * 64,
+        "target_age_scope": "age_6_child_only",
+        "target_age_scope_digest": hashlib.sha256(b"age_6_child_only").hexdigest(),
+    }
+    prompt = _inspection_prompt(metadata).lower()
+
+    assert "target_age_body_proportion" in prompt
+    assert "head_body_blend_naturalism" in prompt
+    assert "not a pasted head" in prompt
+    assert "not teen, adolescent, or adult fashion-model proportions" in prompt
+    assert "model_like_limb_elongation" in prompt
+    assert "target_age_body_proportion_drift" in prompt
+    assert "head_body_integration_artifact" in prompt
+
+
+def test_body_review_prompt_without_age6_context_does_not_inherit_child_specific_language() -> None:
+    prompt = _inspection_prompt(_body_review_metadata_for_vision()).lower()
+
+    assert "six-year-old" not in prompt
+    assert "school-age child" not in prompt
+    assert "not teen, adolescent, or adult fashion-model proportions" not in prompt
 
 
 def test_shared_vision_parser_fails_closed_without_integrated_pixel_evidence() -> None:

@@ -31,6 +31,7 @@ from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan,
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
 from ..visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
+    body_silhouette_age6_cross_view_naturalness_contract,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
     body_silhouette_integrated_whole_person_synthesis_contract,
@@ -6093,6 +6094,9 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                             },
                         )
                     contract["target_age_scope"] = BODY_REFRESH_REFERENCE_AGE_SCOPE
+                    contract["body_silhouette_age6_cross_view_naturalness_contract"] = (
+                        body_silhouette_age6_cross_view_naturalness_contract()
+                    )
                     contract["body_mcp_reference_partition"] = McpBodyReferencePartition.model_validate(
                         metadata.get("body_mcp_reference_partition")
                     ).model_dump(mode="json")

@@ -207,9 +207,15 @@ class OpenAICompatibleBodyCrossViewReviewProvider:
             if not self.available(force=True):
                 raise BodyCrossViewReviewError("body_cross_view_review_provider_unavailable")
             images = self._read_view_images(safe_output_ids)
+            instructions = _build_body_cross_view_review_instructions(
+                self.response_schema,
+                target_age_scope=str(
+                    getattr(body_refresh_analysis_context, "target_age_scope", "") or ""
+                ).strip(),
+            )
             raw_response = self.transport.review(  # type: ignore[union-attr]
                 images,
-                instructions=self.instructions,
+                instructions=instructions,
                 response_schema=self.response_schema,
                 timeout_seconds=self.timeout_seconds,
             )
@@ -324,7 +330,11 @@ def create_configured_body_cross_view_review_provider(
     )
 
 
-def _build_body_cross_view_review_instructions(response_schema: Mapping[str, Any]) -> str:
+def _build_body_cross_view_review_instructions(
+    response_schema: Mapping[str, Any],
+    *,
+    target_age_scope: str | None = None,
+) -> str:
     garment = default_body_silhouette_garment_continuity_contract()
     canonical_fields = {
         "top_colorway": garment["top_colorway"],
@@ -338,6 +348,19 @@ def _build_body_cross_view_review_instructions(response_schema: Mapping[str, Any
         "footwear_cut": garment["footwear_cut"],
         "surface_policy": garment["surface_policy"],
     }
+    age_scope_clause = ""
+    if str(target_age_scope or "").strip() == "age_6_child_only":
+        age_scope_clause = (
+            " This review is bound to target_age_scope=age_6_child_only from the frozen "
+            "Body morphology context. Require all three generated views to read as the "
+            "same approximately six-year-old school-age child body: not teen, adolescent, "
+            "or adult fashion-model proportions. The front, side, and rear views must "
+            "preserve the same compact stature, body depth, shoulder width, and limb scale. "
+            "Fail side or rear view-specific leg elongation, slimming, maturity drift, or "
+            "stature-ratio drift with view_specific_limb_length_drift, "
+            "view_specific_body_maturity_drift, front_side_rear_stature_ratio_conflict, "
+            "age_stage_drift_between_views, or head_body_scale_conflict_between_views."
+        )
     return (
         "Review exactly these three generated Body Silhouette outputs together: "
         "front_full, side_full, and rear_full. Decide only whether they can be "
@@ -353,7 +376,9 @@ def _build_body_cross_view_review_instructions(response_schema: Mapping[str, Any
         "identity is locked across every view: use a plain soft-white matte "
         "cotton-jersey crew-neck short-sleeve top, mid-blue matte cotton-denim "
         "relaxed knee-length shorts, and plain white ribbed-cotton ankle socks; "
-        "keep the surface graphic-free and logo-free. Closed identity fields: "
+        "keep the surface graphic-free and logo-free."
+        + age_scope_clause
+        + " Closed identity fields: "
         + json.dumps(canonical_fields, sort_keys=True, separators=(",", ":"))
         + ". Return only strict JSON "
         "matching this schema; do not include "

@@ -29,6 +29,7 @@ from .micro_real_human_fidelity import (
 from ...visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE,
     BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS,
+    body_silhouette_age6_cross_view_naturalness_contract,
     validated_body_silhouette_source_standard_contract,
 )
 from ...visual_assets.character_card import BodySilhouetteBackdropPresentationContract
@@ -370,11 +371,24 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             (
                 "Body Silhouette review must emit body_silhouette_blocking_issue_evaluation_complete "
                 "only after pixel evaluation, plus typed integrated_whole_person_review_evidence with "
-                "head_neck_shoulder_continuity, single_person_synthesis, natural_body_chain, "
-                "natural_weight_bearing, and shoulder_head_proportion; each is pass|fail|unknown "
+                + ", ".join(BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS)
+                + "; each is pass|fail|unknown "
                 "with pixel_evidence_present. Missing/unknown/false or pasted/mannequin/cardboard/"
                 "shoulder/joint/ground issues blocks formal acceptance."
                 if body_silhouette_review
+                else ""
+            ),
+            (
+                "Age-6 Body naturalness review applies only because the frozen Body refresh analysis context "
+                "declares target_age_scope=age_6_child_only. Require approximately six-year-old school-age "
+                "child body proportions, not teen, adolescent, or adult fashion-model proportions. Fail "
+                "visible head/body joining artifacts as head_body_integration_artifact or "
+                "pasted_head_body_boundary; fail elongated or age-up body scale as "
+                "model_like_limb_elongation or target_age_body_proportion_drift. The generated "
+                "front view must read as one natural whole person, not a pasted head on a "
+                "separate body."
+                if body_silhouette_review
+                and body_silhouette_review.get("age6_cross_view_naturalness_contract")
                 else ""
             ),
             f"Project context summary: {json.dumps(project_summary, ensure_ascii=False)[:1200]}",
@@ -586,13 +600,24 @@ def _enforced_inspection_prompt(
                 lines.append(
                     "Body Silhouette integrated whole-person pixel evidence is mandatory: return a typed "
                     "integrated_whole_person_review_evidence object with exactly these dimensions: "
-                    "head_neck_shoulder_continuity, single_person_synthesis, natural_body_chain, "
-                    "natural_weight_bearing, shoulder_head_proportion. Each dimension must be status "
+                    + ", ".join(BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS)
+                    + ". Each dimension must be status "
                     "pass|fail|unknown plus pixel_evidence_present true|false. Missing, unknown, false, "
                     "pasted_head_body_boundary, head_neck_shoulder_discontinuity, mannequin_body_chain, "
                     "cardboard_stance, shoulder_width_incoherent, limb/joint/ground-contact issues all "
                     "block Body formal acceptance. A generic high-confidence pass is not sufficient."
                 )
+                if body_silhouette_review.get("age6_cross_view_naturalness_contract"):
+                    lines.append(
+                        "Age-6 Body naturalness review applies only because the frozen Body refresh analysis "
+                        "context declares target_age_scope=age_6_child_only. Require approximately "
+                        "six-year-old school-age child body proportions, not teen, adolescent, or adult "
+                        "fashion-model proportions. Fail visible head/body joining artifacts as "
+                        "head_body_integration_artifact or pasted_head_body_boundary; fail elongated or "
+                        "age-up body scale as model_like_limb_elongation or "
+                        "target_age_body_proportion_drift. The front view must read as one natural whole "
+                        "person, not a pasted head on a separate body."
+                    )
             if body_silhouette_review.get("slot_key") == "body.rear_full":
                 lines.append(
                     "Body rear-full evidence rule: the target is an intentional full-body rear view, so a visible face "
@@ -723,6 +748,9 @@ def _professional_body_silhouette_review_context(
         "wardrobe_contract": body_review.get("wardrobe_contract"),
         "hair_continuity_contract": body_review.get("hair_continuity_contract"),
         "source_standard_contract": body_review.get("source_standard_contract"),
+        "age6_cross_view_naturalness_contract": body_review.get(
+            "age6_cross_view_naturalness_contract"
+        ),
         "framing_delta_dimensions": list(body_review.get("framing_delta_dimensions") or []),
         "score_dimensions": list(body_review.get("score_dimensions") or []),
         "issue_codes": list(body_review.get("issue_codes") or []),
@@ -1050,6 +1078,22 @@ def _professional_identity_quality_contract(
         for item in source_standard_contract.get("cross_view_parity_blocking_issue_codes", [])
         if str(item).strip()
     ]
+    raw_analysis_context = metadata.get("professional_body_refresh_analysis_context")
+    age6_naturalness_contract = (
+        body_silhouette_age6_cross_view_naturalness_contract()
+        if (
+            body_silhouette_review_applies
+            and isinstance(raw_analysis_context, dict)
+            and raw_analysis_context.get("source_mode") == "reference_assisted"
+            and raw_analysis_context.get("target_age_scope") == "age_6_child_only"
+        )
+        else {}
+    )
+    age6_naturalness_issue_codes = [
+        str(item).strip()
+        for item in age6_naturalness_contract.get("blocking_issue_codes", [])
+        if str(item).strip()
+    ]
     body_silhouette_score_dimensions = [
         *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
         *body_source_standard_dimensions,
@@ -1061,6 +1105,7 @@ def _professional_identity_quality_contract(
         "body_silhouette_backdrop_not_pure_white",
         *body_source_standard_issue_codes,
         *body_cross_view_issue_codes,
+        *age6_naturalness_issue_codes,
     ]
     absolute_portrait_realism_issue_codes = [
         "absolute_eye_gaze_alignment_failed",
@@ -1247,6 +1292,7 @@ def _professional_identity_quality_contract(
                 "source_standard_contract": source_standard_contract,
                 "hair_continuity_contract": body_source_contract.get("hair_continuity_contract"),
                 "backdrop_presentation_contract": backdrop_presentation_contract,
+                "age6_cross_view_naturalness_contract": age6_naturalness_contract,
                 "backdrop_evidence": {
                     "status": "unknown",
                     "source": "contract_only_until_pixel_inspection",

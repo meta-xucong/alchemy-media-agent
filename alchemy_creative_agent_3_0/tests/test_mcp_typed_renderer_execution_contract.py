@@ -15,6 +15,7 @@ from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import
 )
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+    body_silhouette_age6_cross_view_naturalness_contract,
     body_silhouette_integrated_whole_person_synthesis_contract,
     body_silhouette_mcp_materialization_channel_contract,
 )
@@ -86,6 +87,9 @@ def _strict_contract() -> dict:
         "size_normalization": "white_matte_contain_to_contract_size",
         "body_refresh_source_mode": "reference_assisted",
         "target_age_scope": "age_6_child_only",
+        "body_silhouette_age6_cross_view_naturalness_contract": (
+            body_silhouette_age6_cross_view_naturalness_contract()
+        ),
         "body_silhouette_mcp_materialization_channel_contract": body_silhouette_mcp_materialization_channel_contract(),
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
@@ -222,6 +226,49 @@ def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_
     assert "raw_prompt" not in directive
     assert "provider_payload" not in directive
     assert "base64" not in json.dumps(directive, sort_keys=True).lower()
+
+
+def test_reference_assisted_body_renderer_enforces_age6_natural_single_person_and_cross_view_consistency(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
+    handoff = _ensure(store)
+
+    host_request = store.public_renderer_request(handoff["handoff_id"])
+    directive = host_request["renderer_execution_directive"]
+    renderer_prompt = str(host_request["renderer_prompt"]).lower()
+
+    assert directive["target_age_scope"] == "age_6_child_only"
+    assert directive["age6_cross_view_naturalness"]["target_age_scope"] == "age_6_child_only"
+    assert directive["age6_cross_view_naturalness"]["same_body_model_across_views"] is True
+    assert directive["age6_cross_view_naturalness"]["front_head_body_integration_required"] is True
+    assert directive["age6_cross_view_naturalness"]["forbid_teen_or_adult_model_elongation"] is True
+    assert "approximately six-year-old school-age child body proportions" in renderer_prompt
+    assert "not teen, adolescent, or adult fashion-model proportions" in renderer_prompt
+    assert "do not elongate the legs" in renderer_prompt
+    assert "same compact stature, body depth, shoulder width, and limb scale" in renderer_prompt
+    assert "front view must look like one naturally photographed whole person" in renderer_prompt
+    assert "visible pasted-head seam" in renderer_prompt
+
+
+def test_inference_first_body_renderer_does_not_inherit_age6_child_semantics(tmp_path) -> None:
+    contract = _strict_contract()
+    contract["body_refresh_source_mode"] = "inference_first"
+    contract.pop("target_age_scope", None)
+    contract.pop("body_silhouette_age6_cross_view_naturalness_contract", None)
+    contract.pop("body_mcp_reference_partition", None)
+    contract.pop("body_morphology_profile", None)
+    store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
+    handoff = _ensure(store, contract=contract)
+
+    host_request = store.public_renderer_request(handoff["handoff_id"])
+    directive = host_request["renderer_execution_directive"]
+    renderer_prompt = str(host_request["renderer_prompt"]).lower()
+
+    assert "age6_cross_view_naturalness" not in directive
+    assert "age_6_child_only" not in renderer_prompt
+    assert "six-year-old" not in renderer_prompt
+    assert "school-age child" not in renderer_prompt
 
 
 def test_strict_submit_requires_host_request_hashes_and_accepts_matching_hashes(tmp_path) -> None:

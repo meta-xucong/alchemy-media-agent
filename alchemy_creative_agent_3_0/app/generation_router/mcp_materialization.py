@@ -26,6 +26,7 @@ from ..creative_core.mcp_reference_partition import McpBodyReferencePartition
 from ..creative_core.rules import stable_id
 from ..visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
+    body_silhouette_age6_cross_view_naturalness_contract,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
     body_silhouette_integrated_whole_person_synthesis_contract,
@@ -151,6 +152,14 @@ def _build_body_renderer_execution_directive(
         raise McpMaterializationError(
             "mcp_materialization_renderer_execution_directive_invalid"
         )
+    age6_naturalness = rendering_contract.get(
+        "body_silhouette_age6_cross_view_naturalness_contract"
+    )
+    if age6_naturalness is not None:
+        if age6_naturalness != body_silhouette_age6_cross_view_naturalness_contract():
+            raise McpMaterializationError(
+                "mcp_materialization_renderer_execution_directive_invalid"
+            )
     morphology = rendering_contract.get("body_morphology_profile")
     if rendering_contract.get("body_refresh_source_mode") == "reference_assisted":
         if rendering_contract.get("target_age_scope") != BODY_REFRESH_REFERENCE_AGE_SCOPE:
@@ -192,6 +201,10 @@ def _build_body_renderer_execution_directive(
         raise McpMaterializationError(
             "mcp_materialization_body_morphology_profile_forbidden"
         )
+    elif age6_naturalness is not None:
+        raise McpMaterializationError(
+            "mcp_materialization_body_age6_naturalness_contract_forbidden"
+        )
     directive: dict[str, Any] = {
         "schema_version": _BODY_RENDERER_EXECUTION_DIRECTIVE_SCHEMA,
         "execution_scope": "professional_character_card_body_silhouette_mcp_materialization_only",
@@ -222,6 +235,14 @@ def _build_body_renderer_execution_directive(
         },
         "integrated_whole_person_synthesis": integrated,
     }
+    if age6_naturalness is not None:
+        directive["age6_cross_view_naturalness"] = {
+            "target_age_scope": BODY_REFRESH_REFERENCE_AGE_SCOPE,
+            "same_body_model_across_views": True,
+            "front_head_body_integration_required": True,
+            "forbid_teen_or_adult_model_elongation": True,
+            "blocking_issue_codes": list(age6_naturalness["blocking_issue_codes"]),
+        }
     if garment:
         directive["garment_continuity"] = {
             "top_presentation": garment.get("top_presentation"),
@@ -276,6 +297,19 @@ def _build_body_renderer_execution_directive(
         "contact. Never paste, swap, or composite a head onto a body; never use a "
         "mannequin or cardboard stance."
     )
+    if age6_naturalness is not None:
+        directive["materialization_prompt"] += (
+            " Apply the age-6 Body naturalness contract only for this reference-assisted "
+            "Body refresh: render approximately six-year-old school-age child body "
+            "proportions, not teen, adolescent, or adult fashion-model proportions. "
+            "Do not elongate the legs, slim the frame into a mature runway build, "
+            "or age up the torso/shoulder/limb relationship. Keep the same compact "
+            "stature, body depth, shoulder width, and limb scale across front, side, "
+            "and rear. The front view must look like one naturally photographed whole "
+            "person with continuous face, head, neck, shoulders, torso, and limbs; "
+            "reject any visible pasted-head seam, head swap, hard neck join, or body "
+            "assembled from separate parts."
+        )
     if garment:
         directive["materialization_prompt"] += (
             " Treat the current front/side/rear Body refresh as one exact same-garment series: "
@@ -1443,10 +1477,30 @@ class McpMaterializationHandoffStore:
                     detail={"failure_code": "body_refresh_target_age_scope_invalid"},
                 )
             safe["target_age_scope"] = BODY_REFRESH_REFERENCE_AGE_SCOPE
+            raw_age6_naturalness = raw.get(
+                "body_silhouette_age6_cross_view_naturalness_contract"
+            )
+            if raw_age6_naturalness is not None:
+                expected_age6_naturalness = (
+                    body_silhouette_age6_cross_view_naturalness_contract()
+                )
+                if raw_age6_naturalness != expected_age6_naturalness:
+                    raise McpMaterializationError(
+                        "mcp_materialization_body_rendering_contract_invalid",
+                        detail={"failure_code": "body_age6_naturalness_contract_invalid"},
+                    )
+                safe["body_silhouette_age6_cross_view_naturalness_contract"] = (
+                    expected_age6_naturalness
+                )
         elif raw_target_age_scope is not None:
             raise McpMaterializationError(
                 "mcp_materialization_body_rendering_contract_invalid",
                 detail={"failure_code": "body_refresh_target_age_scope_forbidden_for_inference"},
+            )
+        elif raw.get("body_silhouette_age6_cross_view_naturalness_contract") is not None:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "body_age6_naturalness_contract_forbidden_for_inference"},
             )
 
         identity_contract = {

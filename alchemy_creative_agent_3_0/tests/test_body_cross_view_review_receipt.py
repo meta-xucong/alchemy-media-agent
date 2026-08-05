@@ -126,6 +126,18 @@ def test_cross_view_receipt_rejects_missing_or_failed_visual_dimensions() -> Non
         )
 
 
+def test_cross_view_receipt_blocks_view_specific_age6_proportion_drift() -> None:
+    for code in (
+        "view_specific_limb_length_drift",
+        "view_specific_body_maturity_drift",
+        "front_side_rear_stature_ratio_conflict",
+    ):
+        receipt = _receipt(status="fail", issue_codes=[code])
+        assert receipt.status == "fail"
+        assert receipt.activation_eligible is False
+        assert receipt.issue_codes == (code,)
+
+
 def test_cross_view_receipt_binds_exact_outputs_and_source_digest() -> None:
     receipt = _receipt()
     assert isinstance(receipt, BodyCrossViewReviewReceipt)
@@ -219,7 +231,10 @@ def test_openai_compatible_cross_view_provider_builds_pass_receipt_from_three_ou
         body_refresh_analysis_context=type(
             "Context",
             (),
-            {"source_evidence_id_digest": "a" * 64},
+            {
+                "source_evidence_id_digest": "a" * 64,
+                "target_age_scope": "age_6_child_only",
+            },
         )(),
         body_source_admission=type(
             "Admission",
@@ -239,6 +254,74 @@ def test_openai_compatible_cross_view_provider_builds_pass_receipt_from_three_ou
     ]
     assert "Body proportion source references" not in transport.calls[0]["instructions"]
     assert "category match alone is not enough" in transport.calls[0]["instructions"]
+    instructions = transport.calls[0]["instructions"].lower()
+    assert "approximately six-year-old school-age child" in instructions
+    assert "not teen, adolescent, or adult fashion-model proportions" in instructions
+    assert "same compact stature, body depth, shoulder width, and limb scale" in instructions
+    assert "front_side_rear_stature_ratio_conflict" in instructions
+    assert "view_specific_limb_length_drift" in instructions
+
+
+def test_cross_view_review_instructions_do_not_apply_age6_without_frozen_scope(
+    tmp_path,
+) -> None:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    output_ids: dict[str, str] = {}
+    for index, slot_key in enumerate(
+        ("body.front_full", "body.side_full", "body.rear_full"),
+        start=1,
+    ):
+        record = output_store.save_base64_output(
+            job_id=f"job-no-age-{index}",
+            candidate_id=f"candidate-no-age-{index}",
+            asset_id="asset-body-no-age",
+            provider="openai_gpt_image",
+            model="gpt-image-2",
+            encoded_image=_png_base64((160 + index, 170, 180)),
+            mime_type="image/png",
+            output_format="png",
+        )
+        output_ids[slot_key] = record.output_id
+    transport = _CrossViewTransport(
+        {
+            "dimensions": {dimension: "pass" for dimension in BODY_CROSS_VIEW_DIMENSIONS},
+            "issue_codes": [],
+        }
+    )
+    provider = OpenAICompatibleBodyCrossViewReviewProvider(
+        api_key="configured",
+        base_url="https://vision.example/v1",
+        model="vision-model",
+        output_store=output_store,
+        transport=transport,
+    )
+
+    provider.review_body_cross_view(
+        asset=object(),
+        card=object(),
+        attempt_identity=type(
+            "Attempt",
+            (),
+            {"attempt_id": "body_refresh_attempt_0123456789abcdef0123456789abcdef"},
+        )(),
+        body_refresh_analysis_context=type(
+            "Context",
+            (),
+            {"source_evidence_id_digest": "a" * 64},
+        )(),
+        body_source_admission=type(
+            "Admission",
+            (),
+            {"source_evidence_id_digest": lambda self: "a" * 64},
+        )(),
+        formal_receipts={},
+        view_output_ids=output_ids,
+    )
+
+    instructions = transport.calls[0]["instructions"].lower()
+    assert "six-year-old" not in instructions
+    assert "school-age child" not in instructions
+    assert "not teen, adolescent, or adult fashion-model proportions" not in instructions
     assert "colorway, material, cut, graphics, logo, or added-layer drift" in transport.calls[0][
         "instructions"
     ]
