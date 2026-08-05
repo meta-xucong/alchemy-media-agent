@@ -193,7 +193,7 @@ class OpenAIVisionInspectionProvider:
 
     def _inspect_with_responses(self, client: Any, prompt: str, data_url: str, metadata: dict[str, Any]) -> str:
         model = self._model(metadata)
-        timeout = self._timeout()
+        timeout = self._timeout(metadata)
         reference_data_urls = _inspection_reference_data_urls(metadata)
         response_content = [
             {"type": "input_text", "text": prompt},
@@ -272,13 +272,18 @@ class OpenAIVisionInspectionProvider:
             or "gpt-5.5"
         )
 
-    def _timeout(self) -> float:
-        if self.timeout_seconds is not None:
-            return self.timeout_seconds
+    def _timeout(self, metadata: dict[str, Any] | None = None) -> float:
+        metadata = metadata or {}
+        raw_timeout = metadata.get("vision_inspection_timeout_seconds")
+        if raw_timeout is None:
+            raw_timeout = self.timeout_seconds
+        if raw_timeout is None:
+            raw_timeout = os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "90")
         try:
-            return float(os.getenv("V3_VISION_INSPECTION_TIMEOUT_SECONDS", "90"))
-        except ValueError:
-            return 90.0
+            timeout = float(raw_timeout)
+        except (TypeError, ValueError):
+            timeout = 90.0
+        return max(0.05, min(300.0, timeout))
 
 
 def _is_timeout_error(exc: Exception) -> bool:
