@@ -3165,6 +3165,16 @@ class ProductApiAnchorPackPreparationHost:
             )
             if not prompt_current:
                 continue
+            if (
+                request.module == "body_silhouette"
+                and not self._character_card_mcp_renderer_directive_current(store, payload)
+            ):
+                if str(payload.get("status") or "").strip().lower() == "submitted":
+                    raise AnchorCandidateUnavailable(
+                        "mcp_materialization_reference_mismatch",
+                        mcp_handoff_id=str(payload.get("handoff_id") or "").strip() or None,
+                    )
+                continue
             if self._character_card_mcp_handoff_current(request, payload):
                 current.append(payload)
                 continue
@@ -3194,6 +3204,29 @@ class ProductApiAnchorPackPreparationHost:
             raise AnchorCandidateUnavailable("mcp_materialization_operation_ambiguous")
         handoff_id = str(current[0].get("handoff_id") or "").strip()
         return handoff_id or None
+
+    @staticmethod
+    def _character_card_mcp_renderer_directive_current(
+        store: Any,
+        payload: dict[str, Any],
+    ) -> bool:
+        """Use the handoff store's public contract validator for Body recovery.
+
+        Body handoffs may be reissued when the renderer directive evolves while
+        the operation id and canonical Brain prompt remain unchanged.  The
+        store already owns the directive/hash validation, so recovery must ask
+        that boundary instead of treating prompt parity as sufficient.
+        """
+
+        public_view = getattr(store, "public_view", None)
+        handoff_id = str(payload.get("handoff_id") or "").strip()
+        if not callable(public_view) or not handoff_id:
+            return True
+        try:
+            public_view(handoff_id)
+        except Exception:
+            return False
+        return True
 
     def _character_card_mcp_handoff_current(
         self,

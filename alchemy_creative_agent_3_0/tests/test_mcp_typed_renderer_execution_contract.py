@@ -4,6 +4,7 @@ import json
 import base64
 import hashlib
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -15,6 +16,9 @@ from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import
     build_body_renderer_execution_receipt,
 )
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
+    ProductApiAnchorPackPreparationHost,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
     body_silhouette_age6_cross_view_naturalness_contract,
     body_silhouette_integrated_whole_person_synthesis_contract,
@@ -207,6 +211,54 @@ def test_pending_body_handoff_with_stale_renderer_directive_gets_new_revision(
     assert "Legacy compatibility wording" not in store.public_renderer_request(
         current["handoff_id"]
     )["renderer_prompt"]
+
+
+def test_body_orphan_recovery_skips_stale_renderer_revision(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
+    original_builder = mcp_materialization_module._build_body_renderer_execution_directive
+
+    def legacy_builder(**kwargs):
+        directive = original_builder(**kwargs)
+        directive["materialization_prompt"] += " Legacy compatibility wording."
+        directive["directive_sha256"] = mcp_materialization_module._canonical_json_sha256(directive)
+        return directive
+
+    monkeypatch.setattr(
+        mcp_materialization_module,
+        "_build_body_renderer_execution_directive",
+        legacy_builder,
+    )
+    stale = _ensure(store)
+    monkeypatch.setattr(
+        mcp_materialization_module,
+        "_build_body_renderer_execution_directive",
+        original_builder,
+    )
+    current = _ensure(store)
+
+    host = ProductApiAnchorPackPreparationHost(
+        SimpleNamespace(
+            mcp_materialization_store=store,
+            visual_asset_catalog=None,
+        )
+    )
+    request = SimpleNamespace(
+        module="body_silhouette",
+        slot_key="body.front_full",
+        mcp_handoff_id=None,
+    )
+
+    recovered = host._recover_unconsumed_character_card_mcp_handoff_id(  # noqa: SLF001
+        request,
+        "visual_asset_renderer_contract:body_silhouette:body.front_full:1",
+    )
+
+    assert stale["revision"] == 1
+    assert current["revision"] == 2
+    assert recovered == current["handoff_id"]
 
 
 def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_or_raw_fields(tmp_path) -> None:
