@@ -61,49 +61,46 @@ _BODY_RENDERER_PRESENTATION_PHRASES = {
     "plain_white_ankle_socks": "plain white ankle socks with visible ankle and ground contact",
 }
 _BODY_RENDERER_BACKDROP_PHRASES = {
-    "solid_white": (
-        "perfectly uniform pure solid white backdrop, no gray, no gradient, "
-        "no floor, no shadow"
-    ),
+    "solid_white": "uniform pure solid white studio backdrop",
 }
 
 _BODY_MORPHOLOGY_RENDERER_PHRASES = {
     "relative_head_to_stature": {
-        "larger": "a relatively larger head-to-stature relationship",
-        "proportional": "a proportionate head-to-stature relationship",
-        "smaller": "a relatively smaller head-to-stature relationship",
+        "larger": "a natural child-scale head-to-stature relationship with a slightly larger head proportion",
+        "proportional": "a natural child-scale head-to-stature relationship",
+        "smaller": "a natural child-scale head-to-stature relationship with a slightly smaller head proportion",
     },
     "shoulder_to_head": {
-        "narrower": "shoulders narrower relative to the head",
-        "proportional": "shoulders proportionate to the head",
-        "wider": "shoulders wider relative to the head",
+        "narrower": "shoulders naturally narrower relative to the head",
+        "proportional": "shoulders naturally proportionate to the head",
+        "wider": "shoulders naturally broader relative to the head",
     },
     "torso_to_leg": {
-        "shorter_torso": "a shorter torso relative to leg length",
-        "proportional": "a proportionate torso-to-leg relationship",
-        "longer_torso": "a longer torso relative to leg length",
+        "shorter_torso": "a natural compact torso relative to leg length",
+        "proportional": "a natural torso-to-leg relationship",
+        "longer_torso": "a naturally extended torso relative to leg length",
     },
     "arm_to_leg": {
-        "relatively_shorter": "relatively shorter arms against leg length",
-        "proportional": "a proportionate arm-to-leg relationship",
-        "relatively_longer": "relatively longer arms against leg length",
+        "relatively_shorter": "natural child-scale arm length relative to leg length",
+        "proportional": "a natural arm-to-leg relationship",
+        "relatively_longer": "natural child-scale arm length with a longer proportion relative to leg length",
     },
     "build": {
-        "slender": "a slender natural build",
-        "medium": "a medium natural build",
-        "sturdy": "a sturdy natural build",
+        "slender": "a slender, age-appropriate child build",
+        "medium": "a medium, age-appropriate child build",
+        "sturdy": "a sturdy, age-appropriate child build",
     },
     "neck_shoulder": {
-        "narrow_transition": "a narrow natural neck-to-shoulder transition",
-        "proportional_transition": "a proportionate natural neck-to-shoulder transition",
-        "wide_transition": "a wide natural neck-to-shoulder transition",
+        "narrow_transition": "a smooth natural neck-to-shoulder transition",
+        "proportional_transition": "a smooth natural neck-to-shoulder transition",
+        "wide_transition": "a smooth natural neck-to-shoulder transition",
     },
     "developmental_stage_context": {
-        "early_stage_context": "the frozen early developmental-stage body context",
-        "middle_stage_context": "the frozen middle developmental-stage body context",
-        "later_stage_context": "the frozen later developmental-stage body context",
-        "adult_stage_context": "the frozen adult developmental-stage body context",
-        "unknown_stage_context": "no unsupported developmental-stage claim",
+        "early_stage_context": "an age-appropriate early school-age body context",
+        "middle_stage_context": "an age-appropriate school-age body context",
+        "later_stage_context": "an age-appropriate later school-age body context",
+        "adult_stage_context": "an age-appropriate adult body context",
+        "unknown_stage_context": "an age-appropriate body context",
     },
     "stance_ground": {
         "grounded_full_contact": "natural full-contact standing and weight bearing",
@@ -286,52 +283,37 @@ def _build_body_renderer_execution_directive(
             "mcp_materialization_renderer_execution_directive_invalid"
         ) from exc
     directive["materialization_prompt"] = (
-        "Execute the closed server-owned Body Silhouette renderer directive exactly. "
+        "Apply the server-owned Body Silhouette direction exactly. "
         f"Render a {top_phrase}. Render {bottom_phrase}. Render the subject {footwear_phrase}. "
         f"Use a {backdrop_phrase}. "
-        "Preserve hair from the current Face Identity references with the same "
-        "hairstyle category, same hair length tier, same bangs-or-parting pattern, "
-        "and same overall hair outline. Use Face identity references only as physical "
-        "inputs; Body proportion evidence is analysis-only. "
-        "Synthesize one coherent whole person in one natural body chain from head, "
-        "neck, shoulders, torso, and limbs; preserve anatomical head-neck-shoulder "
-        "continuity, natural asymmetry, weight bearing, joint placement, and ground "
-        "contact. Never paste, swap, or composite a head onto a body; never use a "
-        "mannequin or cardboard stance."
+        "Create one coherent whole person in a natural photographed full-body view with "
+        "a natural continuous transition from face through head, neck, shoulders, torso, "
+        "arms, and legs. "
+        "Use Face identity references only for identity continuity and hair continuity; "
+        "body proportion evidence has already been analyzed server-side and is not a "
+        "physical input. Preserve the same hairstyle category, hair length tier, "
+        "bangs-or-parting pattern, and overall hair outline. Keep natural asymmetry, "
+        "balanced posture, weight bearing, joint placement, and grounded stance."
     )
     if age6_naturalness is not None:
         directive["materialization_prompt"] += (
-            " Apply the age-6 Body naturalness contract only for this reference-assisted "
-            "Body refresh: render approximately six-year-old school-age child body "
-            "proportions, not teen, adolescent, or adult fashion-model proportions. "
-            "Use Face identity references as identity guidance for facial structure and "
-            "hair continuity while generating one cohesive full-body subject. Re-render "
-            "the entire person coherently in one pass from the same camera-space body "
-            "model. Generate the face, head, neck, shoulders, torso, arms, legs, skin "
-            "tone, and lighting as one continuous subject with a smooth natural "
-            "transition through the neck and shoulders. "
-            "Do not elongate the legs, slim the frame into a mature runway build, "
-            "or age up the torso/shoulder/limb relationship. Keep the same compact "
-            "stature, body depth, shoulder width, and limb scale across front, side, "
-            "and rear. Preserve the same body envelope across views: compact height "
-            "impression, shoulder width, torso depth, hip and shorts width, leg length, "
-            "and lower-leg thickness. Do not make side or rear views taller, thinner, "
-            "older, or differently built than the front. The front view must look like "
-            "one naturally photographed whole person with continuous face, head, neck, "
-            "shoulders, torso, and limbs, coherent skin texture, consistent lighting, "
-            "and natural anatomical transitions."
+            " For this reference-assisted Body refresh, render an ordinary, fully clothed "
+            "approximately six-year-old school-age child with compact, age-appropriate "
+            "body scale. Generate the entire person coherently in one "
+            "pass from a shared camera-space body model. Keep the same compact "
+            "age-appropriate body envelope across front, side, and rear views, including "
+            "head-to-body scale, shoulder width, torso depth, torso-to-leg relationship, "
+            "arm-to-leg relationship, leg scale, and lower-leg thickness. Apply the "
+            "frozen Body morphology profile consistently across every view, with coherent "
+            "skin texture, consistent lighting, and natural anatomical transitions."
         )
     if garment:
         directive["materialization_prompt"] += (
-            " Treat the current front/side/rear Body refresh as one exact same-garment series: "
-            "keep the same top garment identity, the same shorts identity, and the same plain "
-            "white ankle socks across views. Do not change garment colorway, material, cut, "
-            "graphics, logos, or added layers between views; only view angle, pose, lighting, "
-            "natural fabric fold, and natural occlusion may vary. The canonical garment "
-            "identity is locked across every view: use a plain soft-white matte cotton-jersey "
-            "crew-neck short-sleeve top, mid-blue matte cotton-denim relaxed knee-length "
-            "shorts, and plain white ribbed-cotton ankle socks. Keep every garment "
-            "graphic-free and logo-free."
+            " Use the same canonical garment identity across every view: a plain soft-white "
+            "matte cotton-jersey crew-neck short-sleeve top, mid-blue matte cotton-denim "
+            "relaxed knee-length shorts, and plain white ribbed-cotton ankle socks. "
+            "Keep the garments plain, graphic-free, and logo-free while allowing natural "
+            "view-angle folds and occlusion."
         )
     if isinstance(morphology, dict):
         bands = morphology["bands"]
@@ -345,7 +327,7 @@ def _build_body_renderer_execution_directive(
                 "mcp_materialization_renderer_execution_directive_invalid"
             ) from exc
         directive["materialization_prompt"] += (
-            " Apply the closed Body morphology profile as one integrated person: "
+            " Apply the frozen Body morphology profile consistently across every view: "
             + "; ".join(morphology_phrases)
             + "."
         )

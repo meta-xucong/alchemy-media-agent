@@ -561,7 +561,7 @@ def test_typed_directive_is_the_actual_host_materialization_input(tmp_path: Path
     assert host_requests[0]["renderer_prompt"] != prompt
     assert "one coherent whole person" in str(host_requests[0]["renderer_prompt"]).lower()
     renderer_prompt = str(host_requests[0]["renderer_prompt"]).lower()
-    assert "never paste, swap, or composite a head onto a body" in renderer_prompt
+    assert "natural continuous transition from face through head, neck, shoulders, torso, arms, and legs" in renderer_prompt
     assert host_requests[0]["renderer_execution_directive_sha256"]
 
 

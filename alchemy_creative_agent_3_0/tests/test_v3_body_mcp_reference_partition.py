@@ -329,12 +329,12 @@ def test_mcp_body_handoff_public_view_preserves_typed_body_face_partition(tmp_pa
     renderer_request = store.public_renderer_request(handoff["handoff_id"])
     assert public_contract["body_mcp_reference_partition"] == partition
     renderer_prompt = renderer_request["renderer_prompt"].lower()
-    assert "proportionate head-to-stature relationship" in renderer_prompt
-    assert "shoulders narrower relative to the head" in renderer_prompt
-    assert "shorter torso relative to leg length" in renderer_prompt
-    assert "slender natural build" in renderer_prompt
+    assert "natural child-scale head-to-stature relationship" in renderer_prompt
+    assert "shoulders naturally narrower relative to the head" in renderer_prompt
+    assert "natural compact torso relative to leg length" in renderer_prompt
+    assert "slender, age-appropriate child build" in renderer_prompt
     assert "one coherent whole person" in renderer_prompt
-    assert "body proportion evidence is analysis-only" in renderer_prompt
+    assert "body proportion evidence has already been analyzed server-side and is not a physical input" in renderer_prompt
     assert "raw_prompt" not in public_contract
     assert "provider_payload" not in public_contract
     assert handoff["rendering_contract_fingerprint"] == store._rendering_contract_fingerprint(contract)

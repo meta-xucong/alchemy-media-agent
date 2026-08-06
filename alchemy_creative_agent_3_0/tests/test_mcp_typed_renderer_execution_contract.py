@@ -341,7 +341,7 @@ def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_
     assert captured["canonical_prompt"] == "Body proportion and stance only."
     assert captured["canonical_prompt_sha256"] == "canonical-prompt-hash"
     assert captured["renderer_prompt"].startswith(
-        "Body proportion and stance only.\n\nExecute the closed server-owned"
+        "Body proportion and stance only.\n\nApply the server-owned"
     )
     assert captured["renderer_prompt_sha256"]
     assert captured["renderer_execution_directive_sha256"] == directive["directive_sha256"]
@@ -359,23 +359,20 @@ def test_fake_imagegen_host_receives_typed_renderer_directive_not_body_evidence_
     assert "plain short-sleeve top" in captured["renderer_prompt"]
     assert "shorts with legs visible" in captured["renderer_prompt"]
     assert "plain white ankle socks with visible ankle and ground contact" in captured["renderer_prompt"]
-    assert "exact same-garment series" in captured["renderer_prompt"]
+    assert "same canonical garment identity across every view" in captured["renderer_prompt"]
     assert "plain soft-white matte cotton-jersey crew-neck short-sleeve top" in captured[
         "renderer_prompt"
     ]
     assert "mid-blue matte cotton-denim relaxed knee-length shorts" in captured["renderer_prompt"]
     assert "plain white ribbed-cotton ankle socks" in captured["renderer_prompt"]
-    assert "graphic-free and logo-free" in captured["renderer_prompt"]
-    assert "do not change garment colorway, material, cut, graphics, logos, or added layers" in captured[
-        "renderer_prompt"
-    ].lower()
+    assert "plain, graphic-free, and logo-free" in captured["renderer_prompt"]
     assert "barefoot" not in captured["renderer_prompt"].lower()
     assert "no shoes or socks" not in captured["renderer_prompt"].lower()
-    assert "perfectly uniform pure solid white backdrop, no gray, no gradient, no floor, no shadow" in captured["renderer_prompt"]
+    assert "uniform pure solid white studio backdrop" in captured["renderer_prompt"]
     assert "same hairstyle category" in captured["renderer_prompt"]
-    assert "same hair length tier" in captured["renderer_prompt"]
-    assert "same bangs-or-parting pattern" in captured["renderer_prompt"]
-    assert "same overall hair outline" in captured["renderer_prompt"]
+    assert "hair length tier" in captured["renderer_prompt"]
+    assert "bangs-or-parting pattern" in captured["renderer_prompt"]
+    assert "overall hair outline" in captured["renderer_prompt"]
     assert "body-hash-0" not in json.dumps(directive, sort_keys=True)
     assert "raw_prompt" not in directive
     assert "provider_payload" not in directive
@@ -402,21 +399,22 @@ def test_reference_assisted_body_renderer_enforces_age6_natural_single_person_an
         == "whole_person_regeneration_not_face_transplant"
     )
     assert directive["age6_cross_view_naturalness"]["same_body_envelope_across_views"] is True
-    assert "approximately six-year-old school-age child body proportions" in renderer_prompt
-    assert "not teen, adolescent, or adult fashion-model proportions" in renderer_prompt
-    assert "do not elongate the legs" in renderer_prompt
-    assert "same compact stature, body depth, shoulder width, and limb scale" in renderer_prompt
-    assert "front view must look like one naturally photographed whole person" in renderer_prompt
-    assert "use face identity references as identity guidance for facial structure and hair continuity" in renderer_prompt
-    assert "generate the face, head, neck, shoulders, torso, arms, legs, skin tone, and lighting as one continuous subject" in renderer_prompt
-    assert "smooth natural transition through the neck and shoulders" in renderer_prompt
-    assert "coherent skin texture, consistent lighting, and natural anatomical transitions" in renderer_prompt
-    assert "same body envelope across views" in renderer_prompt
-    assert "do not make side or rear views taller, thinner, older, or differently built than the front" in renderer_prompt
-    assert "face transplant" not in renderer_prompt
-    assert "pasted face" not in renderer_prompt
+    assert "ordinary, fully clothed approximately six-year-old school-age child" in renderer_prompt
+    assert "one coherent whole person" in renderer_prompt
+    assert "natural continuous transition from face through head, neck, shoulders, torso, arms, and legs" in renderer_prompt
+    assert "same compact age-appropriate body envelope across front, side, and rear views" in renderer_prompt
+    assert "apply the frozen body morphology profile consistently across every view" in renderer_prompt
+    assert "use face identity references only for identity continuity and hair continuity" in renderer_prompt
+    assert "body proportion evidence has already been analyzed server-side and is not a physical input" in renderer_prompt
+    assert "not teen" not in renderer_prompt
+    assert "adolescent" not in renderer_prompt
+    assert "adult fashion" not in renderer_prompt
+    assert "runway" not in renderer_prompt
+    assert "pasted" not in renderer_prompt
+    assert "composite" not in renderer_prompt
     assert "head swap" not in renderer_prompt
-    assert "pasted-head" not in renderer_prompt
+    assert "mannequin" not in renderer_prompt
+    assert "cardboard" not in renderer_prompt
 
 
 def test_inference_first_body_renderer_does_not_inherit_age6_child_semantics(tmp_path) -> None:
