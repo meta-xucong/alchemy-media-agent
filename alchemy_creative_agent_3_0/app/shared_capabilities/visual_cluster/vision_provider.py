@@ -607,6 +607,19 @@ def _enforced_inspection_prompt(
                     "cardboard_stance, shoulder_width_incoherent, limb/joint/ground-contact issues all "
                     "block Body formal acceptance. A generic high-confidence pass is not sufficient."
                 )
+                slot_key = str(body_silhouette_review.get("slot_key") or "").strip()
+                slot_direction = {
+                    "body.front_full": "front_full single front-facing full-body view",
+                    "body.side_full": "side_full single 90-degree side/profile full-body view",
+                    "body.rear_full": "rear_full single rear-facing full-body view",
+                }.get(slot_key, slot_key or "the requested body slot")
+                lines.append(
+                    "Body single-slot layout rule: one body slot image must contain exactly one full-body subject "
+                    f"in the requested {slot_direction}, not a turnaround sheet, contact sheet, split panel, or "
+                    "front-side-rear lineup. Fail any generated image that contains multiple full-body figures, "
+                    "multiple view panels, or a three-view lineup inside one slot with "
+                    "body_silhouette_multi_view_sheet_in_single_slot."
+                )
                 if body_silhouette_review.get("age6_cross_view_naturalness_contract"):
                     lines.append(
                         "Age-6 Body naturalness review applies only because the frozen Body refresh analysis "

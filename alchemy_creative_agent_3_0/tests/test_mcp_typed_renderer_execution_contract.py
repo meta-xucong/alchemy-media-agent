@@ -80,7 +80,7 @@ def _morphology_profile() -> dict:
     }
 
 
-def _strict_contract() -> dict:
+def _strict_contract(*, slot_key: str = "body.front_full") -> dict:
     return {
         "renderer": "codex_builtin_imagegen",
         "model": "gpt-image-2",
@@ -105,6 +105,21 @@ def _strict_contract() -> dict:
         "body_silhouette_garment_continuity_contract": default_body_silhouette_garment_continuity_contract(),
         "body_silhouette_hair_continuity_contract": default_body_silhouette_hair_continuity_contract(),
         "body_silhouette_backdrop_presentation_contract": default_body_silhouette_backdrop_presentation_contract(),
+        "slot_key": slot_key,
+        "candidate_index": 1,
+        "candidate_count": 3,
+        "professional_body_refresh_analysis_context": {
+            "contract_version": "body_refresh_analysis_context_v2",
+            "schema_version": "body_morphology_evidence_profile_v2",
+            "source_mode": "reference_assisted",
+            "attempt_id": "refresh_attempt_renderer_contract",
+            "append_only_revision": 1,
+            "source_binding_digest": "b" * 64,
+            "source_evidence_id_digest": "c" * 64,
+            "profile_digest": "a" * 64,
+            "target_age_scope": "age_6_child_only",
+            "target_age_scope_digest": hashlib.sha256(b"age_6_child_only").hexdigest(),
+        },
     }
 
 
@@ -402,7 +417,7 @@ def test_reference_assisted_body_renderer_enforces_age6_natural_single_person_an
     assert "ordinary, fully clothed approximately six-year-old school-age child" in renderer_prompt
     assert "one coherent whole person" in renderer_prompt
     assert "natural continuous transition from face through head, neck, shoulders, torso, arms, and legs" in renderer_prompt
-    assert "same compact age-appropriate body envelope across front, side, and rear views" in renderer_prompt
+    assert "same compact age-appropriate body envelope across the separate character card body slots" in renderer_prompt
     assert "apply the frozen body morphology profile consistently across every view" in renderer_prompt
     assert "use face identity references only for identity continuity and hair continuity" in renderer_prompt
     assert "body proportion evidence has already been analyzed server-side and is not a physical input" in renderer_prompt
@@ -417,6 +432,26 @@ def test_reference_assisted_body_renderer_enforces_age6_natural_single_person_an
     assert "cardboard" not in renderer_prompt
 
 
+def test_reference_assisted_side_slot_renderer_forbids_turnaround_sheet_in_single_output(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
+    handoff = _ensure(store, contract=_strict_contract(slot_key="body.side_full"))
+
+    host_request = store.public_renderer_request(handoff["handoff_id"])
+    directive = host_request["renderer_execution_directive"]
+    renderer_prompt = str(host_request["renderer_prompt"]).lower()
+
+    assert directive["target_body_view"]["slot_key"] == "body.side_full"
+    assert directive["target_body_view"]["view_kind"] == "side_full"
+    assert directive["target_body_view"]["single_slot_image_required"] is True
+    assert "render only one 90-degree side/profile full-body view" in renderer_prompt
+    assert "do not include a front view, rear view, turnaround sheet, three-view lineup" in renderer_prompt
+    assert "do not place multiple people, multiple poses, multiple panels" in renderer_prompt
+    assert "same compact age-appropriate body envelope across the separate character card body slots" in renderer_prompt
+    assert "same compact age-appropriate body envelope across front, side, and rear views" not in renderer_prompt
+
+
 def test_inference_first_body_renderer_does_not_inherit_age6_child_semantics(tmp_path) -> None:
     contract = _strict_contract()
     contract["body_refresh_source_mode"] = "inference_first"
@@ -424,6 +459,7 @@ def test_inference_first_body_renderer_does_not_inherit_age6_child_semantics(tmp
     contract.pop("body_silhouette_age6_cross_view_naturalness_contract", None)
     contract.pop("body_mcp_reference_partition", None)
     contract.pop("body_morphology_profile", None)
+    contract.pop("professional_body_refresh_analysis_context", None)
     store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
     handoff = _ensure(store, contract=contract)
 

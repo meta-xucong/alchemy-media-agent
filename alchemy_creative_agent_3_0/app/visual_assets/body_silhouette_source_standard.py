@@ -64,6 +64,7 @@ BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES = frozenset(
         "cardboard_stance",
         "stance_centerline_error",
         "body_silhouette_integrated_review_evidence_missing",
+        "body_silhouette_multi_view_sheet_in_single_slot",
     }
 )
 

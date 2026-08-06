@@ -605,6 +605,7 @@ def test_body_visual_review_blocks_mannequin_and_pasted_head_findings_even_when_
         "face_body_texture_lighting_mismatch",
         "target_age_body_proportion_drift",
         "model_like_limb_elongation",
+        "body_silhouette_multi_view_sheet_in_single_slot",
     ):
         result = evaluator(
             {
@@ -652,6 +653,18 @@ def test_body_review_prompt_requires_age6_naturalness_and_integration_evidence()
     assert "face_reference_transplant_artifact" in prompt
     assert "face_body_texture_lighting_mismatch" in prompt
     assert "skin tone, lighting, edge transition, neck support, and shoulder relationship" in prompt
+
+
+def test_body_review_prompt_blocks_multi_view_sheet_inside_single_body_slot() -> None:
+    metadata = _body_review_metadata_for_vision()
+    metadata["professional_character_card_slot"] = "body.side_full"
+    prompt = _inspection_prompt(metadata).lower()
+
+    assert "body_silhouette_multi_view_sheet_in_single_slot" in prompt
+    assert "one body slot image must contain exactly one full-body subject" in prompt
+    assert "not a turnaround sheet, contact sheet, split panel, or front-side-rear lineup" in prompt
+    assert "side_full" in prompt
+    assert "single 90-degree side/profile full-body view" in prompt
 
 
 def test_body_review_prompt_without_age6_context_does_not_inherit_child_specific_language() -> None:

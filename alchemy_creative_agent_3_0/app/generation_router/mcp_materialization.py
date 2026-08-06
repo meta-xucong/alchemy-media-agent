@@ -114,6 +114,36 @@ _BODY_MORPHOLOGY_RENDERER_PHRASES = {
     },
 }
 
+_BODY_RENDERER_TARGET_VIEW_PHRASES = {
+    "body.front_full": {
+        "view_kind": "front_full",
+        "required_view": "single front-facing full-body view",
+        "prompt": (
+            "Render only one front-facing full-body view for this Body slot. "
+            "Do not include a side view, rear view, turnaround sheet, three-view lineup, "
+            "contact sheet, split panel, or comparison layout."
+        ),
+    },
+    "body.side_full": {
+        "view_kind": "side_full",
+        "required_view": "single 90-degree side/profile full-body view",
+        "prompt": (
+            "Render only one 90-degree side/profile full-body view for this Body slot. "
+            "Do not include a front view, rear view, turnaround sheet, three-view lineup, "
+            "contact sheet, split panel, or comparison layout."
+        ),
+    },
+    "body.rear_full": {
+        "view_kind": "rear_full",
+        "required_view": "single rear-facing full-body view",
+        "prompt": (
+            "Render only one rear-facing full-body view for this Body slot. "
+            "Do not include a front view, side view, turnaround sheet, three-view lineup, "
+            "contact sheet, split panel, or comparison layout."
+        ),
+    },
+}
+
 
 def _canonical_json_sha256(value: dict[str, Any]) -> str:
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -232,6 +262,23 @@ def _build_body_renderer_execution_directive(
         },
         "integrated_whole_person_synthesis": integrated,
     }
+    slot_key = str(rendering_contract.get("slot_key") or "").strip()
+    target_view = _BODY_RENDERER_TARGET_VIEW_PHRASES.get(slot_key)
+    if target_view is not None:
+        directive["target_body_view"] = {
+            "slot_key": slot_key,
+            "view_kind": target_view["view_kind"],
+            "required_view": target_view["required_view"],
+            "single_slot_image_required": True,
+            "forbidden_layouts": [
+                "turnaround_sheet",
+                "three_view_lineup",
+                "multi_person_lineup",
+                "contact_sheet",
+                "split_panel",
+                "comparison_layout",
+            ],
+        }
     if age6_naturalness is not None:
         directive["age6_cross_view_naturalness"] = {
             "target_age_scope": BODY_REFRESH_REFERENCE_AGE_SCOPE,
@@ -284,6 +331,8 @@ def _build_body_renderer_execution_directive(
         ) from exc
     directive["materialization_prompt"] = (
         "Apply the server-owned Body Silhouette direction exactly. "
+        + (target_view["prompt"] + " " if target_view is not None else "")
+        + "Do not place multiple people, multiple poses, multiple panels, or multiple body views in this single output. "
         f"Render a {top_phrase}. Render {bottom_phrase}. Render the subject {footwear_phrase}. "
         f"Use a {backdrop_phrase}. "
         "Create one coherent whole person in a natural photographed full-body view with "
@@ -301,7 +350,7 @@ def _build_body_renderer_execution_directive(
             "approximately six-year-old school-age child with compact, age-appropriate "
             "body scale. Generate the entire person coherently in one "
             "pass from a shared camera-space body model. Keep the same compact "
-            "age-appropriate body envelope across front, side, and rear views, including "
+            "age-appropriate body envelope across the separate Character Card Body slots, including "
             "head-to-body scale, shoulder width, torso depth, torso-to-leg relationship, "
             "arm-to-leg relationship, leg scale, and lower-leg thickness. Apply the "
             "frozen Body morphology profile consistently across every view, with coherent "
