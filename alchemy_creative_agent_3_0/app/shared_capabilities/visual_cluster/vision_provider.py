@@ -30,6 +30,7 @@ from ...visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_BLOCKING_ISSUE_EVALUATION_EVIDENCE_CODE,
     BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS,
     body_silhouette_age6_cross_view_naturalness_contract,
+    body_silhouette_fixed_full_body_framing_contract,
     validated_body_silhouette_source_standard_contract,
 )
 from ...visual_assets.character_card import BodySilhouetteBackdropPresentationContract
@@ -620,6 +621,16 @@ def _enforced_inspection_prompt(
                     "multiple view panels, or a three-view lineup inside one slot with "
                     "body_silhouette_multi_view_sheet_in_single_slot."
                 )
+                if body_silhouette_review.get("fixed_full_body_framing_contract"):
+                    lines.append(
+                        "Body fixed full-body framing review: require the same camera distance and subject scale "
+                        "across the front, side, and rear Body slots. The full standing body should use matched "
+                        "headroom and footroom, a stable centered body centerline, and no view-specific zoom. "
+                        "Fail visible front/side/rear distance drift with "
+                        "body_silhouette_cross_view_camera_distance_drift, subject scale drift with "
+                        "body_silhouette_subject_scale_drift, and mismatched top/bottom margins with "
+                        "body_silhouette_headroom_footroom_mismatch."
+                    )
                 if body_silhouette_review.get("age6_cross_view_naturalness_contract"):
                     lines.append(
                         "Age-6 Body naturalness review applies only because the frozen Body refresh analysis "
@@ -765,6 +776,9 @@ def _professional_body_silhouette_review_context(
         "wardrobe_contract": body_review.get("wardrobe_contract"),
         "hair_continuity_contract": body_review.get("hair_continuity_contract"),
         "source_standard_contract": body_review.get("source_standard_contract"),
+        "fixed_full_body_framing_contract": body_review.get(
+            "fixed_full_body_framing_contract"
+        ),
         "age6_cross_view_naturalness_contract": body_review.get(
             "age6_cross_view_naturalness_contract"
         ),
@@ -1111,6 +1125,11 @@ def _professional_identity_quality_contract(
         for item in age6_naturalness_contract.get("blocking_issue_codes", [])
         if str(item).strip()
     ]
+    fixed_framing_contract = (
+        body_silhouette_fixed_full_body_framing_contract()
+        if body_silhouette_review_applies
+        else {}
+    )
     body_silhouette_score_dimensions = [
         *BODY_SILHOUETTE_FRAMING_DELTA_DIMENSIONS,
         *body_source_standard_dimensions,
@@ -1309,6 +1328,7 @@ def _professional_identity_quality_contract(
                 "source_standard_contract": source_standard_contract,
                 "hair_continuity_contract": body_source_contract.get("hair_continuity_contract"),
                 "backdrop_presentation_contract": backdrop_presentation_contract,
+                "fixed_full_body_framing_contract": fixed_framing_contract,
                 "age6_cross_view_naturalness_contract": age6_naturalness_contract,
                 "backdrop_evidence": {
                     "status": "unknown",

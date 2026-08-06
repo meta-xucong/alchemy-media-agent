@@ -32,6 +32,7 @@ from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target
 from ..visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
     body_silhouette_age6_cross_view_naturalness_contract,
+    body_silhouette_fixed_full_body_framing_contract,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
     body_silhouette_integrated_whole_person_synthesis_contract,
@@ -6067,6 +6068,9 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             )
             contract["body_silhouette_integrated_whole_person_synthesis_contract"] = (
                 body_silhouette_integrated_whole_person_synthesis_contract()
+            )
+            contract["body_silhouette_fixed_full_body_framing_contract"] = (
+                body_silhouette_fixed_full_body_framing_contract()
             )
             if self._is_strict_character_card_body_refresh(metadata):
                 source_mode = str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip()

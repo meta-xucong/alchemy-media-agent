@@ -606,6 +606,9 @@ def test_body_visual_review_blocks_mannequin_and_pasted_head_findings_even_when_
         "target_age_body_proportion_drift",
         "model_like_limb_elongation",
         "body_silhouette_multi_view_sheet_in_single_slot",
+        "body_silhouette_cross_view_camera_distance_drift",
+        "body_silhouette_subject_scale_drift",
+        "body_silhouette_headroom_footroom_mismatch",
     ):
         result = evaluator(
             {
@@ -653,6 +656,18 @@ def test_body_review_prompt_requires_age6_naturalness_and_integration_evidence()
     assert "face_reference_transplant_artifact" in prompt
     assert "face_body_texture_lighting_mismatch" in prompt
     assert "skin tone, lighting, edge transition, neck support, and shoulder relationship" in prompt
+
+
+def test_body_review_prompt_requires_fixed_full_body_framing_and_blocks_distance_drift() -> None:
+    metadata = _body_review_metadata_for_vision()
+    prompt = _inspection_prompt(metadata).lower()
+
+    assert "fixed full-body framing" in prompt
+    assert "same camera distance and subject scale" in prompt
+    assert "matched headroom and footroom" in prompt
+    assert "body_silhouette_cross_view_camera_distance_drift" in prompt
+    assert "body_silhouette_subject_scale_drift" in prompt
+    assert "body_silhouette_headroom_footroom_mismatch" in prompt
 
 
 def test_body_review_prompt_blocks_multi_view_sheet_inside_single_body_slot() -> None:

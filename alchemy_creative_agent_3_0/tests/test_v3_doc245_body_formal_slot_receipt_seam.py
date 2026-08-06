@@ -114,6 +114,7 @@ from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standar
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSION_EVIDENCE_CODES,
     BODY_SILHOUETTE_SOURCE_STANDARD_DIMENSIONS,
     BODY_SILHOUETTE_SOURCE_STANDARD_SCORE_FLOOR,
+    body_silhouette_fixed_full_body_framing_contract,
     body_silhouette_integrated_whole_person_synthesis_contract,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
@@ -1832,6 +1833,9 @@ def test_doc245_body_handoff_store_preserves_typed_hair_backdrop_and_fingerprint
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
         ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
+        ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         "body_silhouette_garment_continuity_contract": _doc245_body_garment_continuity_contract(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
@@ -1908,6 +1912,9 @@ def test_doc245_body_handoff_store_rejects_old_strict_contract_without_hair_or_b
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
         ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
+        ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
     }
 
@@ -1947,6 +1954,9 @@ def test_doc245_body_materialization_public_view_exposes_structured_contract_not
         ),
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
         ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         "body_silhouette_garment_continuity_contract": _doc245_body_garment_continuity_contract(),
@@ -2048,6 +2058,9 @@ def test_doc245_body_host_public_view_consumer_reads_typed_hair_backdrop_contrac
         ),
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
         ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         "body_silhouette_garment_continuity_contract": _doc245_body_garment_continuity_contract(),
@@ -2293,6 +2306,9 @@ def _doc245_body_frozen_contract_fields() -> dict[str, object]:
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
         ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
+        ),
         "body_refresh_presentation_intent": _doc245_body_refresh_presentation_intent(),
         "body_silhouette_garment_continuity_contract": _doc245_body_garment_continuity_contract(),
         "body_silhouette_hair_continuity_contract": body_source_contract[
@@ -2437,6 +2453,9 @@ def test_doc245_mcp_handoff_store_fails_closed_for_body_contract_without_valid_i
         ),
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
         ),
     }
     if intent_payload is not None:

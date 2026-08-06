@@ -65,6 +65,10 @@ BODY_SILHOUETTE_SOURCE_STANDARD_BLOCKING_ISSUE_CODES = frozenset(
         "stance_centerline_error",
         "body_silhouette_integrated_review_evidence_missing",
         "body_silhouette_multi_view_sheet_in_single_slot",
+        "body_silhouette_cross_view_camera_distance_drift",
+        "body_silhouette_subject_scale_drift",
+        "body_silhouette_headroom_footroom_mismatch",
+        "body_silhouette_view_specific_zoom_drift",
     }
 )
 
@@ -123,6 +127,10 @@ BODY_SILHOUETTE_INTEGRATED_REVIEW_DIMENSIONS = (
 
 BODY_SILHOUETTE_AGE6_CROSS_VIEW_NATURALNESS_CONTRACT_VERSION = (
     "professional_body_silhouette_age6_cross_view_naturalness_v1"
+)
+
+BODY_SILHOUETTE_FIXED_FULL_BODY_FRAMING_CONTRACT_VERSION = (
+    "professional_body_silhouette_fixed_full_body_framing_v1"
 )
 
 _BODY_SILHOUETTE_MCP_FORBIDDEN_CHANNEL_TERMS = {
@@ -292,6 +300,42 @@ def body_silhouette_age6_cross_view_naturalness_contract() -> dict[str, Any]:
             "teen_or_adult_age_override",
             "body_reference_physical_renderer_input",
             "biometric_vector_or_measurement_storage",
+        ],
+    }
+
+
+def body_silhouette_fixed_full_body_framing_contract() -> dict[str, Any]:
+    """Return the Body-only full-body framing parity contract.
+
+    This contract owns camera-distance and canvas-scale consistency for
+    Professional Character Card Body slots. It is composition authority only:
+    it does not infer age, identity, body measurements, or scenario styling.
+    """
+
+    return {
+        "contract_version": BODY_SILHOUETTE_FIXED_FULL_BODY_FRAMING_CONTRACT_VERSION,
+        "applies": True,
+        "scope": "professional_character_card_body_silhouette_slot_triplet",
+        "target_canvas_size": "1024x1536",
+        "single_full_body_subject_centered": True,
+        "same_camera_distance_across_slots": True,
+        "same_subject_scale_across_slots": True,
+        "matched_headroom_and_footroom": True,
+        "target_subject_height_fraction": {"min": 0.84, "max": 0.90},
+        "target_headroom_fraction": {"min": 0.04, "max": 0.08},
+        "target_footroom_fraction": {"min": 0.04, "max": 0.08},
+        "required_renderer_obligations": [
+            "full_body_head_to_feet_visible_in_each_slot",
+            "same_camera_distance_and_subject_scale_across_front_side_rear",
+            "matched_headroom_and_footroom_across_views",
+            "subject_centerline_consistent_across_views",
+            "no_view_specific_zoom_or_scale_drift",
+        ],
+        "blocking_issue_codes": [
+            "body_silhouette_cross_view_camera_distance_drift",
+            "body_silhouette_subject_scale_drift",
+            "body_silhouette_headroom_footroom_mismatch",
+            "body_silhouette_view_specific_zoom_drift",
         ],
     }
 

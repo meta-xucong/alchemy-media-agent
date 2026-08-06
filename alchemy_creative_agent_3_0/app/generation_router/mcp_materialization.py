@@ -27,6 +27,7 @@ from ..creative_core.rules import stable_id
 from ..visual_assets.body_silhouette_source_standard import (
     BODY_SILHOUETTE_MCP_CLOTHING_ABSENCE_FINDING,
     body_silhouette_age6_cross_view_naturalness_contract,
+    body_silhouette_fixed_full_body_framing_contract,
     body_silhouette_mcp_materialization_channel_contract,
     body_silhouette_mcp_materialization_prompt_findings,
     body_silhouette_integrated_whole_person_synthesis_contract,
@@ -179,6 +180,13 @@ def _build_body_renderer_execution_directive(
         raise McpMaterializationError(
             "mcp_materialization_renderer_execution_directive_invalid"
         )
+    fixed_framing = rendering_contract.get(
+        "body_silhouette_fixed_full_body_framing_contract"
+    )
+    if fixed_framing != body_silhouette_fixed_full_body_framing_contract():
+        raise McpMaterializationError(
+            "mcp_materialization_renderer_execution_directive_invalid"
+        )
     age6_naturalness = rendering_contract.get(
         "body_silhouette_age6_cross_view_naturalness_contract"
     )
@@ -261,6 +269,7 @@ def _build_body_renderer_execution_directive(
             "source_mode_scope": list(channel.get("source_mode_scope") or []),
         },
         "integrated_whole_person_synthesis": integrated,
+        "fixed_full_body_framing": fixed_framing,
     }
     slot_key = str(rendering_contract.get("slot_key") or "").strip()
     target_view = _BODY_RENDERER_TARGET_VIEW_PHRASES.get(slot_key)
@@ -333,6 +342,10 @@ def _build_body_renderer_execution_directive(
         "Apply the server-owned Body Silhouette direction exactly. "
         + (target_view["prompt"] + " " if target_view is not None else "")
         + "Do not place multiple people, multiple poses, multiple panels, or multiple body views in this single output. "
+        "Use the same camera distance and subject scale across the front, side, and rear Body slots. "
+        "Target the full standing body to occupy about 84% to 90% of the portrait canvas height, "
+        "with matched headroom and footroom and a stable centered body centerline. "
+        "Do not zoom one view closer or farther than the others. "
         f"Render a {top_phrase}. Render {bottom_phrase}. Render the subject {footwear_phrase}. "
         f"Use a {backdrop_phrase}. "
         "Create one coherent whole person in a natural photographed full-body view with "
@@ -1509,6 +1522,24 @@ class McpMaterializationHandoffStore:
                 )
             safe["body_silhouette_integrated_whole_person_synthesis_contract"] = (
                 expected_integrated_contract
+            )
+        expected_fixed_framing_contract = body_silhouette_fixed_full_body_framing_contract()
+        raw_fixed_framing = raw.get(
+            "body_silhouette_fixed_full_body_framing_contract"
+        )
+        if raw_fixed_framing is None and require_body_rendering_contract:
+            raise McpMaterializationError(
+                "mcp_materialization_body_rendering_contract_invalid",
+                detail={"failure_code": "fixed_full_body_framing_contract_missing"},
+            )
+        if raw_fixed_framing is not None:
+            if raw_fixed_framing != expected_fixed_framing_contract:
+                raise McpMaterializationError(
+                    "mcp_materialization_body_rendering_contract_invalid",
+                    detail={"failure_code": "fixed_full_body_framing_contract_invalid"},
+                )
+            safe["body_silhouette_fixed_full_body_framing_contract"] = (
+                expected_fixed_framing_contract
             )
         raw_source_mode = raw.get("body_refresh_source_mode")
         if raw_source_mode not in {"inference_first", "reference_assisted"}:

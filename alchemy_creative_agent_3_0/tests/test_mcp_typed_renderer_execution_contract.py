@@ -21,6 +21,7 @@ from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import (
 )
 from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
     body_silhouette_age6_cross_view_naturalness_contract,
+    body_silhouette_fixed_full_body_framing_contract,
     body_silhouette_integrated_whole_person_synthesis_contract,
     body_silhouette_mcp_materialization_channel_contract,
 )
@@ -98,6 +99,9 @@ def _strict_contract(*, slot_key: str = "body.front_full") -> dict:
         "body_silhouette_mcp_materialization_channel_contract": body_silhouette_mcp_materialization_channel_contract(),
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
         ),
         "body_mcp_reference_partition": _partition(),
         "body_morphology_profile": _morphology_profile(),
@@ -430,6 +434,29 @@ def test_reference_assisted_body_renderer_enforces_age6_natural_single_person_an
     assert "head swap" not in renderer_prompt
     assert "mannequin" not in renderer_prompt
     assert "cardboard" not in renderer_prompt
+
+
+def test_reference_assisted_body_renderer_carries_fixed_full_body_framing_contract(
+    tmp_path,
+) -> None:
+    store = McpMaterializationHandoffStore(storage_root=tmp_path / "handoffs")
+    handoff = _ensure(store, contract=_strict_contract(slot_key="body.front_full"))
+
+    host_request = store.public_renderer_request(handoff["handoff_id"])
+    directive = host_request["renderer_execution_directive"]
+    renderer_prompt = str(host_request["renderer_prompt"]).lower()
+
+    framing = directive["fixed_full_body_framing"]
+    assert framing["contract_version"] == "professional_body_silhouette_fixed_full_body_framing_v1"
+    assert framing["same_camera_distance_across_slots"] is True
+    assert framing["same_subject_scale_across_slots"] is True
+    assert framing["single_full_body_subject_centered"] is True
+    assert framing["target_canvas_size"] == "1024x1536"
+    assert framing["target_subject_height_fraction"] == {"min": 0.84, "max": 0.90}
+    assert "same camera distance and subject scale across the front, side, and rear body slots" in renderer_prompt
+    assert "target the full standing body to occupy about 84% to 90% of the portrait canvas height" in renderer_prompt
+    assert "matched headroom and footroom" in renderer_prompt
+    assert "do not zoom one view closer or farther than the others" in renderer_prompt
 
 
 def test_reference_assisted_side_slot_renderer_forbids_turnaround_sheet_in_single_output(

@@ -59,6 +59,7 @@ from alchemy_creative_agent_3_0.app.creative_core.mcp_reference_partition import
     McpBodyReferencePartition,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.body_silhouette_source_standard import (
+    body_silhouette_fixed_full_body_framing_contract,
     body_silhouette_integrated_whole_person_synthesis_contract,
     body_silhouette_mcp_materialization_channel_contract,
 )
@@ -296,6 +297,9 @@ def test_mcp_body_handoff_public_view_preserves_typed_body_face_partition(tmp_pa
         ),
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
         ),
         "body_refresh_presentation_intent": default_body_refresh_presentation_intent().model_dump(
             mode="json"
@@ -905,6 +909,9 @@ def test_strict_body_handoff_missing_partition_fails_closed() -> None:
         ),
         "body_silhouette_integrated_whole_person_synthesis_contract": (
             body_silhouette_integrated_whole_person_synthesis_contract()
+        ),
+        "body_silhouette_fixed_full_body_framing_contract": (
+            body_silhouette_fixed_full_body_framing_contract()
         ),
     }
 
