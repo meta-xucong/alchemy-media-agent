@@ -25,6 +25,9 @@ from ..visual_assets.character_card import character_card_slot_success_receipt_p
 from .service import V3ProductApiService
 
 
+PUBLIC_VISUAL_ASSET_OWNER_SCOPE = "v3_public"
+
+
 class V3ProductRouteHandlers:
     """Method names mirror the reserved V3 route contract."""
 
@@ -141,10 +144,17 @@ class V3ProductRouteHandlers:
     # by the user/workspace library and projects only hold explicit bindings.
     def get_visual_assets(self, owner_scope: str | None = None) -> dict[str, Any]:
         resolved_owner_scope = self._visual_asset_owner_scope(owner_scope)
+        assets = self.visual_asset_library_service.list(owner_scope=resolved_owner_scope)
+        if resolved_owner_scope != PUBLIC_VISUAL_ASSET_OWNER_SCOPE:
+            public_assets = self.visual_asset_library_service.list(
+                owner_scope=PUBLIC_VISUAL_ASSET_OWNER_SCOPE,
+            )
+            existing_ids = {item.visual_asset_id for item in assets}
+            assets.extend(item for item in public_assets if item.visual_asset_id not in existing_ids)
         return {
             "visual_assets": [
                 self._visual_asset_public_record(item)
-                for item in self.visual_asset_library_service.list(owner_scope=resolved_owner_scope)
+                for item in assets
             ]
         }
 
@@ -157,9 +167,9 @@ class V3ProductRouteHandlers:
         return {"visual_asset": self._visual_asset_public_record(asset)}
 
     def get_visual_asset(self, visual_asset_id: str, owner_scope: str | None = None) -> dict[str, Any]:
-        asset = self.visual_asset_library_service.get(
-            owner_scope=self._visual_asset_owner_scope(owner_scope),
+        asset = self._get_readable_visual_asset(
             visual_asset_id=visual_asset_id,
+            owner_scope=self._visual_asset_owner_scope(owner_scope),
         )
         return {"visual_asset": self._visual_asset_public_record(asset)}
 
@@ -363,6 +373,20 @@ class V3ProductRouteHandlers:
     def _visual_asset_owner_scope(self, supplied_owner_scope: str | None) -> str:
         value = str(supplied_owner_scope or self.visual_asset_owner_scope).strip()
         return value or "local_default"
+
+    def _get_readable_visual_asset(self, *, visual_asset_id: str, owner_scope: str) -> Any:
+        try:
+            return self.visual_asset_library_service.get(
+                owner_scope=owner_scope,
+                visual_asset_id=visual_asset_id,
+            )
+        except KeyError:
+            if owner_scope == PUBLIC_VISUAL_ASSET_OWNER_SCOPE:
+                raise
+            return self.visual_asset_library_service.get(
+                owner_scope=PUBLIC_VISUAL_ASSET_OWNER_SCOPE,
+                visual_asset_id=visual_asset_id,
+            )
 
     @staticmethod
     def _visual_asset_public_record(asset: Any) -> dict[str, Any]:
