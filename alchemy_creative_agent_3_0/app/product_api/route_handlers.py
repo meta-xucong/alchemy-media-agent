@@ -349,8 +349,15 @@ class V3ProductRouteHandlers:
     ) -> dict[str, Any]:
         self.project_service.get_project(project_id)
         request = ProjectVisualAssetBindingRequest.model_validate(payload)
-        self.project_visual_asset_binding_service.bind(
+        asset = self._get_readable_visual_asset(
+            visual_asset_id=request.visual_asset_id,
             owner_scope=self._visual_asset_owner_scope(owner_scope),
+        )
+        self.project_visual_asset_binding_service.bind(
+            # Public cards are readable by every V3 user, but their immutable
+            # owner scope remains part of the binding so future validation
+            # resolves the same published card rather than a user copy.
+            owner_scope=asset.owner_scope,
             project_id=project_id,
             request=request,
         )

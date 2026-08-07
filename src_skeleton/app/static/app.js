@@ -6612,12 +6612,13 @@ async function openV3Project(projectId) {
     );
   } catch (error) {
     updateV3Notice(`项目打开失败：${friendlyError(error)}`, "error");
+  } finally {
+    v3State.projectOpening = false;
+    if (els.v3WorkspaceView) delete els.v3WorkspaceView.dataset.v3Opening;
+    setV3PageLoading(false);
+    setV3Busy(false);
+    resumeV3ActiveProjectJobRecovery(recoveryJob);
   }
-  v3State.projectOpening = false;
-  if (els.v3WorkspaceView) delete els.v3WorkspaceView.dataset.v3Opening;
-  setV3PageLoading(false);
-  setV3Busy(false);
-  resumeV3ActiveProjectJobRecovery(recoveryJob);
 }
 
 function renderV3ProjectOpeningState(projectId) {

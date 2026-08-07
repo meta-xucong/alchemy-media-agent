@@ -5548,10 +5548,11 @@ class V3ProjectModeService:
         return shared
 
     def _project_response(self, project: ProjectRecord) -> ProjectResponse:
+        public_project = self._public_project_record(project)
         return ProjectResponse(
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}",
-            project=project,
+            project=public_project,
             templates=self.template_cards(),
             context=project.latest_context,
             metadata={
@@ -5559,6 +5560,34 @@ class V3ProjectModeService:
                 "project_outputs": self._project_output_items(project, limit=60),
             },
         )
+
+    @staticmethod
+    def _public_project_record(project: ProjectRecord) -> ProjectRecord:
+        """Keep durable continuation plans out of browser project reads."""
+
+        public_metadata_keys = {
+            "source",
+            "project_mode",
+            "v3_workspace",
+            "frontend_surface",
+            "selected_template_id",
+            "template_manifest_id",
+            "selected_scenario_id",
+            "scenario_pack_id",
+            "template_first_create",
+            "selected_brand_memory_id",
+            "selected_brand_memory_name",
+            "imports_v1_v2_runtime",
+            "imports_lab_runtime",
+            "doc90_advanced_reference_controls",
+            "advanced_reference_controls",
+        }
+        public_metadata = {
+            key: value
+            for key, value in dict(project.metadata or {}).items()
+            if key in public_metadata_keys
+        }
+        return project.model_copy(update={"metadata": public_metadata}, deep=True)
 
     def _metadata(self) -> dict[str, Any]:
         ecommerce_manifest = self.template_registry.get_manifest(ECOMMERCE_TEMPLATE_ID)

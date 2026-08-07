@@ -94,3 +94,43 @@ def test_public_card_detail_is_readable_but_mutation_stays_owner_scoped(tmp_path
             {},
             owner_scope="v3_user_8",
         )
+
+
+def test_public_card_binds_to_a_user_project_with_its_public_owner_scope(tmp_path):
+    catalog = PersistentVisualAssetLibraryCatalog(tmp_path)
+    public_asset = _active_asset(
+        owner_scope=PUBLIC_VISUAL_ASSET_OWNER_SCOPE,
+        visual_asset_id="visual_asset_public_card",
+    )
+    private_asset = _active_asset(
+        owner_scope="v3_user_8",
+        visual_asset_id="visual_asset_private_card",
+    )
+    catalog._assets[(public_asset.owner_scope, public_asset.visual_asset_id)] = public_asset
+    catalog._assets[(private_asset.owner_scope, private_asset.visual_asset_id)] = private_asset
+    routes = V3ProductRouteHandlers(visual_asset_library_catalog=catalog)
+    project_id = routes.post_projects({"user_goal": "Create a project with a published card."})["project"]["project_id"]
+
+    bound = routes.post_project_visual_asset_binding(
+        project_id,
+        {
+            "visual_asset_id": public_asset.visual_asset_id,
+            "selected_version_id": public_asset.active_version_id,
+            "confirm_binding": True,
+        },
+        owner_scope="v3_user_9",
+    )
+
+    assert bound["state"] == "valid"
+    persisted = routes.project_visual_asset_binding_service.current(project_id=project_id)
+    assert persisted.bindings[0].owner_scope == PUBLIC_VISUAL_ASSET_OWNER_SCOPE
+    with pytest.raises(KeyError, match="visual_asset_not_found"):
+        routes.post_project_visual_asset_binding(
+            project_id,
+            {
+                "visual_asset_id": private_asset.visual_asset_id,
+                "selected_version_id": private_asset.active_version_id,
+                "confirm_binding": True,
+            },
+            owner_scope="v3_user_9",
+        )
