@@ -619,6 +619,7 @@ const els = {
   v3ProjectSnapshot: document.querySelector("#v3ProjectSnapshot"),
   v3ProjectVisualAssetPanel: document.querySelector("#v3ProjectVisualAssetPanel"),
   v3ProjectVisualAssetSummary: document.querySelector("#v3ProjectVisualAssetSummary"),
+  v3ContinueProfessionalProjectBtn: document.querySelector("#v3ContinueProfessionalProjectBtn"),
   v3ManageVisualAssetsFromBindingBtn: document.querySelector("#v3ManageVisualAssetsFromBindingBtn"),
   v3OpenProjectVisualAssetDialogBtn: document.querySelector("#v3OpenProjectVisualAssetDialogBtn"),
   v3VisualAssetBindingDialog: document.querySelector("#v3VisualAssetBindingDialog"),
@@ -1279,10 +1280,19 @@ function bindControls() {
   if (els.v3UsefulReferenceBoard) els.v3UsefulReferenceBoard.addEventListener("click", handleV3ReferenceBoardClick);
   if (els.v3ProjectArchiveBtn) els.v3ProjectArchiveBtn.addEventListener("click", () => archiveV3Project(v3State.currentProject?.project_id));
   if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.addEventListener("click", () => deleteV3Project(v3State.currentProject?.project_id));
+  if (els.v3ContinueProfessionalProjectBtn) {
+    els.v3ContinueProfessionalProjectBtn.addEventListener("click", () => openV3ProjectSubpage("compose"));
+  }
   if (els.v3OpenProjectVisualAssetDialogBtn) els.v3OpenProjectVisualAssetDialogBtn.addEventListener("click", openV3VisualAssetBindingDialog);
   if (els.v3ManageVisualAssetsFromBindingBtn) els.v3ManageVisualAssetsFromBindingBtn.addEventListener("click", openV3VisualAssetLibraryFromBindingDialog);
   if (els.v3ConfirmVisualAssetBindingBtn) els.v3ConfirmVisualAssetBindingBtn.addEventListener("click", confirmV3VisualAssetBinding);
   if (els.v3ClearProjectVisualAssetBindingBtn) els.v3ClearProjectVisualAssetBindingBtn.addEventListener("click", clearV3ProjectVisualAssetBinding);
+  if (els.v3VisualAssetBindingDialog) {
+    els.v3VisualAssetBindingDialog.addEventListener("close", handleV3VisualAssetBindingDialogClose);
+  }
+  if (els.v3VisualAssetLibraryDialog) {
+    els.v3VisualAssetLibraryDialog.addEventListener("close", handleV3VisualAssetLibraryDialogClose);
+  }
   if (els.v3BrandMemoryPanel) els.v3BrandMemoryPanel.addEventListener("click", handleV3BrandMemoryPanelClick);
   if (els.closeV3BrandMemoryBtn) els.closeV3BrandMemoryBtn.addEventListener("click", closeV3BrandMemoryModal);
   if (els.v3BrandMemoryCancelBtn) els.v3BrandMemoryCancelBtn.addEventListener("click", closeV3BrandMemoryModal);
@@ -3234,7 +3244,10 @@ function releaseV3ScrollLockIfNoModal() {
     els.favoritePickerModal,
     els.v2FavoriteReferenceModal,
     els.sampleGuideModal,
-  ].some((modal) => modal && !modal.hidden);
+  ].some((modal) => {
+    if (!modal) return false;
+    return "open" in modal ? modal.open === true : !modal.hidden;
+  });
   if (!hasOpenModal) document.body.classList.remove("modal-open");
 }
 
@@ -5907,10 +5920,24 @@ function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
 
 function closeV3VisualAssetLibraryDialog() {
   if (els.v3VisualAssetLibraryDialog?.open) els.v3VisualAssetLibraryDialog.close();
+  releaseV3ScrollLockIfNoModal();
+}
+
+function handleV3VisualAssetLibraryDialogClose() {
+  releaseV3ScrollLockIfNoModal();
+}
+
+function closeV3VisualAssetBindingDialog() {
+  if (els.v3VisualAssetBindingDialog?.open) els.v3VisualAssetBindingDialog.close();
+  releaseV3ScrollLockIfNoModal();
+}
+
+function handleV3VisualAssetBindingDialogClose() {
+  releaseV3ScrollLockIfNoModal();
 }
 
 function openV3VisualAssetLibraryFromBindingDialog() {
-  if (els.v3VisualAssetBindingDialog?.open) els.v3VisualAssetBindingDialog.close();
+  closeV3VisualAssetBindingDialog();
   openV3VisualAssetLibraryDialog({ focusBuilder: true });
 }
 
@@ -6445,6 +6472,9 @@ function renderV3ProjectVisualAssetPanel() {
   panel.hidden = !project?.project_id || !professionalProject;
   if (!project?.project_id || !professionalProject) return;
   const bindings = Array.isArray(v3State.projectVisualAssetBindings) ? v3State.projectVisualAssetBindings : [];
+  if (els.v3ContinueProfessionalProjectBtn) {
+    els.v3ContinueProfessionalProjectBtn.disabled = !project?.project_id;
+  }
   if (els.v3OpenProjectVisualAssetDialogBtn) {
     els.v3OpenProjectVisualAssetDialogBtn.disabled = v3State.projectVisualAssetBindingsLoading;
     els.v3OpenProjectVisualAssetDialogBtn.textContent = bindings.length ? "管理视觉资产" : "选择视觉资产";
@@ -6518,7 +6548,7 @@ async function confirmV3VisualAssetBinding() {
       });
     }
     await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
-    if (els.v3VisualAssetBindingDialog?.open) els.v3VisualAssetBindingDialog.close();
+    closeV3VisualAssetBindingDialog();
     updateV3Notice("视觉资产已绑定到这个项目。之后新任务会冻结当前启用版本；历史任务不会改变。", "success");
   } catch (error) {
     showGlobalToast(v3VisualAssetErrorMessage(error), "warning");
@@ -6542,7 +6572,7 @@ async function clearV3ProjectVisualAssetBinding() {
       });
     }
     await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
-    if (els.v3VisualAssetBindingDialog?.open) els.v3VisualAssetBindingDialog.close();
+    closeV3VisualAssetBindingDialog();
     updateV3Notice("已解除视觉资产选择。后续任务会按项目本身的需求继续，不会影响历史任务。", "success");
   } catch (error) {
     showGlobalToast(v3VisualAssetErrorMessage(error), "warning");

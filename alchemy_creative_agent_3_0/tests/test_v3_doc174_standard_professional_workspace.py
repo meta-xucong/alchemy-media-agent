@@ -97,3 +97,29 @@ def test_doc174_workspace_route_links_preserve_the_selected_workspace() -> None:
     assert 'document.querySelectorAll("[data-v3-route-link]")' in source
     assert 'v3VisualAssetLibraryPanel: document.querySelector("#v3VisualAssetLibraryPanel")' in source
     assert "els.v3VisualAssetLibraryPanel.hidden = !professional" in source
+
+
+def test_doc174_visual_asset_dialog_close_never_leaves_page_scroll_locked() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+
+    release = _function(source, "releaseV3ScrollLockIfNoModal", "renderV3ProjectHistoryGrid")
+    binding_close = _function(source, "closeV3VisualAssetBindingDialog", "openV3VisualAssetLibraryFromBindingDialog")
+    confirm = _function(source, "confirmV3VisualAssetBinding", "clearV3ProjectVisualAssetBinding")
+    clear = _function(source, "clearV3ProjectVisualAssetBinding", "openV3Project")
+
+    assert 'return "open" in modal ? modal.open === true : !modal.hidden;' in release
+    assert 'els.v3VisualAssetBindingDialog.addEventListener("close", handleV3VisualAssetBindingDialogClose)' in source
+    assert "releaseV3ScrollLockIfNoModal();" in binding_close
+    assert "closeV3VisualAssetBindingDialog();" in confirm
+    assert "closeV3VisualAssetBindingDialog();" in clear
+
+
+def test_doc174_professional_project_keeps_generation_as_a_first_level_action() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+
+    panel = _function(source, "renderV3ProjectVisualAssetPanel", "openV3VisualAssetBindingDialog")
+    assert 'id="v3ContinueProfessionalProjectBtn"' in index
+    assert "els.v3ContinueProfessionalProjectBtn.addEventListener" in source
+    assert 'openV3ProjectSubpage("compose")' in source
+    assert "v3ContinueProfessionalProjectBtn.disabled" in panel
