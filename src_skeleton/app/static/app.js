@@ -887,6 +887,7 @@ const els = {
 };
 
 document.addEventListener("click", handleV3ProjectVisualAssetPanelClick);
+window.openV3ProfessionalProjectContinuation = (event) => handleV3ProjectVisualAssetPanelClick(event);
 
 document.addEventListener("DOMContentLoaded", async () => {
   hydratePortalHomeLink();
@@ -6497,7 +6498,7 @@ function renderV3ProjectVisualAssetPanel() {
 }
 
 function bindV3ContinueProfessionalProjectButton() {
-  const button = els.v3ContinueProfessionalProjectBtn;
+  const button = document.querySelector("#v3ContinueProfessionalProjectBtn") || els.v3ContinueProfessionalProjectBtn;
   if (!button || button.dataset.v3ContinueBound === "true") return;
   button.addEventListener("click", handleV3ProjectVisualAssetPanelClick);
   button.dataset.v3ContinueBound = "true";
@@ -6525,8 +6526,9 @@ async function handleV3ProjectVisualAssetPanelClick(event) {
     : null;
   const eventTarget = event.target instanceof Element ? event.target : event.target?.parentElement || null;
   const button = pathButton || currentTargetButton || eventTarget?.closest?.("#v3ContinueProfessionalProjectBtn");
-  if (!button || button.disabled || !els.v3ProjectVisualAssetPanel?.contains(button)) return;
-  const panel = button.closest("#v3ProjectVisualAssetPanel");
+  const panelRoot = document.querySelector("#v3ProjectVisualAssetPanel") || els.v3ProjectVisualAssetPanel;
+  if (!button || button.disabled || !panelRoot?.contains(button)) return;
+  const panel = button.closest("#v3ProjectVisualAssetPanel") || panelRoot;
   const projectId = v3VisualAssetPanelProjectId(panel);
   if (!projectId) {
     updateV3Notice("项目还在读取，请稍后再继续生成。", "warning");
@@ -6542,12 +6544,6 @@ async function handleV3ProjectVisualAssetPanelClick(event) {
   }
   updateV3Notice("已打开继续生成区域。", "info");
 }
-
-async function openV3ProfessionalProjectContinuation(event) {
-  await handleV3ProjectVisualAssetPanelClick(event);
-}
-
-window.openV3ProfessionalProjectContinuation = openV3ProfessionalProjectContinuation;
 
 async function openV3VisualAssetBindingDialog() {
   if (!v3State.currentProject?.project_id || !v3ProjectUsesProfessionalWorkspace(v3State.currentProject)) return;

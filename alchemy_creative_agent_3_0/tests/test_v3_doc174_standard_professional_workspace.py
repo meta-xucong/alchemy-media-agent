@@ -125,8 +125,9 @@ def test_doc174_professional_project_keeps_generation_as_a_first_level_action() 
     assert 'button.addEventListener("click", handleV3ProjectVisualAssetPanelClick);' in source
     assert "function v3VisualAssetPanelProjectId" in source
     assert "handleV3ProjectVisualAssetPanelClick" in source
-    assert "function openV3ProfessionalProjectContinuation" in source
-    assert "window.openV3ProfessionalProjectContinuation = openV3ProfessionalProjectContinuation;" in source
+    assert "window.openV3ProfessionalProjectContinuation = (event) => handleV3ProjectVisualAssetPanelClick(event);" in source
+    assert 'document.querySelector("#v3ContinueProfessionalProjectBtn") || els.v3ContinueProfessionalProjectBtn' in source
+    assert 'document.querySelector("#v3ProjectVisualAssetPanel") || els.v3ProjectVisualAssetPanel' in source
     assert 'panel.dataset.v3ProjectId = v3VisualAssetPanelProjectId(panel) || project?.project_id || "";' in panel
     assert "const projectId = v3VisualAssetPanelProjectId(panel);" in source
     assert 'openV3ProjectSubpage("compose")' in source
