@@ -332,6 +332,7 @@ const v3State = {
   projectVisualAssetBindingState: "empty",
   projectVisualAssetBindingsLoading: false,
   selectedVisualAssetId: "",
+  createVisualAssetBindingId: "",
   selectedBrandMemory: null,
   selectedScenario: "general_creative",
   selectedPreset: "campaign_poster",
@@ -605,6 +606,8 @@ const els = {
   v3SelectedTemplateTitle: document.querySelector("#v3SelectedTemplateTitle"),
   v3SelectedTemplateIntro: document.querySelector("#v3SelectedTemplateIntro"),
   v3SelectedBrandMemoryBar: document.querySelector("#v3SelectedBrandMemoryBar"),
+  v3CreateVisualAssetBindingPanel: document.querySelector("#v3CreateVisualAssetBindingPanel"),
+  v3CreateVisualAssetBindingChoices: document.querySelector("#v3CreateVisualAssetBindingChoices"),
   v3NewProjectGoalLabel: document.querySelector("#v3NewProjectGoalLabel"),
   v3NewProjectGoalHint: document.querySelector("#v3NewProjectGoalHint"),
   v3NewProjectGoalInput: document.querySelector("#v3NewProjectGoalInput"),
@@ -1272,6 +1275,7 @@ function bindControls() {
   if (els.v3VisualAssetWorkflowRetryBtn) els.v3VisualAssetWorkflowRetryBtn.addEventListener("click", () => {
     void prepareV3VisualAsset(v3State.visualAssetWorkflowAssetId, { fromWorkflow: true });
   });
+  if (els.v3CreateVisualAssetBindingChoices) els.v3CreateVisualAssetBindingChoices.addEventListener("change", handleV3CreateVisualAssetChoiceChange);
   if (els.v3SelectedBrandMemoryBar) els.v3SelectedBrandMemoryBar.addEventListener("click", handleV3SelectedBrandMemoryBarClick);
   if (els.v3NewProjectBtn) els.v3NewProjectBtn.addEventListener("click", createV3Project);
   if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.addEventListener("click", () => loadV3Projects({ silent: false, force: true }));
@@ -2234,6 +2238,7 @@ function renderV3HomeTemplateChooser() {
   if (els.v3NewProjectBtn) els.v3NewProjectBtn.textContent = copy.button;
   if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = !v3TemplateCanCreate(v3State.selectedTemplate) || v3State.loading;
   renderV3SelectedBrandMemoryBar();
+  renderV3CreateVisualAssetBindingPanel();
   els.v3TemplateChooser.innerHTML = "";
   templates.forEach((template) => {
     const canCreate = Boolean(template.project_can_create_jobs);
@@ -2253,6 +2258,66 @@ function renderV3HomeTemplateChooser() {
     `;
     els.v3TemplateChooser.appendChild(card);
   });
+}
+
+function v3ActiveVisualAssetsForProjectCreate() {
+  return (Array.isArray(v3State.visualAssets) ? v3State.visualAssets : [])
+    .filter((asset) => asset?.lifecycle_status !== "archived" && v3VisualAssetIsActive(asset));
+}
+
+function v3SelectedCreateVisualAsset() {
+  const assetId = String(v3State.createVisualAssetBindingId || "").trim();
+  if (!assetId) return null;
+  return v3ActiveVisualAssetsForProjectCreate().find((asset) => asset.visual_asset_id === assetId) || null;
+}
+
+function renderV3CreateVisualAssetBindingPanel() {
+  const panel = els.v3CreateVisualAssetBindingPanel;
+  if (!panel) return;
+  const professional = v3State.workspaceMode === "professional";
+  panel.hidden = !professional;
+  if (!professional) {
+    v3State.createVisualAssetBindingId = "";
+    return;
+  }
+  if (!els.v3CreateVisualAssetBindingChoices) return;
+  const activeAssets = v3ActiveVisualAssetsForProjectCreate();
+  if (v3State.createVisualAssetBindingId && !activeAssets.some((asset) => asset.visual_asset_id === v3State.createVisualAssetBindingId)) {
+    v3State.createVisualAssetBindingId = "";
+  }
+  if (v3State.visualAssetsLoading || !v3State.visualAssetsLoaded) {
+    els.v3CreateVisualAssetBindingChoices.innerHTML = "<div class=\"v3-create-visual-asset-empty\">正在读取可用人物资产。</div>";
+    return;
+  }
+  if (v3State.visualAssetsError) {
+    els.v3CreateVisualAssetBindingChoices.innerHTML = "<div class=\"v3-create-visual-asset-empty\">暂时无法读取人物资产；仍可先创建项目，稍后在项目内选择。</div>";
+    return;
+  }
+  if (!activeAssets.length) {
+    els.v3CreateVisualAssetBindingChoices.innerHTML = "<div class=\"v3-create-visual-asset-empty\">还没有已启用人物资产；本项目将按普通专业项目创建。</div>";
+    return;
+  }
+  const noneChecked = v3State.createVisualAssetBindingId ? "" : "checked";
+  const assetChoices = activeAssets.map((asset) => `
+    <label class="v3-create-visual-asset-choice">
+      <input type="radio" name="v3CreateVisualAssetBinding" value="${escapeHtml(asset.visual_asset_id)}" ${asset.visual_asset_id === v3State.createVisualAssetBindingId ? "checked" : ""} />
+      <span><strong>${escapeHtml(asset.display_name || "人物资产")}</strong><small>创建后立即绑定当前启用版本</small></span>
+    </label>
+  `).join("");
+  els.v3CreateVisualAssetBindingChoices.innerHTML = `
+    <label class="v3-create-visual-asset-choice">
+      <input type="radio" name="v3CreateVisualAssetBinding" value="" ${noneChecked} />
+      <span><strong>不使用人物资产</strong><small>之后仍可在项目概览中选择</small></span>
+    </label>
+    ${assetChoices}
+  `;
+}
+
+function handleV3CreateVisualAssetChoiceChange(event) {
+  const input = event.target instanceof HTMLInputElement ? event.target : null;
+  if (!input || input.name !== "v3CreateVisualAssetBinding") return;
+  v3State.createVisualAssetBindingId = input.value || "";
+  renderV3CreateVisualAssetBindingPanel();
 }
 
 function renderV3SelectedBrandMemoryBar() {
@@ -2895,6 +2960,11 @@ async function createV3Project() {
     showGlobalToast("请先选择一个可以创建项目的类型。", "warning");
     return;
   }
+  const createVisualAsset = v3State.workspaceMode === "professional" ? v3SelectedCreateVisualAsset() : null;
+  if (v3State.workspaceMode === "professional" && v3State.createVisualAssetBindingId && !createVisualAsset) {
+    showGlobalToast("选择的人物资产暂时不可用，请刷新资产库或先不使用人物资产。", "warning");
+    return;
+  }
   try {
     v3State.loading = true;
     if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = true;
@@ -2932,15 +3002,29 @@ async function createV3Project() {
     if (els.v3PromptInput) els.v3PromptInput.value = userGoal;
     if (els.v3NewProjectGoalInput) els.v3NewProjectGoalInput.value = "";
     saveV3ProjectSnapshot(v3State.currentProject);
+    let createBindingApplied = false;
+    let createBindingError = "";
+    if (createVisualAsset && v3State.currentProject?.project_id) {
+      try {
+        await bindV3CreateVisualAssetToProject(v3State.currentProject.project_id, createVisualAsset);
+        createBindingApplied = true;
+      } catch (error) {
+        createBindingError = v3VisualAssetErrorMessage(error);
+      }
+    }
     await loadV3ProjectTimeline(v3State.currentProject?.project_id, { silent: true });
     await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
     openV3ScenarioWorkspace(scenarioId);
     openV3ProjectSubpage("compose");
     updateV3Notice(
-      v3State.workspaceMode === "professional"
+      createBindingApplied
+        ? "专业项目已创建，并已绑定你选择的人物资产。后续新任务会冻结当前启用版本。"
+        : createBindingError
+          ? `专业项目已创建，但人物资产暂时未绑定：${createBindingError}`
+          : v3State.workspaceMode === "professional"
         ? "专业项目已创建。可在项目概览中选择已启用视觉资产；后续新任务会冻结你确认的版本。"
         : "项目已创建。现在可以继续上传参考图或开始生成。",
-      "success",
+      createBindingError ? "warning" : "success",
     );
   } catch (error) {
     updateV3Notice(`项目创建失败：${friendlyError(error)}`, "error");
@@ -2949,6 +3033,20 @@ async function createV3Project() {
     if (els.v3NewProjectBtn) els.v3NewProjectBtn.disabled = false;
     renderV3ScenarioState();
   }
+}
+
+async function bindV3CreateVisualAssetToProject(projectId, asset) {
+  if (!projectId || !asset?.visual_asset_id || !asset?.active_version_id) {
+    throw new Error("visual_asset_binding_incomplete");
+  }
+  await request(v3ProjectVisualAssetBindingsPath(projectId), {
+    method: "POST",
+    body: {
+      visual_asset_id: asset.visual_asset_id,
+      selected_version_id: asset.active_version_id,
+      confirm_binding: true,
+    },
+  });
 }
 
 function renderV3Projects() {
@@ -6416,6 +6514,7 @@ function handleV3VisualAssetAction(event) {
 
 function renderV3VisualAssetLibrary() {
   if (!els.v3ProfessionalHomeSurface) return;
+  renderV3CreateVisualAssetBindingPanel();
   const assets = Array.isArray(v3State.visualAssets) ? v3State.visualAssets : [];
   const visibleAssets = assets.filter((asset) => asset?.lifecycle_status !== "archived");
   const archivedCount = assets.length - visibleAssets.length;

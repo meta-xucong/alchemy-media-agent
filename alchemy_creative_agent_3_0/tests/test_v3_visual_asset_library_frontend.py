@@ -16,7 +16,7 @@ APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
 STYLES_CSS = ROOT / "src_skeleton" / "app" / "static" / "styles.css"
 HANDLERS = ROOT / "alchemy_creative_agent_3_0" / "app" / "product_api" / "route_handlers.py"
-FRONTEND_VERSION = "20260808-v3-professional-scroll-recovery"
+FRONTEND_VERSION = "20260809-v3-create-asset-prebind"
 
 
 def _function(source: str, name: str, next_name: str) -> str:
@@ -179,6 +179,33 @@ def test_doc173_project_generation_button_stays_actionable_when_binding_needs_at
     assert "assetBindingBlocked" not in scenario_state
     assert "await openV3VisualAssetBindingDialog();" in create_job
     assert "当前绑定的视觉资产需要先处理" in create_job
+
+
+def test_doc173_professional_project_creation_can_prebind_active_visual_asset() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    create = _function(source, "createV3Project", "bindV3CreateVisualAssetToProject")
+    bind_create = _function(source, "bindV3CreateVisualAssetToProject", "renderV3Projects")
+    renderer = _function(source, "renderV3CreateVisualAssetBindingPanel", "handleV3CreateVisualAssetChoiceChange")
+
+    assert 'id="v3CreateVisualAssetBindingPanel"' in index
+    assert 'id="v3CreateVisualAssetBindingChoices"' in index
+    assert "createVisualAssetBindingId" in source
+    assert "function renderV3CreateVisualAssetBindingPanel" in source
+    assert "function handleV3CreateVisualAssetChoiceChange" in source
+    assert 'name="v3CreateVisualAssetBinding"' in source
+    assert 'panel.hidden = !professional;' in renderer
+    assert 'v3State.createVisualAssetBindingId = "";' in renderer
+    assert "v3State.workspaceMode === \"professional\" ? v3SelectedCreateVisualAsset() : null" in create
+    assert "await bindV3CreateVisualAssetToProject(v3State.currentProject.project_id, createVisualAsset);" in create
+    assert "v3ProjectVisualAssetBindingsPath(projectId)" in bind_create
+    assert "confirm_binding: true" in bind_create
+    assert "selected_version_id: asset.active_version_id" in bind_create
+    assert "professional_mode:" not in create
+    assert ".v3-create-visual-asset-binding-panel" in css
+    assert ".v3-create-visual-asset-choice" in css
 
 
 def test_doc173_new_surface_is_responsive_and_does_not_reintroduce_template_fallback() -> None:
