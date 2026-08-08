@@ -128,6 +128,13 @@ class CentralCreativeBrain:
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "scenario_id": context.metadata.get("scenario_id"),
+                "ecommerce_creative_context": context.metadata.get("ecommerce_creative_context"),
+                "professional_product_truth_required": context.metadata.get(
+                    "professional_product_truth_required"
+                ),
+                "professional_ecommerce_product_truth_pool_asset_ids": context.metadata.get(
+                    "professional_ecommerce_product_truth_pool_asset_ids"
+                ),
                 # Renderer choice is transport provenance, not creative
                 # direction. Preserve it in the frozen plan so the shared
                 # output record cannot mislabel a Codex/MCP materialization
@@ -372,6 +379,13 @@ class CentralCreativeBrain:
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "scenario_id": context.metadata.get("scenario_id"),
+                "ecommerce_creative_context": context.metadata.get("ecommerce_creative_context"),
+                "professional_product_truth_required": context.metadata.get(
+                    "professional_product_truth_required"
+                ),
+                "professional_ecommerce_product_truth_pool_asset_ids": context.metadata.get(
+                    "professional_ecommerce_product_truth_pool_asset_ids"
+                ),
                 # Keep the explicit renderer channel attached to every
                 # materialization plan. The shared Provider/MCP adapter reads
                 # this field; it must never infer the channel from the image

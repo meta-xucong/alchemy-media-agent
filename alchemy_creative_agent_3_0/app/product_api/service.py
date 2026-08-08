@@ -10830,6 +10830,8 @@ class V3ProductApiService:
             "frozen_visual_asset_binding_set",
             "visual_asset_library_reference_assets",
             "visual_asset_library_execution",
+            "professional_product_truth_required",
+            "professional_ecommerce_product_truth_pool_asset_ids",
         }
     )
 
@@ -10842,6 +10844,8 @@ class V3ProductApiService:
             "professional_body_proportion_analysis_receipt",
             "professional_body_refresh_analysis_context",
             "professional_character_card_body_refresh_target_age_scope",
+            "professional_product_truth_required",
+            "professional_ecommerce_product_truth_pool_asset_ids",
         }
     )
 
@@ -11386,6 +11390,11 @@ class V3ProductApiService:
                 "status": "read_compatible_not_executed",
                 "fields": ignored_fields,
             }
+        product_truth_pool_asset_ids = self._professional_ecommerce_product_truth_pool_asset_ids(
+            request,
+            metadata=metadata,
+            scenario_id=resolution.manifest.scenario_id,
+        )
         job_key = str(metadata.get("job_id") or "").strip() or stable_id(
             "ecommerce_context_job",
             request.user_input,
@@ -11399,10 +11408,62 @@ class V3ProductApiService:
             scenario_parameters=parameters,
             platform_profile=selection.platform_profile if selection is not None else None,
             job_key=job_key,
+            provider_reference_budget=(
+                {"max_product_truth_source_refs_per_output": 2}
+                if product_truth_pool_asset_ids
+                else {}
+            ),
         )
+        if product_truth_pool_asset_ids:
+            metadata["professional_product_truth_required"] = True
+            metadata["professional_ecommerce_product_truth_pool_asset_ids"] = list(
+                product_truth_pool_asset_ids
+            )
         metadata["ecommerce_creative_context"] = context.model_dump(mode="json")
         metadata["ecommerce_creative_context_server_owned"] = True
         request.metadata = metadata
+
+    def _professional_ecommerce_product_truth_pool_asset_ids(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        metadata: dict[str, Any],
+        scenario_id: str,
+    ) -> list[str]:
+        """Resolve one server-owned product-truth pool for Professional E-Commerce.
+
+        Multiple uploaded views of one product are evidence for the Remote Brain,
+        not simultaneous renderer inputs.  This contract is enabled only after
+        Project Mode or another trusted host has frozen a Professional binding;
+        ordinary E-Commerce requests keep their historical role conflict/capacity
+        behavior.
+        """
+
+        if scenario_id != "ecommerce":
+            return []
+        frozen_binding = metadata.get("frozen_visual_asset_binding_set")
+        frozen_binding_active = (
+            isinstance(frozen_binding, dict)
+            and str(frozen_binding.get("state") or "").strip().lower() in {"valid", "empty"}
+        )
+        trusted_professional = metadata.get("professional_mode") is True
+        if not frozen_binding_active and not trusted_professional:
+            return []
+
+        resolved_assets = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
+        product_ids: list[str] = []
+        for asset in resolved_assets:
+            asset_metadata = asset.metadata if isinstance(asset.metadata, dict) else {}
+            channel = str(asset_metadata.get("codex_native_reference_channel") or "").strip().lower()
+            role = str(getattr(asset.role, "value", asset.role) or "").strip().lower()
+            upload_status = str(asset_metadata.get("upload_status") or "").strip().lower()
+            if channel == "product_truth" or role == "product_reference":
+                if upload_status and upload_status != "ready":
+                    raise ValueError("professional_ecommerce_product_truth_asset_not_ready")
+                if not asset.file_path:
+                    raise ValueError("professional_ecommerce_product_truth_asset_not_materialized")
+                product_ids.append(asset.asset_id)
+        return list(dict.fromkeys(product_ids))
 
     def _record_ecommerce_runtime_provenance(self, request: CreateCreativeJobRequest, runtime_result: Any, *, stage: str) -> None:
         """Persist factual inputs and fail-closed reasons without replaying a recipe.

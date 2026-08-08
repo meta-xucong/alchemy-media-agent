@@ -91,7 +91,14 @@ class AssetBindingPlanner(SharedCapabilityModule):
             capability_input.metadata["body_mcp_reference_partition"] = body_mcp_partition.model_dump(
                 mode="json"
             )
-        warnings = self._conflict_warnings(bindings, body_mcp_partition=body_mcp_partition)
+        warnings = self._conflict_warnings(
+            bindings,
+            body_mcp_partition=body_mcp_partition,
+            professional_product_truth_pool=self._professional_product_truth_pool(
+                capability_input,
+                bindings,
+            ),
+        )
         constraints = [
             CapabilityConstraint(
                 target_stage=CapabilityTargetStage.PROMPT_COMPILATION,
@@ -217,6 +224,7 @@ class AssetBindingPlanner(SharedCapabilityModule):
         bindings: list[dict[str, Any]],
         *,
         body_mcp_partition: McpBodyReferencePartition | None = None,
+        professional_product_truth_pool: set[str] | None = None,
     ) -> list[CapabilityWarning]:
         warnings: list[CapabilityWarning] = []
         hard_roles = {AssetRole.PRODUCT_REFERENCE.value, AssetRole.LOGO_REFERENCE.value, AssetRole.FACE_REFERENCE.value, AssetRole.NONHUMAN_IDENTITY_REFERENCE.value}
@@ -226,6 +234,10 @@ class AssetBindingPlanner(SharedCapabilityModule):
                 binding
                 for binding in role_bindings
                 if not (
+                    role == AssetRole.PRODUCT_REFERENCE.value
+                    and professional_product_truth_pool is not None
+                    and binding["asset_id"] in professional_product_truth_pool
+                ) and not (
                     role == AssetRole.FACE_REFERENCE.value
                     and body_mcp_partition is not None
                 ) and not (
@@ -243,3 +255,30 @@ class AssetBindingPlanner(SharedCapabilityModule):
                     )
                 )
         return warnings
+
+    @staticmethod
+    def _professional_product_truth_pool(
+        capability_input: CapabilityInput,
+        bindings: list[dict[str, Any]],
+    ) -> set[str] | None:
+        metadata = capability_input.metadata if isinstance(capability_input.metadata, dict) else {}
+        if (
+            capability_input.scenario_id != "ecommerce"
+            or metadata.get("professional_product_truth_required") is not True
+        ):
+            return None
+        raw_pool = metadata.get("professional_ecommerce_product_truth_pool_asset_ids")
+        pool = [
+            str(item).strip()
+            for item in raw_pool
+            if str(item).strip()
+        ] if isinstance(raw_pool, list) else []
+        actual = [
+            str(binding.get("asset_id") or "").strip()
+            for binding in bindings
+            if binding.get("role") == AssetRole.PRODUCT_REFERENCE.value
+            and str(binding.get("asset_id") or "").strip()
+        ]
+        if not pool or len(pool) != len(set(pool)) or set(actual) != set(pool):
+            return None
+        return set(pool)

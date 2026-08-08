@@ -660,6 +660,7 @@ class EcommerceCreativeContext(V3BaseModel):
     source_version: str = "ecommerce_creative_context_v2"
     product_truth: ProductTruthLock
     apparel_on_model_evidence_profile: ApparelOnModelEvidenceProfile | None = None
+    provider_reference_budget: dict[str, int] = Field(default_factory=dict)
     platform_constraints: dict[str, Any] = Field(default_factory=dict)
     category_evidence_questions: list[str] = Field(default_factory=list)
     seller_inputs: dict[str, Any] = Field(default_factory=dict)

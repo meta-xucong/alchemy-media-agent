@@ -195,6 +195,13 @@ def build_provider_generation_request(
             "project_id": metadata.get("project_id"),
             "template_id": metadata.get("template_id"),
             "scenario_id": metadata.get("scenario_id"),
+            "ecommerce_creative_context": metadata.get("ecommerce_creative_context"),
+            "professional_product_truth_required": metadata.get(
+                "professional_product_truth_required"
+            ),
+            "professional_ecommerce_product_truth_pool_asset_ids": metadata.get(
+                "professional_ecommerce_product_truth_pool_asset_ids"
+            ),
             # Professional serial anchor stages are an explicit opt-in
             # materialization policy.  Preserve the server-owned strategy and
             # stage when the canonical planning result is projected into the
@@ -2201,7 +2208,168 @@ class ProductionImageGenerationProvider(GenerationProvider):
     ) -> list[dict[str, Any]]:
         """Return the server-owned physical reference scope for this route."""
 
-        return combined_assets
+        metadata = self._generation_request_metadata(request)
+        if not metadata.get("professional_product_truth_required"):
+            return combined_assets
+
+        plan = metadata.get("template_deliverable_plan")
+        if not isinstance(plan, dict) or str(plan.get("scenario_id") or "").strip() != "ecommerce":
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth requires a frozen deliverable plan selection.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "ecommerce_product_truth_selection_missing",
+                    "fallback": "blocked",
+                },
+            )
+        raw_pool = metadata.get("professional_ecommerce_product_truth_pool_asset_ids")
+        pool_ids = [
+            str(item).strip()
+            for item in raw_pool
+            if str(item).strip()
+        ] if isinstance(raw_pool, list) else []
+        if not pool_ids or len(pool_ids) != len(set(pool_ids)):
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth pool is missing or malformed.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "ecommerce_product_truth_pool_invalid",
+                    "fallback": "blocked",
+                },
+            )
+        deliverables = plan.get("deliverables")
+        if not isinstance(deliverables, list):
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth selection is missing.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "ecommerce_product_truth_selection_missing",
+                    "fallback": "blocked",
+                },
+            )
+        try:
+            output_index = int(getattr(request.asset_spec, "priority", 1) or 1)
+        except (TypeError, ValueError):
+            output_index = 0
+        deliverable = next(
+            (
+                item
+                for item in deliverables
+                if isinstance(item, dict) and item.get("output_index") == output_index
+            ),
+            None,
+        )
+        deliverable_metadata = (
+            deliverable.get("metadata")
+            if isinstance(deliverable, dict) and isinstance(deliverable.get("metadata"), dict)
+            else None
+        )
+        if deliverable_metadata is None:
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth selection is missing.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "ecommerce_product_truth_selection_missing",
+                    "fallback": "blocked",
+                },
+            )
+        declared_pool = [
+            str(item).strip()
+            for item in deliverable_metadata.get("product_truth_pool_asset_ids", [])
+            if str(item).strip()
+        ]
+        selected = [
+            str(item).strip()
+            for item in deliverable_metadata.get("selected_product_truth_asset_ids", [])
+            if str(item).strip()
+        ]
+        admitted = [
+            str(item).strip()
+            for item in deliverable_metadata.get("admitted_product_truth_asset_ids", [])
+            if str(item).strip()
+        ]
+        selection_source = str(
+            deliverable_metadata.get("product_truth_selection_source") or ""
+        ).strip()
+        selection_role = str(
+            deliverable_metadata.get("product_truth_selection_role") or ""
+        ).strip()
+        try:
+            max_product_refs = int(
+                deliverable_metadata.get("max_product_truth_source_refs_per_output")
+            )
+        except (TypeError, ValueError):
+            max_product_refs = 0
+        if (
+            declared_pool != pool_ids
+            or not selected
+            or len(selected) != len(set(selected))
+            or admitted != selected
+            or selection_source
+            != "remote_brain_image_set_plan.evidence_dimensions_by_output"
+            or max_product_refs not in {1, 2}
+            or len(selected) > max_product_refs
+            or len(selected) > 2
+            or not set(selected).issubset(set(pool_ids))
+            or (len(selected) == 2 and selection_role != "product_detail_or_print_view")
+        ):
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth selection is invalid.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "ecommerce_product_truth_selection_invalid",
+                    "fallback": "blocked",
+                },
+            )
+
+        actual_product_ids = []
+        for item in combined_assets:
+            data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
+            item_metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            role = str(data.get("role") or "").strip().lower()
+            channel = str(item_metadata.get("codex_native_reference_channel") or "").strip().lower()
+            if role == "product_reference" or channel == "product_truth":
+                asset_id = str(data.get("asset_id") or data.get("source_id") or "").strip()
+                if asset_id:
+                    actual_product_ids.append(asset_id)
+        actual_product_id_set = set(actual_product_ids)
+        if actual_product_id_set != set(pool_ids):
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth pool does not match bound product references.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "ecommerce_product_truth_pool_mismatch",
+                    "fallback": "blocked",
+                },
+            )
+        if not actual_product_id_set.intersection(selected):
+            raise ReferenceInputAdmissionError(
+                "Selected Professional E-Commerce product truth is unavailable.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "ecommerce_product_truth_selection_unavailable",
+                    "fallback": "blocked",
+                },
+            )
+
+        suppressed = [asset_id for asset_id in pool_ids if asset_id not in selected]
+        scoped: list[dict[str, Any]] = []
+        for item in combined_assets:
+            data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
+            item_metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            role = str(data.get("role") or "").strip().lower()
+            channel = str(item_metadata.get("codex_native_reference_channel") or "").strip().lower()
+            if role == "product_reference" or channel == "product_truth":
+                asset_id = str(data.get("asset_id") or data.get("source_id") or "").strip()
+                if asset_id not in selected:
+                    continue
+            scoped.append(data)
+        request.metadata["professional_ecommerce_product_truth_projection"] = {
+            "output_index": output_index,
+            "selected_product_truth_asset_ids": list(selected),
+            "suppressed_product_truth_asset_ids": suppressed,
+        }
+        return scoped
 
     def _reference_capacity_limit(
         self,
@@ -5666,7 +5834,7 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             and self._is_strict_character_card_body_refresh(metadata)
             and str(metadata.get(_BODY_REFRESH_SOURCE_MODE_KEY) or "").strip() == "reference_assisted"
         ):
-            return combined_assets
+            return super()._reference_input_scope(request, combined_assets)
 
         anchor_assets = metadata.get("professional_anchor_reference_assets")
         anchor_list = anchor_assets if isinstance(anchor_assets, list) else []

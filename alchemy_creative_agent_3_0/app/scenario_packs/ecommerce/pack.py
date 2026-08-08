@@ -53,6 +53,7 @@ class EcommerceScenarioPackPlanner:
         scenario_parameters: dict[str, Any],
         platform_profile: str | None,
         job_key: str,
+        provider_reference_budget: dict[str, int] | None = None,
     ) -> EcommerceCreativeContext:
         """Build factual input for the remote Brain without a visual answer."""
 
@@ -112,6 +113,7 @@ class EcommerceScenarioPackPlanner:
             ),
             product_truth=truth,
             apparel_on_model_evidence_profile=apparel_on_model_profile,
+            provider_reference_budget=dict(provider_reference_budget or {}),
             platform_constraints=platform_constraints,
             category_evidence_questions=category_questions,
             seller_inputs=seller_inputs,
@@ -171,6 +173,7 @@ class EcommerceScenarioPackPlanner:
         scenario_parameters: dict[str, Any],
         platform_profile: str | None,
         job_key: str,
+        provider_reference_budget: dict[str, int] | None = None,
     ) -> EcommercePackOutput:
         """Return a read-compatible, recipe-free summary for a new job."""
 
@@ -181,6 +184,7 @@ class EcommerceScenarioPackPlanner:
             scenario_parameters=scenario_parameters,
             platform_profile=platform_profile,
             job_key=job_key,
+            provider_reference_budget=provider_reference_budget,
         )
         marketplace_base = self.marketplace_rule_engine.profile(
             platform_profile=platform_profile,
