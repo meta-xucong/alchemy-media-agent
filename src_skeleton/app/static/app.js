@@ -1280,6 +1280,7 @@ function bindControls() {
   if (els.v3ProjectNextActions) els.v3ProjectNextActions.addEventListener("click", handleV3ProjectActionClick);
   if (els.v3CloseSubpageBtn) els.v3CloseSubpageBtn.addEventListener("click", closeV3ProjectSubpage);
   if (els.v3UsefulReferenceBoard) els.v3UsefulReferenceBoard.addEventListener("click", handleV3ReferenceBoardClick);
+  bindV3ContinueProfessionalProjectButton();
   if (els.v3ProjectArchiveBtn) els.v3ProjectArchiveBtn.addEventListener("click", () => archiveV3Project(v3State.currentProject?.project_id));
   if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.addEventListener("click", () => deleteV3Project(v3State.currentProject?.project_id));
   if (els.v3OpenProjectVisualAssetDialogBtn) els.v3OpenProjectVisualAssetDialogBtn.addEventListener("click", openV3VisualAssetBindingDialog);
@@ -6468,7 +6469,7 @@ function renderV3ProjectVisualAssetPanel() {
   if (!panel) return;
   const project = v3State.currentProject;
   const professionalProject = v3ProjectUsesProfessionalWorkspace(project);
-  panel.dataset.v3ProjectId = project?.project_id || "";
+  panel.dataset.v3ProjectId = v3VisualAssetPanelProjectId(panel) || project?.project_id || "";
   panel.hidden = !project?.project_id || !professionalProject;
   if (!project?.project_id || !professionalProject) {
     delete panel.dataset.v3ProjectId;
@@ -6477,6 +6478,7 @@ function renderV3ProjectVisualAssetPanel() {
   const bindings = Array.isArray(v3State.projectVisualAssetBindings) ? v3State.projectVisualAssetBindings : [];
   if (els.v3ContinueProfessionalProjectBtn) {
     els.v3ContinueProfessionalProjectBtn.disabled = !project?.project_id;
+    bindV3ContinueProfessionalProjectButton();
   }
   if (els.v3OpenProjectVisualAssetDialogBtn) {
     els.v3OpenProjectVisualAssetDialogBtn.disabled = v3State.projectVisualAssetBindingsLoading;
@@ -6494,13 +6496,42 @@ function renderV3ProjectVisualAssetPanel() {
   }
 }
 
+function bindV3ContinueProfessionalProjectButton() {
+  const button = els.v3ContinueProfessionalProjectBtn;
+  if (!button || button.dataset.v3ContinueBound === "true") return;
+  button.addEventListener("click", handleV3ProjectVisualAssetPanelClick);
+  button.dataset.v3ContinueBound = "true";
+}
+
+function v3VisualAssetPanelProjectId(panel = els.v3ProjectVisualAssetPanel) {
+  const currentId = v3State.currentProject?.project_id || "";
+  if (currentId) return currentId;
+  const existing = panel?.dataset?.v3ProjectId || "";
+  if (existing) return existing;
+  const title = String(els.v3ProjectTitle?.textContent || "").replace("...", "").trim();
+  const projects = Array.isArray(v3State.projects) ? v3State.projects : [];
+  const visibleProject = title
+    ? projects.find((project) => v3ProjectDisplayTitle(project).startsWith(title) || title.startsWith(v3ShortText(v3ProjectDisplayTitle(project), 24).replace("...", "")))
+    : null;
+  return visibleProject?.project_id || projects[0]?.project_id || "";
+}
+
 async function handleV3ProjectVisualAssetPanelClick(event) {
-  if (!(event.target instanceof Element)) return;
-  const button = event.target.closest("#v3ContinueProfessionalProjectBtn");
+  const pathButton = typeof event.composedPath === "function"
+    ? event.composedPath().find((node) => node instanceof Element && node.id === "v3ContinueProfessionalProjectBtn")
+    : null;
+  const currentTargetButton = event.currentTarget instanceof Element && event.currentTarget.id === "v3ContinueProfessionalProjectBtn"
+    ? event.currentTarget
+    : null;
+  const eventTarget = event.target instanceof Element ? event.target : event.target?.parentElement || null;
+  const button = pathButton || currentTargetButton || eventTarget?.closest?.("#v3ContinueProfessionalProjectBtn");
   if (!button || button.disabled || !els.v3ProjectVisualAssetPanel?.contains(button)) return;
   const panel = button.closest("#v3ProjectVisualAssetPanel");
-  const projectId = panel?.dataset.v3ProjectId || v3State.currentProject?.project_id || "";
-  if (!projectId) return;
+  const projectId = v3VisualAssetPanelProjectId(panel);
+  if (!projectId) {
+    updateV3Notice("项目还在读取，请稍后再继续生成。", "warning");
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   if (!v3State.currentProject?.project_id || v3State.currentProject.project_id !== projectId) {
