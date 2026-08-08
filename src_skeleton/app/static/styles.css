@@ -32,6 +32,10 @@ body.modal-open {
   overflow: hidden;
 }
 
+body[data-active-module="v3"]:not(.modal-open):not(.v3-page-loading-active) {
+  overflow-y: auto;
+}
+
 body {
   margin: 0;
   color: var(--ink);
@@ -4205,6 +4209,7 @@ button.v2-live-preview:focus-visible {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -4446,6 +4451,10 @@ button.v2-live-preview:focus-visible {
 
 .v3-project-visual-asset-heading h4 {
   margin: 2px 0 5px;
+}
+
+.v3-project-visual-asset-heading .v3-visual-asset-actions {
+  flex: 0 0 auto;
 }
 
 .v3-project-visual-asset-summary {
@@ -7836,6 +7845,8 @@ body[data-active-module="v3"] #sessionLabel {
 .v3-workspace-view {
   display: grid;
   gap: 18px;
+  min-height: 0;
+  align-content: start;
 }
 
 .v3-professional-home-surface,
@@ -8703,6 +8714,8 @@ body.v3-page-loading-active {
   inset: 72px max(18px, calc((100vw - 1180px) / 2)) 24px;
   z-index: 120;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   border-color: rgba(66, 109, 134, 0.22);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 249, 248, 0.82)),
@@ -8723,6 +8736,12 @@ body.v3-page-loading-active {
 
 .v3-project-subpage[hidden] {
   display: none;
+}
+
+.v3-project-detail-panel,
+.v3-step-action-region {
+  min-height: 0;
+  overflow: visible;
 }
 
 .v3-subpage-body {
@@ -10418,7 +10437,12 @@ body.v3-page-loading-active {
 @media (max-width: 760px) {
   .v3-project-subpage {
     inset: 12px;
+    max-height: calc(100dvh - 24px);
     border-radius: 14px;
+  }
+
+  .v3-workspace-view {
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
   }
 
   .v3-project-history-modal {

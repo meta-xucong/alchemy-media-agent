@@ -3250,6 +3250,17 @@ function releaseV3ScrollLockIfNoModal() {
     return "open" in modal ? modal.open === true : !modal.hidden;
   });
   if (!hasOpenModal) document.body.classList.remove("modal-open");
+  const hasActivePageOverlay = [
+    document.querySelector("#v3PageLoadingOverlay"),
+    document.querySelector("#appPageLoadingOverlay"),
+  ].some((overlay) => overlay && !overlay.hidden);
+  if (!hasActivePageOverlay) document.body.classList.remove("v3-page-loading-active");
+}
+
+function releaseV3ScrollLockAfterNativeDialogClose() {
+  releaseV3ScrollLockIfNoModal();
+  window.requestAnimationFrame?.(() => releaseV3ScrollLockIfNoModal());
+  window.setTimeout(() => releaseV3ScrollLockIfNoModal(), 0);
 }
 
 function renderV3ProjectHistoryGrid(group) {
@@ -4625,6 +4636,7 @@ function openV3ProjectSubpage(stepKey = "compose") {
     showGlobalToast("请先新建或打开一个 V3 项目。", "warning");
     return;
   }
+  releaseV3ScrollLockIfNoModal();
   v3State.activeProjectStep = stepKey || "compose";
   const copy = v3ProjectSubpageCopy(v3State.activeProjectStep);
   if (els.v3SubpageEyebrow) els.v3SubpageEyebrow.textContent = copy.eyebrow;
@@ -5911,6 +5923,7 @@ function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
   }
   renderV3VisualAssetLibrary();
   if (!dialog.open) dialog.showModal();
+  document.body.classList.add("modal-open");
   void loadV3VisualAssets({ silent: true, force: true });
   if (!focusBuilder) return;
   window.setTimeout(() => {
@@ -5921,20 +5934,20 @@ function openV3VisualAssetLibraryDialog({ focusBuilder = false } = {}) {
 
 function closeV3VisualAssetLibraryDialog() {
   if (els.v3VisualAssetLibraryDialog?.open) els.v3VisualAssetLibraryDialog.close();
-  releaseV3ScrollLockIfNoModal();
+  releaseV3ScrollLockAfterNativeDialogClose();
 }
 
 function handleV3VisualAssetLibraryDialogClose() {
-  releaseV3ScrollLockIfNoModal();
+  releaseV3ScrollLockAfterNativeDialogClose();
 }
 
 function closeV3VisualAssetBindingDialog() {
   if (els.v3VisualAssetBindingDialog?.open) els.v3VisualAssetBindingDialog.close();
-  releaseV3ScrollLockIfNoModal();
+  releaseV3ScrollLockAfterNativeDialogClose();
 }
 
 function handleV3VisualAssetBindingDialogClose() {
-  releaseV3ScrollLockIfNoModal();
+  releaseV3ScrollLockAfterNativeDialogClose();
 }
 
 function openV3VisualAssetLibraryFromBindingDialog() {
@@ -6569,7 +6582,11 @@ async function openV3VisualAssetBindingDialog() {
   }
   if (els.v3ConfirmVisualAssetBindingBtn) els.v3ConfirmVisualAssetBindingBtn.disabled = !available.length;
   if (els.v3ClearProjectVisualAssetBindingBtn) els.v3ClearProjectVisualAssetBindingBtn.disabled = !current;
-  if (els.v3VisualAssetBindingDialog?.showModal) els.v3VisualAssetBindingDialog.showModal();
+  if (els.v3VisualAssetBindingDialog?.showModal) {
+    if (!els.v3VisualAssetBindingDialog.open) els.v3VisualAssetBindingDialog.showModal();
+    document.body.classList.add("modal-open");
+    els.v3VisualAssetBindingDialog.scrollTop = 0;
+  }
 }
 
 function v3SelectedVisualAssetChoice() {
@@ -6700,6 +6717,7 @@ async function openV3Project(projectId) {
     v3State.projectOpening = false;
     if (els.v3WorkspaceView) delete els.v3WorkspaceView.dataset.v3Opening;
     setV3PageLoading(false);
+    releaseV3ScrollLockIfNoModal();
     setV3Busy(false);
     resumeV3ActiveProjectJobRecovery(recoveryJob);
   }
@@ -7813,6 +7831,7 @@ function setV3PageLoading(visible, title = "", detail = "") {
   const overlay = ensureV3PageLoadingOverlay();
   overlay.hidden = !visible;
   document.body.classList.toggle("v3-page-loading-active", Boolean(visible));
+  if (!visible) releaseV3ScrollLockIfNoModal();
   const titleNode = overlay.querySelector("#v3PageLoadingTitle");
   const detailNode = overlay.querySelector("#v3PageLoadingDetail");
   if (titleNode) titleNode.textContent = title || "正在进入项目";
@@ -7838,6 +7857,7 @@ function setAppPageLoading(visible, title = "", detail = "") {
   const overlay = ensureAppPageLoadingOverlay();
   overlay.hidden = !visible;
   document.body.classList.toggle("v3-page-loading-active", Boolean(visible));
+  if (!visible) releaseV3ScrollLockIfNoModal();
   const titleNode = overlay.querySelector("#appPageLoadingTitle");
   const detailNode = overlay.querySelector("#appPageLoadingDetail");
   if (titleNode) titleNode.textContent = title || "正在加载";

@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
+STYLES_CSS = ROOT / "src_skeleton" / "app" / "static" / "styles.css"
 DOC173 = ROOT / "alchemy_creative_agent_3_0" / "docs" / "173_V3_VISUAL_ASSET_LIBRARY_FIRST_PROFESSIONAL_WORKSPACE_RECONSTRUCTION_SPEC.md"
 DOC174 = ROOT / "alchemy_creative_agent_3_0" / "docs" / "174_V3_STANDARD_AND_PROFESSIONAL_WORKSPACE_NAVIGATION_SPEC.md"
 
@@ -103,15 +104,37 @@ def test_doc174_visual_asset_dialog_close_never_leaves_page_scroll_locked() -> N
     source = APP_JS.read_text(encoding="utf-8")
 
     release = _function(source, "releaseV3ScrollLockIfNoModal", "renderV3ProjectHistoryGrid")
+    deferred_release = _function(source, "releaseV3ScrollLockAfterNativeDialogClose", "renderV3ProjectHistoryGrid")
     binding_close = _function(source, "closeV3VisualAssetBindingDialog", "openV3VisualAssetLibraryFromBindingDialog")
     confirm = _function(source, "confirmV3VisualAssetBinding", "clearV3ProjectVisualAssetBinding")
     clear = _function(source, "clearV3ProjectVisualAssetBinding", "openV3Project")
 
     assert 'return "open" in modal ? modal.open === true : !modal.hidden;' in release
+    assert 'document.querySelector("#v3PageLoadingOverlay")' in release
+    assert 'document.body.classList.remove("v3-page-loading-active")' in release
+    assert "window.requestAnimationFrame?.(() => releaseV3ScrollLockIfNoModal());" in deferred_release
     assert 'els.v3VisualAssetBindingDialog.addEventListener("close", handleV3VisualAssetBindingDialogClose)' in source
-    assert "releaseV3ScrollLockIfNoModal();" in binding_close
+    assert "releaseV3ScrollLockAfterNativeDialogClose();" in binding_close
     assert "closeV3VisualAssetBindingDialog();" in confirm
     assert "closeV3VisualAssetBindingDialog();" in clear
+
+
+def test_doc174_professional_project_page_remains_scrollable_after_asset_binding() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+    open_subpage = _function(source, "openV3ProjectSubpage", "closeV3ProjectSubpage")
+    open_project = _function(source, "openV3Project", "renderV3ProjectOpeningState")
+    page_loading = _function(source, "setV3PageLoading", "ensureAppPageLoadingOverlay")
+
+    assert 'body[data-active-module="v3"]:not(.modal-open):not(.v3-page-loading-active)' in css
+    assert "overflow-y: auto;" in css
+    assert ".v3-workspace-view" in css
+    assert "align-content: start;" in css
+    assert "max-height: calc(100dvh - 24px);" in css
+    assert "-webkit-overflow-scrolling: touch;" in css
+    assert "releaseV3ScrollLockIfNoModal();" in open_subpage
+    assert "releaseV3ScrollLockIfNoModal();" in open_project
+    assert "if (!visible) releaseV3ScrollLockIfNoModal();" in page_loading
 
 
 def test_doc174_professional_project_keeps_generation_as_a_first_level_action() -> None:
