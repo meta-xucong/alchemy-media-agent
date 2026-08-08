@@ -474,6 +474,10 @@ def test_generic_provider_400_stays_unattributed_by_operation(tmp_path, monkeypa
                 "status_code": 400,
                 "operation_timeout_seconds": 665.0,
                 "operation_timeout_exhausted": False,
+                "runtime_transport": {
+                    "effective_client_timeout_seconds": 665.0,
+                    "operation_timeout_exhausted": False,
+                },
             },
         )
 

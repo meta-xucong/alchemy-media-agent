@@ -4874,6 +4874,7 @@ function mobileV3RecoveredJobFromProjectOutputs(projectId, jobId, baseJob = mobi
   if (!outputs.length) return null;
   const expectedCount = mobileV3ExpectedImageCountForJob(baseJob);
   const partialRecovery = allowPartial && Number.isFinite(expectedCount) && outputs.length < expectedCount;
+  const missingCount = partialRecovery ? Math.max(0, expectedCount - outputs.length) : 0;
   return {
     ...(baseJob || {}),
     job_id: targetJobId,
@@ -4888,7 +4889,9 @@ function mobileV3RecoveredJobFromProjectOutputs(projectId, jobId, baseJob = mobi
             partial_generation_recovery: {
               status: "partial_output_preserved",
               source_record_status: String(baseJob?.status || "blocked"),
+              requested_image_count: expectedCount,
               delivered_output_count: outputs.length,
+              missing_output_count: missingCount,
               remaining_roles_failed: true,
               append_only_history_preserved: true,
             },

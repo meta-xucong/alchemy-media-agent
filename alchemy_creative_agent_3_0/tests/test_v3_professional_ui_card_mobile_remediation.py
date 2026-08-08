@@ -118,6 +118,8 @@ def test_mobile_v3_project_detail_recovers_blocked_outputs_and_resets_scroll() -
 
     assert "function mobileV3ExpectedImageCountForJob" in mobile_js
     assert "function mobileV3RecoveredJobFromProjectOutputs" in mobile_js
+    assert "requested_image_count: expectedCount" in mobile_js
+    assert "missing_output_count: missingCount" in mobile_js
     assert "surface.scrollTop = 0;" in mobile_js
     assert "surface.scrollLeft = 0;" in mobile_js
     refresh_body = mobile_js[mobile_js.index("async function refreshMobileV3ProjectDetail"):mobile_js.index("function renderMobileV3ProjectOutputs")]

@@ -1026,7 +1026,9 @@ def test_partial_persisted_output_remains_visible_when_a_later_role_blocks_the_j
     assert recovered.metadata["partial_generation_recovery"] == {
         "status": "partial_output_preserved",
         "source_record_status": "blocked",
+        "requested_image_count": 2,
         "delivered_output_count": 1,
+        "missing_output_count": 1,
         "remaining_roles_failed": True,
         "append_only_history_preserved": True,
     }

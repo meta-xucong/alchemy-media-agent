@@ -3664,6 +3664,7 @@ function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob, {
   const visibleCount = outputs.length;
   const expectedCount = v3ExpectedImageCountForJob(baseJob || {});
   const partialRecovery = allowPartial && visibleCount < expectedCount;
+  const missingCount = partialRecovery ? Math.max(0, expectedCount - visibleCount) : 0;
   return {
     ...(baseJob || {}),
     job_id: jobId,
@@ -3678,7 +3679,9 @@ function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob, {
             partial_generation_recovery: {
               status: "partial_output_preserved",
               source_record_status: baseStatus || "blocked",
+              requested_image_count: expectedCount,
               delivered_output_count: visibleCount,
+              missing_output_count: missingCount,
               remaining_roles_failed: true,
               append_only_history_preserved: true,
             },

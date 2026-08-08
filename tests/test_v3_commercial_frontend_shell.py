@@ -64,8 +64,8 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3ProjectSnapshot"' in index.text
     assert 'id="v3PersistentDisplayRegion"' in index.text
     assert index.text.count('id="v3PersistentDisplayRegion"') == 1
-    assert "/static/styles.css?v=20260726-visual-asset-cards" in index.text
-    assert "/static/app.js?v=20260726-visual-asset-cards" in index.text
+    assert "/static/styles.css?v=20260808-v3-professional-scroll-recovery" in index.text
+    assert "/static/app.js?v=20260808-v3-professional-scroll-recovery" in index.text
     assert 'id="v3ProjectOutputBoard"' in index.text
     assert 'id="v3UsefulReferenceBoard"' in index.text
     assert 'id="v3ProjectWorkflow"' in index.text
@@ -520,6 +520,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "recoveryJob = restoredJob || v3State.currentJob;" in script.text
     assert "resumeV3ActiveProjectJobRecovery(recoveryJob);" in script.text
     assert 'throw new Error("v3_project_recovery_replaced")' in script.text
+    assert "requested_image_count: expectedCount" in script.text
+    assert "missing_output_count: missingCount" in script.text
     assert "function v3HasPersonIdentityReferenceForAdvancedControls" in script.text
     assert "function v3HasProductReferenceForAdvancedControls" in script.text
     assert "已保持参考物品的外观，场景和镜头按本次要求" in script.text

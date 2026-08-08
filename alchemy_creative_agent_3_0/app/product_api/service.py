@@ -9259,10 +9259,14 @@ class V3ProductApiService:
             return None
         result = record.planning_result
         output_count = len(restored.candidates)
+        requested_count = self._partial_recovery_requested_image_count(record, restored)
+        missing_output_count = max(0, requested_count - output_count) if requested_count is not None else None
         partial_metadata = {
             "status": "partial_output_preserved",
             "source_record_status": record.status.value,
+            **({"requested_image_count": requested_count} if requested_count is not None else {}),
             "delivered_output_count": output_count,
+            **({"missing_output_count": missing_output_count} if missing_output_count is not None else {}),
             "remaining_roles_failed": True,
             "append_only_history_preserved": True,
         }
@@ -9297,6 +9301,36 @@ class V3ProductApiService:
             },
             deep=True,
         )
+
+    @staticmethod
+    def _partial_recovery_requested_image_count(record: ProductJobRecord, restored: ProductJobStatus) -> int | None:
+        request_metadata = dict(record.request.metadata or {})
+        candidates: list[Any] = [
+            request_metadata.get("requested_image_count"),
+        ]
+        scenario_parameters = request_metadata.get("scenario_parameters")
+        if isinstance(scenario_parameters, dict):
+            candidates.append(scenario_parameters.get("requested_image_count"))
+        if record.planning_result is not None:
+            planning_metadata = record.planning_result.metadata if isinstance(record.planning_result.metadata, dict) else {}
+            candidates.append(planning_metadata.get("requested_image_count"))
+            assets = getattr(getattr(record.planning_result, "asset_pack", None), "assets", None)
+            if isinstance(assets, list):
+                candidates.append(len(assets))
+        restored_metadata = dict(restored.metadata or {})
+        candidates.append(restored_metadata.get("requested_image_count"))
+        candidates.append(restored_metadata.get("output_count"))
+        for candidate in restored.candidates:
+            metadata = dict(candidate.metadata or {})
+            candidates.append(metadata.get("requested_image_count"))
+        for value in candidates:
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                continue
+            if count > 0:
+                return count
+        return None
 
     def _history_items_from_output_store(self, limit: int) -> list[V3JobHistoryItem]:
         by_job: dict[str, list[V3GeneratedOutputRecord]] = {}
