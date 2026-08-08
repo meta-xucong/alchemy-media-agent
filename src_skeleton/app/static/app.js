@@ -6468,8 +6468,12 @@ function renderV3ProjectVisualAssetPanel() {
   if (!panel) return;
   const project = v3State.currentProject;
   const professionalProject = v3ProjectUsesProfessionalWorkspace(project);
+  panel.dataset.v3ProjectId = project?.project_id || "";
   panel.hidden = !project?.project_id || !professionalProject;
-  if (!project?.project_id || !professionalProject) return;
+  if (!project?.project_id || !professionalProject) {
+    delete panel.dataset.v3ProjectId;
+    return;
+  }
   const bindings = Array.isArray(v3State.projectVisualAssetBindings) ? v3State.projectVisualAssetBindings : [];
   if (els.v3ContinueProfessionalProjectBtn) {
     els.v3ContinueProfessionalProjectBtn.disabled = !project?.project_id;
@@ -6490,12 +6494,21 @@ function renderV3ProjectVisualAssetPanel() {
   }
 }
 
-function handleV3ProjectVisualAssetPanelClick(event) {
+async function handleV3ProjectVisualAssetPanelClick(event) {
   if (!(event.target instanceof Element)) return;
   const button = event.target.closest("#v3ContinueProfessionalProjectBtn");
   if (!button || button.disabled || !els.v3ProjectVisualAssetPanel?.contains(button)) return;
+  const panel = button.closest("#v3ProjectVisualAssetPanel");
+  const projectId = panel?.dataset.v3ProjectId || v3State.currentProject?.project_id || "";
+  if (!projectId) return;
   event.preventDefault();
-  openV3ProjectSubpage("compose");
+  event.stopPropagation();
+  if (!v3State.currentProject?.project_id || v3State.currentProject.project_id !== projectId) {
+    await openV3Project(projectId);
+  }
+  if (v3State.currentProject?.project_id === projectId) {
+    openV3ProjectSubpage("compose");
+  }
   updateV3Notice("已打开继续生成区域。", "info");
 }
 
