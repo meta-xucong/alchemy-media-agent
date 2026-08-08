@@ -6543,6 +6543,12 @@ async function handleV3ProjectVisualAssetPanelClick(event) {
   updateV3Notice("已打开继续生成区域。", "info");
 }
 
+async function openV3ProfessionalProjectContinuation(event) {
+  await handleV3ProjectVisualAssetPanelClick(event);
+}
+
+window.openV3ProfessionalProjectContinuation = openV3ProfessionalProjectContinuation;
+
 async function openV3VisualAssetBindingDialog() {
   if (!v3State.currentProject?.project_id || !v3ProjectUsesProfessionalWorkspace(v3State.currentProject)) return;
   await Promise.all([
