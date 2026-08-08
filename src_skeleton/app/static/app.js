@@ -886,6 +886,8 @@ const els = {
   closeImageLightboxBtn: document.querySelector("#closeImageLightboxBtn"),
 };
 
+document.addEventListener("click", handleV3ProjectVisualAssetPanelClick);
+
 document.addEventListener("DOMContentLoaded", async () => {
   hydratePortalHomeLink();
   hydrateCachedVeyraAccount();
@@ -1280,9 +1282,6 @@ function bindControls() {
   if (els.v3UsefulReferenceBoard) els.v3UsefulReferenceBoard.addEventListener("click", handleV3ReferenceBoardClick);
   if (els.v3ProjectArchiveBtn) els.v3ProjectArchiveBtn.addEventListener("click", () => archiveV3Project(v3State.currentProject?.project_id));
   if (els.v3ProjectDeleteBtn) els.v3ProjectDeleteBtn.addEventListener("click", () => deleteV3Project(v3State.currentProject?.project_id));
-  if (els.v3ContinueProfessionalProjectBtn) {
-    els.v3ContinueProfessionalProjectBtn.addEventListener("click", () => openV3ProjectSubpage("compose"));
-  }
   if (els.v3OpenProjectVisualAssetDialogBtn) els.v3OpenProjectVisualAssetDialogBtn.addEventListener("click", openV3VisualAssetBindingDialog);
   if (els.v3ManageVisualAssetsFromBindingBtn) els.v3ManageVisualAssetsFromBindingBtn.addEventListener("click", openV3VisualAssetLibraryFromBindingDialog);
   if (els.v3ConfirmVisualAssetBindingBtn) els.v3ConfirmVisualAssetBindingBtn.addEventListener("click", confirmV3VisualAssetBinding);
@@ -6489,6 +6488,15 @@ function renderV3ProjectVisualAssetPanel() {
   } else {
     els.v3ProjectVisualAssetSummary.innerHTML = bindings.map((binding) => `<span class="v3-project-visual-asset-chip"><strong>${escapeHtml(v3AssetNameForBinding(binding))}</strong><small>人物身份已绑定；新任务会冻结当前版本</small></span>`).join("");
   }
+}
+
+function handleV3ProjectVisualAssetPanelClick(event) {
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest("#v3ContinueProfessionalProjectBtn");
+  if (!button || button.disabled || !els.v3ProjectVisualAssetPanel?.contains(button)) return;
+  event.preventDefault();
+  openV3ProjectSubpage("compose");
+  updateV3Notice("已打开继续生成区域。", "info");
 }
 
 async function openV3VisualAssetBindingDialog() {
