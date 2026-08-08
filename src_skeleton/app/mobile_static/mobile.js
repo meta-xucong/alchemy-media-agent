@@ -4415,12 +4415,6 @@ async function generateMobileV3Job() {
     return;
   }
   const projectId = mobileV3State.currentProject.project_id;
-  {
-  const count = mobileV3BoundedCount(
-    document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1,
-    mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate || "general_template",
-  );
-  }
   const scenarioId = mobileV3ScenarioForTemplate(mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate);
   const count = scenarioId === "photography"
     ? (mobileV3State.selectedPhotographyMode === "professional_set" ? 3 : 1)
@@ -4466,7 +4460,11 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
       await loadMobileV3ProjectOutputs(projectId, { limit: 120 });
       const jobOutputs = mobileV3FinalOutputsForProject(projectId).filter((item) => item?.job_id === jobId || item?.metadata?.job_id === jobId);
       if (jobOutputs.length >= expectedCount) return { ...lastJob, metadata: { ...(lastJob?.metadata || {}), project_outputs: jobOutputs } };
-      if (["blocked", "failed", "not_found"].includes(lastJob?.status)) return lastJob;
+      if (["blocked", "failed", "not_found"].includes(lastJob?.status)) {
+        const recovered = mobileV3RecoveredJobFromProjectOutputs(projectId, jobId, lastJob, { allowPartial: true });
+        if (recovered) return recovered;
+        return lastJob;
+      }
     } catch (_error) {
       // Keep polling project outputs; the job endpoint can lag behind.
     }
@@ -4633,7 +4631,11 @@ async function refreshMobileV3ProjectDetail(projectId) {
   const latestJobId = Array.isArray(project?.job_ids) ? project.job_ids[project.job_ids.length - 1] : "";
   if (latestJobId) {
     try {
-      mobileV3State.currentJob = await mobileV3Request(`/jobs/${encodeURIComponent(latestJobId)}`);
+      const latestJob = await mobileV3Request(`/jobs/${encodeURIComponent(latestJobId)}`);
+      const recovered = ["blocked", "failed", "not_found"].includes(String(latestJob?.status || "").trim().toLowerCase())
+        ? mobileV3RecoveredJobFromProjectOutputs(project.project_id, latestJobId, latestJob, { allowPartial: true })
+        : null;
+      mobileV3State.currentJob = recovered || latestJob;
     } catch (_error) {
       mobileV3State.currentJob = null;
     }
@@ -4854,6 +4856,57 @@ function mobileV3FinalOutputsForProject(projectId) {
   return outputs.filter((item) => mobileV3CanonicalFinalDelivery(item));
 }
 
+function mobileV3ExpectedImageCountForJob(job = mobileV3State.currentJob, explicitCount = null) {
+  const metadata = job?.metadata || {};
+  const autoGenerateMetadata = job?.auto_generate?.metadata || {};
+  const candidates = [explicitCount, metadata.requested_image_count, autoGenerateMetadata.requested_image_count, mobileV3State.generationCount];
+  for (const value of candidates) {
+    const number = Number.parseInt(String(value ?? ""), 10);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return null;
+}
+
+function mobileV3RecoveredJobFromProjectOutputs(projectId, jobId, baseJob = mobileV3State.currentJob, { allowPartial = false } = {}) {
+  const targetJobId = String(jobId || "").trim();
+  if (!projectId || !targetJobId) return null;
+  const outputs = mobileV3FinalOutputsForProject(projectId).filter((item) => item?.job_id === targetJobId || item?.metadata?.job_id === targetJobId || item?.related_job_id === targetJobId);
+  if (!outputs.length) return null;
+  const expectedCount = mobileV3ExpectedImageCountForJob(baseJob);
+  const partialRecovery = allowPartial && Number.isFinite(expectedCount) && outputs.length < expectedCount;
+  return {
+    ...(baseJob || {}),
+    job_id: targetJobId,
+    status: "generated",
+    candidates: outputs,
+    asset_series: outputs,
+    metadata: {
+      ...(baseJob?.metadata || {}),
+      recovered_from_project_outputs: true,
+      ...(partialRecovery
+        ? {
+            partial_generation_recovery: {
+              status: "partial_output_preserved",
+              source_record_status: String(baseJob?.status || "blocked"),
+              delivered_output_count: outputs.length,
+              remaining_roles_failed: true,
+              append_only_history_preserved: true,
+            },
+          }
+        : {}),
+      project_outputs: outputs,
+    },
+    warnings: partialRecovery
+      ? [
+          ...new Set([
+            ...(Array.isArray(baseJob?.warnings) ? baseJob.warnings : []),
+            "A generated image was preserved after a later set role failed; it is available as a recoverable partial result.",
+          ]),
+        ]
+      : baseJob?.warnings,
+  };
+}
+
 function mobileV3CanonicalFinalDelivery(item) {
   if (!item || mobileV3OutputDeliveryState(item) !== "final_delivery") return false;
   const sourceType = String(item?.source_type || item?.metadata?.source_type || "").trim().toLowerCase();
@@ -5069,6 +5122,8 @@ function openMobileSurface(id, opener = null) {
   document.body.classList.add("mobile-surface-open");
   document.body.dataset.mobileActiveSurface = id;
   if (opener) document.body.dataset.mobileSurfaceOpener = opener.id || "";
+  surface.scrollTop = 0;
+  surface.scrollLeft = 0;
   const focusTarget = surface.querySelector("button, input, textarea, select, a[href]");
   focusTarget?.focus({ preventScroll: true });
   if (id === "v3-compose") {
@@ -11882,7 +11937,10 @@ async function request(path, options = {}) {
     if (response.status === 401 && !options.skipVeyraAuth) {
       await handleVeyraUnauthorized();
     }
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = response.status;
+    error.responseText = detail;
+    throw error;
   }
   return response.json();
 }

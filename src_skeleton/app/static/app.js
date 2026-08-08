@@ -2436,8 +2436,7 @@ function renderV3ScenarioState() {
     button.setAttribute("aria-pressed", String(active));
   });
   const canCreate = v3ScenarioCanCreate(selected);
-  const assetBindingBlocked = v3State.projectVisualAssetBindingState === "blocked";
-  if (els.v3CreateJobBtn) els.v3CreateJobBtn.disabled = !canCreate || v3State.loading || assetBindingBlocked;
+  if (els.v3CreateJobBtn) els.v3CreateJobBtn.disabled = !canCreate || v3State.loading;
   if (els.v3GenerateBtn) {
     els.v3GenerateBtn.hidden = true;
     els.v3GenerateBtn.disabled = true;
@@ -3621,6 +3620,21 @@ function v3JobHasExpectedVisibleImages(job = v3State.currentJob, expectedCount =
   return v3JobVisibleImageCount(job) >= v3ExpectedImageCountForJob(job, expectedCount);
 }
 
+function v3JobHasRecoverablePartialDelivery(job = v3State.currentJob, expectedCount = null) {
+  if (!job || !v3JobDeliverySettled(job)) return false;
+  const visibleCount = v3JobVisibleImageCount(job);
+  if (visibleCount <= 0) return false;
+  const expectedVisibleCount = v3ExpectedImageCountForJob(job, expectedCount);
+  if (visibleCount >= expectedVisibleCount) return false;
+  const metadata = job?.metadata || {};
+  const partialRecovery = metadata.partial_generation_recovery;
+  return Boolean(
+    (partialRecovery && typeof partialRecovery === "object" && partialRecovery.status === "partial_output_preserved")
+    || metadata.restored_from_output_store
+    || metadata.recovered_from_project_outputs
+  );
+}
+
 function v3StoredProjectOutputItems(project = v3State.currentProject) {
   const projectId = project?.project_id || "";
   return Array.isArray(v3State.projectOutputs)
@@ -3640,10 +3654,16 @@ function v3ProjectOutputsForJob(jobId, project = v3State.currentProject) {
   return v3DeliveryDisplayItems(items);
 }
 
-function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob) {
-  if (baseJob && !v3JobDeliverySettled(baseJob)) return null;
+function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob, { allowPartial = false } = {}) {
+  const baseStatus = String(baseJob?.status || "").trim();
+  if (baseJob && !v3JobDeliverySettled(baseJob)) {
+    if (!allowPartial || !["blocked", "failed", "not_found"].includes(baseStatus)) return null;
+  }
   const outputs = v3ProjectOutputsForJob(jobId);
   if (!outputs.length) return null;
+  const visibleCount = outputs.length;
+  const expectedCount = v3ExpectedImageCountForJob(baseJob || {});
+  const partialRecovery = allowPartial && visibleCount < expectedCount;
   return {
     ...(baseJob || {}),
     job_id: jobId,
@@ -3653,8 +3673,27 @@ function v3RecoveredJobFromProjectOutputs(jobId, baseJob = v3State.currentJob) {
     metadata: {
       ...(baseJob?.metadata || {}),
       recovered_from_project_outputs: true,
+      ...(partialRecovery
+        ? {
+            partial_generation_recovery: {
+              status: "partial_output_preserved",
+              source_record_status: baseStatus || "blocked",
+              delivered_output_count: visibleCount,
+              remaining_roles_failed: true,
+              append_only_history_preserved: true,
+            },
+          }
+        : {}),
       project_outputs: outputs,
     },
+    warnings: partialRecovery
+      ? [
+          ...new Set([
+            ...(Array.isArray(baseJob?.warnings) ? baseJob.warnings : []),
+            "A generated image was preserved after a later set role failed; it is available as a recoverable partial result.",
+          ]),
+        ]
+      : baseJob?.warnings,
   };
 }
 
@@ -3695,8 +3734,10 @@ function v3RecoveredLatestVisibleProjectOutputs(project = v3State.currentProject
 function syncV3CurrentJobFromProjectOutputs({ preferLatest = false } = {}) {
   const baseJob = v3State.currentJob;
   const jobId = baseJob?.job_id || (preferLatest ? v3LatestProjectJobId(v3State.currentProject) : "");
+  const baseStatus = String(baseJob?.status || "").trim();
+  const allowPartial = ["blocked", "failed", "not_found"].includes(baseStatus);
   const recovered =
-    (jobId ? v3RecoveredJobFromProjectOutputs(jobId, baseJob) : null) ||
+    (jobId ? v3RecoveredJobFromProjectOutputs(jobId, baseJob, { allowPartial }) : null) ||
     (preferLatest ? v3RecoveredLatestVisibleProjectOutputs(v3State.currentProject, baseJob) : null);
   if (!recovered) return false;
   if (v3JobVisibleImageCount(recovered) <= v3JobVisibleImageCount(baseJob)) return false;
@@ -4984,6 +5025,7 @@ function handleV3ProjectActionClick(event) {
         : `保持这个项目已选图片的风格，继续生成一张新的商业视觉图。${goal ? ` 目标：${goal}` : ""}`;
       els.v3PromptInput.focus();
     }
+    openV3ProjectSubpage("compose");
     updateV3Notice(v3State.selectedScenario === "ecommerce" ? "已准备好继续制作。确认需求和数量后点击生成即可。" : "已切到同风格续作。确认需求后点击生成即可。", "info");
     return;
   }
@@ -5002,7 +5044,10 @@ function handleV3ProjectActionClick(event) {
       els.v3PromptInput.value = goal;
       els.v3PromptInput.focus();
     }
-    updateV3Notice(v3State.selectedScenario === "ecommerce" ? "确认需求和数量后即可生成；商品图和补充信息可按需填写。" : "确认这一句需求后，点击生成第一组图片。", "info");
+    openV3ProjectSubpage("compose");
+    updateV3Notice(v3State.selectedScenario === "ecommerce" ? "已打开生成区，正在开始生成新电商图。" : "已打开生成区，正在开始生成第一组图片。", "info");
+    void generateV3Job();
+    return;
   }
 }
 
@@ -5184,6 +5229,14 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
   }
   try {
     const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+    if (["blocked", "failed", "not_found"].includes(String(job?.status || "").trim().toLowerCase())) {
+      const recovered = v3RecoveredJobFromProjectOutputs(jobId, job, { allowPartial: true });
+      if (recovered) {
+        v3State.currentJob = recovered;
+        v3State.selectedResult = null;
+        return recovered;
+      }
+    }
     if (!v3JobDeliverySettled(job)) {
       v3State.currentJob = job;
       // A background job has no delivery to restore yet, but it is still the
@@ -7399,8 +7452,8 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
 
 async function createV3Job() {
   if (v3State.projectVisualAssetBindingState === "blocked") {
-    showGlobalToast("当前绑定的视觉资产不可用。请在项目概览中选择其他已启用资产，或明确解除绑定后再生成。", "warning");
-    renderV3ProjectVisualAssetPanel();
+    await openV3VisualAssetBindingDialog();
+    showGlobalToast("当前绑定的视觉资产需要先处理。请在弹窗里选择其他已启用资产，或解除绑定后再继续生成。", "warning");
     return;
   }
   try {
@@ -7445,6 +7498,11 @@ async function createV3Job() {
       return;
     }
     if (created.status === "blocked") {
+      const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(created.job_id, created, { allowPartial: true });
+      if (recoveredFromOutputs) {
+        await completeV3GeneratedJob(recoveredFromOutputs, uploadedAssets, copy);
+        return;
+      }
       const ecommerceFailure = v3EcommerceFailureMessage(created);
       if (ecommerceFailure) {
         updateV3Notice(ecommerceFailure, "warning");
@@ -7458,7 +7516,13 @@ async function createV3Job() {
     }
     updateV3Notice(created.status === "blocked" ? "当前生成暂时受阻，请检查输入后再试。" : "已理解需求，可以继续生成图片。", created.status === "blocked" ? "warning" : "success");
   } catch (error) {
-    updateV3Notice(`V3 暂时没有读到完成结果：${friendlyError(error)}。项目已保留，可以稍后刷新。`, "warning");
+    const detail = friendlyError(error);
+    const status = Number(error?.status || 0);
+    if (status >= 400 && status < 500) {
+      updateV3Notice(`当前生成请求被拒绝：${detail}。项目已保留，可以修改后再试。`, "warning");
+      return;
+    }
+    updateV3Notice(`V3 暂时没有读到完成结果：${detail}。项目已保留，可以稍后刷新。`, "warning");
   } finally {
     clearV3RecoverPolling();
     clearV3ProgressTimer();
@@ -7470,7 +7534,16 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
   v3State.currentJob = generated;
   v3State.activeProjectStep = "compose";
   syncV3ProjectOutputsFromPayload(generated);
-  setV3Progress(generated?.status === "blocked" ? "failed" : "completed", generated?.status === "blocked" ? "生成遇到阻碍，已保留项目记录。" : "后台已完成出图，正在刷新项目图片。", generated?.status === "blocked" ? "warning" : "success");
+  const partialRecovery = v3JobHasRecoverablePartialDelivery(generated);
+  setV3Progress(
+    generated?.status === "blocked" ? "failed" : "completed",
+    generated?.status === "blocked"
+      ? "生成遇到阻碍，已保留项目记录。"
+      : partialRecovery
+        ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
+        : "后台已完成出图，正在刷新项目图片。",
+    generated?.status === "blocked" ? "warning" : partialRecovery ? "warning" : "success"
+  );
   renderV3Job(generated);
   await refreshV3CurrentProject({ silent: true });
   await loadV3ProjectOutputs({ silent: true, force: true });
@@ -7481,7 +7554,7 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     openV3ProjectSubpage("compose");
   }
-  if (generated?.status === "blocked") {
+  if (generated?.status === "blocked" && !partialRecovery) {
     const ecommerceFailure = v3EcommerceFailureMessage(generated);
     if (ecommerceFailure) {
       updateV3Notice(ecommerceFailure, "warning");
@@ -7489,8 +7562,12 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
     }
   }
   updateV3Notice(
-    generated?.status === "blocked" ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。") : copy.generatedNotice,
-    generated?.status === "blocked" ? "warning" : "success"
+    generated?.status === "blocked"
+      ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。")
+      : partialRecovery
+        ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
+        : copy.generatedNotice,
+    generated?.status === "blocked" || partialRecovery ? "warning" : "success"
   );
 }
 
@@ -7547,7 +7624,33 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
       if (v3JobHasExpectedVisibleImages(job, expectedCount)) {
         return job;
       }
+      if (v3JobHasRecoverablePartialDelivery(job, expectedCount)) {
+        v3State.currentJob = job;
+        renderV3Job(job);
+        await refreshV3CurrentProject({ silent: true });
+        await loadV3ProjectTimeline(projectId, { silent: true });
+        await loadV3ProjectOutputs({ silent: true, force: true });
+        setV3Progress("completed", "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。", "warning", { forceNotice: true });
+        return job;
+      }
       if (job?.status === "blocked" || job?.status === "failed" || job?.status === "not_found") {
+        const recovered = v3RecoveredJobFromProjectOutputs(jobId, job, { allowPartial: true });
+        if (recovered) {
+          v3State.currentJob = recovered;
+          renderV3Job(recovered);
+          await refreshV3CurrentProject({ silent: true });
+          await loadV3ProjectTimeline(projectId, { silent: true });
+          await loadV3ProjectOutputs({ silent: true, force: true });
+          setV3Progress(
+            "completed",
+            v3JobHasRecoverablePartialDelivery(recovered, expectedCount)
+              ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
+              : "后台已保留可用图片，项目可以继续查看或重新生成。",
+            v3JobHasRecoverablePartialDelivery(recovered, expectedCount) ? "warning" : "success",
+            { forceNotice: true }
+          );
+          return recovered;
+        }
         v3State.currentJob = job;
         renderV3Job(job);
         await refreshV3CurrentProject({ silent: true });
@@ -7577,6 +7680,10 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         v3State.currentJob = recoveredFromOutputs;
         return recoveredFromOutputs;
       }
+      if (recoveredFromOutputs && v3JobHasRecoverablePartialDelivery(recoveredFromOutputs, expectedCount)) {
+        v3State.currentJob = recoveredFromOutputs;
+        return recoveredFromOutputs;
+      }
       const restored = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
       if (restored?.job_id === jobId && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;
     } catch (error) {
@@ -7592,6 +7699,7 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
     await refreshV3CurrentProject({ silent: true });
     const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
     if (recoveredFromOutputs && v3JobHasExpectedVisibleImages(recoveredFromOutputs, expectedCount)) return recoveredFromOutputs;
+    if (recoveredFromOutputs && v3JobHasRecoverablePartialDelivery(recoveredFromOutputs, expectedCount)) return recoveredFromOutputs;
   } catch (error) {
     lastError = error;
   }
@@ -16093,7 +16201,10 @@ async function request(path, options = {}) {
     if (response.status === 401 && !options.skipVeyraAuth) {
       await handleVeyraUnauthorized();
     }
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = response.status;
+    error.responseText = detail;
+    throw error;
   }
   return response.json();
 }

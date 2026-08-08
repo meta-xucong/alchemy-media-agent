@@ -13,7 +13,7 @@ DOC_PATH = (
     / "visual_assets"
     / "PROFESSIONAL_MODE_V3_UI_CARD_AND_MOBILE_REMEDIATION_20260726.md"
 )
-FRONTEND_VERSION = "20260727-v3-mobile-card-thumbnails"
+FRONTEND_VERSION = "20260808-v3-professional-scroll-recovery"
 
 
 def _read(path: Path) -> str:
@@ -111,6 +111,21 @@ def test_mobile_professional_project_creation_preserves_template_and_records_wor
     assert "primary_template_id: template.template_id" in mobile_js
     assert "selected_template_id: template.template_id" in mobile_js
     assert "selected_scenario_id: mobileV3ScenarioForTemplate(template.template_id)" in mobile_js
+
+
+def test_mobile_v3_project_detail_recovers_blocked_outputs_and_resets_scroll() -> None:
+    mobile_js = _read(MOBILE_ROOT / "mobile.js")
+
+    assert "function mobileV3ExpectedImageCountForJob" in mobile_js
+    assert "function mobileV3RecoveredJobFromProjectOutputs" in mobile_js
+    assert "surface.scrollTop = 0;" in mobile_js
+    assert "surface.scrollLeft = 0;" in mobile_js
+    refresh_body = mobile_js[mobile_js.index("async function refreshMobileV3ProjectDetail"):mobile_js.index("function renderMobileV3ProjectOutputs")]
+    assert "mobileV3RecoveredJobFromProjectOutputs(project.project_id, latestJobId, latestJob, { allowPartial: true })" in refresh_body
+    recover_body = mobile_js[mobile_js.index("async function recoverMobileV3GeneratedJob"):mobile_js.index("function setMobileV3Busy")]
+    assert '["blocked", "failed", "not_found"].includes(lastJob?.status)' in recover_body
+    assert "const recovered = mobileV3RecoveredJobFromProjectOutputs(projectId, jobId, lastJob, { allowPartial: true });" in recover_body
+    assert "return recovered;" in recover_body
 
 
 def test_ui_remediation_doc_records_boundaries() -> None:

@@ -268,7 +268,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-optional-details" in styles.text
     assert "grid-template-columns: repeat(auto-fit, minmax(160px, 1fr))" in styles.text
     assert mobile_styles.status_code == 200
-    assert "/mobile-static/mobile.js?v=20260719-v3-frontend-ux-fix2" in mobile_index.text
+    assert "/mobile-static/mobile.js?v=20260808-v3-professional-scroll-recovery" in mobile_index.text
     assert ".tab.v3-link-tab" in mobile_styles.text
     assert ".module-tabs .tab.v3-link-tab" in mobile_styles.text
     assert ".v3-mobile-upload-button::before" in mobile_styles.text
@@ -408,6 +408,12 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert 'els.v3WorkspaceView.dataset.v3Opening = "true"' in script.text
     assert "async function restoreV3LatestProjectJob" in script.text
     assert "await restoreV3LatestProjectJob(v3State.currentProject" in script.text
+    restore_body = script.text.split("async function restoreV3LatestProjectJob", 1)[1].split("function v3ProjectJobNeedsRecovery", 1)[0]
+    assert '["blocked", "failed", "not_found"].includes(String(job?.status || "").trim().toLowerCase())' in restore_body
+    assert "v3RecoveredJobFromProjectOutputs(jobId, job, { allowPartial: true })" in restore_body
+    sync_body = script.text.split("function syncV3CurrentJobFromProjectOutputs", 1)[1].split("function v3RecoveredLatestVisibleProjectOutputs", 1)[0]
+    assert 'const allowPartial = ["blocked", "failed", "not_found"].includes(baseStatus);' in sync_body
+    assert "v3RecoveredJobFromProjectOutputs(jobId, baseJob, { allowPartial })" in sync_body
     assert "/jobs/${encodeURIComponent(jobId)}" in script.text
     assert "function renderV3ProjectSnapshot" in script.text
     assert "function renderV3HomeTemplateChooser" in script.text

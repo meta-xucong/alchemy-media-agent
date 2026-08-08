@@ -170,6 +170,17 @@ def test_doc173_project_binding_is_explicit_and_never_silent_fallback() -> None:
     assert "professional_mode" not in create_job
 
 
+def test_doc173_project_generation_button_stays_actionable_when_binding_needs_attention() -> None:
+    source = APP_JS.read_text(encoding="utf-8")
+    scenario_state = source[source.index("function renderV3ScenarioState"):source.index("async function loadV3PhotographerProfiles")]
+    create_job = _function(source, "createV3Job", "renderV3Job")
+
+    assert "els.v3CreateJobBtn.disabled = !canCreate || v3State.loading;" in scenario_state
+    assert "assetBindingBlocked" not in scenario_state
+    assert "await openV3VisualAssetBindingDialog();" in create_job
+    assert "当前绑定的视觉资产需要先处理" in create_job
+
+
 def test_doc173_new_surface_is_responsive_and_does_not_reintroduce_template_fallback() -> None:
     source = APP_JS.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
