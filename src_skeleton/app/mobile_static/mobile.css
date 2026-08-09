@@ -4999,6 +4999,11 @@ body.v3-mobile-loading-active {
 
 .v3-mobile-output-card.review-only {
   border-color: rgba(173, 93, 52, 0.22);
+  background: rgba(255, 248, 238, 0.78);
+}
+
+.v3-mobile-output-card.review-only .v3-mobile-output-copy span {
+  color: var(--muted);
 }
 
 .v3-mobile-project-card.is-skeleton {

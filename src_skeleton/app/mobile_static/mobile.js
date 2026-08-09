@@ -2673,6 +2673,7 @@ const mobileV3State = {
   templatesError: "",
   projectRenderLimit: mobileV3ProjectPageSize,
   outputs: [],
+  reviewOutputs: [],
   workspaceMode: "standard",
   selectedTemplate: "general_template",
   currentProject: null,
@@ -3410,8 +3411,10 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
     try {
       const outputsPayload = await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`);
       mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
+      mobileV3State.reviewOutputs = Array.isArray(outputsPayload.review_items) ? outputsPayload.review_items : [];
     } catch (_error) {
       mobileV3State.outputs = [];
+      mobileV3State.reviewOutputs = [];
     }
     mobileV3State.outputsLoaded = true;
     persistMobileV3Caches();
@@ -3579,8 +3582,7 @@ function mobileV3ProjectFromOutputGroup(projectId, latestItem) {
 function mobileV3RecentProjectGroups() {
   const grouped = new Map();
   (mobileV3State.outputs || []).forEach((item) => {
-    if (item?.selection_state === "unselected" || item?.selection_state === "rejected") return;
-    if (["superseded", "process_only"].includes(mobileV3OutputDeliveryState(item))) return;
+    if (!mobileV3CanonicalFinalDelivery(item)) return;
     const projectId = item?.project_id || item?.metadata?.project_id;
     if (!projectId) return;
     const group = grouped.get(projectId) || { projectId, items: [], latestItem: null, latestAt: "" };
@@ -3607,15 +3609,14 @@ function mobileV3RecentProjectGroupMap() {
 }
 
 function mobileV3GroupFromProject(project, outputGroup = null) {
-  const summaryOutputs = mobileV3SummaryThumbOutputs(project);
-  const latestItem = outputGroup?.latestItem || summaryOutputs[0] || null;
+  const latestItem = outputGroup?.latestItem || null;
   return {
     projectId: String(project.project_id || ""),
     project,
     items: outputGroup?.items || [],
     latestItem,
     latestAt: outputGroup?.latestAt || project.updated_at || project.created_at || "",
-    count: outputGroup?.count || Number(project.generated_output_count || project.output_count || project.selected_asset_count || summaryOutputs.length || 0),
+    count: outputGroup ? outputGroup.count : 0,
   };
 }
 
@@ -3655,9 +3656,8 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     const project = group.project;
     const finalOutputs = group.items;
     const latest = group.latestItem || finalOutputs[0] || null;
-    const summaryThumbs = mobileV3SummaryThumbs(project);
-    const thumb = deferImages ? "" : mobileV3ThumbUrl(latest) || summaryThumbs[0] || "";
-    const visualCount = group.count || finalOutputs.length || summaryThumbs.length || 0;
+    const thumb = deferImages ? "" : mobileV3ThumbUrl(latest) || "";
+    const visualCount = group.count || finalOutputs.length || 0;
     const stackCount = Math.min(Math.max(Number(visualCount || 0), 1), 5);
     const card = document.createElement("article");
     card.className = "v3-mobile-project-card v3-mobile-project-stack-card";
@@ -4642,7 +4642,8 @@ async function refreshMobileV3ProjectDetail(projectId) {
     : Array.isArray(timelinePayload?.metadata?.project_outputs)
       ? timelinePayload.metadata.project_outputs
       : [];
-  mobileV3MergeProjectOutputs(project.project_id, scopedOutputs);
+  const scopedReviewOutputs = Array.isArray(outputsPayload.review_items) ? outputsPayload.review_items : [];
+  mobileV3MergeProjectOutputs(project.project_id, scopedOutputs, scopedReviewOutputs);
   mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== project.project_id)];
   persistMobileV3Caches();
   renderMobileV3ProjectCards();
@@ -4676,7 +4677,13 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
   const grid = document.querySelector("#mobileV3OutputGrid");
   if (!grid || !project?.project_id) return;
   const outputs = mobileV3DisplayOutputsForProject(project);
-  const reviewItems = mobileV3ReviewOnlyJobImageItems();
+  const reviewById = new Map();
+  [...mobileV3ReviewOutputsForProject(project.project_id), ...mobileV3ReviewOnlyJobImageItems()]
+    .forEach((item) => {
+      const identity = mobileV3OutputId(item);
+      if (identity && !reviewById.has(identity)) reviewById.set(identity, item);
+    });
+  const reviewItems = Array.from(reviewById.values());
   setText("#mobileV3OutputCount", `${outputs.length} 张`);
   grid.innerHTML = "";
   grid.classList.toggle("empty-v2-list", outputs.length === 0 && reviewItems.length === 0);
@@ -4695,8 +4702,18 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
     if (!mobileV3JobDeliveryWithheld()) grid.textContent = "还没有图片，点“继续项目”生成第一组。";
     return;
   }
+  if (reviewItems.length) {
+    const reviewNotice = document.createElement("article");
+    reviewNotice.className = "v3-mobile-review-hold";
+    reviewNotice.innerHTML = `
+      <strong>复核记录 ${reviewItems.length} 张</strong>
+      <span>这些图片没有进入首页正式预览，也不能设为后续参考。</span>
+    `;
+    grid.appendChild(reviewNotice);
+  }
   reviewItems.slice(0, 8).forEach((item, index) => {
     const thumb = mobileV3ThumbUrl(item);
+    const reason = item?.review_reason || item?.metadata?.review_reason || "未进入正式交付，保留供复核。";
     const card = document.createElement("article");
     card.className = "v3-mobile-output-card review-only";
     card.innerHTML = `
@@ -4705,7 +4722,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
       </button>
       <div class="v3-mobile-output-copy">
         <strong>复核图 ${index + 1}</strong>
-        <span>已生成，但未进入正式交付，也不会自动设为后续参考。</span>
+        <span>${escapeHtml(reason)}</span>
       </div>
     `;
     grid.appendChild(card);
@@ -4859,7 +4876,8 @@ function handleMobileV3GalleryPreviewClick(event) {
   if (!button) return;
   event.preventDefault();
   event.stopPropagation();
-  const item = mobileV3State.outputs.find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview);
+  const item = [...(mobileV3State.outputs || []), ...(mobileV3State.reviewOutputs || [])]
+    .find((output) => mobileV3OutputId(output) === button.dataset.mobileV3GalleryPreview);
   if (!item) return;
   openMobileV3OutputLightbox(item);
 }
@@ -4894,6 +4912,11 @@ function mobileV3OutputsByProject() {
 
 function mobileV3OutputsForProject(projectId) {
   return mobileV3OutputsByProject().get(projectId) || [];
+}
+
+function mobileV3ReviewOutputsForProject(projectId) {
+  return (mobileV3State.reviewOutputs || [])
+    .filter((item) => String(item?.project_id || item?.metadata?.project_id || "") === String(projectId || ""));
 }
 
 function mobileV3OutputDeliveryState(item) {
@@ -5045,13 +5068,14 @@ async function loadMobileV3ProjectOutputs(projectId, { limit = 80 } = {}) {
   if (!projectId) return [];
   const payload = await mobileV3Request(`/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`);
   const outputs = Array.isArray(payload.items) ? payload.items : [];
-  mobileV3MergeProjectOutputs(projectId, outputs);
+  const reviewOutputs = Array.isArray(payload.review_items) ? payload.review_items : [];
+  mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs);
   persistMobileV3Caches();
   renderMobileV3ProjectCards();
   return outputs;
 }
 
-function mobileV3MergeProjectOutputs(projectId, outputs = []) {
+function mobileV3MergeProjectOutputs(projectId, outputs = [], reviewOutputs = null) {
   if (!projectId || !Array.isArray(outputs)) return;
   const nextOutputs = outputs.filter(Boolean);
   const rest = (mobileV3State.outputs || []).filter((item) => {
@@ -5059,6 +5083,14 @@ function mobileV3MergeProjectOutputs(projectId, outputs = []) {
     return itemProjectId !== projectId;
   });
   mobileV3State.outputs = [...nextOutputs, ...rest];
+  if (Array.isArray(reviewOutputs)) {
+    const nextReviewOutputs = reviewOutputs.filter(Boolean);
+    const reviewRest = (mobileV3State.reviewOutputs || []).filter((item) => {
+      const itemProjectId = item.project_id || item.metadata?.project_id;
+      return itemProjectId !== projectId;
+    });
+    mobileV3State.reviewOutputs = [...nextReviewOutputs, ...reviewRest];
+  }
 }
 
 function mobileV3DisplayOutputsForProject(project = mobileV3State.currentProject) {

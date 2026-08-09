@@ -160,6 +160,7 @@ class V3ProjectModeService:
         items: list[dict[str, Any]] = []
         if project_id:
             project = self._require_project(project_id)
+            review_items: list[dict[str, Any]] = []
             if project.status != ProjectStatus.ARCHIVED and self._project_visible_to_owner(project, owner_user_id):
                 self._reconcile_project_outputs(project)
                 items = self._project_output_items(
@@ -168,7 +169,14 @@ class V3ProjectModeService:
                     owner_user_id=owner_user_id,
                     compact=compact,
                 )
+                review_items = self._project_review_output_items(
+                    project,
+                    limit=bounded_limit,
+                    owner_user_id=owner_user_id,
+                    compact=compact,
+                )
             items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
+            review_items = sorted(review_items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
             return {
                 "api_namespace": API_NAMESPACE,
                 "route": f"{API_NAMESPACE}/project-outputs",
@@ -176,9 +184,11 @@ class V3ProjectModeService:
                 "total": len(items),
                 "limit": bounded_limit,
                 "items": items,
+                "review_items": review_items,
                 "metadata": {**self._metadata(), "compact": bool(compact), "project_scoped": True},
             }
         project_scan_limit = max(12, min(100, bounded_limit * 2))
+        review_items = []
         for project in self.project_store.list_projects(limit=project_scan_limit):
             if project.status == ProjectStatus.ARCHIVED:
                 continue
@@ -193,13 +203,23 @@ class V3ProjectModeService:
                     compact=compact,
                 )
             )
+            review_items.extend(
+                self._project_review_output_items(
+                    project,
+                    limit=bounded_limit,
+                    owner_user_id=owner_user_id,
+                    compact=compact,
+                )
+            )
         items = sorted(items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
+        review_items = sorted(review_items, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:bounded_limit]
         return {
             "api_namespace": API_NAMESPACE,
             "route": f"{API_NAMESPACE}/project-outputs",
             "total": len(items),
             "limit": bounded_limit,
             "items": items,
+            "review_items": review_items,
             "metadata": {**self._metadata(), "compact": bool(compact)},
         }
 
@@ -4821,13 +4841,9 @@ class V3ProjectModeService:
             except Exception:
                 continue
             delivery = self._delivery_annotations_for_records(records)
-            has_final_delivery = any(
-                item.get("delivery_state") == "final_delivery"
-                for item in delivery.values()
-            )
             for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
                 delivery_state = delivery.get(self._output_record_identity(record), {}).get("delivery_state")
-                if delivery_state == "superseded" or (has_final_delivery and delivery_state != "final_delivery"):
+                if delivery_state != "final_delivery":
                     continue
                 url = record.thumbnail_url or record.preview_url or record.download_url
                 if url and not str(url).startswith("mock://"):
@@ -4870,6 +4886,11 @@ class V3ProjectModeService:
                 key=lambda attempt: (len(attempt_groups.get(attempt, [])), attempt),
             )
             final_records = attempt_groups.get(final_attempt, [])[:requested_count]
+        final_records = [
+            record
+            for record in final_records
+            if not self._output_record_is_review_rejected(record)
+        ]
         final_attempts = sorted({self._output_record_retry_attempt(record) for record in final_records})
         final_ids = {self._output_record_identity(record) for record in final_records}
         annotations: dict[str, dict[str, Any]] = {}
@@ -4897,6 +4918,109 @@ class V3ProjectModeService:
                 }
         return annotations
 
+    def _project_review_output_items(
+        self,
+        project: ProjectRecord,
+        *,
+        limit: int = 60,
+        owner_user_id: int | None = None,
+        compact: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return generated pixels kept for project review, never delivery.
+
+        The ordinary ``items`` collection is the only formal delivery surface.
+        This parallel read model deliberately exposes only safe media pointers
+        and review state so users can inspect rejected or superseded images
+        without letting them leak into home previews or continuation references.
+        """
+
+        all_items = self._project_output_items(
+            project,
+            limit=max(1, int(limit or 60)),
+            include_hidden=True,
+            owner_user_id=owner_user_id,
+            compact=compact,
+        )
+        final_items = self._project_output_items(
+            project,
+            limit=max(1, int(limit or 60)),
+            include_hidden=False,
+            owner_user_id=owner_user_id,
+            compact=compact,
+        )
+        final_ids = {
+            self._public_project_output_identity(item)
+            for item in final_items
+            if self._public_project_output_identity(item)
+        }
+        review_items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in all_items:
+            identity = self._public_project_output_identity(item)
+            if not identity or identity in final_ids or identity in seen:
+                continue
+            if not self._public_project_output_has_image(item):
+                continue
+            seen.add(identity)
+            reason = self._public_project_review_reason(item)
+            metadata = dict(item.get("metadata") or {})
+            review_items.append(
+                {
+                    **item,
+                    "review_only": True,
+                    "review_reason": reason,
+                    "metadata": {
+                        **metadata,
+                        "review_only": True,
+                        "review_reason": reason,
+                    },
+                }
+            )
+            if len(review_items) >= max(1, int(limit or 60)):
+                break
+        return review_items
+
+    @staticmethod
+    def _public_project_output_identity(item: dict[str, Any]) -> str:
+        return str(
+            item.get("output_id")
+            or item.get("asset_id")
+            or item.get("candidate_id")
+            or item.get("output_ref_id")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _public_project_output_has_image(item: dict[str, Any]) -> bool:
+        for key in ("thumbnail_url", "preview_url", "download_url"):
+            value = str(item.get(key) or "").strip()
+            if value and not value.startswith("mock://"):
+                return True
+        return False
+
+    @staticmethod
+    def _public_project_review_reason(item: dict[str, Any]) -> str:
+        metadata = dict(item.get("metadata") or {})
+        codes = [
+            str(code).strip().lower()
+            for code in metadata.get("retry_reason_codes", [])
+            if str(code).strip()
+        ]
+        if any("exhausted_refine_budget" in code for code in codes):
+            return "自动精修次数已用完，保留这张图供复核。"
+        if any("reject" in code or "review" in code for code in codes):
+            return "自动审查未建议正式交付，保留这张图供复核。"
+        if str(item.get("delivery_state") or "").lower() in {"superseded", "process_only"}:
+            return "这张图属于过程记录，未进入正式交付。"
+        if str(item.get("selection_state") or "").lower() in {"unselected", "rejected"}:
+            return "这张图已从正式项目结果中移出。"
+        if str(item.get("certification_state") or "").lower() in {
+            "blocked",
+            "manual_confirmation_required",
+        }:
+            return "这张图尚未通过正式交付审查。"
+        return "这张图未进入正式交付，保留供复核。"
+
     def _delivery_requested_image_count(self, records: list[Any]) -> int:
         values: list[int] = []
         for record in records:
@@ -4917,6 +5041,50 @@ class V3ProjectModeService:
             return max(0, int(raw or 0))
         except (TypeError, ValueError):
             return 0
+
+    def _output_record_is_review_rejected(self, record: Any) -> bool:
+        """Recognize explicit review/retry rejection without guessing from pixels."""
+
+        metadata = dict(getattr(record, "metadata", None) or {})
+        sources = [metadata]
+        for key in ("candidate_metadata", "asset_metadata", "review"):
+            nested = metadata.get(key)
+            if isinstance(nested, dict):
+                sources.append(nested)
+        rejected_values = {
+            "blocked",
+            "fail",
+            "failed",
+            "failed_after_retry",
+            "manual_review",
+            "reject",
+            "rejected",
+            "retry",
+            "retry_recommended",
+        }
+        for source in sources:
+            for key in ("recommendation", "review_recommendation", "retry_recommendation", "review_status"):
+                value = str(source.get(key) or "").strip().lower()
+                if value in rejected_values:
+                    return True
+            if any(
+                bool(source.get(key))
+                for key in ("candidate_rejected", "review_rejected", "reject_recommendation", "refine_budget_exhausted")
+            ):
+                return True
+            for key in ("visual_retry_reason_codes", "retry_reason_codes", "issue_codes"):
+                values = source.get(key)
+                if not isinstance(values, list):
+                    continue
+                for value in values:
+                    normalized = str(value or "").strip().lower()
+                    if (
+                        "exhausted_refine_budget" in normalized
+                        or "reject_recommendation" in normalized
+                        or normalized in {"review_rejected", "output_rejected", "failed_after_retry"}
+                    ):
+                        return True
+        return False
 
     def _output_record_has_usable_image(self, record: Any) -> bool:
         return any(
@@ -4956,7 +5124,12 @@ class V3ProjectModeService:
             except Exception:
                 continue
             if not self._job_delivery_is_settled(job_status):
-                continue
+                # A terminal job may have generated pixels while a shared
+                # final-delivery gate is withholding them. Those pixels are
+                # review-only evidence, but must never appear on the normal
+                # delivery surface. In-flight jobs remain hidden everywhere.
+                if not include_hidden or not self._job_has_terminal_review_state(job_status):
+                    continue
             try:
                 records = output_store.list_by_job(job_id)
             except Exception:
@@ -5020,6 +5193,15 @@ class V3ProjectModeService:
         # history while still withholding them from the ordinary project
         # result panel until every frozen role has a final winner.
         return not (isinstance(execution, dict) and bool(execution.get("final_delivery_withheld")))
+
+    @staticmethod
+    def _job_has_terminal_review_state(job_status: ProductJobStatus) -> bool:
+        """Allow ended withheld jobs into the review-only projection only."""
+
+        return job_status.status not in {
+            ProductJobStatusValue.GENERATING,
+            ProductJobStatusValue.FINALIZING,
+        }
 
     @staticmethod
     def _public_output_review_projection(job_status: ProductJobStatus, record: Any) -> dict[str, Any]:

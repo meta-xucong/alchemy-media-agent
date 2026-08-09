@@ -1615,6 +1615,112 @@ def test_project_outputs_append_across_jobs_and_delete_hides_only_selected_image
     assert state_map[first_record.output_id] == "unselected"
 
 
+def test_project_outputs_separate_rejected_pixels_from_formal_delivery(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a clean campaign", "title": "Review Boundary"})["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create one campaign image"})
+    rejected = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="candidate_rejected_review",
+        asset_id="asset_rejected_review",
+        metadata_override={
+            "visual_retry_reason_codes": ["exhausted_refine_budget", "reject_recommendation"],
+        },
+    )
+
+    payload = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)
+
+    assert payload["items"] == []
+    assert [item["output_id"] for item in payload["review_items"]] == [rejected.output_id]
+    assert payload["review_items"][0]["review_only"] is True
+    assert "自动精修次数已用完" in payload["review_items"][0]["review_reason"]
+    summary = handlers.get_projects(limit=10)["projects"][0]
+    assert summary["latest_thumbnail_urls"] == []
+
+
+def test_project_outputs_keep_home_delivery_and_review_pixels_separate(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a two-image campaign", "title": "Delivery Split"})["project"]
+    good_job = handlers.post_project_job(project["project_id"], {"user_input": "Create the approved campaign image"})
+    good = _save_project_output(
+        handlers,
+        job_id=good_job["job_id"],
+        candidate_id="candidate_formal_delivery",
+        asset_id="asset_formal_delivery",
+    )
+    rejected_job = handlers.post_project_job(project["project_id"], {"user_input": "Create the rejected campaign image"})
+    rejected = _save_project_output(
+        handlers,
+        job_id=rejected_job["job_id"],
+        candidate_id="candidate_review_only",
+        asset_id="asset_review_only",
+        metadata_override={
+            "visual_retry_reason_codes": ["exhausted_refine_budget", "reject_recommendation"],
+        },
+    )
+
+    payload = handlers.get_project_outputs(limit=10, compact=True)
+    project_items = [item for item in payload["items"] if item["project_id"] == project["project_id"]]
+    project_reviews = [item for item in payload["review_items"] if item["project_id"] == project["project_id"]]
+    summary = next(item for item in handlers.get_projects(limit=10)["projects"] if item["project_id"] == project["project_id"])
+
+    assert [item["output_id"] for item in project_items] == [good.output_id]
+    assert [item["output_id"] for item in project_reviews] == [rejected.output_id]
+    assert summary["latest_thumbnail_urls"] == [good.thumbnail_url]
+
+
+def test_project_outputs_expose_terminal_withheld_pixels_only_in_review_items(tmp_path, monkeypatch) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a reviewed professional set"})["project"]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create a professional set"})
+    withheld = _save_project_output(
+        handlers,
+        job_id=job["job_id"],
+        candidate_id="candidate_withheld_review",
+        asset_id="asset_withheld_review",
+    )
+    original_get_job = handlers.service.get_job
+    base_status = original_get_job(job["job_id"])
+    withheld_status = base_status.model_copy(
+        update={
+            "status": ProductJobStatusValue.GENERATED,
+            "metadata": {
+                **dict(base_status.metadata or {}),
+                "specialized_execution_summary": {"final_delivery_withheld": True},
+                "post_generation_review": {
+                    "inspections": [
+                        {
+                            "output_id": withheld.output_id,
+                            "mode": "hybrid",
+                            "status": "manual_review",
+                            "verification_state": "verified",
+                        }
+                    ]
+                },
+                "final_delivery": {
+                    "final_delivery_status": "withheld_manual_confirmation",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": True,
+                    "delivery_gate_applies": True,
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(
+        handlers.service,
+        "get_job",
+        lambda target_job_id: withheld_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
+    )
+
+    payload = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)
+
+    assert payload["items"] == []
+    assert [item["output_id"] for item in payload["review_items"]] == [withheld.output_id]
+    assert payload["review_items"][0]["review_only"] is True
+    assert payload["review_items"][0]["certification_state"] == "manual_confirmation_required"
+
+
 def test_project_outputs_mark_retry_superseded_and_final_delivery_group(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     project = handlers.post_projects({"user_goal": "Create four portrait alternatives", "title": "Portrait Batch"})[
@@ -1957,9 +2063,12 @@ def test_project_outputs_hide_modern_withheld_review_candidate(tmp_path, monkeyp
     )
 
     visible = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)["items"]
+    review_items = handlers.get_project_outputs(project_id=project["project_id"], limit=10, compact=True)["review_items"]
     stored = handlers.service.output_store.list_by_job(job["job_id"])
 
     assert visible == []
+    assert [item["output_id"] for item in review_items] == [record.output_id]
+    assert review_items[0]["review_only"] is True
     assert [item.output_id for item in stored] == [record.output_id]
 
 
@@ -1970,8 +2079,19 @@ def test_project_output_board_discloses_safe_shared_review_state() -> None:
 
     assert "function v3ProjectOutputReviewNotice(item)" in source
     assert "const reviewNotice = v3ProjectOutputReviewNotice(item);" in source
+    assert "function v3StoredProjectReviewOutputItems(project = v3State.currentProject)" in source
+    assert "const reviewItems = Array.isArray(payload.review_items) ? payload.review_items : [];" in source
+    assert "return v3CanonicalFinalDelivery(item);" in source
     assert "真实像素审查已认证" in source
     assert "需要人工确认" in source
+
+    mobile = (Path(__file__).resolve().parents[2] / "src_skeleton" / "app" / "mobile_static" / "mobile.js").read_text(
+        encoding="utf-8"
+    )
+    assert "function mobileV3ReviewOutputsForProject(projectId)" in mobile
+    assert "function mobileV3CanonicalFinalDelivery(item)" in mobile
+    assert 'mobileV3OutputDeliveryState(item) !== "final_delivery"' in mobile
+    assert "mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs);" in mobile
 
 
 def test_v3_template_catalog_rerenders_after_initial_loading_settles() -> None:

@@ -353,6 +353,7 @@ const v3State = {
   currentJob: null,
   projectOutputItems: [],
   projectOutputs: [],
+  projectReviewOutputs: [],
   resultItems: [],
   selectedResult: null,
   pendingNegativeFeedbackOutputId: "",
@@ -2827,10 +2828,14 @@ async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24,
     v3State.projectOutputsRequest = requestPromise;
     const payload = await requestPromise;
     const items = Array.isArray(payload.items) ? payload.items : [];
-    if (!scopedProjectId) v3State.imageHistory = items;
+    const reviewItems = Array.isArray(payload.review_items) ? payload.review_items : [];
+    if (!scopedProjectId) {
+      v3State.imageHistory = items;
+      v3State.projectReviewOutputs = reviewItems;
+    }
     v3State.imageHistoryLoaded = true;
     if (scopedProjectId) {
-      syncV3ProjectOutputsFromList(items, scopedProjectId);
+      syncV3ProjectOutputsFromList(items, scopedProjectId, reviewItems);
     }
     renderV3History();
     renderV3HeroHistory();
@@ -2870,13 +2875,17 @@ function writeV3LocalProjects(items) {
 
 function syncV3ProjectOutputsFromPayload(payload) {
   const items = payload?.metadata?.project_outputs;
-  if (!Array.isArray(items)) return;
-  v3State.projectOutputs = items;
+  if (Array.isArray(items)) v3State.projectOutputs = items;
+  const reviewItems = payload?.metadata?.review_items;
+  if (Array.isArray(reviewItems)) v3State.projectReviewOutputs = reviewItems;
 }
 
-function syncV3ProjectOutputsFromList(items, projectId = v3State.currentProject?.project_id) {
+function syncV3ProjectOutputsFromList(items, projectId = v3State.currentProject?.project_id, reviewItems = null) {
   if (!projectId || !Array.isArray(items)) return;
   v3State.projectOutputs = items.filter((item) => item?.project_id === projectId);
+  if (Array.isArray(reviewItems)) {
+    v3State.projectReviewOutputs = reviewItems.filter((item) => item?.project_id === projectId);
+  }
 }
 
 function mergeV3ProjectItems(primaryItems, fallbackItems) {
@@ -3242,7 +3251,7 @@ function v3ProjectThumbnailItem(project) {
 }
 
 function v3ProjectGroupFromProject(project, outputGroup = null) {
-  const latestItem = outputGroup?.latestItem || v3ProjectThumbnailItem(project);
+  const latestItem = outputGroup?.latestItem || null;
   return {
     projectId: String(project.project_id),
     title: v3ProjectDisplayTitle(project, outputGroup?.title || "V3 项目图片"),
@@ -3252,7 +3261,7 @@ function v3ProjectGroupFromProject(project, outputGroup = null) {
     items: outputGroup?.items || [],
     latestItem,
     latestAt: outputGroup?.latestAt || project.updated_at || project.created_at || "",
-    count: outputGroup?.count || Number(project.generated_output_count || project.output_count || project.selected_asset_count || 0),
+    count: outputGroup ? outputGroup.count : 0,
   };
 }
 
@@ -3280,7 +3289,7 @@ function v3OutputItemTime(item) {
 function v3HistoryOutputVisible(item) {
   const state = item?.selection_state || item?.metadata?.selection_state || "";
   if (state === "unselected" || state === "rejected") return false;
-  return !["superseded", "process_only"].includes(v3OutputDeliveryState(item));
+  return v3CanonicalFinalDelivery(item);
 }
 
 function v3ProjectImageGroup(projectId) {
@@ -3804,6 +3813,15 @@ function v3StoredProjectOutputItems(project = v3State.currentProject) {
     : [];
 }
 
+function v3StoredProjectReviewOutputItems(project = v3State.currentProject) {
+  const projectId = project?.project_id || "";
+  return Array.isArray(v3State.projectReviewOutputs)
+    ? v3State.projectReviewOutputs
+        .filter((item) => !projectId || item?.project_id === projectId)
+        .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "project_review_output" }))
+    : [];
+}
+
 function v3ProjectOutputsForJob(jobId, project = v3State.currentProject) {
   const targetJobId = String(jobId || "").trim();
   if (!targetJobId) return [];
@@ -3994,6 +4012,14 @@ function v3ProjectOutputReviewNotice(item) {
   return "";
 }
 
+function v3ProjectReviewReason(item) {
+  return String(
+    item?.review_reason
+      || item?.metadata?.review_reason
+      || "这张图未进入正式交付，保留供复核。",
+  ).trim();
+}
+
 function v3TimelineHasType(type) {
   return Array.isArray(v3State.projectTimeline) && v3State.projectTimeline.some((item) => item?.item_type === type);
 }
@@ -4026,15 +4052,16 @@ function renderV3ProjectOutputBoard() {
   const project = v3State.currentProject;
   const ecommerceProject = project?.primary_template_id === "ecommerce_template";
   const items = v3AllProjectImageItems(project);
+  const reviewItems = v3StoredProjectReviewOutputItems(project);
   v3State.projectOutputItems = items;
-  v3State.projectProcessOutputItems = [];
+  v3State.projectProcessOutputItems = reviewItems;
   els.v3ProjectOutputBoard.innerHTML = "";
-  els.v3ProjectOutputBoard.classList.toggle("empty-v3-list", !items.length);
+  els.v3ProjectOutputBoard.classList.toggle("empty-v3-list", !items.length && !reviewItems.length);
   if (!project) {
     els.v3ProjectOutputBoard.textContent = "打开项目后，这里会优先展示生成图片。";
     return;
   }
-  if (!items.length) {
+  if (!items.length && !reviewItems.length) {
     els.v3ProjectOutputBoard.textContent = "生成后的最终图片会放在这里。满意的图可以直接设为后续参考，让这个项目越做越一致。";
     return;
   }
@@ -4077,6 +4104,39 @@ function renderV3ProjectOutputBoard() {
     }
     els.v3ProjectOutputBoard.appendChild(card);
   });
+  if (reviewItems.length) {
+    const details = document.createElement("details");
+    details.className = "v3-review-output-details";
+    details.innerHTML = `
+      <summary>
+        <span>复核记录 ${reviewItems.length} 张</span>
+        <small>未通过正式交付的图片，仅供查看，不能设为后续参考</small>
+      </summary>
+      <div class="v3-review-output-grid"></div>
+    `;
+    const grid = details.querySelector(".v3-review-output-grid");
+    reviewItems.slice(0, 24).forEach((item, index) => {
+      const title = `复核图 ${index + 1}`;
+      const urls = v3OutputImageCandidates(item);
+      const card = document.createElement("article");
+      card.className = "v3-review-output-tile";
+      card.innerHTML = `
+        <button class="v3-process-output-tile" type="button" aria-label="查看${escapeHtml(title)}"><img alt="${escapeHtml(title)}" /></button>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(v3ProjectReviewReason(item))}</span>
+      `;
+      const image = card.querySelector("img");
+      if (image) bindImageWithFallback(image, urls, { emptyAlt: "复核图暂时无法加载" });
+      card.querySelector("button")?.addEventListener("click", () => {
+        openV3OutputLightbox(item, {
+          title,
+          meta: "项目复核记录 - 不属于正式交付",
+        });
+      });
+      grid?.appendChild(card);
+    });
+    els.v3ProjectOutputBoard.appendChild(details);
+  }
 }
 
 async function handleV3ProjectOutputBoardClick(event) {
