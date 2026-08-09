@@ -4711,14 +4711,24 @@ class V3ProductApiService:
     ) -> list[str]:
         metadata = dict(metadata or {})
         provider_failure_retry = metadata.get("provider_failure_retry")
+        projected_provider_failure = (
+            cls._public_provider_failure_retry(provider_failure_retry)
+            if isinstance(provider_failure_retry, dict)
+            else None
+        )
         safe_provider_warning = (
             cls._safe_generation_failure_message(
                 provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
-                provider_failure_retry=provider_failure_retry if isinstance(provider_failure_retry, dict) else None,
+                provider_failure_retry=projected_provider_failure,
                 fallback_code="provider_failure",
             )
             if isinstance(provider_failure_retry, dict)
             else None
+        )
+        legacy_local_contract_warning = (
+            isinstance(projected_provider_failure, dict)
+            and projected_provider_failure.get("final_classification")
+            == "non_retryable_input_contract_failure"
         )
         projected: list[str] = []
         provider_warning_added = False
@@ -4735,6 +4745,15 @@ class V3ProductApiService:
                 continue
             lowered = text.lower()
             looks_raw_provider = any(marker in lowered for marker in raw_provider_markers)
+            looks_legacy_local_contract = (
+                legacy_local_contract_warning
+                and ("closed provider failure" in lowered or "provider_unavailable" in lowered)
+            )
+            if looks_legacy_local_contract:
+                if not provider_warning_added and safe_provider_warning:
+                    projected.append(safe_provider_warning)
+                    provider_warning_added = True
+                continue
             if safe_provider_warning and looks_raw_provider:
                 if not provider_warning_added:
                     projected.append(safe_provider_warning)
@@ -8879,14 +8898,15 @@ class V3ProductApiService:
     def _public_provider_failure_retry(summary: dict[str, Any]) -> dict[str, Any]:
         """Expose retry counts and classified outcomes without raw provider data."""
 
-        attempts = [item for item in summary.get("attempts", []) if isinstance(item, dict)]
+        normalized = V3ProductApiService._normalize_legacy_input_contract_failure(summary)
+        attempts = [item for item in normalized.get("attempts", []) if isinstance(item, dict)]
         projected = {
-            "executed_count": max(0, int(summary.get("executed_count") or 0)),
-            "max_attempts": max(0, int(summary.get("max_attempts") or 0)),
-            "fresh_upstream_requests": max(0, int(summary.get("fresh_upstream_requests") or 0)),
-            "final_status": str(summary.get("final_status") or "unknown"),
-            "final_classification": str(summary.get("final_classification") or "unknown"),
-            "final_failure_code": str(summary.get("final_failure_code") or "") or None,
+            "executed_count": max(0, int(normalized.get("executed_count") or 0)),
+            "max_attempts": max(0, int(normalized.get("max_attempts") or 0)),
+            "fresh_upstream_requests": max(0, int(normalized.get("fresh_upstream_requests") or 0)),
+            "final_status": str(normalized.get("final_status") or "unknown"),
+            "final_classification": str(normalized.get("final_classification") or "unknown"),
+            "final_failure_code": str(normalized.get("final_failure_code") or "") or None,
             "attempts": [
                 {
                     "attempt": max(0, int(item.get("attempt") or 0)),
@@ -8898,10 +8918,69 @@ class V3ProductApiService:
                 for item in attempts
             ],
         }
-        runtime_budget = safe_runtime_execution_budget(summary.get("execution_audit"))
+        runtime_budget = safe_runtime_execution_budget(normalized.get("execution_audit"))
         if runtime_budget:
             projected["runtime_budget"] = runtime_budget
         return projected
+
+    @staticmethod
+    def _normalize_legacy_input_contract_failure(summary: dict[str, Any]) -> dict[str, Any]:
+        """Repair only the public projection of pre-fix local admission records."""
+
+        normalized = dict(summary)
+        classification = str(normalized.get("final_classification") or "").strip().lower()
+        if classification != "non_retryable_provider_failure":
+            return normalized
+        try:
+            fresh_requests = max(0, int(normalized.get("fresh_upstream_requests") or 0))
+        except (TypeError, ValueError):
+            fresh_requests = 0
+        if fresh_requests != 0:
+            return normalized
+        attempts = [
+            dict(item)
+            for item in normalized.get("attempts", [])
+            if isinstance(item, dict)
+        ]
+        local_attempt = next(
+            (
+                item
+                for item in attempts
+                if str(item.get("error_type") or "").strip() == "ReferenceInputAdmissionError"
+            ),
+            None,
+        )
+        if local_attempt is None:
+            return normalized
+        message = str(local_attempt.get("message") or "").lower()
+        failure_code = (
+            "ecommerce_product_truth_pool_mismatch"
+            if "product truth pool does not match bound product references" in message
+            else "reference_input_contract_invalid"
+        )
+        normalized["final_classification"] = "non_retryable_input_contract_failure"
+        normalized["final_failure_code"] = failure_code
+        normalized["attempts"] = [
+            {
+                **item,
+                "classification": "non_retryable_input_contract_failure",
+                "failure_code": failure_code,
+                "retryable": False,
+            }
+            if item is local_attempt
+            else item
+            for item in attempts
+        ]
+        reference_execution = normalized.get("reference_input_execution")
+        if isinstance(reference_execution, dict):
+            normalized["reference_input_execution"] = {
+                **reference_execution,
+                "failure_code": failure_code,
+                "admission_outcome": "ineligible",
+                "operation_outcome": "failed",
+                "outer_request_count": 0,
+            }
+        return normalized
 
     def _public_provider_execution_status(self, record: ProductJobRecord) -> dict[str, Any] | None:
         """Derive a safe Provider/Reference execution read model for Job UI.

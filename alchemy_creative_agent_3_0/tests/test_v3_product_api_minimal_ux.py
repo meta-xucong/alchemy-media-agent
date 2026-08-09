@@ -776,6 +776,42 @@ def test_local_input_contract_failure_message_does_not_claim_provider_outage() -
     assert "product" in message.lower()
 
 
+def test_public_projection_repairs_legacy_local_reference_failure_without_mutating_record() -> None:
+    raw = {
+        "executed_count": 0,
+        "max_attempts": 0,
+        "fresh_upstream_requests": 0,
+        "final_status": "failed",
+        "final_classification": "non_retryable_provider_failure",
+        "final_failure_code": "provider_unavailable",
+        "attempts": [
+            {
+                "attempt": 0,
+                "status": "failed",
+                "classification": "non_retryable_provider_failure",
+                "failure_code": "provider_unavailable",
+                "error_type": "ReferenceInputAdmissionError",
+                "message": "Professional E-Commerce product truth pool does not match bound product references.",
+                "retryable": False,
+            }
+        ],
+        "reference_input_execution": {
+            "operation": "image_edit",
+            "operation_outcome": "failed",
+            "outer_request_count": 0,
+            "failure_code": "provider_unavailable",
+        },
+    }
+
+    projected = V3ProductApiService._public_provider_failure_retry(raw)  # noqa: SLF001
+
+    assert projected["final_classification"] == "non_retryable_input_contract_failure"
+    assert projected["final_failure_code"] == "ecommerce_product_truth_pool_mismatch"
+    assert projected["fresh_upstream_requests"] == 0
+    assert projected["attempts"][0]["failure_code"] == "ecommerce_product_truth_pool_mismatch"
+    assert raw["final_failure_code"] == "provider_unavailable"
+
+
 def test_empty_job_status_sanitizes_provider_failure_warnings() -> None:
     service, _, _ = _service("empty_status_warning_sanitizer")
     created = service.create_job({"user_input": "Create one neutral product image."})
