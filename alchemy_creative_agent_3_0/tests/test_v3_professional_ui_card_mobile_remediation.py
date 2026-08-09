@@ -13,7 +13,7 @@ DOC_PATH = (
     / "visual_assets"
     / "PROFESSIONAL_MODE_V3_UI_CARD_AND_MOBILE_REMEDIATION_20260726.md"
 )
-FRONTEND_VERSION = "20260809-v3-create-asset-prebind"
+FRONTEND_VERSION = "20260809-v3-terminal-delivery-cachebust"
 
 
 def _read(path: Path) -> str:
