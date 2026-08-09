@@ -106,6 +106,29 @@ class ReferenceInputAdmissionError(ProviderRuntimeError, ValueError):
     """
 
 
+REFERENCE_INPUT_CONTRACT_FAILURE_CLASSIFICATION = "non_retryable_input_contract_failure"
+REFERENCE_INPUT_CONTRACT_FAILURE_CODES = frozenset(
+    {
+        "reference_input_unsupported",
+        "reference_input_capability_mismatch",
+        "reference_input_rejected",
+        "ecommerce_product_truth_selection_missing",
+        "ecommerce_product_truth_pool_invalid",
+        "ecommerce_product_truth_selection_invalid",
+        "ecommerce_product_truth_pool_mismatch",
+        "ecommerce_product_truth_selection_unavailable",
+        "body_mcp_reference_partition_invalid",
+        "body_refresh_source_mode_invalid",
+        "body_reference_partition_forbidden_for_inference",
+        "body_refresh_target_age_scope_mismatch",
+        "body_proportion_analysis_context_missing",
+        "body_proportion_analysis_context_invalid",
+        "body_proportion_analysis_context_mismatch",
+    }
+)
+REFERENCE_INPUT_CONTRACT_FALLBACK_CODE = "reference_input_contract_invalid"
+
+
 class GenerationRequest(BaseModel):
     asset_spec: AssetSpec | None = None
     layout_plan: LayoutPlan | None = None
@@ -1440,6 +1463,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return
 
     def _classify_provider_failure(self, exc: BaseException) -> str:
+        if isinstance(exc, ReferenceInputAdmissionError):
+            return REFERENCE_INPUT_CONTRACT_FAILURE_CLASSIFICATION
         code = str(getattr(exc, "code", "") or "").lower()
         detail = getattr(exc, "detail", None)
         declared_failure_code = ""
@@ -1547,12 +1572,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
         }:
             return local_contract_failure
         declared = str(detail.get("reference_input_failure_code") or "").strip()
-        if declared in {
-            "reference_input_unsupported",
-            "reference_input_capability_mismatch",
-            "reference_input_rejected",
-        }:
+        if declared in REFERENCE_INPUT_CONTRACT_FAILURE_CODES:
             return declared
+        if declared:
+            return REFERENCE_INPUT_CONTRACT_FALLBACK_CODE
 
         code = str(getattr(exc, "code", "") or detail.get("code") or detail.get("error_code") or "").lower()
         detail_text = " ".join(str(value) for value in detail.values() if value is not None).lower()
@@ -1641,6 +1664,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "provider_policy_blocked": "The image provider blocked this request before image pixels were returned.",
             "provider_timeout": "The image provider timed out before image pixels were returned.",
             "provider_unavailable": "The image provider was unavailable before image pixels were returned.",
+            "ecommerce_product_truth_pool_mismatch": (
+                "The bound product references did not match the frozen product-truth plan; "
+                "no image request was sent."
+            ),
+            "ecommerce_product_truth_selection_invalid": (
+                "The selected product-reference contract was invalid; no image request was sent."
+            ),
+            "ecommerce_product_truth_selection_unavailable": (
+                "The selected product-reference image was unavailable; no image request was sent."
+            ),
+            "reference_input_contract_invalid": (
+                "The visual-reference contract was invalid before an image request was sent."
+            ),
             "empty_provider_output": "The image provider returned no image pixels.",
             "remote_creative_brain_prompt_signoff_missing": "The creative plan did not contain an approved Provider prompt, so no image request was sent.",
             "canonical_provider_prompt_exceeds_transport_limit": "The approved Provider prompt exceeds the configured transport limit, so no image request was sent.",
@@ -1668,13 +1704,25 @@ class ProductionImageGenerationProvider(GenerationProvider):
         raw_assets = self._raw_reference_assets(request)
         operation = "image_edit" if raw_assets else "image_generate"
         failure_code = self._provider_failure_code(exc, reference_assets=raw_assets)
+        local_contract_failure = isinstance(exc, ReferenceInputAdmissionError)
+        classification = (
+            REFERENCE_INPUT_CONTRACT_FAILURE_CLASSIFICATION
+            if local_contract_failure
+            else "non_retryable_provider_failure"
+        )
         reference_execution = self._reference_input_execution_audit(
             request,
             reference_assets=raw_assets,
             operation=operation,
             admission_outcome=(
                 "ineligible"
-                if failure_code in {"reference_input_unsupported", "reference_input_capability_mismatch"}
+                if local_contract_failure
+                or failure_code
+                in {
+                    "reference_input_unsupported",
+                    "reference_input_capability_mismatch",
+                    "reference_input_rejected",
+                }
                 else "admitted"
             ),
         )
@@ -1694,13 +1742,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "max_attempts": 0,
             "fresh_upstream_requests": 0,
             "final_status": "failed",
-            "final_classification": "non_retryable_provider_failure",
+            "final_classification": classification,
             "final_failure_code": failure_code,
             "attempts": [
                 {
                     "attempt": 0,
                     "status": "failed",
-                    "classification": "non_retryable_provider_failure",
+                    "classification": classification,
                     "failure_code": failure_code,
                     "error_type": exc.__class__.__name__,
                     "message": self._provider_failure_message(exc),

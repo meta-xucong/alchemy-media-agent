@@ -7989,6 +7989,27 @@ function v3EcommerceFailureMessage(job) {
   const scenarioId = String(job?.scenario?.scenario_id || "").trim().toLowerCase();
   const status = String(job?.status || "").trim().toLowerCase();
   if (scenarioId !== "ecommerce" || !["blocked", "failed"].includes(status)) return "";
+  const providerFailure = job?.metadata?.provider_failure_retry;
+  const providerFailureCode = String(
+    providerFailure?.final_failure_code
+      || providerFailure?.failure_code
+      || providerFailure?.attempts?.find((item) => item?.failure_code)?.failure_code
+      || "",
+  ).trim().toLowerCase();
+  const providerFailureClass = String(
+    providerFailure?.final_classification
+      || providerFailure?.classification
+      || "",
+  ).trim().toLowerCase();
+  if (
+    providerFailureCode === "ecommerce_product_truth_pool_mismatch"
+    || (
+      providerFailureClass === "non_retryable_input_contract_failure"
+      && Number(providerFailure?.fresh_upstream_requests || 0) === 0
+    )
+  ) {
+    return "\u5546\u54c1\u53c2\u8003\u56fe\u4e0e\u5f53\u524d\u5546\u54c1\u4e8b\u5b9e\u7ed1\u5b9a\u4e0d\u4e00\u81f4\uff0c\u5c1a\u672a\u53d1\u9001\u751f\u56fe\u8bf7\u6c42\u3002\u8bf7\u91cd\u65b0\u9009\u62e9\u4e0e\u5f53\u524d\u9879\u76ee\u5339\u914d\u7684\u5546\u54c1\u53c2\u8003\u56fe\u540e\u518d\u751f\u6210\u3002";
+  }
   const provenance = job?.metadata?.ecommerce_runtime_provenance;
   const events = Array.isArray(provenance?.events) ? provenance.events : [];
   const codes = events.flatMap((event) => Array.isArray(event?.failure_reason_codes) ? event.failure_reason_codes : []);

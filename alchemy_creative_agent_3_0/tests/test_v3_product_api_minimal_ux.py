@@ -760,6 +760,22 @@ def test_no_pixel_provider_failure_has_safe_reference_execution_projection() -> 
     ) == {}
 
 
+def test_local_input_contract_failure_message_does_not_claim_provider_outage() -> None:
+    message = V3ProductApiService._safe_generation_failure_message(  # noqa: SLF001
+        provider_strategy=None,
+        provider_failure_retry={
+            "final_classification": "non_retryable_input_contract_failure",
+            "final_failure_code": "ecommerce_product_truth_pool_mismatch",
+            "fresh_upstream_requests": 0,
+        },
+        fallback_code="provider_unavailable",
+    )
+
+    assert "provider failure" not in message.lower()
+    assert "image request" in message.lower()
+    assert "product" in message.lower()
+
+
 def test_empty_job_status_sanitizes_provider_failure_warnings() -> None:
     service, _, _ = _service("empty_status_warning_sanitizer")
     created = service.create_job({"user_input": "Create one neutral product image."})

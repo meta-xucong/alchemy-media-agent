@@ -4688,6 +4688,16 @@ class V3ProductApiService:
             prefix = "V3 candidate generation failed"
         failure_code = cls._provider_failure_closed_code(provider_failure_retry)
         classification = cls._provider_failure_closed_classification(provider_failure_retry)
+        if classification == "non_retryable_input_contract_failure":
+            if failure_code == "ecommerce_product_truth_pool_mismatch":
+                return (
+                    "V3 image generation was blocked before an image request was sent because "
+                    "the bound product references did not match the frozen product-truth plan."
+                )
+            return (
+                "V3 image generation was blocked before an image request was sent because "
+                "the visual-reference contract did not match the current project plan."
+            )
         if failure_code:
             return f"{prefix} with closed provider failure ({classification}: {failure_code})."
         safe_code = str(fallback_code or "provider_failure").strip() or "provider_failure"
@@ -9024,6 +9034,7 @@ class V3ProductApiService:
             state = None
         if classification not in {
             "non_retryable_provider_failure",
+            "non_retryable_input_contract_failure",
             "retryable_provider_failure",
             "unknown_retryable_failure",
             "empty_provider_output",

@@ -2348,6 +2348,7 @@ class ProductApiAnchorPackPreparationHost:
                     code in _ANCHOR_PROVIDER_NO_PIXEL_FAILURE_CODES
                     and classification in {
                         "non_retryable_provider_failure",
+                        "non_retryable_input_contract_failure",
                         "retryable_provider_failure",
                     }
                     and operation_outcome in {"", "failed"}

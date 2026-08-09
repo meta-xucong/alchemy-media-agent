@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
+from alchemy_creative_agent_3_0.app.generation_router.providers import ReferenceInputAdmissionError
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.schemas import (
@@ -414,6 +415,33 @@ def test_required_reference_admission_blocks_before_any_provider_request(tmp_pat
     assert summary["final_failure_code"] == "reference_input_unsupported"
     assert summary["reference_input_execution"]["admission_outcome"] == "ineligible"
     assert summary["reference_input_execution"]["reference_requirement"] == "required"
+
+
+def test_local_reference_contract_failure_is_not_reported_as_provider_unavailable(tmp_path) -> None:
+    """A local product-truth binding failure is not an upstream outage."""
+
+    request = _generation_request()
+    provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+    error = ReferenceInputAdmissionError(
+        "Professional E-Commerce product truth pool does not match bound product references.",
+        provider=provider.provider_name,
+        detail={
+            "reference_input_failure_code": "ecommerce_product_truth_pool_mismatch",
+            "fallback": "blocked",
+        },
+    )
+
+    summary = provider._preflight_provider_failure_summary(request, error)  # noqa: SLF001
+
+    assert provider._classify_provider_failure(error) == "non_retryable_input_contract_failure"  # noqa: SLF001
+    assert provider._provider_failure_code(error, reference_assets=[]) == (  # noqa: SLF001
+        "ecommerce_product_truth_pool_mismatch"
+    )
+    assert summary["fresh_upstream_requests"] == 0
+    assert summary["final_classification"] == "non_retryable_input_contract_failure"
+    assert summary["final_failure_code"] == "ecommerce_product_truth_pool_mismatch"
+    assert summary["reference_input_execution"]["admission_outcome"] == "ineligible"
+    assert summary["reference_input_execution"]["outer_request_count"] == 0
 
 
 def test_corrupt_required_reference_is_blocked_by_decoded_media_admission(tmp_path, monkeypatch) -> None:

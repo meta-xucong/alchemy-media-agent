@@ -123,6 +123,15 @@ def test_e23_next_actions_restore_human_recovery_for_blocked_held_and_completed_
     assert "生成第一组套图" not in actions
 
 
+def test_e23_local_product_truth_binding_failure_has_actionable_browser_copy() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    failure_section = _section(script, "function v3EcommerceFailureMessage", "function v3RemoteCreativeBrainFailureMessage")
+
+    assert "ecommerce_product_truth_pool_mismatch" in failure_section
+    assert r"\u5c1a\u672a\u53d1\u9001\u751f\u56fe\u8bf7\u6c42" in failure_section
+    assert "provider_unavailable" not in failure_section.split("ecommerce_product_truth_pool_mismatch", 1)[0]
+
+
 def test_e23_ecommerce_copy_does_not_promise_a_fixed_listing_suite() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     home_function = _section(script, "function v3HomeTemplateCopy", "function selectV3HomeTemplate")

@@ -1045,6 +1045,7 @@ class CentralCreativeBrain:
         classification = str(summary.get("final_classification") or "").strip().lower()
         if classification not in {
             "non_retryable_provider_failure",
+            "non_retryable_input_contract_failure",
             "retryable_provider_failure",
             "unknown_retryable_failure",
             "empty_provider_output",
