@@ -83,6 +83,10 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
             "professional_anchor_lineage_role": asset.metadata.get(
                 "professional_anchor_lineage_role"
             ),
+            "visual_asset_library_formal_face_chain_id": self._formal_face_chain_id(
+                asset.asset_id,
+                capability_input,
+            ),
         }
         if path is None or not path.exists():
             warnings.append(
@@ -151,6 +155,22 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
                 )
             )
             return {**base, "stored": True, "style_signals": [], "composition": {}}, warnings
+
+    @staticmethod
+    def _formal_face_chain_id(asset_id: str, capability_input: CapabilityInput) -> str | None:
+        """Read only the Product API's frozen same-card identity grouping."""
+
+        metadata = capability_input.metadata if isinstance(capability_input.metadata, dict) else {}
+        raw_bindings = metadata.get("visual_asset_library_formal_face_chain_bindings")
+        if not isinstance(raw_bindings, dict):
+            return None
+        raw_entry = raw_bindings.get(asset_id)
+        if not isinstance(raw_entry, dict):
+            return None
+        if raw_entry.get("chain_kind") != "formal_face_identity_v1":
+            return None
+        chain_id = str(raw_entry.get("chain_id") or "").strip()
+        return chain_id or None
 
     def _constraints_for_analysis(self, analysis: dict[str, Any]) -> list[CapabilityConstraint]:
         role = analysis.get("role")

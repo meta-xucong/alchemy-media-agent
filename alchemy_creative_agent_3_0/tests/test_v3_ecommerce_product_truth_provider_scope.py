@@ -52,6 +52,7 @@ from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioSelection
 from alchemy_creative_agent_3_0.app.shared_capabilities import (
     AssetBindingPlanner,
     AssetRole,
+    AssetRoleAnalyzer,
     CapabilityInput,
     UploadedAssetInfo,
 )
@@ -566,6 +567,55 @@ def test_project_mode_receipt_bound_visual_asset_resolves_its_active_face_winner
         for item in record.request.metadata["visual_asset_library_reference_assets"]
     ] == face_output_ids
     assert record.request.metadata["professional_ecommerce_product_truth_pool_asset_ids"] == product_ids
+    face_chain_bindings = record.request.metadata[
+        "visual_asset_library_formal_face_chain_bindings"
+    ]
+    assert set(face_chain_bindings) == set(face_output_ids)
+    assert {
+        item["chain_kind"] for item in face_chain_bindings.values()
+    } == {"formal_face_identity_v1"}
+
+    runtime_payload = service._runtime_request_payload(record.request)  # noqa: SLF001
+    capability_input = CapabilityInput(
+        job_id="job_formal_face_chain",
+        scenario_id="ecommerce",
+        user_input=record.request.user_input,
+        uploaded_assets=runtime_payload["uploaded_assets"],
+        metadata=runtime_payload["metadata"],
+    )
+    role_analysis = AssetRoleAnalyzer().execute(capability_input)
+    planned = AssetBindingPlanner().execute(
+        capability_input.model_copy(update={"prior_results": [role_analysis]})
+    )
+    assert not any(
+        warning.code == "asset_binding_role_conflict"
+        and warning.metadata.get("asset_ids") == face_output_ids
+        for warning in planned.warnings
+    )
+
+    unrelated_face = _image(tmp_path / "unrelated-face.png", (220, 160, 120))
+    conflicting_input = capability_input.model_copy(
+        update={
+            "uploaded_assets": [
+                *capability_input.uploaded_assets,
+                UploadedAssetInfo(
+                    asset_id="unrelated_face_upload",
+                    role=AssetRole.FACE_REFERENCE,
+                    file_path=str(unrelated_face),
+                    filename=unrelated_face.name,
+                ),
+            ]
+        }
+    )
+    conflicting_analysis = AssetRoleAnalyzer().execute(conflicting_input)
+    conflicting_plan = AssetBindingPlanner().execute(
+        conflicting_input.model_copy(update={"prior_results": [conflicting_analysis]})
+    )
+    assert any(
+        warning.code == "asset_binding_role_conflict"
+        and "unrelated_face_upload" in warning.metadata.get("asset_ids", [])
+        for warning in conflicting_plan.warnings
+    )
 
 
 def test_project_mode_receipt_bound_visual_asset_fails_closed_without_active_face_chain(tmp_path) -> None:
@@ -654,6 +704,29 @@ def test_project_mode_receipt_bound_visual_asset_fails_closed_without_active_fac
                 "user_input": "Create the ecommerce image set using the supplied product evidence.",
                 "uploaded_asset_ids": [upload["asset_id"]],
             },
+        )
+
+
+def test_public_job_cannot_supply_formal_face_chain_bindings() -> None:
+    service = V3ProductApiService()
+
+    with pytest.raises(
+        ValueError,
+        match="runtime_metadata_server_owned: visual_asset_library_formal_face_chain_bindings",
+    ):
+        service.create_job(
+            {
+                "user_input": "Create one professional ecommerce image.",
+                "scenario_selection": {"scenario_id": "ecommerce"},
+                "metadata": {
+                    "visual_asset_library_formal_face_chain_bindings": {
+                        "untrusted_output": {
+                            "chain_id": "sha256:forged",
+                            "chain_kind": "formal_face_identity_v1",
+                        }
+                    }
+                },
+            }
         )
 
 

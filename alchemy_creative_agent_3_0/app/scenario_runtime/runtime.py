@@ -6330,6 +6330,7 @@ class ScenarioRuntime:
             safe_binding = request.metadata.get("visual_asset_library_binding")
             base_metadata.pop("frozen_visual_asset_binding_set", None)
             base_metadata.pop("visual_asset_library_reference_assets", None)
+            base_metadata.pop("visual_asset_library_formal_face_chain_bindings", None)
             base_metadata.pop("visual_asset_library_execution", None)
             if not isinstance(safe_binding, dict):
                 raise CapabilityActivationError("visual_asset_library_brain_binding_missing")

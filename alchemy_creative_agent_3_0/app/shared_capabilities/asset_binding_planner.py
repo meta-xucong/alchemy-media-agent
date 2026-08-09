@@ -160,6 +160,9 @@ class AssetBindingPlanner(SharedCapabilityModule):
             "professional_anchor_lineage_role": analysis.get(
                 "professional_anchor_lineage_role"
             ),
+            "visual_asset_library_formal_face_chain_id": analysis.get(
+                "visual_asset_library_formal_face_chain_id"
+            ),
         }
 
     def _placement_for_role(self, role: str) -> str:
@@ -246,6 +249,10 @@ class AssetBindingPlanner(SharedCapabilityModule):
                     and binding.get("professional_anchor_lineage_role") == "prior_view_winner"
                 )
             ]
+            if role == AssetRole.FACE_REFERENCE.value:
+                competing_bindings = self._collapse_formal_face_identity_chain(
+                    competing_bindings
+                )
             if len(competing_bindings) > 1:
                 warnings.append(
                     CapabilityWarning(
@@ -255,6 +262,33 @@ class AssetBindingPlanner(SharedCapabilityModule):
                     )
                 )
         return warnings
+
+    @staticmethod
+    def _collapse_formal_face_identity_chain(
+        bindings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Treat only one frozen Character Card's formal views as one source."""
+
+        chain_groups: dict[str, list[dict[str, Any]]] = {}
+        ungrouped: list[dict[str, Any]] = []
+        for binding in bindings:
+            chain_id = str(binding.get("visual_asset_library_formal_face_chain_id") or "").strip()
+            if chain_id:
+                chain_groups.setdefault(chain_id, []).append(binding)
+            else:
+                ungrouped.append(binding)
+        if len(chain_groups) == 1 and not ungrouped:
+            return []
+        return [
+            *ungrouped,
+            *[
+                group[0]
+                for _, group in sorted(
+                    chain_groups.items(),
+                    key=lambda item: item[0],
+                )
+            ],
+        ]
 
     @staticmethod
     def _professional_product_truth_pool(

@@ -10833,6 +10833,7 @@ class V3ProductApiService:
             "mcp_operation_id",
             "frozen_visual_asset_binding_set",
             "visual_asset_library_reference_assets",
+            "visual_asset_library_formal_face_chain_bindings",
             "visual_asset_library_execution",
             "professional_product_truth_required",
             "professional_ecommerce_product_truth_pool_asset_ids",
@@ -11148,8 +11149,13 @@ class V3ProductApiService:
                 snapshot,
                 binding_service=binding_service,
             )
+            formal_face_chain_bindings = self._library_formal_face_chain_bindings(
+                snapshot,
+                binding_service=binding_service,
+            )
         else:
             references = []
+            formal_face_chain_bindings = {}
         request.metadata = {
             **dict(request.metadata or {}),
             # Full binding stays server-owned provenance. ScenarioRuntime
@@ -11158,6 +11164,11 @@ class V3ProductApiService:
             # Shared materialization sees only server-resolved references;
             # neither browser paths nor arbitrary caller metadata are trusted.
             "visual_asset_library_reference_assets": references,
+            # The active Character Card's front, three-quarter, and profile
+            # winners are complementary views of one identity, not competing
+            # user uploads. This mapping stays server-owned and never reaches
+            # the remote Brain.
+            "visual_asset_library_formal_face_chain_bindings": formal_face_chain_bindings,
         }
 
     def _library_visual_asset_reference_assets(
@@ -11225,6 +11236,55 @@ class V3ProductApiService:
         if snapshot.state == "valid" and not references:
             raise ValueError("visual_asset_library_evidence_missing")
         return references
+
+    def _library_formal_face_chain_bindings(
+        self,
+        snapshot: FrozenVisualAssetBindingSet,
+        *,
+        binding_service: ProjectVisualAssetBindingService,
+    ) -> dict[str, dict[str, str]]:
+        """Return the trusted same-card identity group for active Face slots."""
+
+        bindings: dict[str, dict[str, str]] = {}
+        for binding in snapshot.bindings:
+            asset = binding_service.catalog.get(
+                owner_scope=binding.owner_scope,
+                visual_asset_id=binding.visual_asset_id,
+            )
+            if (
+                asset is None
+                or asset.lifecycle_status != "active"
+                or asset.active_version_id != binding.selected_version_id
+                or asset.character_card.face_identity_status != "active"
+            ):
+                continue
+            output_ids = self._library_binding_reference_output_ids(
+                binding_service=binding_service,
+                visual_asset_id=binding.visual_asset_id,
+                selected_version_id=binding.selected_version_id,
+                owner_scope=binding.owner_scope,
+                approved_evidence_ids=binding.approved_evidence_ids,
+            )
+            chain_id = "sha256:" + hashlib.sha256(
+                (
+                    "visual_asset_library_formal_face_chain_v1|"
+                    + binding.owner_scope
+                    + "|"
+                    + binding.visual_asset_id
+                    + "|"
+                    + binding.selected_version_id
+                ).encode("utf-8")
+            ).hexdigest()
+            for output_id in output_ids:
+                value = {
+                    "chain_id": chain_id,
+                    "chain_kind": "formal_face_identity_v1",
+                }
+                existing = bindings.get(output_id)
+                if existing is not None and existing != value:
+                    raise ValueError("visual_asset_library_formal_face_chain_ambiguous")
+                bindings[output_id] = value
+        return bindings
 
     @staticmethod
     def _library_binding_reference_output_ids(
