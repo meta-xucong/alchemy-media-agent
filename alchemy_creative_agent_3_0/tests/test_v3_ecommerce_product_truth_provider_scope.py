@@ -13,7 +13,32 @@ from alchemy_creative_agent_3_0.app.generation_router import (
 )
 from alchemy_creative_agent_3_0.app.generation_router.providers import ReferenceInputAdmissionError
 from alchemy_creative_agent_3_0.app.product_api.contracts import CreateCreativeJobRequest
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore
+from alchemy_creative_agent_3_0.app.visual_assets.library import (
+    LibraryVisualAssetCreateRequest,
+    ProjectVisualAssetBindingService,
+    VisualAssetLibraryCatalog,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.character_card import (
+    CharacterCardSlot,
+    CharacterCardState,
+    apply_face_identity_pack_to_card,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.contracts import (
+    AnchorView,
+    IdentityAnchorPackVersion,
+    IdentityScoreSummary,
+    RootSourceProvenance,
+)
+from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import (
+    FormalSlotAcceptanceCore,
+    FormalSlotCandidateSummary,
+    FormalSlotRequirementSummary,
+    FormalSlotSharedReviewSummary,
+)
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -30,6 +55,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities import (
     CapabilityInput,
     UploadedAssetInfo,
 )
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
 
 def _png_bytes(color: tuple[int, int, int]) -> bytes:
@@ -357,6 +383,350 @@ def test_product_api_issues_product_truth_pool_only_for_trusted_professional_bin
     assert request.metadata["ecommerce_creative_context"]["provider_reference_budget"] == {
         "max_product_truth_source_refs_per_output": 2
     }
+
+
+def test_project_mode_bound_visual_asset_freezes_before_ecommerce_truth_preflight(tmp_path) -> None:
+    output_store = V3GeneratedOutputStore(storage_root=tmp_path / "outputs")
+    service = ecommerce_test_service(output_store=output_store)
+    service.asset_store.storage_root = tmp_path / "uploads"
+    catalog = VisualAssetLibraryCatalog()
+    binding_service = ProjectVisualAssetBindingService(catalog)
+    handlers = V3ProductRouteHandlers(
+        service=service,
+        project_store=InMemoryProjectStore(),
+        visual_asset_library_catalog=catalog,
+        project_visual_asset_binding_service=binding_service,
+    )
+
+    product_ids = []
+    for index in range(4):
+        upload = handlers.post_uploads(
+            {
+                "filename": f"product-{index}.png",
+                "mime_type": "image/png",
+                "size_bytes": len(_png_bytes((120 + index, 80, 150))),
+                "role": "product_reference",
+            }
+        )
+        handlers.put_upload_content(
+            upload["asset_id"],
+            {
+                "content_base64": base64.b64encode(_png_bytes((120 + index, 80, 150))).decode("ascii"),
+                "mime_type": "image/png",
+            },
+        )
+        handlers.post_upload_complete(upload["asset_id"])
+        product_ids.append(upload["asset_id"])
+
+    people_asset = catalog.create(
+        owner_scope="local_default",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Bound person",
+            asset_type="people",
+            root_source_asset_id="v3_asset_people_root",
+            consent_reference="user-authorized-source",
+            preparation_intent="A neutral reusable people reference.",
+        ),
+    )
+    rendered_anchor = output_store.save_base64_output(
+        job_id="job_visual_asset_anchor",
+        candidate_id="candidate_visual_asset_anchor",
+        asset_id="asset_visual_asset_anchor",
+        provider="fixture",
+        model="fixture",
+        encoded_image=base64.b64encode(_png_bytes((180, 150, 120))).decode("ascii"),
+    )
+    people_asset = catalog.activate_version(
+        owner_scope="local_default",
+        visual_asset_id=people_asset.visual_asset_id,
+        version_id="pack_people_v1",
+        approved_evidence_ids=[rendered_anchor.output_id],
+    )
+    project = handlers.post_projects(
+        {"user_goal": "Create an ecommerce image set", "primary_template_id": "ecommerce_template"}
+    )["project"]
+    handlers.post_project_visual_asset_binding(
+        project["project_id"],
+        {
+            "visual_asset_id": people_asset.visual_asset_id,
+            "selected_version_id": people_asset.active_version_id,
+            "confirm_binding": True,
+        },
+    )
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create the ecommerce image set using the supplied product evidence.",
+            "uploaded_asset_ids": product_ids,
+        },
+    )
+    record = service.get_job_record(job["job_id"])
+
+    assert record is not None
+    assert job["status"] == "planned"
+    assert record.request.metadata["frozen_visual_asset_binding_set"]["state"] == "valid"
+    assert record.request.metadata["professional_product_truth_required"] is True
+    assert record.request.metadata["professional_ecommerce_product_truth_pool_asset_ids"] == product_ids
+
+
+def test_project_mode_receipt_bound_visual_asset_resolves_its_active_face_winners(tmp_path) -> None:
+    output_store = V3GeneratedOutputStore(storage_root=tmp_path / "outputs")
+    service = ecommerce_test_service(output_store=output_store)
+    service.asset_store.storage_root = tmp_path / "uploads"
+    catalog = VisualAssetLibraryCatalog()
+    binding_service = ProjectVisualAssetBindingService(catalog)
+    handlers = V3ProductRouteHandlers(
+        service=service,
+        project_store=InMemoryProjectStore(),
+        visual_asset_library_catalog=catalog,
+        project_visual_asset_binding_service=binding_service,
+    )
+
+    product_ids = []
+    for index in range(4):
+        upload = handlers.post_uploads(
+            {
+                "filename": f"product-{index}.png",
+                "mime_type": "image/png",
+                "size_bytes": len(_png_bytes((120 + index, 80, 150))),
+                "role": "product_reference",
+            }
+        )
+        handlers.put_upload_content(
+            upload["asset_id"],
+            {
+                "content_base64": base64.b64encode(_png_bytes((120 + index, 80, 150))).decode("ascii"),
+                "mime_type": "image/png",
+            },
+        )
+        handlers.post_upload_complete(upload["asset_id"])
+        product_ids.append(upload["asset_id"])
+
+    people_asset = catalog.create(
+        owner_scope="local_default",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Receipt-bound person",
+            asset_type="people",
+            root_source_asset_id="v3_asset_people_root",
+            consent_reference="user-authorized-source",
+            preparation_intent="A neutral reusable people reference.",
+        ),
+    )
+    face_output_ids = [
+        output_store.save_base64_output(
+            job_id=f"job_face_{role}",
+            candidate_id=f"candidate_face_{role}",
+            asset_id=f"asset_face_{role}",
+            provider="fixture",
+            model="fixture",
+            encoded_image=base64.b64encode(_png_bytes((180, 150, 120))).decode("ascii"),
+        ).output_id
+        for role in ("front", "three_quarter", "profile")
+    ]
+    card = _active_face_card(
+        visual_asset_id=people_asset.visual_asset_id,
+        output_ids=face_output_ids,
+    )
+    people_asset = catalog.activate_version(
+        owner_scope="local_default",
+        visual_asset_id=people_asset.visual_asset_id,
+        version_id="pack_people_receipt_v1",
+        approved_evidence_ids=["formal_face_slot_receipts_verified"],
+    )
+    catalog.save(people_asset.model_copy(update={"character_card": card}))
+
+    project = handlers.post_projects(
+        {"user_goal": "Create an ecommerce image set", "primary_template_id": "ecommerce_template"}
+    )["project"]
+    handlers.post_project_visual_asset_binding(
+        project["project_id"],
+        {
+            "visual_asset_id": people_asset.visual_asset_id,
+            "selected_version_id": people_asset.active_version_id,
+            "confirm_binding": True,
+        },
+    )
+
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create the ecommerce image set using the supplied product evidence.",
+            "uploaded_asset_ids": product_ids,
+        },
+    )
+    record = service.get_job_record(job["job_id"])
+
+    assert record is not None
+    assert job["status"] == "planned"
+    assert [
+        item["output_id"]
+        for item in record.request.metadata["visual_asset_library_reference_assets"]
+    ] == face_output_ids
+    assert record.request.metadata["professional_ecommerce_product_truth_pool_asset_ids"] == product_ids
+
+
+def test_project_mode_receipt_bound_visual_asset_fails_closed_without_active_face_chain(tmp_path) -> None:
+    output_store = V3GeneratedOutputStore(storage_root=tmp_path / "outputs")
+    service = ecommerce_test_service(output_store=output_store)
+    service.asset_store.storage_root = tmp_path / "uploads"
+    catalog = VisualAssetLibraryCatalog()
+    binding_service = ProjectVisualAssetBindingService(catalog)
+    handlers = V3ProductRouteHandlers(
+        service=service,
+        project_store=InMemoryProjectStore(),
+        visual_asset_library_catalog=catalog,
+        project_visual_asset_binding_service=binding_service,
+    )
+    upload = handlers.post_uploads(
+        {
+            "filename": "product.png",
+            "mime_type": "image/png",
+            "size_bytes": len(_png_bytes((120, 80, 150))),
+            "role": "product_reference",
+        }
+    )
+    handlers.put_upload_content(
+        upload["asset_id"],
+        {
+            "content_base64": base64.b64encode(_png_bytes((120, 80, 150))).decode("ascii"),
+            "mime_type": "image/png",
+        },
+    )
+    handlers.post_upload_complete(upload["asset_id"])
+    people_asset = catalog.create(
+        owner_scope="local_default",
+        request=LibraryVisualAssetCreateRequest(
+            display_name="Broken receipt-bound person",
+            asset_type="people",
+            root_source_asset_id="v3_asset_people_root",
+            consent_reference="user-authorized-source",
+            preparation_intent="A neutral reusable people reference.",
+        ),
+    )
+    face_output_ids = [
+        output_store.save_base64_output(
+            job_id=f"job_face_{role}",
+            candidate_id=f"candidate_face_{role}",
+            asset_id=f"asset_face_{role}",
+            provider="fixture",
+            model="fixture",
+            encoded_image=base64.b64encode(_png_bytes((180, 150, 120))).decode("ascii"),
+        ).output_id
+        for role in ("front", "three_quarter", "profile")
+    ]
+    card = _active_face_card(
+        visual_asset_id=people_asset.visual_asset_id,
+        output_ids=face_output_ids,
+    )
+    broken_slots = dict(card.face_slots)
+    broken_slots["face.profile"] = CharacterCardSlot(
+        slot_key="face.profile",
+        module="face_identity",
+    )
+    broken_card = card.model_copy(update={"face_slots": broken_slots})
+    people_asset = catalog.activate_version(
+        owner_scope="local_default",
+        visual_asset_id=people_asset.visual_asset_id,
+        version_id="pack_people_broken_receipt_v1",
+        approved_evidence_ids=["formal_face_slot_receipts_verified"],
+    )
+    catalog.save(people_asset.model_copy(update={"character_card": broken_card}))
+    project = handlers.post_projects(
+        {"user_goal": "Create an ecommerce image set", "primary_template_id": "ecommerce_template"}
+    )["project"]
+    handlers.post_project_visual_asset_binding(
+        project["project_id"],
+        {
+            "visual_asset_id": people_asset.visual_asset_id,
+            "selected_version_id": people_asset.active_version_id,
+            "confirm_binding": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="visual_asset_library_active_face_chain_invalid"):
+        handlers.post_project_job(
+            project["project_id"],
+            {
+                "template_id": "ecommerce_template",
+                "user_input": "Create the ecommerce image set using the supplied product evidence.",
+                "uploaded_asset_ids": [upload["asset_id"]],
+            },
+        )
+
+
+def _active_face_card(*, visual_asset_id: str, output_ids: list[str]) -> CharacterCardState:
+    roles = ("standard_front", "three_quarter", "profile")
+    if len(output_ids) != len(roles):
+        raise ValueError("fixture requires three active face outputs")
+    shared_review = FormalSlotSharedReviewSummary(
+        status="pass",
+        evidence_codes=["fixture_shared_review_passed"],
+        score_dimensions=["identity_consistency"],
+    )
+    requirement = FormalSlotRequirementSummary(
+        status="pass",
+        evidence_codes=["fixture_requirement_passed"],
+        dimensions={"fixture_score": 1.0},
+    )
+    views = []
+    for role, output_id in zip(roles, output_ids, strict=True):
+        receipt = FormalSlotAcceptanceCore().accept(
+            module="face_identity",
+            slot_key=f"face_identity.{role}",
+            acceptance_mode="standard_three_candidate",
+            candidates=[
+                FormalSlotCandidateSummary(
+                    candidate_index=index,
+                    candidate_id=f"candidate_{role}_{index}",
+                    output_id=output_id if index == 1 else f"{output_id}_alternate_{index}",
+                    reviewed=True,
+                    shared_review=shared_review,
+                )
+                for index in (1, 2, 3)
+            ],
+            framing_summary=requirement,
+            parity_summary=requirement,
+            identity_summary=requirement,
+            ranking_key=lambda candidate, winner_output_id=output_id: (
+                1.0 if candidate.output_id == winner_output_id else 0.5
+            ),
+            reload_public_projection_verified=True,
+        )
+        views.append(
+            AnchorView(
+                view_id=f"view_{role}",
+                view_role=role,
+                output_id=output_id,
+                source_candidate_ids=[candidate.candidate_id for candidate in receipt.candidates],
+                identity_scores=IdentityScoreSummary(
+                    same_face_score=0.95,
+                    visual_quality_score=0.9,
+                    distinctive_feature_score=0.94,
+                    human_realism_score=0.9,
+                ),
+                formal_slot_receipt=receipt,
+            )
+        )
+    pack = IdentityAnchorPackVersion(
+        pack_version_id="pack_people_receipt_v1",
+        people_asset_id=visual_asset_id,
+        status="active",
+        anchor_views=views,
+        root_source_provenance=RootSourceProvenance(
+            source_type="uploaded_portrait",
+            source_asset_id="v3_asset_people_root",
+            project_id="project_fixture",
+            consent_reference="user-authorized-source",
+        ),
+        user_activation_confirmed=True,
+    )
+    return apply_face_identity_pack_to_card(
+        CharacterCardState.initial(card_version_id="card_people_receipt_v1"),
+        pack,
+    )
 
 
 def test_public_product_truth_scope_marker_cannot_be_forged() -> None:

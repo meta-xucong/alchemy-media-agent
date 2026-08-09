@@ -47,6 +47,10 @@ from ..visual_assets import (
     ProjectVisualAssetBindingService,
     bind_professional_mode,
 )
+from ..visual_assets.formal_slot_acceptance import (
+    FormalSlotReceipt,
+    validate_formal_slot_receipt_for_activation,
+)
 from ..visual_assets.body_silhouette_source_standard import body_silhouette_mcp_materialization_channel_contract
 from ..visual_assets.character_card import BodyRefreshPresentationIntent, BodySourceAdmission
 from ..visual_assets.body_proportion_evidence_profile import (
@@ -11140,7 +11144,10 @@ class V3ProductApiService:
         if snapshot.state == "blocked":
             raise ValueError("visual_asset_binding_set_blocked")
         if snapshot.state == "valid":
-            references = self._library_visual_asset_reference_assets(snapshot)
+            references = self._library_visual_asset_reference_assets(
+                snapshot,
+                binding_service=binding_service,
+            )
         else:
             references = []
         request.metadata = {
@@ -11156,13 +11163,30 @@ class V3ProductApiService:
     def _library_visual_asset_reference_assets(
         self,
         snapshot: FrozenVisualAssetBindingSet,
+        *,
+        binding_service: ProjectVisualAssetBindingService,
     ) -> list[dict[str, Any]]:
-        """Resolve approved library evidence through the existing output store."""
+        """Resolve a frozen library binding to its canonical face outputs.
+
+        ``approved_evidence_ids`` are release proof, not necessarily media
+        identifiers.  A current Character Card therefore owns the preferred
+        renderer chain: its three activated formal face winners.  Older
+        library records without an active Character Card retain the original
+        direct-output evidence path.  Neither branch may substitute arbitrary
+        uploads or an incomplete face chain.
+        """
 
         references: list[dict[str, Any]] = []
         seen: set[str] = set()
         for binding in snapshot.bindings:
-            for output_id in binding.approved_evidence_ids:
+            output_ids = self._library_binding_reference_output_ids(
+                binding_service=binding_service,
+                visual_asset_id=binding.visual_asset_id,
+                selected_version_id=binding.selected_version_id,
+                owner_scope=binding.owner_scope,
+                approved_evidence_ids=binding.approved_evidence_ids,
+            )
+            for output_id in output_ids:
                 if output_id in seen:
                     continue
                 seen.add(output_id)
@@ -11201,6 +11225,69 @@ class V3ProductApiService:
         if snapshot.state == "valid" and not references:
             raise ValueError("visual_asset_library_evidence_missing")
         return references
+
+    @staticmethod
+    def _library_binding_reference_output_ids(
+        *,
+        binding_service: ProjectVisualAssetBindingService,
+        visual_asset_id: str,
+        selected_version_id: str,
+        owner_scope: str,
+        approved_evidence_ids: list[str],
+    ) -> list[str]:
+        """Return the bound asset's trusted face chain or legacy outputs."""
+
+        asset = binding_service.catalog.get(
+            owner_scope=owner_scope,
+            visual_asset_id=visual_asset_id,
+        )
+        if (
+            asset is None
+            or asset.lifecycle_status != "active"
+            or asset.active_version_id != selected_version_id
+        ):
+            raise ValueError("visual_asset_library_binding_asset_mismatch")
+
+        card = asset.character_card
+        if card.face_identity_status == "active":
+            expected_slots = (
+                ("face.front", "face_identity.standard_front"),
+                ("face.front_three_quarter", "face_identity.three_quarter"),
+                ("face.profile", "face_identity.profile"),
+            )
+            output_ids: list[str] = []
+            for slot_key, expected_receipt_slot_key in expected_slots:
+                slot = card.face_slots.get(slot_key)
+                if (
+                    slot is None
+                    or slot.state != "active"
+                    or not str(slot.output_id or "").strip()
+                    or slot.formal_slot_receipt is None
+                ):
+                    raise ValueError("visual_asset_library_active_face_chain_invalid")
+                try:
+                    receipt = validate_formal_slot_receipt_for_activation(
+                        FormalSlotReceipt.model_validate(slot.formal_slot_receipt)
+                    )
+                except (TypeError, ValueError):
+                    raise ValueError("visual_asset_library_active_face_chain_invalid") from None
+                if (
+                    receipt.module != "face_identity"
+                    or receipt.slot_key != expected_receipt_slot_key
+                    or receipt.winner_output_id != slot.output_id
+                ):
+                    raise ValueError("visual_asset_library_active_face_chain_invalid")
+                output_ids.append(str(slot.output_id))
+            return output_ids
+
+        legacy_output_ids = [
+            str(output_id).strip()
+            for output_id in approved_evidence_ids
+            if str(output_id).strip()
+        ]
+        if not legacy_output_ids or len(legacy_output_ids) != len(set(legacy_output_ids)):
+            raise ValueError("visual_asset_library_evidence_missing")
+        return legacy_output_ids
 
     @staticmethod
     def _bind_server_job_instance_id(request: CreateCreativeJobRequest) -> None:
