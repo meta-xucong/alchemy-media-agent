@@ -4974,6 +4974,33 @@ body.v3-mobile-loading-active {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.v3-mobile-review-hold {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid rgba(173, 93, 52, 0.28);
+  border-radius: 14px;
+  color: var(--ink-soft);
+  background: rgba(255, 248, 238, 0.92);
+}
+
+.v3-mobile-review-hold strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.v3-mobile-review-hold span,
+.v3-mobile-review-hold small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.v3-mobile-output-card.review-only {
+  border-color: rgba(173, 93, 52, 0.22);
+}
+
 .v3-mobile-project-card.is-skeleton {
   min-height: 138px;
   pointer-events: none;

@@ -4435,8 +4435,23 @@ async function generateMobileV3Job() {
     mobileV3State.currentJob = finalJob;
     mobileV3MergeProjectOutputs(projectId, finalJob?.metadata?.project_outputs || []);
     await refreshMobileV3ProjectDetail(projectId);
-    setMobileV3Progress("completed", "生成完成，已刷新项目图片");
-    updateMobileV3Status("生成完成");
+    const deliveryWithheld = mobileV3JobDeliveryWithheld(finalJob);
+    const terminalFailure = ["blocked", "failed", "not_found"].includes(String(finalJob?.status || "").trim().toLowerCase());
+    setMobileV3Progress(
+      terminalFailure ? "failed" : deliveryWithheld ? "review_blocked" : "completed",
+      terminalFailure
+        ? "本次没有交付图片，项目记录已保留。"
+        : deliveryWithheld
+          ? mobileV3JobFinalDeliveryNotice(finalJob)
+          : "生成完成，已刷新项目图片",
+    );
+    updateMobileV3Status(
+      terminalFailure
+        ? `生成失败：${friendlyError(finalJob?.warnings?.[0] || "项目已保留，可以修改后重试")}`
+        : deliveryWithheld
+          ? mobileV3JobFinalDeliveryNotice(finalJob)
+          : "生成完成",
+    );
   } catch (error) {
     setMobileV3Progress("failed", `生成失败：${friendlyError(error)}`);
     updateMobileV3Status(`生成失败：${friendlyError(error)}`);
@@ -4452,6 +4467,11 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
     await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 1200 : 2500));
     try {
       lastJob = await mobileV3Request(`/jobs/${encodeURIComponent(jobId)}`);
+      if (mobileV3JobHasTerminalOutcome(lastJob)) {
+        mobileV3MergeProjectOutputs(projectId, lastJob?.metadata?.project_outputs || []);
+        await loadMobileV3ProjectOutputs(projectId, { limit: 120 });
+        return lastJob;
+      }
       if (["generating", "finalizing", "planned"].includes(lastJob?.status)) {
         setMobileV3Progress("recovering", `后台正在生成或完成交付收尾，已刷新 ${attempt} 次`);
         continue;
@@ -4488,6 +4508,7 @@ const mobileV3ProgressStages = [
   { key: "generating", percent: 68, label: "生成图片" },
   { key: "recovering", percent: 86, label: "刷新结果" },
   { key: "completed", percent: 100, label: "完成" },
+  { key: "review_blocked", percent: 100, label: "未交付" },
   { key: "failed", percent: 100, label: "需重试" },
 ];
 
@@ -4497,7 +4518,7 @@ function setMobileV3Progress(stageKey, detail = "") {
   const stage = mobileV3ProgressStages.find((item) => item.key === stageKey) || mobileV3ProgressStages[0];
   panel.hidden = false;
   setText("#mobileV3ProgressTitle", stage.label);
-  setText("#mobileV3ProgressElapsed", stage.key === "completed" ? "已完成" : "进行中");
+  setText("#mobileV3ProgressElapsed", ["completed", "review_blocked", "failed"].includes(stage.key) ? "已结束" : "进行中");
   const fill = document.querySelector("#mobileV3ProgressFill");
   if (fill) fill.style.width = `${stage.percent}%`;
   const steps = document.querySelector("#mobileV3ProgressSteps");
@@ -4642,6 +4663,7 @@ async function refreshMobileV3ProjectDetail(projectId) {
   } else {
     mobileV3State.currentJob = null;
   }
+  renderMobileV3ProjectOutputs(project);
   renderMobileV3PhotographyRoleBoard(mobileV3State.currentJob, project);
   renderMobileV3ReferenceBoard(project);
   renderMobileV3Timeline(mobileV3State.currentTimeline);
@@ -4654,13 +4676,40 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
   const grid = document.querySelector("#mobileV3OutputGrid");
   if (!grid || !project?.project_id) return;
   const outputs = mobileV3DisplayOutputsForProject(project);
+  const reviewItems = mobileV3ReviewOnlyJobImageItems();
   setText("#mobileV3OutputCount", `${outputs.length} 张`);
   grid.innerHTML = "";
-  grid.classList.toggle("empty-v2-list", outputs.length === 0);
-  if (!outputs.length) {
-    grid.textContent = "还没有图片，点“继续项目”生成第一组。";
+  grid.classList.toggle("empty-v2-list", outputs.length === 0 && reviewItems.length === 0);
+  if (mobileV3JobDeliveryWithheld()) {
+    const notice = document.createElement("article");
+    const lines = mobileV3JobReviewLines();
+    notice.className = "v3-mobile-review-hold";
+    notice.innerHTML = `
+      <strong>图片已生成，但未通过自动审查</strong>
+      <span>${escapeHtml(mobileV3JobFinalDeliveryNotice())}</span>
+      ${lines.length ? `<small>${escapeHtml(lines.join("；"))}</small>` : ""}
+    `;
+    grid.appendChild(notice);
+  }
+  if (!outputs.length && !reviewItems.length) {
+    if (!mobileV3JobDeliveryWithheld()) grid.textContent = "还没有图片，点“继续项目”生成第一组。";
     return;
   }
+  reviewItems.slice(0, 8).forEach((item, index) => {
+    const thumb = mobileV3ThumbUrl(item);
+    const card = document.createElement("article");
+    card.className = "v3-mobile-output-card review-only";
+    card.innerHTML = `
+      <button class="v3-mobile-output-preview" type="button" data-mobile-v3-gallery-preview="${escapeHtml(mobileV3OutputId(item))}">
+        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="复核图 ${index + 1}" loading="lazy" decoding="async" />` : `<span>复核图</span>`}
+      </button>
+      <div class="v3-mobile-output-copy">
+        <strong>复核图 ${index + 1}</strong>
+        <span>已生成，但未进入正式交付，也不会自动设为后续参考。</span>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
   outputs.forEach((item, index) => {
     const thumb = mobileV3ThumbUrl(item);
     const card = document.createElement("article");
@@ -4849,6 +4898,74 @@ function mobileV3OutputsForProject(projectId) {
 
 function mobileV3OutputDeliveryState(item) {
   return String(item?.delivery_state || item?.metadata?.delivery_state || "final_delivery").trim() || "final_delivery";
+}
+
+function mobileV3FinalDeliveryProjection(job = mobileV3State.currentJob) {
+  const projection = job?.metadata?.final_delivery;
+  return projection && typeof projection === "object" ? projection : null;
+}
+
+function mobileV3JobDeliveryWithheld(job = mobileV3State.currentJob) {
+  const projection = mobileV3FinalDeliveryProjection(job);
+  return Boolean(
+    projection?.delivery_gate_applies === true
+      && projection?.automatic_delivery_available !== true,
+  );
+}
+
+function mobileV3JobReviewLines(job = mobileV3State.currentJob) {
+  const review = job?.metadata?.post_generation_review || job?.metadata?.post_generation_review_package || {};
+  const summary = Array.isArray(review?.user_visible_summary) ? review.user_visible_summary : [];
+  const inspections = Array.isArray(review?.inspections) ? review.inspections : [];
+  const retrySummary = job?.metadata?.visual_auto_retry || {};
+  const executedCount = Number(retrySummary.executed_count || 0);
+  const maxAttempts = Number(retrySummary.max_attempts || 0);
+  const issueLines = inspections
+    .flatMap((item) => (Array.isArray(item?.detected_issues) ? item.detected_issues : []))
+    .map((issue) => {
+      const code = String(issue?.code || "").trim().toLowerCase();
+      if (code.includes("exhausted_refine_budget")) return "自动精修次数已用完";
+      if (code.includes("reject_recommendation") || code === "reject") return "自动审查建议暂不交付这张图片";
+      return issue?.message || "";
+    })
+    .filter(Boolean);
+  return [...new Set([
+    ...summary,
+    ...issueLines,
+    ...(maxAttempts > 0 && executedCount >= maxAttempts ? ["自动精修次数已用完，系统没有继续重复提交。"] : []),
+  ])].slice(0, 5);
+}
+
+function mobileV3JobFinalDeliveryNotice(job = mobileV3State.currentJob) {
+  const lines = mobileV3JobReviewLines(job);
+  return lines.length
+    ? `图片已经生成，但自动质量审查未通过。${lines[0]} 项目记录已保留，可以查看复核图、修改需求后重新生成。`
+    : "图片已经生成，但自动质量审查未通过。项目记录已保留，可以查看复核图、修改需求后重新生成。";
+}
+
+function mobileV3JobAwaitingFinalDelivery(job) {
+  return job?.status === "finalizing" || Boolean(job?.metadata?.delivery_settling);
+}
+
+function mobileV3JobHasTerminalOutcome(job = mobileV3State.currentJob) {
+  const status = String(job?.status || "").trim().toLowerCase();
+  if (["blocked", "failed", "not_found"].includes(status)) return true;
+  if (!["generated", "selected"].includes(status)) return false;
+  return !mobileV3JobAwaitingFinalDelivery(job);
+}
+
+function mobileV3ReviewOnlyJobImageItems(job = mobileV3State.currentJob) {
+  if (!job || !mobileV3JobDeliveryWithheld(job)) return [];
+  const candidates = Array.isArray(job.candidates) ? job.candidates : [];
+  const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
+  const source = candidates.length ? candidates : assets;
+  return source.filter((item) => {
+    const selectionState = String(item?.selection_state || "").trim().toLowerCase();
+    return (
+      selectionState !== "rejected"
+      && Boolean(mobileV3ThumbUrl(item) || mobileV3PreviewUrl(item) || mobileV3FullUrl(item))
+    );
+  });
 }
 
 function mobileV3FinalOutputsForProject(projectId) {

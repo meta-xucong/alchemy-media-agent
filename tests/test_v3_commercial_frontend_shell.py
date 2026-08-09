@@ -206,6 +206,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "post_generation_review" in script.text
     assert "v3PostGenerationReviewLines" in script.text
     assert "自动修复未完成；用于正式交付前请人工确认细节" in script.text
+    assert "metadata?.final_delivery" in script.text
+    assert "图片已经生成，但自动质量审查未通过" in script.text
+    assert "v3JobHasTerminalOutcome" in script.text
+    assert "v3ReviewOnlyJobImageItems" in script.text
     assert "高级查看：质量复检" in script.text
     assert ".v3-field-title-row" in styles.text
     assert ".v3-generation-settings" in styles.text
@@ -294,6 +298,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "mobileV3DisplayOutputsForProject" in mobile_script.text
     assert "mobileV3ProcessOutputsForProject" in mobile_script.text
     assert "function mobileV3CanonicalFinalDelivery" in mobile_script.text
+    assert "function mobileV3JobDeliveryWithheld" in mobile_script.text
+    assert "review_blocked" in mobile_script.text
+    assert "图片已经生成，但自动质量审查未通过" in mobile_script.text
     assert 'sourceType === "selected_output"' in mobile_script.text
     mobile_output_body = mobile_script.text.split("function mobileV3DisplayOutputsForProject", 1)[1].split("function mobileV3SummaryThumbs", 1)[0]
     assert "return mobileV3FinalOutputsForProject(project.project_id);" in mobile_output_body

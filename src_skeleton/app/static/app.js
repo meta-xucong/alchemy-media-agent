@@ -3646,10 +3646,72 @@ function v3ReviewCertification(job = v3State.currentJob) {
   return certification.scenario_id === "photography" ? certification : null;
 }
 
+function v3FinalDeliveryProjection(job = v3State.currentJob) {
+  const projection = job?.metadata?.final_delivery;
+  return projection && typeof projection === "object" ? projection : null;
+}
+
 function v3JobDeliveryWithheld(job = v3State.currentJob) {
   const certification = v3ReviewCertification(job);
   if (certification?.final_delivery_withheld) return true;
-  return Boolean(job?.metadata?.specialized_execution_summary?.final_delivery_withheld);
+  if (job?.metadata?.specialized_execution_summary?.final_delivery_withheld) return true;
+  const projection = v3FinalDeliveryProjection(job);
+  return Boolean(
+    projection?.delivery_gate_applies === true
+      && projection?.automatic_delivery_available !== true,
+  );
+}
+
+function v3JobFinalDeliveryReviewLines(job = v3State.currentJob) {
+  const projection = v3FinalDeliveryProjection(job);
+  const projectionSummary = Array.isArray(projection?.user_visible_summary)
+    ? projection.user_visible_summary
+    : [];
+  const retrySummary = job?.metadata?.visual_auto_retry || {};
+  const executedCount = Number(retrySummary.executed_count || 0);
+  const maxAttempts = Number(retrySummary.max_attempts || 0);
+  const retryLine = maxAttempts > 0 && executedCount >= maxAttempts
+    ? "自动精修次数已用完，系统没有继续重复提交。"
+    : "";
+  return uniqueNonEmpty([
+    ...projectionSummary,
+    ...v3PostGenerationReviewLines(job),
+    retryLine,
+  ]).slice(0, 5);
+}
+
+function v3JobFinalDeliveryNotice(job = v3State.currentJob) {
+  const lines = v3JobFinalDeliveryReviewLines(job);
+  return lines.length
+    ? `图片已经生成，但自动质量审查未通过。${lines[0]} 项目记录已保留，可以查看复核图、修改需求后重新生成。`
+    : "图片已经生成，但自动质量审查未通过。项目记录已保留，可以查看复核图、修改需求后重新生成。";
+}
+
+function v3JobHasTerminalOutcome(job = v3State.currentJob) {
+  const status = String(job?.status || "").trim().toLowerCase();
+  if (["blocked", "failed", "not_found"].includes(status)) return true;
+  if (!["generated", "selected"].includes(status)) return false;
+  return !v3JobAwaitingFinalDelivery(job);
+}
+
+function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
+  if (!job || !v3JobDeliveryWithheld(job)) return [];
+  const candidates = Array.isArray(job.candidates) ? job.candidates : [];
+  const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
+  const source = candidates.length ? candidates : assets;
+  const hiddenIds = v3ReviewOutputIdSet("hidden_output_ids", job);
+  return source
+    .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "review_only" }))
+    .filter((item) => {
+      const identity = v3OutputItemIdentity(item);
+      const selectionState = item?.selection_state || v3ProjectOutputStateMap().get(identity);
+      return (
+        v3OutputImageCandidates(item).length > 0
+        && selectionState !== "rejected"
+        && !hiddenIds.has(identity)
+      );
+    })
+    .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
 }
 
 function v3ReviewCertificationModes(certification) {
@@ -4442,9 +4504,16 @@ function v3PostGenerationReviewLines(job = v3State.currentJob) {
   }
   const issueLines = inspections
     .flatMap((item) => (Array.isArray(item.detected_issues) ? item.detected_issues : []))
-    .map((issue) => issue?.message || issue?.code)
+    .map((issue) => v3SafeReviewIssueText(issue))
     .filter(Boolean);
   return uniqueNonEmpty([...lines, ...issueLines]).slice(0, 6);
+}
+
+function v3SafeReviewIssueText(issue) {
+  const code = String(issue?.code || "").trim().toLowerCase();
+  if (code.includes("exhausted_refine_budget")) return "自动精修次数已用完";
+  if (code.includes("reject_recommendation") || code === "reject") return "自动审查建议暂不交付这张图片";
+  return issue?.message || (code ? "自动审查发现需要处理的画面问题" : "");
 }
 
 function renderV3WorkflowArtifacts() {
@@ -4879,11 +4948,12 @@ function renderV3ProjectNextActions() {
       '<button class="button ghost compact" type="button" data-v3-project-action="start_first_generation">重新尝试一次</button>',
     );
   } else if (withheld) {
-    title = "图片需要确认";
-    detail = "图片暂未作为最终交付。请回到项目查看确认要求，或补充信息后再尝试。";
+    title = "图片已生成，但未通过自动审查";
+    detail = "图片和审查记录已经保留。你可以先查看复核图，再修改需求或继续制作，不会被卡在等待状态。";
     actionRows.push(
-      '<button class="button primary compact" type="button" data-v3-project-action="show_project_results">查看项目状态</button>',
-      '<button class="button secondary compact" type="button" data-v3-project-action="edit_ecommerce_details">补充商品信息</button>',
+      '<button class="button primary compact" type="button" data-v3-project-action="show_project_results">查看复核图</button>',
+      '<button class="button secondary compact" type="button" data-v3-project-action="continue_same_style">修改后继续生成</button>',
+      '<button class="button ghost compact" type="button" data-v3-project-action="edit_ecommerce_details">补充商品信息</button>',
       '<button class="button ghost compact" type="button" data-v3-project-action="return_to_project">返回项目</button>',
     );
   } else if (visibleCount > 0 && v3JobDeliverySettled(job)) {
@@ -5374,6 +5444,7 @@ function v3ProjectJobNeedsRecovery(job) {
   return Boolean(
     job?.job_id
     && !v3JobDeliverySettled(job)
+    && !v3JobHasTerminalOutcome(job)
     && !["blocked", "failed", "not_found"].includes(status),
   );
 }
@@ -7637,14 +7708,17 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
   v3State.activeProjectStep = "compose";
   syncV3ProjectOutputsFromPayload(generated);
   const partialRecovery = v3JobHasRecoverablePartialDelivery(generated);
+  const deliveryWithheld = v3JobDeliveryWithheld(generated);
   setV3Progress(
-    generated?.status === "blocked" ? "failed" : "completed",
+    generated?.status === "blocked" ? "failed" : deliveryWithheld ? "review_blocked" : "completed",
     generated?.status === "blocked"
       ? "生成遇到阻碍，已保留项目记录。"
+      : deliveryWithheld
+        ? v3JobFinalDeliveryNotice(generated)
       : partialRecovery
         ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
         : "后台已完成出图，正在刷新项目图片。",
-    generated?.status === "blocked" ? "warning" : partialRecovery ? "warning" : "success"
+    generated?.status === "blocked" || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
   renderV3Job(generated);
   await refreshV3CurrentProject({ silent: true });
@@ -7666,10 +7740,12 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
   updateV3Notice(
     generated?.status === "blocked"
       ? (generated.warnings?.[0] || "图片生成暂时受阻，请检查配置或稍后再试。")
+      : deliveryWithheld
+        ? v3JobFinalDeliveryNotice(generated)
       : partialRecovery
         ? "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。"
         : copy.generatedNotice,
-    generated?.status === "blocked" || partialRecovery ? "warning" : "success"
+    generated?.status === "blocked" || deliveryWithheld || partialRecovery ? "warning" : "success"
   );
 }
 
@@ -7679,7 +7755,7 @@ async function runV3GenerationWithRecovery({ projectId, jobId, body, expectedCou
   const generationRequest = request(endpoint, { method: "POST", body: generationBody });
   try {
     const generated = await withV3SoftTimeout(generationRequest, v3GenerationSoftTimeoutMs);
-    if (generated?.status === "blocked" || generated?.status === "failed" || v3JobHasExpectedVisibleImages(generated, expectedCount)) {
+    if (v3JobHasTerminalOutcome(generated) || v3JobHasExpectedVisibleImages(generated, expectedCount)) {
       return generated;
     }
     setV3Progress("recovering", "后台已开始生成，页面正在等待图片结果。", "info", { forceNotice: true });
@@ -7722,6 +7798,14 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
       if (typeof shouldContinue === "function" && !shouldContinue()) {
         throw new Error("v3_project_recovery_replaced");
+      }
+      if (v3JobHasTerminalOutcome(job)) {
+        v3State.currentJob = job;
+        renderV3Job(job);
+        await refreshV3CurrentProject({ silent: true });
+        await loadV3ProjectTimeline(projectId, { silent: true });
+        await loadV3ProjectOutputs({ silent: true, force: true });
+        return job;
       }
       if (v3JobHasExpectedVisibleImages(job, expectedCount)) {
         return job;
@@ -8146,6 +8230,7 @@ const v3ProgressStages = [
   { key: "recovering", percent: 82, label: "核对结果" },
   { key: "reviewing", percent: 92, label: "整理结果" },
   { key: "completed", percent: 100, label: "完成" },
+  { key: "review_blocked", percent: 100, label: "未交付" },
   { key: "failed", percent: 100, label: "需要处理" },
 ];
 
@@ -8315,6 +8400,7 @@ function renderV3OutcomeItems(entries) {
   if (!els.v3CapabilityList) return;
   const items = uniqueNonEmpty(entries).slice(0, 5);
   const jobStatus = v3State.currentJob?.status || "";
+  const deliveryWithheld = v3JobDeliveryWithheld(v3State.currentJob);
   const percentMap = {
     planned: 42,
     generated: 100,
@@ -8326,22 +8412,43 @@ function renderV3OutcomeItems(entries) {
   const activeProgress = v3State.loading && v3ProgressByKey[v3State.progressStageKey];
   const percent = activeProgress ? v3ProgressByKey[v3State.progressStageKey].percent : percentMap[jobStatus] || (v3State.loading ? 66 : 12);
   const activeIndex = Math.max(0, Math.min(items.length - 1, Math.ceil((percent / 100) * items.length) - 1));
-  const failed = jobStatus === "failed" || jobStatus === "blocked" || jobStatus === "not_found";
+  const failed = deliveryWithheld || jobStatus === "failed" || jobStatus === "blocked" || jobStatus === "not_found";
   const progressStage = activeProgress ? v3ProgressByKey[v3State.progressStageKey] : null;
   const elapsed = v3ProgressElapsedLabel();
-  if (els.v3SummaryTitle) els.v3SummaryTitle.textContent = failed ? "生成已停止" : percent >= 100 ? "生成完成" : progressStage?.label || "生成进度";
+  if (els.v3SummaryTitle) {
+    els.v3SummaryTitle.textContent = deliveryWithheld
+      ? "图片已生成，但暂未交付"
+      : failed
+        ? "生成已停止"
+        : percent >= 100
+          ? "生成完成"
+          : progressStage?.label || "生成进度";
+  }
   if (els.v3SummaryPill) {
-    els.v3SummaryPill.textContent = failed ? "需处理" : percent >= 100 ? "已完成" : elapsed ? `已用 ${elapsed}` : v3State.loading ? "进行中" : "待开始";
+    els.v3SummaryPill.textContent = deliveryWithheld
+      ? "需处理"
+      : failed
+        ? "需处理"
+        : percent >= 100
+          ? "已完成"
+          : elapsed
+            ? `已用 ${elapsed}`
+            : v3State.loading
+              ? "进行中"
+              : "待开始";
   }
   if (els.v3ProgressFill) els.v3ProgressFill.style.width = `${percent}%`;
   if (els.v3SummaryIntro) {
     els.v3SummaryIntro.textContent =
+      (deliveryWithheld && v3JobFinalDeliveryNotice(v3State.currentJob)) ||
       (v3State.loading && v3State.progressDetail) ||
       items[activeIndex] ||
       (v3State.currentJob ? "V3 正在把项目需求整理成可执行的画面方向。" : "写一句需求后，V3 会把它整理成清晰的画面方向。");
   }
   if (els.v3SummaryFootnote) {
-    els.v3SummaryFootnote.textContent = failed
+    els.v3SummaryFootnote.textContent = deliveryWithheld
+      ? "图片已生成，但未通过自动质量审查；项目已保留，可以查看复核图或修改需求后重新生成。"
+      : failed
       ? "本次没有交付图片，项目记录已保留；不会自动重复提交。"
       : percent >= 100
         ? "图片已准备好，下一步可以挑选满意方向。"
@@ -8530,15 +8637,46 @@ function renderV3ResultBoard(job) {
     els.v3ResultBoard.classList.add("empty-v3-board");
     if (v3JobDeliveryWithheld(job)) {
       const notice = document.createElement("article");
-      notice.className = "v3-result-card";
+      notice.className = "v3-result-card v3-result-card-wide v3-review-hold-card";
+      const reviewLines = v3JobFinalDeliveryReviewLines(job);
       notice.innerHTML = `
         <div class="v3-card-head">
-          <strong>${escapeHtml(reviewCertification ? v3ReviewCertificationLabel(reviewCertification) : "需要确认")}</strong>
-          <span class="mini-pill">暂未交付</span>
+          <strong>${escapeHtml(reviewCertification ? v3ReviewCertificationLabel(reviewCertification) : "自动审查未通过")}</strong>
+          <span class="mini-pill">已结束 · 未交付</span>
         </div>
-        <p>${escapeHtml(reviewCertification ? v3ReviewCertificationNotice(reviewCertification) : "图片尚未成为最终交付。请查看项目状态或补充信息后再继续。")}</p>
+        <p>${escapeHtml(reviewCertification ? v3ReviewCertificationNotice(reviewCertification) : v3JobFinalDeliveryNotice(job))}</p>
+        ${reviewLines.length ? `<ul class="v3-review-reasons">${reviewLines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : ""}
       `;
+      els.v3ResultBoard.classList.remove("empty-v3-board");
       els.v3ResultBoard.appendChild(notice);
+      const reviewItems = v3ReviewOnlyJobImageItems(job);
+      reviewItems.slice(0, 8).forEach((item, index) => {
+        const card = document.createElement("article");
+        const title = `复核图 ${index + 1}`;
+        const imageCandidates = v3OutputImageCandidates(item);
+        const downloadUrl = v3OutputDownloadUrl(item);
+        card.className = "v3-result-card v3-review-only-card";
+        card.innerHTML = `
+          <button class="v3-result-preview" type="button" data-v3-review-preview aria-label="预览复核图"><img alt="${escapeHtml(title)}" /></button>
+          <div class="v3-card-head">
+            <strong>${escapeHtml(title)}</strong>
+            <span class="mini-pill">仅供复核</span>
+          </div>
+          <p>这张图已生成，但没有进入正式交付，也不会自动设为后续参考。</p>
+          <div class="v3-result-meta">
+            ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载复核图</a>` : ""}
+          </div>
+        `;
+        const image = card.querySelector(".v3-result-preview img");
+        if (image) bindImageWithFallback(image, imageCandidates, { emptyAlt: "复核图暂时无法加载" });
+        card.querySelector("[data-v3-review-preview]")?.addEventListener("click", () => {
+          openV3OutputLightbox(item, {
+            title,
+            meta: `${v3ScenarioLabel(job?.scenario?.scenario_id)} - 仅供复核`,
+          });
+        });
+        els.v3ResultBoard.appendChild(card);
+      });
       return;
     }
     if (["blocked", "failed", "not_found"].includes(String(job.status || "").toLowerCase())) {

@@ -10244,6 +10244,32 @@ body.v3-page-loading-active {
     rgba(255, 255, 252, 0.58);
 }
 
+.v3-result-card-wide {
+  grid-column: 1 / -1;
+}
+
+.v3-review-hold-card {
+  min-height: 0;
+  border-color: rgba(173, 93, 52, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 248, 238, 0.92), rgba(255, 255, 255, 0.72)),
+    rgba(255, 255, 252, 0.58);
+}
+
+.v3-review-reasons {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.v3-review-only-card {
+  border-color: rgba(173, 93, 52, 0.22);
+}
+
 .v3-result-preview,
 .v3-result-placeholder {
   width: 100%;
