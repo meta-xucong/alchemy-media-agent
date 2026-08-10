@@ -244,6 +244,37 @@ def test_doc260_no_references_still_reviews_generic_pixels_and_marks_all_optiona
     assert generated.metadata["visual_auto_retry"]["manual_confirmation_required"] is False
 
 
+def test_doc260_default_no_reference_route_uses_available_vision_provider(
+    tmp_path,
+) -> None:
+    provider = _StaticVisionProvider({"status": "pass", "confidence": 0.96, "issue_codes": []})
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+
+    generated = service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {"max_visual_retry_attempts": 0},
+        },
+    )
+
+    assert len(provider.calls) == 1
+    package = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
+    inspection = package["inspections"][0]
+    assert inspection["mode"] == "hybrid"
+    assert inspection["verification_state"] == "verified"
+    assert package["real_pixel_review"] is True
+    assert generated.metadata["final_delivery"]["final_delivery_status"] == "ready"
+    plan = _review_evidence_plan(_internal_generation_metadata(service, created.job_id))
+    assert _channel(plan, "product_truth")["evidence_state"] in {"not_provided", "not_applicable"}
+    assert _channel(plan, "person_identity")["evidence_state"] in {"not_provided", "not_applicable"}
+
+
 def test_doc260_optional_missing_reference_does_not_trigger_retry_or_manual_hold(
     tmp_path,
 ) -> None:
