@@ -73,6 +73,8 @@ class GeminiImageProvider:
                 "formats": ["png", "jpeg", "webp"],
                 "aspect_ratios": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"],
                 "image_sizes": ["1K", "2K", "4K"],
+                "request_timeout_seconds": settings.gemini_image_timeout_seconds,
+                "high_resolution_timeout_seconds": settings.gemini_image_high_resolution_timeout_seconds,
                 "api_key_configured": bool(settings.gemini_image_api_key),
                 "base_url_configured": bool(settings.gemini_image_base_url),
                 "temporarily_disabled": not settings.gemini_image_generation_enabled,
@@ -110,7 +112,7 @@ class GeminiImageProvider:
             "Content-Type": "application/json",
             "x-goog-api-key": settings.gemini_image_api_key or "",
         }
-        timeout = httpx.Timeout(300.0, connect=30.0)
+        timeout = httpx.Timeout(self._timeout_seconds(plan), connect=30.0)
         attempts: list[dict[str, Any]] = []
         data: dict[str, Any] | None = None
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -338,6 +340,15 @@ class GeminiImageProvider:
         if quality == "medium":
             return "1K"
         return "2K"
+
+    def _timeout_seconds(self, plan) -> float:
+        image_size = self._image_size(str(getattr(plan, "quality", "") or "auto"))
+        if image_size in {"2K", "4K"}:
+            return max(
+                float(settings.gemini_image_timeout_seconds),
+                float(settings.gemini_image_high_resolution_timeout_seconds),
+            )
+        return max(1.0, float(settings.gemini_image_timeout_seconds))
 
     def _supports_image_size(self, model: str) -> bool:
         normalized = model.lower()

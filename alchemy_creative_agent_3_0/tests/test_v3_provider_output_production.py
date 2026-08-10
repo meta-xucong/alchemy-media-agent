@@ -2,6 +2,7 @@ import base64
 import json
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,7 +19,7 @@ from alchemy_creative_agent_3_0.app.schemas import (
     PromptCompilationResult,
     ProviderStrategy,
 )
-from app.schemas import ImageGenerationResult
+from app.schemas import ImageGenerationResult, ImagePromptPlan
 from app.providers.base import ProviderRuntimeError, ProviderNotConfiguredError
 
 
@@ -743,6 +744,20 @@ def test_production_provider_gateway_managed_failover_does_not_replay_terminal_f
     }
     assert managed_timeout == 665.0
     assert managed_attempts == 1
+
+
+def test_production_provider_keeps_high_resolution_timeout_above_v1_provider_deadline(monkeypatch, tmp_path) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", False)
+    monkeypatch.setattr(settings, "openai_image_request_timeout_seconds", 240.0)
+    monkeypatch.setattr(settings, "openai_image_high_resolution_timeout_seconds", 900.0)
+    provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+    ordinary_request = SimpleNamespace(prompt_plan=ImagePromptPlan(main_subject="product", quality="medium"))
+    high_resolution_request = SimpleNamespace(prompt_plan=ImagePromptPlan(main_subject="product", quality="high"))
+
+    assert provider._app_provider_timeout_seconds([], app_request=ordinary_request) == 255.0  # noqa: SLF001
+    assert provider._app_provider_timeout_seconds([], app_request=high_resolution_request) == 915.0  # noqa: SLF001
 
 
 def test_production_provider_retries_generic_reference_upstream_400_once(tmp_path, monkeypatch) -> None:

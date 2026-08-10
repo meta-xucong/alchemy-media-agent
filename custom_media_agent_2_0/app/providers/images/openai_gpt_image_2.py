@@ -215,9 +215,10 @@ class V2OpenAIGPTImage2Provider:
                     model=settings.openai_image_model,
                     prompt=_prompt(plan),
                     n=1,
-                    timeout=settings.openai_image_timeout_seconds,
+                    timeout=_effective_openai_image_timeout_seconds(plan),
                     **kwargs,
-                )
+                ),
+                timeout_seconds=_effective_openai_image_timeout_seconds(plan),
             )
         except V2ImageProviderRateLimitError:
             raise
@@ -242,7 +243,13 @@ class V2OpenAIGPTImage2Provider:
                         "local_rate_guard": rate_guard,
                     },
                 ) from exc
-            raise _openai_error(exc, provider=self.name, operation="images.generate", index=index) from exc
+            raise _openai_error(
+                exc,
+                provider=self.name,
+                operation="images.generate",
+                index=index,
+                timeout_seconds=_effective_openai_image_timeout_seconds(plan),
+            ) from exc
         outputs = await _outputs_from_openai_response(response, plan, index=index, operation="images.generate", reference_count=0)
         return _with_reference_delivery_receipt(outputs, receipt)
 
@@ -279,12 +286,13 @@ class V2OpenAIGPTImage2Provider:
                         image=image_files,
                         prompt=_prompt(plan),
                         n=1,
-                        timeout=settings.openai_image_timeout_seconds,
+                        timeout=_effective_openai_image_timeout_seconds(plan),
                         **kwargs,
                     )
 
                 response = await _call_openai_image_operation(
-                    edit_operation
+                    edit_operation,
+                    timeout_seconds=_effective_openai_image_timeout_seconds(plan),
                 )
         except V2ImageProviderRateLimitError:
             raise
@@ -310,7 +318,13 @@ class V2OpenAIGPTImage2Provider:
                         "reference_image_count": len(reference_paths),
                     },
                 ) from exc
-            raise _openai_error(exc, provider=self.name, operation="images.edit", index=index) from exc
+            raise _openai_error(
+                exc,
+                provider=self.name,
+                operation="images.edit",
+                index=index,
+                timeout_seconds=_effective_openai_image_timeout_seconds(plan),
+            ) from exc
         outputs = await _outputs_from_openai_response(
             response,
             plan,
@@ -354,7 +368,7 @@ async def _outputs_from_openai_response(response, plan, *, index: int, operation
         reference_count=reference_count,
         default_format=fmt,
         default_mime_type=f"image/{fmt}",
-        url_timeout_seconds=settings.openai_image_timeout_seconds,
+        url_timeout_seconds=_effective_openai_image_timeout_seconds(plan),
     )
 
 
@@ -368,12 +382,24 @@ def _with_reference_delivery_receipt(
     ]
 
 
-def _openai_error(exc: Exception, *, provider: str, operation: str, index: int):
+def _openai_error(
+    exc: Exception,
+    *,
+    provider: str,
+    operation: str,
+    index: int,
+    timeout_seconds: float | None = None,
+):
     message = str(exc)
     retryable = _is_retryable_openai_error(exc)
     detail_message = message[:1000]
+    effective_timeout = (
+        max(1.0, float(timeout_seconds))
+        if timeout_seconds is not None
+        else max(1.0, float(settings.openai_image_timeout_seconds))
+    )
     if isinstance(exc, TimeoutError):
-        detail_message = f"OpenAI image request timed out after {settings.openai_image_timeout_seconds:g} seconds."
+        detail_message = f"OpenAI image request timed out after {effective_timeout:g} seconds."
     detail = {
         "error_type": type(exc).__name__,
         "message": detail_message,
@@ -382,7 +408,7 @@ def _openai_error(exc: Exception, *, provider: str, operation: str, index: int):
         "retryable": retryable,
     }
     if isinstance(exc, TimeoutError):
-        detail["timeout_seconds"] = settings.openai_image_timeout_seconds
+        detail["timeout_seconds"] = effective_timeout
     if _is_rate_limit(exc):
         return V2ImageProviderRateLimitError("OpenAI image request is rate limited.", provider=provider, detail=detail)
     return V2ImageProviderRuntimeError(
@@ -393,9 +419,13 @@ def _openai_error(exc: Exception, *, provider: str, operation: str, index: int):
     )
 
 
-async def _call_openai_image_operation(operation):
+async def _call_openai_image_operation(operation, *, timeout_seconds: float | None = None):
     last_error: Exception | None = None
-    timeout = max(1.0, float(settings.openai_image_timeout_seconds))
+    timeout = (
+        max(1.0, float(timeout_seconds))
+        if timeout_seconds is not None
+        else max(1.0, float(settings.openai_image_timeout_seconds))
+    )
     for attempt in range(1, _OPENAI_TRANSIENT_MAX_ATTEMPTS + 1):
         try:
             return await asyncio.wait_for(operation(), timeout=timeout)
@@ -538,6 +568,38 @@ def _openai_image_kwargs(plan) -> dict[str, str]:
     if size:
         kwargs["size"] = size
     return kwargs
+
+
+def _effective_openai_image_timeout_seconds(plan) -> float:
+    timeout = max(1.0, float(settings.openai_image_timeout_seconds))
+    if _requires_high_resolution_timeout(plan):
+        return max(timeout, float(settings.openai_image_high_resolution_timeout_seconds))
+    return timeout
+
+
+def _requires_high_resolution_timeout(plan) -> bool:
+    params = getattr(plan, "provider_parameters", None) or {}
+    if str(params.get("quality") or "").strip().lower() == "high":
+        return True
+    values = [
+        params.get("size"),
+        params.get("image_size"),
+        params.get("imageSize"),
+        params.get("resolution"),
+    ]
+    for value in values:
+        normalized = str(value or "").strip().lower().replace(" ", "")
+        if normalized in {"2k", "4k"}:
+            return True
+        if "x" not in normalized:
+            continue
+        try:
+            width_text, height_text = normalized.split("x", 1)
+            if max(int(width_text), int(height_text)) >= 2048:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _size(plan) -> str | None:

@@ -3669,6 +3669,43 @@ def test_openai_image_operation_has_outer_timeout(monkeypatch) -> None:
         asyncio.run(openai_image_provider._call_openai_image_operation(never_returns))
 
 
+def test_openai_image_high_resolution_timeout_is_900_seconds() -> None:
+    original_timeout = settings.openai_image_timeout_seconds
+    original_high_resolution_timeout = settings.openai_image_high_resolution_timeout_seconds
+    object.__setattr__(settings, "openai_image_timeout_seconds", 240.0)
+    object.__setattr__(settings, "openai_image_high_resolution_timeout_seconds", 900.0)
+    try:
+        ordinary = ImagePromptPlan(
+            plan_id="plan_ordinary",
+            mode="smart_enhance",
+            prompt="ordinary image",
+            provider_parameters={"quality": "medium"},
+        )
+        high_resolution = ImagePromptPlan(
+            plan_id="plan_high_resolution",
+            mode="smart_enhance",
+            prompt="high resolution image",
+            provider_parameters={"quality": "high"},
+        )
+        large_canvas = ImagePromptPlan(
+            plan_id="plan_large_canvas",
+            mode="smart_enhance",
+            prompt="large canvas image",
+            provider_parameters={"size": "2400x3392", "quality": "auto"},
+        )
+
+        assert openai_image_provider._effective_openai_image_timeout_seconds(ordinary) == 240.0
+        assert openai_image_provider._effective_openai_image_timeout_seconds(high_resolution) == 900.0
+        assert openai_image_provider._effective_openai_image_timeout_seconds(large_canvas) == 900.0
+    finally:
+        object.__setattr__(settings, "openai_image_timeout_seconds", original_timeout)
+        object.__setattr__(
+            settings,
+            "openai_image_high_resolution_timeout_seconds",
+            original_high_resolution_timeout,
+        )
+
+
 def test_openai_image_timeout_error_is_retryable_with_detail() -> None:
     object.__setattr__(settings, "openai_image_timeout_seconds", 240.0)
 

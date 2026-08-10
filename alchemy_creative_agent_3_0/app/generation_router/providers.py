@@ -1302,7 +1302,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
         *,
         reference_input_execution: dict[str, Any],
     ):
-        timeout_seconds = self._app_provider_timeout_seconds(reference_assets)
+        timeout_seconds = self._app_provider_timeout_seconds(reference_assets, app_request=app_request)
         max_attempts = self._app_provider_max_attempts()
         execution_audit = self._provider_execution_audit(
             reference_assets=reference_assets,
@@ -5728,14 +5728,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
         quality_mode = str(request.metadata.get("quality_mode") or request.generation_plan.metadata.get("quality_mode") or "standard")
         return "high" if quality_mode == "strict" else "medium"
 
-    def _app_provider_timeout_seconds(self, reference_assets: list[dict[str, Any]]) -> float:
+    def _app_provider_timeout_seconds(self, reference_assets: list[dict[str, Any]], *, app_request=None) -> float:
         try:
             from app.config import settings as app_settings
+            from app.providers.openai_image import OpenAIGPTImageProvider
 
-            value = (
-                app_settings.openai_image_edit_request_timeout_seconds
-                if reference_assets
-                else app_settings.openai_image_request_timeout_seconds
+            plan = getattr(app_request, "prompt_plan", None)
+            value = OpenAIGPTImageProvider(model="gpt-image-2")._client_timeout_seconds(
+                image_edit=bool(reference_assets),
+                plan=plan,
             )
             if bool(getattr(app_settings, "openai_image_gateway_managed_failover", False)):
                 # This is V3's end-to-end client deadline. It includes a
@@ -5745,7 +5746,6 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 # guard slightly later than the provider's HTTP deadline so
                 # the provider can convert its terminal timeout into a normal
                 # failed job rather than leaving a canceled request behind.
-                value = app_settings.openai_image_gateway_managed_failover_timeout_seconds
                 return max(660.0, float(value)) + 5.0
         except Exception:
             value = 240.0

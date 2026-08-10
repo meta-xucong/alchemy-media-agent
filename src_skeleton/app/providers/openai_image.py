@@ -251,6 +251,7 @@ class OpenAIGPTImageProvider:
                 "upstream_cooldown_seconds": settings.openai_image_upstream_cooldown_seconds,
                 "request_timeout_seconds": settings.openai_image_request_timeout_seconds,
                 "image_edit_request_timeout_seconds": settings.openai_image_edit_request_timeout_seconds,
+                "high_resolution_timeout_seconds": settings.openai_image_high_resolution_timeout_seconds,
                 # The raw per-operation values above remain useful for ordinary
                 # OpenAI-compatible deployments.  Expose the effective values
                 # separately so an operator can see when a gateway-owned
@@ -282,7 +283,7 @@ class OpenAIGPTImageProvider:
         reference_paths = self._provider_reference_paths(reference_paths)
         repair_mask = self._identity_repair_mask_path(plan)
         self._assert_reference_transport_supported(len(reference_paths))
-        timeout_seconds = self._client_timeout_seconds(image_edit=bool(reference_paths))
+        timeout_seconds = self._client_timeout_seconds(image_edit=bool(reference_paths), plan=plan)
         transport_client = self._gateway_managed_transport_client(timeout_seconds=timeout_seconds)
         client = AsyncOpenAI(
             **openai_sdk_client_kwargs(
@@ -326,7 +327,7 @@ class OpenAIGPTImageProvider:
                 "requests": output_count,
                 "gateway_managed_failover": self._uses_gateway_managed_failover(),
                 "sdk_max_retries": self._sdk_max_retries(),
-                "client_timeout_seconds": self._client_timeout_seconds(image_edit=bool(reference_paths)),
+                "client_timeout_seconds": self._client_timeout_seconds(image_edit=bool(reference_paths), plan=plan),
             },
         )
 
@@ -349,6 +350,7 @@ class OpenAIGPTImageProvider:
                         **kwargs,
                     ),
                     image_edit=False,
+                    plan=plan,
                 )
                 break
             except ProviderRateLimitError:
@@ -388,7 +390,7 @@ class OpenAIGPTImageProvider:
                             "request_index": index,
                             "attempts": attempt,
                             "retryable": retryable,
-                            "runtime_transport": self._runtime_transport_summary(image_edit=False),
+                            "runtime_transport": self._runtime_transport_summary(image_edit=False, plan=plan),
                             "upstream_concurrency_limited": self._is_concurrency_limit_error(exc),
                             "upstream_image_quota_limited": self._is_image_quota_limit_error(exc),
                         },
@@ -438,7 +440,7 @@ class OpenAIGPTImageProvider:
             fidelity_fallback_reason = (
                 f"Configured OpenAI image transport profile {self._transport_profile()} does not accept input_fidelity."
             )
-        operation_timeout = self._client_timeout_seconds(image_edit=True)
+        operation_timeout = self._client_timeout_seconds(image_edit=True, plan=plan)
         operation_deadline = time.monotonic() + operation_timeout
         # ``max_attempts`` can grow by exactly one for the optional
         # input-fidelity capability negotiation below.  A ``while`` loop keeps
@@ -478,6 +480,7 @@ class OpenAIGPTImageProvider:
                             **kwargs,
                         ),
                         image_edit=True,
+                        plan=plan,
                         timeout_seconds=max(0.1, remaining_timeout),
                     )
                 _openai_image_rate_limiter.note_image_edit_success()
@@ -556,7 +559,7 @@ class OpenAIGPTImageProvider:
                             "transient_image_edit_failure": transient_image_edit,
                             "operation_timeout_exhausted": operation_timeout_exhausted,
                             "operation_timeout_seconds": operation_timeout,
-                            "runtime_transport": self._runtime_transport_summary(image_edit=True),
+                            "runtime_transport": self._runtime_transport_summary(image_edit=True, plan=plan),
                             "reference_image_count": len(reference_paths),
                             "upstream_concurrency_limited": self._is_concurrency_limit_error(exc),
                             "upstream_image_quota_limited": self._is_image_quota_limit_error(exc),
@@ -677,7 +680,8 @@ class OpenAIGPTImageProvider:
         except ModuleNotFoundError as exc:
             raise ProviderNotConfiguredError("The openai package is not installed.", provider=self.name) from exc
 
-        timeout_seconds = self._client_timeout_seconds(image_edit=True)
+        plan = request.prompt_plan
+        timeout_seconds = self._client_timeout_seconds(image_edit=True, plan=plan)
         transport_client = self._gateway_managed_transport_client(timeout_seconds=timeout_seconds)
         client = AsyncOpenAI(
             **openai_sdk_client_kwargs(
@@ -688,7 +692,6 @@ class OpenAIGPTImageProvider:
                 http_client=transport_client,
             )
         )
-        plan = request.prompt_plan
         prompt = self._render_prompt(plan)
         try:
             async with _openai_image_generation_lock:
@@ -706,7 +709,7 @@ class OpenAIGPTImageProvider:
                 "api_style": "images.edit",
                 "gateway_managed_failover": self._uses_gateway_managed_failover(),
                 "sdk_max_retries": self._sdk_max_retries(),
-                "client_timeout_seconds": self._client_timeout_seconds(image_edit=True),
+                "client_timeout_seconds": self._client_timeout_seconds(image_edit=True, plan=plan),
                 "source_output_id": request.source_output_id,
                 "source_job_id": source_job_id,
                 "source_output_format": source_format,
@@ -1095,12 +1098,13 @@ class OpenAIGPTImageProvider:
             return None
         return max(0.0, parsed.timestamp() - time.time())
 
-    def _client_timeout_seconds(self, *, image_edit: bool) -> float:
+    def _client_timeout_seconds(self, *, image_edit: bool, plan=None) -> float:
         value = (
             settings.openai_image_edit_request_timeout_seconds
             if image_edit
             else settings.openai_image_request_timeout_seconds
         )
+        high_resolution = self._is_high_resolution_plan(plan)
         if self._uses_gateway_managed_failover():
             # The managed deadline covers every line transition plus the
             # gateway's terminal-response margin. Do not cap it with the
@@ -1109,8 +1113,37 @@ class OpenAIGPTImageProvider:
             # reserve this margin by shortening the SDK deadline: that makes
             # the SDK itself cancel a still-valid gateway request early.
             value = settings.openai_image_gateway_managed_failover_timeout_seconds
+            if high_resolution:
+                value = max(float(value), float(settings.openai_image_high_resolution_timeout_seconds))
             return max(_GATEWAY_MANAGED_FAILOVER_MINIMUM_TIMEOUT_SECONDS, float(value))
+        if high_resolution:
+            value = max(float(value), float(settings.openai_image_high_resolution_timeout_seconds))
         return max(30.0, float(value))
+
+    @staticmethod
+    def _is_high_resolution_plan(plan) -> bool:
+        if plan is None:
+            return False
+        if str(getattr(plan, "quality", "") or "").strip().lower() == "high":
+            return True
+        variables = getattr(plan, "variables", None)
+        values = [
+            getattr(plan, "size", None),
+            *(value for value in (variables or {}).values() if isinstance(value, (str, int, float))),
+        ]
+        for value in values:
+            normalized = str(value or "").strip().lower().replace(" ", "")
+            if normalized in {"2k", "4k"}:
+                return True
+            if "x" not in normalized:
+                continue
+            try:
+                width_text, height_text = normalized.split("x", 1)
+                if max(int(width_text), int(height_text)) >= 2048:
+                    return True
+            except ValueError:
+                continue
+        return False
 
     def _sdk_max_retries(self) -> int:
         # OpenAI's SDK otherwise retries retryable transport/status failures
@@ -1120,7 +1153,7 @@ class OpenAIGPTImageProvider:
         # retry owner or the gateway must remain the only retry authority.
         return 0
 
-    def _runtime_transport_summary(self, *, image_edit: bool) -> dict[str, object]:
+    def _runtime_transport_summary(self, *, image_edit: bool, plan=None) -> dict[str, object]:
         """Return safe-to-persist runtime facts for generation audit records.
 
         A gateway can distinguish its own 5xx from a downstream cancellation
@@ -1133,7 +1166,7 @@ class OpenAIGPTImageProvider:
             "gateway_managed_failover_timeout_seconds": float(
                 settings.openai_image_gateway_managed_failover_timeout_seconds
             ),
-            "effective_client_timeout_seconds": self._client_timeout_seconds(image_edit=image_edit),
+            "effective_client_timeout_seconds": self._client_timeout_seconds(image_edit=image_edit, plan=plan),
             "sdk_max_retries": self._sdk_max_retries(),
             "environment_proxy_bypassed": self._bypasses_environment_proxy(),
             "operation": "image_edit" if image_edit else "image_generate",
@@ -1169,8 +1202,8 @@ class OpenAIGPTImageProvider:
             ) from exc
         return httpx.AsyncClient(timeout=timeout_seconds, trust_env=False)
 
-    async def _call_with_timeout(self, awaitable, *, image_edit: bool, timeout_seconds: float | None = None):
-        timeout = self._client_timeout_seconds(image_edit=image_edit) if timeout_seconds is None else timeout_seconds
+    async def _call_with_timeout(self, awaitable, *, image_edit: bool, plan=None, timeout_seconds: float | None = None):
+        timeout = self._client_timeout_seconds(image_edit=image_edit, plan=plan) if timeout_seconds is None else timeout_seconds
         return await asyncio.wait_for(awaitable, timeout=timeout)
 
     async def _close_async_client(self, client, *, transport_client=None) -> None:

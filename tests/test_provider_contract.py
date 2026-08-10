@@ -406,6 +406,36 @@ def test_openai_image_provider_gateway_managed_failover_keeps_one_request_in_fli
     assert provider._sdk_max_retries() == 0  # noqa: SLF001
 
 
+def test_openai_image_provider_uses_900_second_timeout_for_high_resolution_requests(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", False)
+    monkeypatch.setattr(settings, "openai_image_request_timeout_seconds", 240.0)
+    monkeypatch.setattr(settings, "openai_image_edit_request_timeout_seconds", 420.0)
+    monkeypatch.setattr(settings, "openai_image_high_resolution_timeout_seconds", 900.0)
+
+    ordinary = ImagePromptPlan(main_subject="table lamp", quality="medium")
+    high_quality = ImagePromptPlan(main_subject="table lamp", quality="high")
+    large_canvas = ImagePromptPlan(main_subject="table lamp", size="2400x3392", quality="auto")
+
+    assert provider._client_timeout_seconds(image_edit=False, plan=ordinary) == 240.0  # noqa: SLF001
+    assert provider._client_timeout_seconds(image_edit=True, plan=ordinary) == 420.0  # noqa: SLF001
+    assert provider._client_timeout_seconds(image_edit=False, plan=high_quality) == 900.0  # noqa: SLF001
+    assert provider._client_timeout_seconds(image_edit=True, plan=large_canvas) == 900.0  # noqa: SLF001
+
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", True)
+    monkeypatch.setattr(settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)
+    assert provider._client_timeout_seconds(image_edit=False, plan=high_quality) == 900.0  # noqa: SLF001
+
+
+def test_gemini_image_provider_uses_900_second_timeout_for_2k_output(monkeypatch):
+    provider = registry.image("gemini_image")
+    monkeypatch.setattr(settings, "gemini_image_timeout_seconds", 300.0)
+    monkeypatch.setattr(settings, "gemini_image_high_resolution_timeout_seconds", 900.0)
+
+    assert provider._timeout_seconds(ImagePromptPlan(main_subject="table lamp", quality="medium")) == 300.0  # noqa: SLF001
+    assert provider._timeout_seconds(ImagePromptPlan(main_subject="table lamp", quality="high")) == 900.0  # noqa: SLF001
+
+
 def test_openai_image_provider_gateway_managed_failover_does_not_replay_image_edit_500(tmp_path, monkeypatch):
     provider = registry.image("openai_gpt_image")
     monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", True)
@@ -1013,7 +1043,7 @@ def test_openai_image_provider_image_edit_has_total_timeout_guard(tmp_path):
         images = SlowImages()
 
     try:
-        provider._client_timeout_seconds = lambda *, image_edit: 0.05
+        provider._client_timeout_seconds = lambda *, image_edit, plan=None: 0.05
         settings.openai_image_edit_transient_cooldown_seconds = 0.0
         with pytest.raises(ProviderRuntimeError) as exc_info:
             asyncio.run(

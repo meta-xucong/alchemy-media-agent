@@ -236,6 +236,9 @@ class Settings(BaseModel):
     openai_image_max_retry_after_seconds: float = _float_env("OPENAI_IMAGE_MAX_RETRY_AFTER_SECONDS", 900.0)
     openai_image_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_REQUEST_TIMEOUT_SECONDS", 240.0)
     openai_image_edit_request_timeout_seconds: float = _float_env("OPENAI_IMAGE_EDIT_REQUEST_TIMEOUT_SECONDS", 420.0)
+    openai_image_high_resolution_timeout_seconds: float = _float_env(
+        "OPENAI_IMAGE_HIGH_RESOLUTION_TIMEOUT_SECONDS", 900.0
+    )
     # Some OpenAI-compatible gateways own line selection, retry and backoff for
     # one image request.  Opt in only when a gateway documents that contract:
     # V3 will keep exactly one request in flight per logical output instead of
@@ -272,6 +275,10 @@ class Settings(BaseModel):
         default_factory=lambda: Path(os.getenv("V3_IDENTITY_MODEL_DIR", "/app/models/v3_identity"))
     )
     gemini_image_model: str = os.getenv("GEMINI_IMAGE_MODEL", os.getenv("GEMINI_MODEL", "gemini-3-pro-image-preview"))
+    gemini_image_timeout_seconds: float = _float_env("GEMINI_IMAGE_TIMEOUT_SECONDS", 300.0)
+    gemini_image_high_resolution_timeout_seconds: float = _float_env(
+        "GEMINI_IMAGE_HIGH_RESOLUTION_TIMEOUT_SECONDS", 900.0
+    )
     image_work_intensity: str = os.getenv("IMAGE_WORK_INTENSITY", "balanced")
     default_video_provider: str = os.getenv("DEFAULT_VIDEO_PROVIDER", "seedance")
     orchestration_mode: str = os.getenv("ORCHESTRATION_MODE", "runtime_first")
