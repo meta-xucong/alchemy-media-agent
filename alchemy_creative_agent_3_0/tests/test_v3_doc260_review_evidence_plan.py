@@ -275,6 +275,144 @@ def test_doc260_default_no_reference_route_uses_available_vision_provider(
     assert _channel(plan, "person_identity")["evidence_state"] in {"not_provided", "not_applicable"}
 
 
+def test_doc260_public_review_projects_safe_no_reference_real_pixel_facts(
+    tmp_path,
+) -> None:
+    provider = _StaticVisionProvider({"status": "pass", "confidence": 0.96, "issue_codes": []})
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+    service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {"max_visual_retry_attempts": 0},
+        },
+    )
+
+    public = service.get_job(created.job_id)
+    review = public.metadata["post_generation_review"]
+
+    assert review["real_pixel_review_attempted"] is True
+    assert review["real_pixel_review_certified"] is True
+    assert review["review_evidence_receipt_status"] == "complete"
+    assert review["reference_comparison"]["product_truth"] in {"not_provided", "not_applicable"}
+    assert review["reference_comparison"]["person_identity"] in {"not_provided", "not_applicable"}
+    assert "review_evidence_plan_digest" not in review
+    assert "review_evidence_plans" not in review
+    assert "evidence_ids" not in review
+
+
+def test_doc260_public_review_projects_required_unavailable_without_source_ids(
+    tmp_path,
+) -> None:
+    provider = _StaticVisionProvider({"status": "pass", "confidence": 0.96, "issue_codes": []})
+    source_id = "v3_asset_missing_public_projection"
+    resolution = _ready_resolution(tmp_path).model_copy(
+        update={
+            "metadata": {
+                "candidate_metadata": {
+                    "reference_truth_source_ids": [source_id],
+                    "reference_input_execution": {
+                        "admission_outcome": "admitted",
+                        "operation_outcome": "pixels_received",
+                        "reference_count": 1,
+                    },
+                }
+            }
+        }
+    )
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(resolution),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service, uploaded_asset_ids=[source_id])
+    service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {"max_visual_retry_attempts": 0},
+        },
+    )
+
+    public = service.get_job(created.job_id)
+    review = public.metadata["post_generation_review"]
+
+    assert provider.calls == []
+    assert review["real_pixel_review_attempted"] is False
+    assert review["real_pixel_review_certified"] is False
+    assert review["review_evidence_receipt_status"] == "complete"
+    assert review["reference_comparison"]["product_truth"] == "unavailable"
+    assert public.metadata["final_delivery"]["automatic_delivery_available"] is False
+    assert source_id not in str(review)
+    assert "review_evidence_plan_digest" not in review
+
+
+def test_doc260_public_review_distinguishes_pixels_not_reviewed(tmp_path) -> None:
+    service = _service(tmp_path)
+    created = _create_general_job(service)
+
+    public = service.get_job(created.job_id)
+    review = public.metadata["post_generation_review"]
+
+    assert review["real_pixel_review_attempted"] is False
+    assert review["real_pixel_review_certified"] is False
+    assert review["review_evidence_receipt_status"] == "not_available"
+    assert review["reference_comparison"] == {
+        "product_truth": "not_reviewed",
+        "person_identity": "not_reviewed",
+    }
+
+
+def test_doc260_public_review_requires_all_ready_outputs_for_certified_pixels() -> None:
+    review = V3ProductApiService._public_post_generation_review(  # noqa: SLF001
+        {
+            "review_evidence_receipt_status": "complete",
+            "resolutions": [
+                {"output_id": "output_doc260_a", "status": "ready"},
+                {"output_id": "output_doc260_b", "status": "ready"},
+            ],
+            "inspections": [
+                {
+                    "output_id": "output_doc260_a",
+                    "mode": "hybrid",
+                    "status": "pass",
+                    "verification_state": "verified",
+                    "evidence": {"provider_pixel_result_certified": True},
+                },
+                {
+                    "output_id": "output_doc260_b",
+                    "mode": "hybrid",
+                    "status": "manual_review",
+                    "verification_state": "unverified",
+                    "evidence": {},
+                },
+            ],
+            "review_evidence_plans": {
+                "output_doc260_a": {
+                    "channels": {
+                        "product_truth": {"evidence_state": "not_applicable"},
+                        "person_identity": {"evidence_state": "not_applicable"},
+                    }
+                },
+                "output_doc260_b": {
+                    "channels": {
+                        "product_truth": {"evidence_state": "not_applicable"},
+                        "person_identity": {"evidence_state": "not_applicable"},
+                    }
+                },
+            },
+        }
+    )
+
+    assert review["real_pixel_review_attempted"] is True
+    assert review["real_pixel_review_certified"] is False
+
+
 def test_doc260_optional_missing_reference_does_not_trigger_retry_or_manual_hold(
     tmp_path,
 ) -> None:

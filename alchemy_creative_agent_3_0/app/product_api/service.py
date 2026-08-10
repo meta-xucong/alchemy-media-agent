@@ -8363,10 +8363,30 @@ class V3ProductApiService:
         """Expose review outcome without provider, prompt, path, or repair internals."""
 
         package = dict(value or {}) if isinstance(value, dict) else {}
+        receipt_status = str(package.get("review_evidence_receipt_status") or "").strip().lower()
+        if receipt_status not in {"complete", "closed"}:
+            receipt_status = "not_available"
+        ready_output_ids = {
+            str(item.get("output_id") or "").strip()
+            for item in package.get("resolutions", [])
+            if isinstance(item, dict)
+            and str(item.get("status") or "").strip().lower() == "ready"
+            and str(item.get("output_id") or "").strip()
+        }
+        certified_output_ids: set[str] = set()
         inspections = []
         for item in package.get("inspections", []):
             if not isinstance(item, dict):
                 continue
+            output_id = str(item.get("output_id") or "")
+            evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+            if (
+                output_id
+                and str(item.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
+                and str(item.get("verification_state") or "").strip().lower() == "verified"
+                and bool(evidence.get("provider_pixel_result_certified"))
+            ):
+                certified_output_ids.add(output_id)
             issues = [
                 {
                     "code": str(issue.get("code") or "review_notice"),
@@ -8379,13 +8399,25 @@ class V3ProductApiService:
             ]
             inspections.append(
                 {
-                    "output_id": str(item.get("output_id") or ""),
+                    "output_id": output_id,
                     "mode": str(item.get("mode") or "metadata_only"),
                     "status": str(item.get("status") or "unverified"),
                     "verification_state": str(item.get("verification_state") or "unverified"),
                     "detected_issues": issues,
                 }
             )
+        if not ready_output_ids:
+            ready_output_ids = {
+                str(item.get("output_id") or "").strip()
+                for item in package.get("inspections", [])
+                if isinstance(item, dict) and str(item.get("output_id") or "").strip()
+            }
+        real_pixel_review_attempted = bool(certified_output_ids)
+        real_pixel_review_certified = (
+            receipt_status == "complete"
+            and bool(ready_output_ids)
+            and ready_output_ids.issubset(certified_output_ids)
+        )
         return {
             "user_visible_summary": [
                 str(line)[:300]
@@ -8395,7 +8427,69 @@ class V3ProductApiService:
             "inspections": inspections,
             "recommended_output_ids": [str(value) for value in package.get("recommended_output_ids", []) if str(value)],
             "hidden_output_ids": [str(value) for value in package.get("hidden_output_ids", []) if str(value)],
+            "real_pixel_review_attempted": real_pixel_review_attempted,
+            "real_pixel_review_certified": real_pixel_review_certified,
+            "review_evidence_receipt_status": receipt_status,
+            "reference_comparison": V3ProductApiService._public_reference_comparison(
+                package,
+                certified_output_ids=certified_output_ids,
+            ),
         }
+
+    @staticmethod
+    def _public_reference_comparison(
+        package: dict[str, Any],
+        *,
+        certified_output_ids: set[str],
+    ) -> dict[str, str]:
+        """Project only channel applicability/certification, never source evidence."""
+
+        plans = package.get("review_evidence_plans")
+        if not isinstance(plans, dict):
+            return {
+                "product_truth": "not_reviewed",
+                "person_identity": "not_reviewed",
+            }
+
+        comparison: dict[str, str] = {}
+        for channel_name in ("product_truth", "person_identity"):
+            required_states: list[tuple[str, str]] = []
+            optional_states: list[str] = []
+            for output_id, raw_plan in plans.items():
+                if not isinstance(raw_plan, dict):
+                    continue
+                channels = raw_plan.get("channels")
+                if not isinstance(channels, dict):
+                    continue
+                raw_channel = channels.get(channel_name)
+                if not isinstance(raw_channel, dict):
+                    continue
+                state = str(raw_channel.get("evidence_state") or "").strip().lower()
+                if state in {"available", "unavailable", "invalid"}:
+                    required_states.append((str(output_id or "").strip(), state))
+                elif state in {"not_applicable", "not_provided"}:
+                    optional_states.append(state)
+
+            invalid = any(state == "invalid" for _, state in required_states)
+            unavailable = any(state == "unavailable" for _, state in required_states)
+            available_output_ids = [output_id for output_id, state in required_states if state == "available"]
+            if invalid:
+                comparison[channel_name] = "invalid"
+            elif unavailable:
+                comparison[channel_name] = "unavailable"
+            elif available_output_ids:
+                comparison[channel_name] = (
+                    "verified"
+                    if all(output_id in certified_output_ids for output_id in available_output_ids)
+                    else "not_reviewed"
+                )
+            elif "not_provided" in optional_states:
+                comparison[channel_name] = "not_provided"
+            elif "not_applicable" in optional_states:
+                comparison[channel_name] = "not_applicable"
+            else:
+                comparison[channel_name] = "not_reviewed"
+        return comparison
 
     @staticmethod
     def _is_verified_real_pixel_inspection(inspection: dict[str, Any]) -> bool:
