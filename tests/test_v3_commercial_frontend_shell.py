@@ -464,7 +464,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function openV3OutputLightbox" in script.text
     assert "data-v3-output-action" in script.text
     assert "data-v3-result-action" in script.text
-    assert 'data-v3-result-action="delete"' in script.text
+    assert 'data-v3-result-action="remove_from_project"' in script.text
+    assert 'data-v3-result-action="delete"' not in script.text
     assert "function renderV3UsefulReferences" in script.text
     assert "function v3UsefulReferenceItems" in script.text
     assert "function maybePersistV3UploadedReferences" in script.text
