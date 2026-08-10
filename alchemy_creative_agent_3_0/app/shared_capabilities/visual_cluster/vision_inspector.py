@@ -1,4 +1,4 @@
-﻿"""Post-generation visual inspection helpers for Doc55."""
+"""Post-generation visual inspection helpers for Doc55."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from typing import Any
 
 from ...creative_core.rules import stable_id
 from ..apparel_construction import APPAREL_CONSTRUCTION_REVIEW_ISSUES
-from .contracts import GeneratedOutputResolution, VisualInspectionReport
+from .contracts import GeneratedOutputResolution, ReviewEvidencePlan, VisualInspectionReport
+from .review_evidence import review_plan_digest
 from .vision_provider import (
     VisionInspectionProvider,
     VisionInspectionProviderError,
@@ -348,17 +349,15 @@ class VisionOutputInspector:
         if resolution.status != "ready":
             return self._manual_report(resolution, resolution.status, metadata)
         mode = self._inspection_mode(metadata)
-        if _reference_evidence_unavailable(metadata):
+        evidence_gate = _review_evidence_gate(metadata, resolution)
+        if evidence_gate is not None:
+            reason_code, evidence_extra = evidence_gate
             return self._manual_report(
                 resolution,
-                "reference_evidence_unavailable",
+                reason_code,
                 metadata,
                 mode=mode,
-                evidence_extra={
-                    "reference_evidence_required": True,
-                    "reference_evidence_available": False,
-                    "not_verifiable": ["reference_truth"],
-                },
+                evidence_extra=evidence_extra,
             )
         review_contract = active_review_contract(metadata)
         if review_contract["requires_pixel_review"] and mode == "local_image_heuristic":
@@ -612,6 +611,7 @@ class VisionOutputInspector:
                 "file_path": resolution.file_path,
                 "provider_name": provider_name,
                 "provider_status": payload.get("status"),
+                "provider_pixel_result_certified": True,
                 "provider_issue_codes": issue_codes,
                 "identity_deltas": _string_list(payload.get("identity_deltas")),
                 "identity_metric": identity_metric,
@@ -623,6 +623,7 @@ class VisionOutputInspector:
                 "feedback_review": feedback_evidence,
                 "human_naturalness_attestation": human_attestation,
                 "integrated_whole_person_review_evidence": integrated_review_evidence,
+                **_review_evidence_payload(metadata),
             },
             user_visible_summary=user_summary[:4],
             metadata={"doc": "55", "vision_provider": provider_name, **_public_metadata(metadata)},
@@ -957,7 +958,16 @@ class VisionOutputInspector:
         mode: str = "metadata_only",
         evidence_extra: dict[str, Any] | None = None,
     ) -> VisualInspectionReport:
-        issue_code = reason_code if reason_code in MANUAL_REVIEW_ISSUE_CODES else "file_missing"
+        dynamic_review_evidence_code = (
+            reason_code.startswith("review_evidence_")
+            or reason_code.startswith("legacy_reference_")
+            or reason_code.startswith("public_review_")
+        )
+        issue_code = (
+            reason_code
+            if reason_code in MANUAL_REVIEW_ISSUE_CODES or dynamic_review_evidence_code
+            else "file_missing"
+        )
         issue_codes = [issue_code]
         verification_state = (
             "unavailable"
@@ -1000,6 +1010,7 @@ class VisionOutputInspector:
                 "warnings": list(resolution.warnings),
                 "identity_metric": identity_metric,
                 "identity_review_fusion": identity_fusion,
+                **_review_evidence_payload(metadata),
                 **dict(evidence_extra or {}),
             },
             user_visible_summary=["This image needs manual confirmation before automatic retry."],
@@ -1742,6 +1753,119 @@ def _reference_evidence_unavailable(metadata: dict[str, Any]) -> bool:
     if not _truthy(metadata.get("review_reference_evidence_available")):
         return True
     return not inspection_reference_paths(metadata)
+
+
+def _review_evidence_gate(
+    metadata: dict[str, Any],
+    resolution: GeneratedOutputResolution,
+) -> tuple[str, dict[str, Any]] | None:
+    """Apply Doc260 evidence state after exact plan binding and digest checks."""
+
+    if "public_review_evidence_plan" in metadata:
+        return (
+            "public_review_evidence_plan_rejected",
+            {
+                "certification_state": "unverified",
+                "not_verifiable": ["review_evidence_plan_authority"],
+            },
+        )
+
+    raw_plan = metadata.get("review_evidence_plan")
+    if raw_plan is not None:
+        try:
+            plan = ReviewEvidencePlan.model_validate(raw_plan)
+        except Exception as exc:
+            return (
+                "review_evidence_plan_invalid",
+                {
+                    "certification_state": "unverified",
+                    "review_evidence_plan_error": str(exc)[:200],
+                },
+            )
+        if metadata.get("review_evidence_plan_authority") != "exact_review_evidence_resolver":
+            return (
+                "review_evidence_plan_authority_invalid",
+                {
+                    "certification_state": "unverified",
+                    "not_verifiable": ["review_evidence_plan_authority"],
+                },
+            )
+        if plan.job_id != str(resolution.job_id or "").strip() or plan.output_id != str(resolution.output_id or "").strip():
+            return (
+                "review_evidence_plan_binding_invalid",
+                {
+                    "certification_state": "unverified",
+                    "not_verifiable": ["review_evidence_plan_binding"],
+                },
+            )
+        if plan.review_plan_digest != review_plan_digest(plan.model_dump(mode="json")):
+            return (
+                "review_evidence_plan_digest_invalid",
+                {
+                    "certification_state": "unverified",
+                    "not_verifiable": ["review_evidence_plan_integrity"],
+                },
+            )
+        channels = {
+            name: channel.model_dump(mode="json")
+            for name, channel in plan.channels.items()
+        }
+        for name, channel in plan.channels.items():
+            if (
+                channel.applicability == "required"
+                and channel.evidence_state in {"unavailable", "invalid"}
+            ):
+                return (
+                    f"review_evidence_{name}_{channel.evidence_state}",
+                    {
+                        "certification_state": "unverified",
+                        "review_evidence_channels": channels,
+                        "review_evidence_plan_digest": plan.review_plan_digest,
+                        "not_verifiable": [name],
+                    },
+                )
+        return None
+
+    # Legacy booleans cannot reconstruct a typed plan. Preserve the old
+    # Doc121 missing-evidence hold for explicit false availability, while
+    # treating true/true without exact paths as ambiguous rather than valid.
+    if _truthy(metadata.get("review_reference_evidence_required")):
+        if not _truthy(metadata.get("review_reference_evidence_available")):
+            return (
+                "reference_evidence_unavailable",
+                {
+                    "reference_evidence_required": True,
+                    "reference_evidence_available": False,
+                    "not_verifiable": ["reference_truth"],
+                },
+            )
+        return (
+            "legacy_reference_evidence_ambiguous",
+            {
+                "certification_state": "unverified",
+                "reference_evidence_required": True,
+                "reference_evidence_available": True,
+                "not_verifiable": ["reference_truth"],
+            },
+        )
+    return None
+
+
+def _review_evidence_payload(metadata: dict[str, Any]) -> dict[str, Any]:
+    raw_plan = metadata.get("review_evidence_plan")
+    if not isinstance(raw_plan, dict):
+        return {}
+    try:
+        plan = ReviewEvidencePlan.model_validate(raw_plan)
+    except Exception:
+        return {}
+    return {
+        "review_evidence_channels": {
+            name: channel.model_dump(mode="json")
+            for name, channel in plan.channels.items()
+        },
+        "review_evidence_plan_digest": plan.review_plan_digest,
+    }
 
 
 def _portrait_identity_metric_requested(metadata: dict[str, Any]) -> bool:

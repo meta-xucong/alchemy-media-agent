@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from io import BytesIO
 from pathlib import Path
 import sys
@@ -89,7 +90,8 @@ def _create_general_job(service: V3ProductApiService):
 
 def _ready_resolution(tmp_path: Path) -> GeneratedOutputResolution:
     image_path = tmp_path / "ready.png"
-    image_path.write_bytes(base64.b64decode(_png_base64()))
+    content = base64.b64decode(_png_base64())
+    image_path.write_bytes(content)
     return GeneratedOutputResolution(
         resolution_id="resolution_ready",
         project_id="project_doc55",
@@ -102,6 +104,7 @@ def _ready_resolution(tmp_path: Path) -> GeneratedOutputResolution:
         width=96,
         height=72,
         status="ready",
+        metadata={"content_sha256": hashlib.sha256(content).hexdigest()},
     )
 
 
@@ -215,6 +218,7 @@ def _openai_resolution_with_aigc_metadata(tmp_path: Path) -> GeneratedOutputReso
         provider="openai_gpt_image",
         model="gpt-image-2",
         status="ready",
+        metadata={"content_sha256": hashlib.sha256(image_path.read_bytes()).hexdigest()},
     )
 
 
@@ -278,7 +282,7 @@ class _StaticReadyResolver:
         self.resolution = resolution
 
     def resolve_result(self, result, project_id: str | None = None):
-        return [self.resolution.model_copy(update={"project_id": project_id or self.resolution.project_id})]
+        return [self.resolution.model_copy(update={"project_id": project_id or self.resolution.project_id, "job_id": result.creative_job.job_id})]
 
 
 class _BoundReadyResolver(_StaticReadyResolver):
@@ -291,6 +295,7 @@ class _BoundReadyResolver(_StaticReadyResolver):
             self.resolution.model_copy(
                 update={
                     "project_id": project_id or self.resolution.project_id,
+                    "job_id": result.creative_job.job_id,
                     "candidate_id": packaged.metadata.get("selected_candidate_id"),
                     "asset_id": packaged.asset_id,
                     "output_id": metadata.get("output_id"),
@@ -376,7 +381,9 @@ def test_doc121_review_uses_only_admitted_job_reference_pixels(tmp_path) -> None
             }
         }
     )
-    assert service._admitted_review_reference_metadata(record, unadmitted_resolution) == {}  # noqa: SLF001
+    unadmitted_metadata = service._admitted_review_reference_metadata(record, unadmitted_resolution)  # noqa: SLF001
+    assert unadmitted_metadata["review_evidence_plan"]["channels"]["product_truth"]["evidence_state"] == "unavailable"
+    assert "uploaded_assets" not in unadmitted_metadata
 
     missing_source_resolution = resolution.model_copy(
         update={
@@ -392,12 +399,10 @@ def test_doc121_review_uses_only_admitted_job_reference_pixels(tmp_path) -> None
             }
         }
     )
-    assert service._admitted_review_reference_metadata(record, missing_source_resolution) == {  # noqa: SLF001
-        "review_reference_evidence_required": True,
-        "review_reference_evidence_available": False,
-    }
-
-
+    missing_source_metadata = service._admitted_review_reference_metadata(record, missing_source_resolution)  # noqa: SLF001
+    assert missing_source_metadata["review_evidence_plan"]["channels"]["product_truth"]["evidence_state"] == "unavailable"
+    assert "uploaded_assets" not in missing_source_metadata
+    assert missing_source_metadata["review_evidence_plan"]["output_id"] == resolution.output_id
 def test_doc121_missing_admitted_reference_is_non_certifying(tmp_path) -> None:
     provider = _StaticVisionProvider({"status": "pass", "confidence": 0.96, "issue_codes": []})
     inspector = VisionOutputInspector(vision_provider=provider)

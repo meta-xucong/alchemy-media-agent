@@ -26,8 +26,25 @@ class OutputQualityReviewMerger:
         project_id: str | None,
         resolutions: list[GeneratedOutputResolution],
         inspections: list[VisualInspectionReport],
+        review_evidence_plans: dict[str, Any] | None = None,
+        review_evidence_plan_digests: dict[str, str] | None = None,
+        review_evidence_receipt_status: str | None = None,
+        review_evidence_receipt_errors: tuple[str, ...] = (),
         max_attempts: int = 1,
     ) -> PostGenerationReviewPackage:
+        plans = dict(review_evidence_plans or {})
+        digests = dict(review_evidence_plan_digests or {})
+        ready_output_ids = {
+            str(resolution.output_id).strip()
+            for resolution in resolutions
+            if str(resolution.status).strip() == "ready" and str(resolution.output_id or "").strip()
+        }
+        receipt_status = review_evidence_receipt_status or (
+            "complete" if ready_output_ids.issubset(plans) else "closed"
+        )
+        receipt_errors = tuple(review_evidence_receipt_errors)
+        if receipt_status == "closed" and not receipt_errors and ready_output_ids.difference(plans):
+            receipt_errors = ("review_evidence_plan_missing",)
         reports = [self._review_report(inspection) for inspection in inspections]
         decisions = self._auto_retry_decisions(job_id, project_id, inspections, max_attempts=max_attempts)
         real_review_signal_package = self._real_review_signal_package(
@@ -57,6 +74,10 @@ class OutputQualityReviewMerger:
             recommended_output_ids=list(dict.fromkeys(recommended_output_ids)),
             hidden_output_ids=list(dict.fromkeys(hidden_output_ids)),
             user_visible_summary=self._package_summary(inspections, decisions),
+            review_evidence_plans=plans,
+            review_evidence_plan_digests=digests,
+            review_evidence_receipt_status=receipt_status,
+            review_evidence_receipt_errors=receipt_errors,
             metadata={
                 "doc": "55,66",
                 "post_generation": True,

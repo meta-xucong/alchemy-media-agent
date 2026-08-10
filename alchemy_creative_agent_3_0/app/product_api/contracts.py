@@ -194,6 +194,7 @@ class V3UploadedAssetRecord(V3BaseModel):
     upload_url: str | None = None
     content_url: str | None = None
     file_path: str | None = None
+    content_sha256: str | None = None
     error: dict[str, Any] | None = None
     created_at: str
     updated_at: str

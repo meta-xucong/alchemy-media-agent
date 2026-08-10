@@ -59,6 +59,8 @@ from .contracts import (
     VisualQualityReviewResult,
     VisualReferenceBindingProfile,
     ProjectVisualGrammarSnapshot,
+    ReviewEvidenceChannel,
+    ReviewEvidencePlan,
 )
 from .adaptive_reference import ADAPTIVE_REFERENCE_RETRIEVER_MODULE_ID, AdaptiveReferenceRetriever
 from .batch_identity_review import BatchIdentityDiversityReviewer
@@ -203,6 +205,8 @@ __all__ = [
     "GenericVisualReviewReceipt",
     "SFaceIdentityMetricProvider",
     "ProjectVisualGrammarSnapshot",
+    "ReviewEvidenceChannel",
+    "ReviewEvidencePlan",
     "project_laugh_expression_review_receipt",
     "project_generic_visual_review_receipt",
     "REFERENCE_CHANNEL_ISSUE_CODES",

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from ...schemas.models import V3BaseModel
 
@@ -484,6 +485,142 @@ class VisualInspectionReport(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+_REVIEW_EVIDENCE_CHANNEL_NAMES = frozenset(
+    {"product_truth", "person_identity", "prompt_semantics", "selected_output"}
+)
+
+
+class FrozenReviewEvidenceChannels(Mapping[str, "ReviewEvidenceChannel"]):
+    """Tuple-backed immutable map for the exact four review channels."""
+
+    __slots__ = ("_items",)
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        if isinstance(values, FrozenReviewEvidenceChannels):
+            object.__setattr__(self, "_items", values._items)
+            return
+        if not isinstance(values, Mapping):
+            raise TypeError("ReviewEvidencePlan.channels must be a mapping")
+        items = tuple(
+            (str(name), ReviewEvidenceChannel.model_validate(channel))
+            for name, channel in values.items()
+        )
+        object.__setattr__(self, "_items", items)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise TypeError("ReviewEvidencePlan.channels is immutable")
+
+    def __getitem__(self, key: str) -> "ReviewEvidenceChannel":
+        for name, channel in self._items:
+            if name == key:
+                return channel
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return (name for name, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def items(self) -> tuple[tuple[str, "ReviewEvidenceChannel"], ...]:
+        return self._items
+
+    def keys(self) -> tuple[str, ...]:
+        return tuple(name for name, _ in self._items)
+
+    def values(self) -> tuple["ReviewEvidenceChannel", ...]:
+        return tuple(channel for _, channel in self._items)
+
+    def __repr__(self) -> str:
+        return f"FrozenReviewEvidenceChannels({dict(self._items)!r})"
+
+
+class ReviewEvidenceChannel(V3BaseModel):
+    """Closed, immutable applicability and resolution state for one channel."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid", frozen=True)
+
+    applicability: Literal["not_applicable", "not_provided", "required"]
+    evidence_state: Literal[
+        "not_applicable",
+        "not_provided",
+        "available",
+        "unavailable",
+        "invalid",
+    ]
+    evidence_ids: tuple[str, ...] = ()
+    comparison_allowed: bool = False
+    source_type: str | None = None
+    reason_codes: tuple[str, ...] = ()
+
+    @field_validator("evidence_ids", "reason_codes")
+    @classmethod
+    def values_are_nonblank_and_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(str(item).strip() for item in value)
+        if any(not item for item in cleaned):
+            raise ValueError("review evidence identifiers must be nonblank")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("review evidence identifiers must be unique")
+        return cleaned
+
+    @model_validator(mode="after")
+    def state_is_consistent(self) -> "ReviewEvidenceChannel":
+        if self.applicability != "required":
+            if self.evidence_state != self.applicability:
+                raise ValueError("non-required applicability must match evidence_state")
+            if self.evidence_ids or self.comparison_allowed or self.source_type:
+                raise ValueError("non-required review evidence cannot carry evidence")
+        elif self.evidence_state == "available" and not self.evidence_ids and self.source_type != "prompt_contract":
+            raise ValueError("available review evidence requires an evidence id")
+        elif self.evidence_state in {"not_applicable", "not_provided"}:
+            raise ValueError("required review evidence cannot be not_applicable or not_provided")
+        if self.evidence_state != "available" and self.comparison_allowed:
+            raise ValueError("only available review evidence can be compared")
+        return self
+
+
+class ReviewEvidencePlan(V3BaseModel):
+    """Closed, immutable, server-owned output-scoped evidence contract."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid", frozen=True, arbitrary_types_allowed=True)
+
+    contract_version: Literal["review_evidence_plan_v1"] = "review_evidence_plan_v1"
+    plan_id: str
+    job_id: str
+    output_id: str
+    review_mode: Literal["real_pixel", "metadata_only"]
+    channels: FrozenReviewEvidenceChannels
+    source_binding_digest: str
+    review_plan_digest: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_channels(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        normalized = dict(data)
+        normalized["channels"] = FrozenReviewEvidenceChannels(normalized.get("channels", {}))
+        return normalized
+
+    @field_serializer("channels")
+    def serialize_channels(self, value: FrozenReviewEvidenceChannels) -> dict[str, dict[str, Any]]:
+        return {name: channel.model_dump(mode="json") for name, channel in value.items()}
+
+    @field_validator("plan_id", "job_id", "output_id", "source_binding_digest", "review_plan_digest")
+    @classmethod
+    def bindings_are_nonblank(cls, value: str) -> str:
+        cleaned = str(value).strip()
+        if not cleaned:
+            raise ValueError("review evidence plan bindings must be nonblank")
+        return cleaned
+
+    @model_validator(mode="after")
+    def exact_channel_set(self) -> "ReviewEvidencePlan":
+        if set(self.channels) != _REVIEW_EVIDENCE_CHANNEL_NAMES:
+            raise ValueError("ReviewEvidencePlan requires the exact four Doc260 channels")
+        return self
+
+
 class PostGenerationReviewPackage(V3BaseModel):
     package_id: str
     project_id: str | None = None
@@ -496,7 +633,44 @@ class PostGenerationReviewPackage(V3BaseModel):
     recommended_output_ids: list[str] = Field(default_factory=list)
     hidden_output_ids: list[str] = Field(default_factory=list)
     user_visible_summary: list[str] = Field(default_factory=list)
+    review_evidence_plans: dict[str, ReviewEvidencePlan] = Field(default_factory=dict)
+    review_evidence_plan_digests: dict[str, str] = Field(default_factory=dict)
+    review_evidence_receipt_status: Literal["complete", "closed"] = "complete"
+    review_evidence_receipt_errors: tuple[str, ...] = ()
+    real_pixel_review: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def output_scoped_plan_maps_are_exact(self) -> "PostGenerationReviewPackage":
+        if set(self.review_evidence_plans) != set(self.review_evidence_plan_digests):
+            raise ValueError("Doc260 plan and digest maps must cover the same outputs")
+        for output_id, plan in self.review_evidence_plans.items():
+            if output_id != plan.output_id or plan.job_id != self.job_id:
+                raise ValueError("Doc260 plan map contains a mismatched output binding")
+            if self.review_evidence_plan_digests[output_id] != plan.review_plan_digest:
+                raise ValueError("Doc260 plan digest map contains a mismatched digest")
+        ready_output_ids = {
+            str(resolution.output_id).strip()
+            for resolution in self.resolutions
+            if str(resolution.status).strip() == "ready" and str(resolution.output_id or "").strip()
+        }
+        resolved_output_ids = {
+            str(resolution.output_id).strip()
+            for resolution in self.resolutions
+            if str(resolution.output_id or "").strip()
+        }
+        unknown = set(self.review_evidence_plans).difference(resolved_output_ids)
+        if unknown:
+            raise ValueError("Doc260 plan map contains an output outside this package")
+        if self.review_evidence_receipt_status == "complete":
+            missing = ready_output_ids.difference(self.review_evidence_plans)
+            if missing:
+                raise ValueError("Doc260 complete receipt is missing ready-output review plans")
+            if self.review_evidence_receipt_errors:
+                raise ValueError("Doc260 complete receipt cannot retain closure errors")
+        elif self.real_pixel_review:
+            raise ValueError("Doc260 closed receipt cannot claim real pixel review")
+        return self
 
 
 class AutoRetryDecision(V3BaseModel):

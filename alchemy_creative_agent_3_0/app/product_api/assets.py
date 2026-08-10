@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from datetime import datetime, timezone
 from io import BytesIO
 import json
@@ -121,6 +122,7 @@ class V3UploadedAssetStore:
                 "mime_type": mime_type,
                 "size_bytes": len(content),
                 "file_path": str(path),
+                "content_sha256": hashlib.sha256(content).hexdigest(),
                 "content_url": _content_route(record.asset_id),
                 "updated_at": _now_iso(),
                 "error": None,

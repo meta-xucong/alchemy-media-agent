@@ -71,10 +71,12 @@ from ..shared_capabilities.visual_cluster import (
     VisionOutputInspector,
     reference_channel_retry_patch,
 )
+from ..shared_capabilities.visual_cluster.contracts import ReviewEvidencePlan
 from ..shared_capabilities.visual_cluster.human_photorealism import (
     HUMAN_REALISM_REVIEW_DIMENSIONS,
     normalize_human_realism_issue_code,
 )
+from ..shared_capabilities.visual_cluster.review_evidence import ExactReviewEvidenceResolver, review_plan_digest
 from ..schemas import (
     AssetType,
     BrandProfile,
@@ -4832,9 +4834,15 @@ class V3ProductApiService:
         generate_request: GenerateJobRequest,
     ) -> PlanningResult:
         project_id = record.request.metadata.get("project_id")
-        review_metadata = {
+        # Review evidence is server-owned and must never be accepted from public metadata.
+        public_metadata = {
             **dict(record.request.metadata or {}),
             **dict(generate_request.metadata or {}),
+        }
+        for key in ("review_evidence_plan", "review_evidence_plan_digest", "review_evidence_plans", "review_evidence_plan_digests"):
+            public_metadata.pop(key, None)
+        review_metadata = {
+            **public_metadata,
             # The reviewer must see the exact user-owned direction that was
             # frozen for this Job.  It is not safe to rely on the planning
             # result or GenerateJobRequest metadata to carry it: both are
@@ -4891,27 +4899,81 @@ class V3ProductApiService:
             generation_result,
             review_metadata,
         )
+        evidence_metadata_by_resolution = [
+            self._admitted_review_reference_metadata(record, resolution)
+            for resolution in resolutions
+        ]
         inspections = [
             self.vision_inspector.inspect(
                 resolution,
                 metadata={
                     **review_metadata,
-                    **self._admitted_review_reference_metadata(record, resolution),
+                    **evidence_metadata,
                     "frozen_output_review_contract": self._frozen_output_review_contract(
                         resolution,
                         frozen_output_review_contracts,
                     ),
                 },
             )
-            for resolution in resolutions
+            for resolution, evidence_metadata in zip(resolutions, evidence_metadata_by_resolution)
         ]
+        plans_by_output: dict[str, ReviewEvidencePlan] = {}
+        digests_by_output: dict[str, str] = {}
+        receipt_errors: list[str] = []
+        for resolution, evidence_metadata in zip(resolutions, evidence_metadata_by_resolution):
+            if str(getattr(resolution, "status", "") or "").strip() != "ready":
+                continue
+            output_id = str(getattr(resolution, "output_id", "") or "").strip()
+            raw_plan = evidence_metadata.get("review_evidence_plan")
+            raw_digest = str(evidence_metadata.get("review_evidence_plan_digest") or "").strip()
+            if not output_id:
+                receipt_errors.append("review_evidence_plan_missing_output")
+                continue
+            if output_id in plans_by_output:
+                receipt_errors.append("review_evidence_plan_duplicate_output")
+                continue
+            if not isinstance(raw_plan, dict):
+                receipt_errors.append("review_evidence_plan_absent")
+                continue
+            if evidence_metadata.get("review_evidence_plan_authority") != "exact_review_evidence_resolver":
+                receipt_errors.append("review_evidence_plan_authority_invalid")
+                continue
+            try:
+                plan = ReviewEvidencePlan.model_validate(raw_plan)
+            except Exception:
+                receipt_errors.append("review_evidence_plan_non_certifying")
+                continue
+            if (
+                plan.job_id != generation_result.creative_job.job_id
+                or plan.output_id != output_id
+                or raw_digest != plan.review_plan_digest
+                or plan.review_plan_digest != review_plan_digest(plan.model_dump(mode="json"))
+            ):
+                receipt_errors.append("review_evidence_plan_binding_invalid")
+                continue
+            plans_by_output[output_id] = plan
+            digests_by_output[output_id] = plan.review_plan_digest
+        receipt_status = "closed" if receipt_errors else "complete"
         package = self.review_merger.build_package(
             job_id=generation_result.creative_job.job_id,
             project_id=project_id,
             resolutions=resolutions,
             inspections=inspections,
+            review_evidence_plans=plans_by_output,
+            review_evidence_plan_digests=digests_by_output,
+            review_evidence_receipt_status=receipt_status,
+            review_evidence_receipt_errors=tuple(dict.fromkeys(receipt_errors)),
             max_attempts=self._visual_auto_retry_max_attempts(generate_request),
         )
+        real_pixel_review = (
+            package.review_evidence_receipt_status == "complete"
+            and any(
+                inspection.verification_state == "verified"
+                and bool(inspection.evidence.get("provider_pixel_result_certified"))
+                for inspection in inspections
+            )
+        )
+        package = package.model_copy(update={"real_pixel_review": real_pixel_review})
         package_payload = package.model_dump(mode="json")
         metadata = dict(generation_result.metadata)
         shared_capabilities = dict(metadata.get("shared_capabilities") or {})
@@ -4998,114 +5060,10 @@ class V3ProductApiService:
         continues to expose only its safe review/provider summaries.
         """
 
-        candidate_records: list[dict[str, Any]] = []
-        resolution_metadata = resolution.metadata if isinstance(getattr(resolution, "metadata", None), dict) else {}
-        direct_candidate = resolution_metadata.get("candidate_metadata")
-        if isinstance(direct_candidate, dict):
-            candidate_records.append(direct_candidate)
-        asset_metadata = resolution_metadata.get("asset_metadata")
-        if isinstance(asset_metadata, dict):
-            candidate_candidate = asset_metadata.get("candidate_metadata")
-            if isinstance(candidate_candidate, dict):
-                candidate_records.append(candidate_candidate)
-        output_record = resolution_metadata.get("output_record")
-        if isinstance(output_record, dict):
-            output_metadata = output_record.get("metadata")
-            if isinstance(output_metadata, dict):
-                candidate_records.append(output_metadata)
-
-        admitted_records: list[dict[str, Any]] = []
-        for candidate_metadata in candidate_records:
-            audit = candidate_metadata.get("reference_input_execution")
-            if not isinstance(audit, dict):
-                continue
-            if str(audit.get("admission_outcome") or "").lower() != "admitted":
-                continue
-            if str(audit.get("operation_outcome") or "").lower() != "pixels_received":
-                continue
-            if (self._safe_int(audit.get("reference_count"), default=0) or 0) <= 0:
-                continue
-            admitted_records.append(candidate_metadata)
-
-        if not admitted_records:
-            return {}
-
-        source_ids = self._dedupe_strings(
-            source_id
-            for candidate_metadata in admitted_records
-            for source_id in (
-                candidate_metadata.get("reference_truth_source_ids")
-                or candidate_metadata.get("reference_asset_ids")
-                or []
-            )
-        )
-        job_upload_ids = set(self._dedupe_strings(record.request.uploaded_asset_ids))
-        admitted_source_ids = [asset_id for asset_id in source_ids if asset_id in job_upload_ids]
-        frozen_anchor_references = dict(record.request.metadata or {}).get(
-            "professional_anchor_reference_assets"
-        )
-        frozen_anchor_references = (
-            [dict(item) for item in frozen_anchor_references if isinstance(item, dict)]
-            if isinstance(frozen_anchor_references, list)
-            else []
-        )
-        frozen_anchor_ids = {
-            str(item.get("asset_id") or "").strip()
-            for item in frozen_anchor_references
-            if str(item.get("asset_id") or "").strip()
-        }
-        admitted_output_ids = [source_id for source_id in source_ids if source_id in frozen_anchor_ids]
-        if not admitted_source_ids and not admitted_output_ids:
-            return {
-                "review_reference_evidence_required": True,
-                "review_reference_evidence_available": False,
-            }
-
-        review_assets: list[dict[str, Any]] = []
-        for asset in self.asset_store.resolve_uploaded_assets(admitted_source_ids):
-            if asset.asset_id not in job_upload_ids or not asset.file_path:
-                continue
-            path = Path(asset.file_path)
-            if not path.is_file():
-                continue
-            review_assets.append(
-                {
-                    "asset_id": asset.asset_id,
-                    "role": asset.role.value if asset.role else None,
-                    "source_type": "uploaded",
-                    "use_policy": "admitted_generation_reference",
-                    "file_path": str(path),
-                    "mime_type": asset.mime_type,
-                }
-            )
-        metadata: dict[str, Any] = {
-            "review_reference_evidence_required": True,
-            "review_reference_evidence_available": bool(review_assets or admitted_output_ids),
-        }
-        if review_assets:
-            metadata["uploaded_assets"] = review_assets
-        selected_review_assets: list[dict[str, Any]] = []
-        for output_id in admitted_output_ids:
-            output = self.output_store.get_output(output_id)
-            path = Path(output.file_path) if output is not None and output.file_path else None
-            if output is None or path is None or not path.is_file():
-                continue
-            selected_review_assets.append(
-                {
-                    "asset_id": output.output_id,
-                    "output_id": output.output_id,
-                    "role": "face_reference",
-                    "source_type": "selected_output",
-                    "use_policy": "admitted_generation_reference",
-                    "file_path": str(path),
-                    "mime_type": output.mime_type,
-                }
-            )
-        if admitted_output_ids and len(selected_review_assets) != len(admitted_output_ids):
-            metadata["review_reference_evidence_available"] = False
-        if selected_review_assets:
-            metadata["reference_assets"] = selected_review_assets
-        return metadata
+        return ExactReviewEvidenceResolver(
+            asset_store=self.asset_store,
+            output_store=self.output_store,
+        ).resolve(record=record, resolution=resolution)
 
     @staticmethod
     def _frozen_output_review_contracts_by_asset_id(
@@ -8456,6 +8414,29 @@ class V3ProductApiService:
         """
 
         package = result.metadata.get("post_generation_review_package")
+        receipt_status = (
+            str(package.get("review_evidence_receipt_status") or "").strip().lower()
+            if isinstance(package, dict) and "review_evidence_receipt_status" in package
+            else None
+        )
+        if receipt_status is not None and receipt_status != "complete":
+            # A retained review package is an authoritative receipt boundary.
+            # Its generated records remain append-only, but a partial, malformed,
+            # or explicitly closed receipt cannot authorize public delivery.
+            inspections = package.get("inspections") if isinstance(package, dict) else []
+            inspected_count = len([item for item in inspections if isinstance(item, dict)])
+            return (
+                {
+                    "final_delivery_status": "withheld_review_failure",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": False,
+                    "reviewed_output_count": inspected_count,
+                    "final_delivery_output_count": 0,
+                    "delivery_gate_applies": True,
+                },
+                set(),
+                set(),
+            )
         inspections = package.get("inspections") if isinstance(package, dict) else []
         inspections = [dict(item) for item in inspections if isinstance(item, dict)]
         real_review_attempted = any(
