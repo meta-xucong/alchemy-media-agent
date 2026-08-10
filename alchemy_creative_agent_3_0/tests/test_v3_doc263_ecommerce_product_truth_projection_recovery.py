@@ -788,7 +788,10 @@ def test_doc263_product_api_issues_projection_from_current_project_pool_and_brai
         assert projections[output_index]["admission_binding_digest"] == admission["source_binding_digest"]
 
 
-def test_doc263_tampered_server_upload_authorization_receipt_closes_before_planning(tmp_path) -> None:
+def test_doc263_tampered_server_upload_authorization_receipt_closes_before_planning(
+    tmp_path,
+    monkeypatch,
+) -> None:
     from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
     from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
@@ -820,15 +823,35 @@ def test_doc263_tampered_server_upload_authorization_receipt_closes_before_plann
             "use_policy": "product",
         },
     )
+    calls = {"plan": 0, "dispatch": 0}
 
-    with pytest.raises(ValueError, match="product_truth_admission_invalid"):
-        handlers.post_project_job(
-            project["project_id"],
-            {
-                "template_id": "ecommerce_template",
-                "user_input": "Create from the current product original.",
-            },
-        )
+    def _unexpected_plan(*_args, **_kwargs):
+        calls["plan"] += 1
+        raise AssertionError("Tampered product evidence must close before planning.")
+
+    def _unexpected_dispatch(*_args, **_kwargs):
+        calls["dispatch"] += 1
+        raise AssertionError("Tampered product evidence must close before dispatch.")
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", _unexpected_plan)
+    monkeypatch.setattr(handlers.service.scenario_runtime, "generate_job", _unexpected_dispatch)
+
+    status = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create from the current product original.",
+        },
+    )
+
+    assert status["status"] == "blocked"
+    assert status["metadata"]["current_operation"] == {
+        "state": "needs_input",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "review_product_inputs"}],
+    }
+    assert calls == {"plan": 0, "dispatch": 0}
 
 
 def test_doc263_does_not_change_ordinary_reference_materialization(tmp_path) -> None:

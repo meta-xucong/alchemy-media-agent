@@ -580,6 +580,10 @@ class ProductJobRecord:
         return result.creative_job.job_id
 
 
+class EcommerceProductInputNeedsAttention(ValueError):
+    """Closed E-Commerce admission outcome that must never reach Brain planning."""
+
+
 class InMemoryProductJobStore:
     """Small deterministic job store for V3 product API tests and adapters."""
 
@@ -1249,20 +1253,28 @@ class V3ProductApiService:
                 for item in project_ecommerce_canonical_product_asset_ids
                 if str(item).strip()
             ]
-            if not canonical_ids or len(canonical_ids) != len(set(canonical_ids)):
+            if len(canonical_ids) != len(set(canonical_ids)):
                 raise ValueError("product_truth_admission_invalid")
-            # Project Mode is the authority for the active canonical pool.
-            # Replace any browser/API upload selector before planning so
-            # downstream context and admission construction cannot read a
-            # caller-owned list as product truth.
-            create_request = create_request.model_copy(
-                update={"uploaded_asset_ids": canonical_ids}
-            )
-            create_request.metadata = {
-                **dict(create_request.metadata or {}),
-                "doc263_project_reference_authority": "v3_project_mode",
-                "doc263_project_canonical_product_asset_ids": canonical_ids,
-            }
+            if canonical_ids:
+                # Project Mode is the authority for the active canonical pool.
+                # Replace any browser/API upload selector before planning so
+                # downstream context and admission construction cannot read a
+                # caller-owned list as product truth.
+                create_request = create_request.model_copy(
+                    update={"uploaded_asset_ids": canonical_ids}
+                )
+                create_request.metadata = {
+                    **dict(create_request.metadata or {}),
+                    "doc263_project_reference_authority": "v3_project_mode",
+                    "doc263_project_canonical_product_asset_ids": canonical_ids,
+                }
+        try:
+            # The binding snapshot derives a stable job identity through the
+            # runtime request envelope. Close legacy product evidence before
+            # that path can reach any Brain planning seam.
+            self._prepare_ecommerce_creative_context(create_request)
+        except EcommerceProductInputNeedsAttention:
+            return self._ecommerce_needs_input_status(create_request)
         if project_visual_asset_binding_service is not None:
             self._bind_project_visual_asset_library_snapshot(
                 create_request,
@@ -1487,7 +1499,10 @@ class V3ProductApiService:
             create_request,
             trusted_photography_continuation=trusted_photography_continuation,
         )
-        self._prepare_ecommerce_creative_context(create_request)
+        try:
+            self._prepare_ecommerce_creative_context(create_request)
+        except EcommerceProductInputNeedsAttention:
+            return self._ecommerce_needs_input_status(create_request)
         runtime_result = self.scenario_runtime.plan_job(
             self._runtime_request_payload(
                 create_request,
@@ -1570,6 +1585,31 @@ class V3ProductApiService:
             capability_run=runtime_result.capability_run,
             balance_estimate=estimate,
             warnings=list(runtime_result.warnings),
+        )
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return self._status_from_record(record)
+
+    def _ecommerce_needs_input_status(self, request: CreateCreativeJobRequest) -> ProductJobStatus:
+        """Persist one terminal, public-safe E-Commerce receipt before planning."""
+
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "doc264_ecommerce_product_input_needs_attention": True,
+        }
+        request.metadata.pop("supersedes_job_id", None)
+        job_id = stable_id(
+            "job",
+            request.user_input,
+            request.effective_brand_id,
+            "ecommerce",
+            request.metadata.get("v3_job_instance_id"),
+        )
+        record = ProductJobRecord(
+            request=request,
+            status=ProductJobStatusValue.BLOCKED,
+            job_id_value=job_id,
+            balance_estimate=self._empty_balance_estimate(),
         )
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
@@ -8773,6 +8813,15 @@ class V3ProductApiService:
 
     @staticmethod
     def _doc263_terminal_status_metadata(record: ProductJobRecord) -> dict[str, Any]:
+        if dict(record.request.metadata or {}).get("doc264_ecommerce_product_input_needs_attention") is True:
+            return {
+                "current_operation": {
+                    "state": "needs_input",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [{"id": "review_product_inputs"}],
+                }
+            }
         scenario_id = (
             record.scenario_resolution.manifest.scenario_id
             if record.scenario_resolution
@@ -11895,7 +11944,12 @@ class V3ProductApiService:
             or canonical_project_ids != list(request.uploaded_asset_ids)
             or len(canonical_project_ids) != len(set(canonical_project_ids))
         ):
-            raise ValueError("product_truth_admission_invalid")
+            raise EcommerceProductInputNeedsAttention()
+        if trusted_project_ecommerce:
+            # Project Mode owns this ordered pool. Keep every server-owned ID
+            # present so missing or drifted records close in admission rather
+            # than disappearing into the no-product fallback.
+            return list(canonical_project_ids)
         resolved_assets = self.asset_store.resolve_uploaded_assets(canonical_project_ids)
         product_ids: list[str] = []
         for asset in resolved_assets:
@@ -11905,8 +11959,10 @@ class V3ProductApiService:
             upload_status = str(asset_metadata.get("upload_status") or "").strip().lower()
             if channel == "product_truth" or role == "product_reference":
                 if upload_status and upload_status != "ready":
-                    raise ValueError("professional_ecommerce_product_truth_asset_not_ready")
+                    raise EcommerceProductInputNeedsAttention()
                 if not asset.file_path:
+                    if trusted_project_ecommerce:
+                        raise EcommerceProductInputNeedsAttention()
                     raise ValueError("professional_ecommerce_product_truth_asset_not_materialized")
                 product_ids.append(asset.asset_id)
         return list(dict.fromkeys(product_ids))
@@ -11925,23 +11981,30 @@ class V3ProductApiService:
         for asset_id in product_ids:
             record = self.asset_store.get_upload(asset_id)
             if record is None or record.status != V3AssetUploadStatusValue.READY:
-                raise ValueError("product_truth_admission_invalid")
+                raise EcommerceProductInputNeedsAttention()
             role = str(record.role or "").strip().lower()
             if role != "product_reference":
-                raise ValueError("product_truth_admission_invalid")
+                raise EcommerceProductInputNeedsAttention()
             path = Path(str(record.file_path or ""))
             expected_digest = str(record.content_sha256 or "").strip().lower()
             if not path.is_file() or not expected_digest:
-                raise ValueError("product_truth_admission_invalid")
+                raise EcommerceProductInputNeedsAttention()
             try:
                 actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             except OSError as exc:
-                raise ValueError("product_truth_admission_invalid") from exc
+                raise EcommerceProductInputNeedsAttention() from exc
             if actual_digest != expected_digest:
-                raise ValueError("product_truth_admission_invalid")
-            receipt = record.metadata.get("upload_authorization_receipt")
-            if not isinstance(receipt, dict):
-                raise ValueError("product_truth_admission_invalid")
+                raise EcommerceProductInputNeedsAttention()
+            record_metadata = dict(record.metadata or {})
+            receipt = record_metadata.get("upload_authorization_receipt")
+            if receipt is None:
+                receipt = self._reattest_legacy_ecommerce_product_upload(
+                    record=record,
+                    actual_digest=actual_digest,
+                    role=role,
+                )
+                record = self.asset_store.get_upload(asset_id) or record
+                record_metadata = dict(record.metadata or {})
             expected_receipt_keys = {
                 "schema_version",
                 "authority",
@@ -11953,8 +12016,8 @@ class V3ProductApiService:
                 "rights_basis",
                 "receipt_digest",
             }
-            if set(receipt) != expected_receipt_keys:
-                raise ValueError("product_truth_admission_invalid")
+            if not isinstance(receipt, dict) or set(receipt) != expected_receipt_keys:
+                raise EcommerceProductInputNeedsAttention()
             consent_reference = str(receipt.get("consent_basis") or "").strip()
             rights_reference = str(receipt.get("rights_basis") or "").strip()
             receipt_digest = str(receipt.get("receipt_digest") or "").strip().lower()
@@ -11983,7 +12046,20 @@ class V3ProductApiService:
                 or not rights_reference
                 or receipt_digest != expected_receipt_digest
             ):
-                raise ValueError("product_truth_admission_invalid")
+                raise EcommerceProductInputNeedsAttention()
+            legacy_facts = record_metadata.get("legacy_upload_authorization_facts")
+            if isinstance(legacy_facts, dict):
+                expected_marker = {
+                    "schema_version": "doc264_legacy_product_reference_reattestation_v1",
+                    "authority": "v3_product_api",
+                    "asset_id": asset_id,
+                    "content_sha256": actual_digest,
+                    "persisted_role": "product_reference",
+                    "reference_channel": "product_truth",
+                    "migration_source": "v3_legacy_upload_authorization_facts_v1",
+                }
+                if record_metadata.get("legacy_product_reference_reattestation") != expected_marker:
+                    raise EcommerceProductInputNeedsAttention()
             sources.append(
                 ProductTruthSource(
                     asset_id=asset_id,
@@ -12018,6 +12094,82 @@ class V3ProductApiService:
             sources=sources,
             product_truth_plan_digest=plan_digest,
         )
+
+    def _reattest_legacy_ecommerce_product_upload(
+        self,
+        *,
+        record: V3UploadedAssetRecord,
+        actual_digest: str,
+        role: str,
+    ) -> dict[str, Any]:
+        """Issue one normal receipt only from the closed persisted legacy fact record."""
+
+        facts = dict(record.metadata or {}).get("legacy_upload_authorization_facts")
+        expected_fact_keys = {
+            "schema_version",
+            "authority",
+            "asset_id",
+            "content_sha256",
+            "persisted_role",
+            "reference_channel",
+            "consent_basis",
+            "rights_basis",
+        }
+        if not isinstance(facts, dict) or set(facts) != expected_fact_keys:
+            raise EcommerceProductInputNeedsAttention()
+        consent_reference = str(facts.get("consent_basis") or "").strip()
+        rights_reference = str(facts.get("rights_basis") or "").strip()
+        if (
+            facts.get("schema_version") != "v3_legacy_upload_authorization_facts_v1"
+            or facts.get("authority") != "v3_uploaded_asset_store"
+            or str(facts.get("asset_id") or "").strip() != record.asset_id
+            or str(facts.get("content_sha256") or "").strip().lower() != actual_digest
+            or str(facts.get("persisted_role") or "").strip().lower() != role
+            or role != "product_reference"
+            or str(facts.get("reference_channel") or "").strip().lower() != "product_truth"
+            or not consent_reference
+            or not rights_reference
+            or record.status != V3AssetUploadStatusValue.READY
+        ):
+            raise EcommerceProductInputNeedsAttention()
+        receipt_payload = "|".join(
+            (
+                "v3_upload_authorization_receipt_v1",
+                record.asset_id,
+                actual_digest,
+                "product_reference",
+                "product_truth",
+                consent_reference,
+                rights_reference,
+            )
+        )
+        receipt = {
+            "schema_version": "v3_upload_authorization_receipt_v1",
+            "authority": "v3_uploaded_asset_store",
+            "asset_id": record.asset_id,
+            "content_sha256": actual_digest,
+            "persisted_role": "product_reference",
+            "reference_channel": "product_truth",
+            "consent_basis": consent_reference,
+            "rights_basis": rights_reference,
+            "receipt_digest": hashlib.sha256(receipt_payload.encode("utf-8")).hexdigest(),
+        }
+        marker = {
+            "schema_version": "doc264_legacy_product_reference_reattestation_v1",
+            "authority": "v3_product_api",
+            "asset_id": record.asset_id,
+            "content_sha256": actual_digest,
+            "persisted_role": "product_reference",
+            "reference_channel": "product_truth",
+            "migration_source": "v3_legacy_upload_authorization_facts_v1",
+        }
+        metadata = {
+            **dict(record.metadata or {}),
+            "upload_authorization_receipt": receipt,
+            "legacy_product_reference_reattestation": marker,
+        }
+        self.asset_store._save_record(record.model_copy(update={"metadata": metadata}))  # noqa: SLF001
+        return receipt
 
     def _bind_ecommerce_physical_projections(
         self,

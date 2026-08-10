@@ -4530,7 +4530,7 @@ function renderV3EcommerceProjectViewReferences(project, ecommerceView) {
         <div class="v3-reference-placeholder">人物</div>
         <div>
           <span class="v3-reference-origin">锁定人物资产</span>
-          <strong>${escapeHtml(item.asset_type || "people")}</strong>
+          <strong>${escapeHtml(item.display_name || "已绑定人物资产")}</strong>
           <p>${escapeHtml(v3ShortText(item.visual_asset_id || item.selected_version_id || "已绑定当前启用版本", 68))}</p>
         </div>
       `;

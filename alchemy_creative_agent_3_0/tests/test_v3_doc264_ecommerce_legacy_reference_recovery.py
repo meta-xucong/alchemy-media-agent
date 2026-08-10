@@ -323,7 +323,6 @@ def _persist_pre_doc263_blocked_job(handlers: V3ProductRouteHandlers, job_id: st
         and not key.startswith("professional_ecommerce_product_truth")
         and key != "professional_ecommerce_contract_authority"
     }
-    metadata["legacy_job_schema"] = "pre_doc263_frozen_product_inputs_v1"
     record.status = ProductJobStatusValue.BLOCKED
     record.request.metadata = metadata
     record.warnings.append(
@@ -578,7 +577,14 @@ def test_doc264_invalid_legacy_facts_close_before_brain_or_provider_with_one_san
     assert "product_truth_admission_invalid" not in public_json
     assert "browser-forged" not in public_json
     assert calls == {"plan": 0, "dispatch": 0}
-    loaded = handlers.get_project(project["project_id"])["project"]
+    project_response = handlers.get_project(project["project_id"])
+    assert project_response["metadata"]["current_operation"] == {
+        "state": "needs_input",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "review_product_inputs"}],
+    }
+    loaded = project_response["project"]
     assert loaded["job_ids"][0] == historical["job_id"]
     assert blocked["job_id"] != historical["job_id"]
     historical_record = handlers.service.get_job_record(historical["job_id"])
@@ -597,6 +603,164 @@ def test_doc264_invalid_legacy_facts_close_before_brain_or_provider_with_one_san
         for job_id in loaded["job_ids"]
     )
     assert "supersedes_job_id" not in blocked["metadata"]
+
+
+def test_doc264_tampered_standard_receipt_closes_project_mode_before_brain_or_provider(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    handlers, _catalog = _handlers(tmp_path)
+    product_id = _ready_product_upload(
+        handlers,
+        filename="tampered-standard-receipt.png",
+        color=(95, 125, 165),
+    )
+    project = _project(handlers)
+    handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": product_id,
+            "source_type": "uploaded",
+            "use_policy": "product",
+        },
+    )
+    record = handlers.service.get_uploaded_asset(product_id)
+    assert record is not None
+    receipt = dict(record.metadata["upload_authorization_receipt"])
+    handlers.service.asset_store._save_record(  # noqa: SLF001
+        record.model_copy(
+            update={
+                "metadata": {
+                    **dict(record.metadata),
+                    "upload_authorization_receipt": {
+                        **receipt,
+                        "receipt_digest": "tampered-standard-receipt",
+                    },
+                }
+            }
+        )
+    )
+    calls = _forbid_planning_and_dispatch(monkeypatch, handlers)
+
+    blocked = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Generate using my current product original.",
+            "metadata": {"idempotency_key": "doc264-tampered-standard-receipt"},
+        },
+    )
+
+    assert blocked["status"] == "blocked"
+    assert blocked["metadata"]["current_operation"] == {
+        "state": "needs_input",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "review_product_inputs"}],
+    }
+    assert calls == {"plan": 0, "dispatch": 0}
+    assert "product_truth_admission_invalid" not in json.dumps(blocked, sort_keys=True)
+    project_response = handlers.get_project(project["project_id"])
+    assert project_response["metadata"]["current_operation"] == blocked["metadata"]["current_operation"]
+    assert all(
+        handlers.service.get_job_record(job_id).status
+        not in {
+            ProductJobStatusValue.PLANNED,
+            ProductJobStatusValue.GENERATING,
+            ProductJobStatusValue.FINALIZING,
+        }
+        for job_id in project_response["project"]["job_ids"]
+    )
+
+
+def test_doc264_active_product_association_with_role_drift_closes_before_text_to_image(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    handlers, _catalog = _handlers(tmp_path)
+    product_id = _ready_product_upload(
+        handlers,
+        filename="role-drifted-product.png",
+        color=(80, 145, 170),
+    )
+    project = _project(handlers)
+    handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": product_id,
+            "source_type": "uploaded",
+            "use_policy": "product",
+        },
+    )
+    record = handlers.service.get_uploaded_asset(product_id)
+    assert record is not None
+    handlers.service.asset_store._save_record(  # noqa: SLF001
+        record.model_copy(update={"role": "face_reference"})
+    )
+    calls = _forbid_planning_and_dispatch(monkeypatch, handlers)
+
+    blocked = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Generate from the locked product original.",
+            "metadata": {"idempotency_key": "doc264-role-drift"},
+        },
+    )
+
+    assert blocked["status"] == "blocked"
+    assert blocked["metadata"]["current_operation"] == {
+        "state": "needs_input",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "review_product_inputs"}],
+    }
+    assert blocked["metadata"]["ecommerce_text_to_image_fallback"] is False
+    assert blocked["metadata"]["has_product_reference"] is True
+    assert calls == {"plan": 0, "dispatch": 0}
+
+
+def test_doc264_active_product_association_with_missing_upload_closes_before_text_to_image(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    handlers, _catalog = _handlers(tmp_path)
+    product_id = _ready_product_upload(
+        handlers,
+        filename="missing-product-record.png",
+        color=(120, 85, 155),
+    )
+    project = _project(handlers)
+    handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": product_id,
+            "source_type": "uploaded",
+            "use_policy": "product",
+        },
+    )
+    assert handlers.service.asset_store.delete_upload(product_id) is True
+    calls = _forbid_planning_and_dispatch(monkeypatch, handlers)
+
+    blocked = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Generate from the locked product original.",
+            "metadata": {"idempotency_key": "doc264-missing-product-record"},
+        },
+    )
+
+    assert blocked["status"] == "blocked"
+    assert blocked["metadata"]["current_operation"] == {
+        "state": "needs_input",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "review_product_inputs"}],
+    }
+    assert blocked["metadata"]["ecommerce_text_to_image_fallback"] is False
+    assert blocked["metadata"]["has_product_reference"] is True
+    assert calls == {"plan": 0, "dispatch": 0}
 
 
 def test_doc264_no_product_reference_ecommerce_keeps_text_to_image_path(tmp_path) -> None:
@@ -702,11 +866,19 @@ def test_doc264_unrelated_blocked_job_and_browser_history_flags_cannot_request_s
     assert old_record is not None
     old_record.status = ProductJobStatusValue.BLOCKED
     old_record.request.metadata = {
-        **dict(old_record.request.metadata),
+        key: value
+        for key, value in dict(old_record.request.metadata).items()
+        if not key.startswith("doc263_")
+        and not key.startswith("professional_ecommerce_product_truth")
+        and key != "professional_ecommerce_contract_authority"
+    }
+    old_record.request.metadata.update(
+        {
         "historical_reference_projection": {"failure_code": "browser-claimed-legacy"},
         "legacy_reference_projection": {"request_supersession": True},
-    }
-    old_record.warnings.append("browser-claimed legacy failure must remain history only")
+        }
+    )
+    old_record.warnings = ["provider delivery unavailable; unrelated failure remains history only"]
     old_record.lifecycle = handlers.service._build_lifecycle(old_record)  # noqa: SLF001
     handlers.service.job_store.save(old_record)
 

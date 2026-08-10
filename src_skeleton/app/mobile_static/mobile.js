@@ -5023,7 +5023,7 @@ function renderMobileV3EcommerceProjectViewReferences(project, ecommerceView) {
         <div class="v3-mobile-reference-thumb"><span>人物</span></div>
         <div class="v3-mobile-reference-copy">
           <span class="v3-mobile-reference-origin">锁定人物资产</span>
-          <strong>${escapeHtml(item.asset_type || "people")}</strong>
+          <strong>${escapeHtml(item.display_name || "已绑定人物资产")}</strong>
           <small>${escapeHtml(mobileV3ShortText(item.visual_asset_id || item.selected_version_id || "已绑定当前启用版本", 56))}</small>
         </div>
       `;

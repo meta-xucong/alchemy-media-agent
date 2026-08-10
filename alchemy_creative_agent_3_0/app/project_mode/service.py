@@ -93,6 +93,15 @@ from .templates import ProjectTemplateManifest, ProjectTemplateRegistry
 
 ECOMMERCE_PRODUCT_UPLOAD_ROLES = {"product_reference", "subject_reference"}
 PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
+_ECOMMERCE_IGNORED_CLIENT_METADATA = frozenset(
+    {
+        "current_reference_binding_digest",
+        "supersedes_job_id",
+        "historical_reference_projection",
+        "legacy_reference_projection",
+        "legacy_upload_authorization_facts",
+    }
+)
 
 
 class EcommerceSlotContinuationError(ValueError):
@@ -761,6 +770,15 @@ class V3ProjectModeService:
             )
         ecommerce_text_to_image_fallback = False
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
+            job_request = job_request.model_copy(
+                update={
+                    "metadata": {
+                        key: value
+                        for key, value in dict(job_request.metadata or {}).items()
+                        if key not in _ECOMMERCE_IGNORED_CLIENT_METADATA
+                    }
+                }
+            )
             requested_product_ids = [
                 str(item).strip()
                 for item in job_request.uploaded_asset_ids
@@ -792,7 +810,7 @@ class V3ProjectModeService:
             )
             if existing is not None:
                 return existing
-            supersedes_job_id = self._reference_projection_drift_superseded_job_id(project)
+            supersedes_job_id = self._ecommerce_superseded_job_id(project)
             job_request = job_request.model_copy(
                 update={
                     "metadata": {
@@ -817,12 +835,13 @@ class V3ProjectModeService:
             project.allowed_template_ids.append(template_manifest.template_id)
         project.primary_template_id = template_manifest.template_id
         user_input = job_request.user_input or project.user_goal
-        self._persist_job_uploaded_references(
-            project,
-            uploaded_asset_ids,
-            template_id=template_manifest.template_id,
-            user_input=user_input,
-        )
+        if template_manifest.template_id != ECOMMERCE_TEMPLATE_ID:
+            self._persist_job_uploaded_references(
+                project,
+                uploaded_asset_ids,
+                template_id=template_manifest.template_id,
+                user_input=user_input,
+            )
         advanced_reference_controls = self._advanced_reference_controls_for_template(
             project=project,
             request=job_request,
@@ -928,6 +947,12 @@ class V3ProjectModeService:
             if self.project_visual_asset_binding_service is not None
             else self.product_service.create_job(create_payload)
         )
+        if (
+            template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
+            and isinstance(status.metadata.get("current_operation"), dict)
+            and status.metadata["current_operation"].get("state") == "needs_input"
+        ):
+            supersedes_job_id = None
         bound_context_snapshot = status.metadata.get("project_context_snapshot")
         if not isinstance(bound_context_snapshot, dict):
             bound_context_snapshot = context_snapshot
@@ -2634,9 +2659,12 @@ class V3ProjectModeService:
             else:
                 invalid_request_ids.append(clean_id)
 
-        for asset_id in self._project_product_reference_candidates(project):
-            if self._is_ready_product_upload(asset_id):
-                product_asset_ids.append(asset_id)
+        # An active server-owned product association is evidence that the
+        # project has product originals, even when its upload record is now
+        # missing or has role/readiness drift. Preserve the ID so Product API
+        # can close the exact admission before planning instead of silently
+        # routing the project into text-to-image.
+        product_asset_ids.extend(self._project_product_reference_candidates(project))
         product_asset_ids.extend(request_product_ids)
 
         if invalid_request_ids:
@@ -2644,19 +2672,37 @@ class V3ProjectModeService:
         return self._dedupe_uploaded_asset_ids_by_content(product_asset_ids)
 
     def _project_product_reference_candidates(self, project: ProjectRecord) -> list[str]:
-        candidate_ids = [
-            reference.asset_ref_id
+        active_product_references = [
+            reference
             for reference in project.reference_assets
             if reference.status == ProjectReferenceStatus.ACTIVE
             and reference.source_type == ProjectReferenceSourceType.UPLOADED
             and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
         ]
-        legacy_ids = [
-            str(item.get("asset_id") or "").strip()
-            for item in project.uploaded_asset_refs
-            if str(item.get("role") or "").strip() in PROJECT_PRODUCT_REFERENCE_ROLES
-            and str(item.get("status") or "").strip().lower() != ProjectReferenceStatus.INACTIVE.value
-        ]
+        candidate_ids = [reference.asset_ref_id for reference in active_product_references]
+        active_reference_ids = {reference.reference_id for reference in active_product_references}
+        legacy_ids: list[str] = []
+        for item in project.uploaded_asset_refs:
+            asset_id = str(item.get("asset_id") or "").strip()
+            if (
+                not asset_id
+                or str(item.get("role") or "").strip() not in PROJECT_PRODUCT_REFERENCE_ROLES
+                or str(item.get("status") or "").strip().lower() == ProjectReferenceStatus.INACTIVE.value
+            ):
+                continue
+            reference_id = str(item.get("reference_id") or "").strip()
+            source = str(item.get("source") or "").strip().lower()
+            if reference_id in active_reference_ids:
+                legacy_ids.append(asset_id)
+                continue
+            # Project-create selectors are only historical evidence when
+            # their durable upload still exists. A fake selector must retain
+            # the established no-product fallback; legacy mirrors without
+            # that source remain server-owned associations and are preserved
+            # for admission to close if their upload is gone.
+            if source == "project_create" and self.product_service.get_uploaded_asset(asset_id) is None:
+                continue
+            legacy_ids.append(asset_id)
         return self._dedupe_uploaded_asset_ids_by_content(
             [asset_id for asset_id in dict.fromkeys([*candidate_ids, *legacy_ids]) if asset_id]
         )
@@ -2767,6 +2813,40 @@ class V3ProjectModeService:
                 == str(project.project_id).strip()
                 and receipt.get("failure_code") == "reference_projection_drift"
                 and receipt.get("source") == "provider_pre_dispatch_contract"
+            ):
+                return record.job_id
+        return None
+
+    def _ecommerce_superseded_job_id(self, project: ProjectRecord) -> str | None:
+        drift_job_id = self._reference_projection_drift_superseded_job_id(project)
+        if drift_job_id:
+            return drift_job_id
+        current_product_asset_ids = set(self._project_product_reference_candidates(project))
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None or record.status not in {
+                ProductJobStatusValue.BLOCKED,
+                ProductJobStatusValue.FAILED,
+            }:
+                continue
+            metadata = dict(record.request.metadata or {})
+            frozen_product_asset_ids = [
+                str(asset_id).strip()
+                for asset_id in record.request.uploaded_asset_ids
+                if str(asset_id).strip()
+            ]
+            if (
+                str(metadata.get("project_id") or "").strip() != project.project_id
+                or str(metadata.get("template_id") or "").strip() != ECOMMERCE_TEMPLATE_ID
+                or "doc263_project_canonical_product_asset_ids" in metadata
+                or "professional_ecommerce_product_truth_admission" in metadata
+                or not frozen_product_asset_ids
+                or not set(frozen_product_asset_ids).issubset(current_product_asset_ids)
+            ):
+                continue
+            if any(
+                str(warning or "").strip().lower().startswith("product_truth_admission_invalid:")
+                for warning in record.warnings
             ):
                 return record.job_id
         return None
@@ -5447,6 +5527,7 @@ class V3ProjectModeService:
                             "visual_asset_id": str(getattr(binding, "visual_asset_id", "") or ""),
                             "selected_version_id": str(getattr(binding, "selected_version_id", "") or ""),
                             "asset_type": str(getattr(binding, "asset_type", "") or ""),
+                            "display_name": self._ecommerce_locked_identity_display_name(binding),
                         }
                     )
 
@@ -5472,6 +5553,19 @@ class V3ProjectModeService:
                 },
             },
         }
+
+    def _ecommerce_locked_identity_display_name(self, binding: Any) -> str:
+        binding_service = self.project_visual_asset_binding_service
+        catalog = getattr(binding_service, "catalog", None)
+        if catalog is not None:
+            asset = catalog.get(
+                owner_scope=str(getattr(binding, "owner_scope", "") or ""),
+                visual_asset_id=str(getattr(binding, "visual_asset_id", "") or ""),
+            )
+            display_name = str(getattr(asset, "display_name", "") or "").strip()
+            if display_name:
+                return display_name
+        return "已绑定人物资产"
 
     @staticmethod
     def _ecommerce_public_history_output(item: dict[str, Any]) -> dict[str, Any]:
@@ -5518,6 +5612,18 @@ class V3ProjectModeService:
         if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
             return None
         for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if (
+                record is not None
+                and dict(record.request.metadata or {}).get("doc264_ecommerce_product_input_needs_attention")
+                is True
+            ):
+                return {
+                    "state": "needs_input",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [{"id": "review_product_inputs"}],
+                }
             try:
                 status = self.product_service.get_job(job_id)
             except Exception:
