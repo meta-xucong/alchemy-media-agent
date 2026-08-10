@@ -3379,6 +3379,22 @@ function persistMobileV3Caches() {
   }
 }
 
+function mobileV3ProjectWithResponseMetadata(project, payload) {
+  if (!project || !payload?.metadata || typeof payload.metadata !== "object") return project;
+  const metadata = payload.metadata;
+  const hasEcommerceView = metadata.ecommerce_project_view && typeof metadata.ecommerce_project_view === "object";
+  const hasCurrentOperation = Object.prototype.hasOwnProperty.call(metadata, "current_operation");
+  if (!hasEcommerceView && !hasCurrentOperation) return project;
+  const nextMetadata = { ...(project.metadata || {}) };
+  if (hasEcommerceView) nextMetadata.ecommerce_project_view = metadata.ecommerce_project_view;
+  if (hasCurrentOperation && metadata.current_operation && typeof metadata.current_operation === "object") {
+    nextMetadata.current_operation = metadata.current_operation;
+  } else if (hasCurrentOperation || hasEcommerceView) {
+    delete nextMetadata.current_operation;
+  }
+  return { ...project, metadata: nextMetadata };
+}
+
 async function loadMobileV3Projects({ silent = true, force = false } = {}) {
   if (mobileV3State.loading) return;
   if (mobileV3State.loaded && !force) {
@@ -3697,6 +3713,18 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
 function handleMobileV3Click(event) {
   if (event.target.closest("#mobileV3ShowFullPromptBtn")) {
     openMobileV3FullPrompt();
+    return;
+  }
+  const projectActionButton = event.target.closest("[data-mobile-v3-project-action]");
+  if (projectActionButton?.dataset.mobileV3ProjectAction === "continue_recovery") {
+    const project = mobileV3State.currentProject;
+    if (!project?.project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMobileV3Busy(false);
+    setMobileV3Progress("failed", "已打开编辑区。确认后点击生成才会创建新的续作。");
+    updateMobileV3Status("已打开恢复编辑区。确认原始商品图和需求后，再点击生成。");
+    openMobileSurface("v3-compose", projectActionButton);
     return;
   }
   const referenceActionButton = event.target.closest("[data-mobile-v3-reference-action]");
@@ -4170,7 +4198,7 @@ async function createMobileV3ProjectFromHome() {
         },
       },
     });
-    const project = payload.project || payload;
+    const project = mobileV3ProjectWithResponseMetadata(payload.project || payload, payload);
     mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== project.project_id)];
     mobileV3State.loaded = true;
     renderMobileV3ProjectCards();
@@ -4646,6 +4674,7 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   simplifyMobileV3ProjectHome();
   renderMobileV3ProjectMeta(project);
   renderMobileV3ProjectSnapshot(project);
+  renderMobileV3ProjectCurrentOperation(project);
   renderMobileV3ProjectOutputs(project);
   renderMobileV3PhotographyRoleBoard(mobileV3State.currentJob, project);
   renderMobileV3ReferenceBoard(project);
@@ -4667,7 +4696,7 @@ async function refreshMobileV3ProjectDetail(projectId) {
     mobileV3Request(`/projects/${encodeURIComponent(projectId)}/timeline`),
     mobileV3Request(`/project-outputs?limit=80&compact=true&project_id=${encodeURIComponent(projectId)}`),
   ]);
-  const project = projectPayload.project || projectPayload;
+  const project = mobileV3ProjectWithResponseMetadata(projectPayload.project || projectPayload, projectPayload);
   mobileV3State.currentProject = project;
   const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
   if (!templateId) throw new Error("项目类型还没有确认，无法安全继续生成");
@@ -4685,6 +4714,7 @@ async function refreshMobileV3ProjectDetail(projectId) {
   renderMobileV3ProjectCards();
   renderMobileV3ProjectMeta(project);
   renderMobileV3ProjectSnapshot(project);
+  renderMobileV3ProjectCurrentOperation(project);
   renderMobileV3ProjectOutputs(project);
   const latestJobId = Array.isArray(project?.job_ids) ? project.job_ids[project.job_ids.length - 1] : "";
   if (latestJobId) {
@@ -4866,9 +4896,188 @@ function renderMobileV3ProjectSnapshot(project = mobileV3State.currentProject) {
   });
 }
 
+function mobileV3ProjectCurrentOperation(project = mobileV3State.currentProject) {
+  const operation = project?.metadata?.current_operation;
+  return operation && typeof operation === "object" ? operation : null;
+}
+
+function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentProject) {
+  const node = document.querySelector("#mobileV3ProjectCurrentOperation");
+  if (!node) return;
+  const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
+  const operation = mobileV3ProjectCurrentOperation(project);
+  const failedNoDelivery = isEcommerce && operation?.state === "failed_no_delivery";
+  node.hidden = !failedNoDelivery;
+  node.innerHTML = "";
+  if (!failedNoDelivery) return;
+  setMobileV3Busy(false);
+  setMobileV3Progress("failed", "本次没有交付图片。项目原图和记录已保留，确认后可继续。");
+  node.innerHTML = `
+    <div>
+      <strong>这次暂时没有交付图片</strong>
+      <span>请先确认原始商品图和需求。继续只会打开编辑区，不会自动重新提交。</span>
+    </div>
+    <button class="button primary compact" type="button" data-mobile-v3-project-action="continue_recovery">继续</button>
+  `;
+}
+
+function renderMobileV3EcommerceProjectViewReferences(project, ecommerceView) {
+  const board = document.querySelector("#mobileV3ReferenceBoard");
+  if (!board) return;
+  const originalInputs = mobileV3EcommerceProjectViewItems(ecommerceView, "original_product_inputs");
+  const lockedIdentity = mobileV3EcommerceProjectViewItems(ecommerceView, "locked_person_identity");
+  const selectedDirections = mobileV3EcommerceProjectViewItems(ecommerceView, "selected_continuation_directions");
+  const history = mobileV3EcommerceProjectViewHistory(ecommerceView);
+  const historyCount = history.delivered_outputs.length + history.review_withheld_outputs.length + history.failed_attempts.length;
+  const totalCount = originalInputs.length + lockedIdentity.length + selectedDirections.length + historyCount;
+  setText("#mobileV3ReferenceCount", `原图 ${originalInputs.length} · 人物 ${lockedIdentity.length} · 成片 ${selectedDirections.length}`);
+  board.innerHTML = "";
+  board.classList.toggle("empty-v2-list", totalCount === 0);
+  if (!totalCount) {
+    board.textContent = "还没有原始商品图、人物资产、延续方向或复核记录。";
+    return;
+  }
+
+  const renderImageGroup = ({ key, title, description, refs, sourceKind }) => {
+    if (!refs.length) return;
+    const group = document.createElement("section");
+    group.className = `v3-mobile-reference-group ${escapeHtml(key)}`;
+    group.innerHTML = `
+      <div class="v3-mobile-reference-group-head">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(description)}</small>
+        </div>
+        <span>${refs.length} 张</span>
+      </div>
+      <div class="v3-mobile-reference-group-grid"></div>
+    `;
+    const grid = group.querySelector(".v3-mobile-reference-group-grid");
+    refs.forEach((item, index) => {
+      const ref = sourceKind === "selected_continuation_directions"
+        ? {
+            ...item,
+            source_type: "generated_selected",
+            asset_ref_id: item.output_id || item.asset_ref_id,
+            created_from_output_id: item.output_id,
+            created_from_job_id: item.job_id,
+            use_policy: "style",
+          }
+        : {
+            ...item,
+            source_type: "uploaded",
+            use_policy: "product",
+          };
+      const isGeneratedReference = sourceKind === "selected_continuation_directions";
+      const thumb = mobileV3ReferenceThumb(ref);
+      const referenceId = String(ref?.reference_id || "").trim();
+      const outputId = mobileV3ReferenceContinuationIdentity(ref);
+      const removalLabel = isGeneratedReference ? "取消沿用" : "不再作为商品依据";
+      const note = isGeneratedReference
+        ? "项目成片只作为延续方向；项目成片不会进入原始商品图。"
+        : "用户上传的原始商品图，作为当前商品事实依据。";
+      const tile = document.createElement("article");
+      tile.className = "v3-mobile-reference-tile";
+      tile.innerHTML = `
+        <div class="v3-mobile-reference-thumb">${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(title)} ${index + 1}" loading="lazy" decoding="async" />` : `<span>${isGeneratedReference ? "方向" : "商品图"}</span>`}</div>
+        <div class="v3-mobile-reference-copy">
+          <span class="v3-mobile-reference-origin">${isGeneratedReference ? "已选成片方向" : "原始商品图"}</span>
+          <strong>${escapeHtml(item.label || (isGeneratedReference ? "已选延续方向" : "上传商品图"))}</strong>
+          <small>${escapeHtml(note)}</small>
+          <div class="v3-mobile-reference-actions">
+            <button type="button" data-mobile-v3-reference-action="remove" data-mobile-v3-reference-id="${escapeHtml(referenceId)}" data-mobile-v3-output-id="${escapeHtml(outputId)}" data-mobile-v3-reference-source="${escapeHtml(ref.source_type)}">${removalLabel}</button>
+          </div>
+        </div>
+      `;
+      grid?.appendChild(tile);
+    });
+    board.appendChild(group);
+  };
+
+  renderImageGroup({
+    key: "original_product_inputs",
+    title: "原始商品图",
+    description: "只放用户上传并被服务器确认为商品事实的原图。",
+    refs: originalInputs,
+    sourceKind: "original_product_inputs",
+  });
+
+  if (lockedIdentity.length) {
+    const group = document.createElement("section");
+    group.className = "v3-mobile-reference-group locked_person_identity";
+    group.innerHTML = `
+      <div class="v3-mobile-reference-group-head">
+        <div>
+          <strong>人物视觉资产</strong>
+          <small>人物资产负责一致性，不会被当作商品原图。</small>
+        </div>
+        <span>${lockedIdentity.length} 个</span>
+      </div>
+      <div class="v3-mobile-reference-group-grid"></div>
+    `;
+    const grid = group.querySelector(".v3-mobile-reference-group-grid");
+    lockedIdentity.forEach((item) => {
+      const tile = document.createElement("article");
+      tile.className = "v3-mobile-reference-tile";
+      tile.innerHTML = `
+        <div class="v3-mobile-reference-thumb"><span>人物</span></div>
+        <div class="v3-mobile-reference-copy">
+          <span class="v3-mobile-reference-origin">锁定人物资产</span>
+          <strong>${escapeHtml(item.asset_type || "people")}</strong>
+          <small>${escapeHtml(mobileV3ShortText(item.visual_asset_id || item.selected_version_id || "已绑定当前启用版本", 56))}</small>
+        </div>
+      `;
+      grid?.appendChild(tile);
+    });
+    board.appendChild(group);
+  }
+
+  renderImageGroup({
+    key: "selected_continuation_directions",
+    title: "已选延续方向",
+    description: "只来自确认过的项目成片，不覆盖原始商品事实。",
+    refs: selectedDirections,
+    sourceKind: "selected_continuation_directions",
+  });
+
+  if (historyCount) {
+    const group = document.createElement("section");
+    group.className = "v3-mobile-reference-group generated_and_review_history";
+    const rows = [
+      { label: "正式成果", value: `${history.delivered_outputs.length} 张`, note: "下方项目成果查看" },
+      { label: "复核记录", value: `${history.review_withheld_outputs.length} 张`, note: "仅供人工确认" },
+      { label: "失败尝试", value: `${history.failed_attempts.length} 次`, note: "不展示内部细节" },
+    ];
+    group.innerHTML = `
+      <div class="v3-mobile-reference-group-head">
+        <div>
+          <strong>生成与复核历史</strong>
+          <small>正式图、复核图和失败尝试分开记录。</small>
+        </div>
+        <span>${historyCount} 条</span>
+      </div>
+      <div class="v3-mobile-ecommerce-history-summary">
+        ${rows.map((row) => `
+          <article>
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value)}</strong>
+            <small>${escapeHtml(row.note)}</small>
+          </article>
+        `).join("")}
+      </div>
+    `;
+    board.appendChild(group);
+  }
+}
+
 function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
   const board = document.querySelector("#mobileV3ReferenceBoard");
   if (!board) return;
+  const ecommerceView = mobileV3EcommerceProjectView(project);
+  if (project && ecommerceView) {
+    renderMobileV3EcommerceProjectViewReferences(project, ecommerceView);
+    return;
+  }
   const groups = mobileV3ProjectReferenceGroups(project);
   const referenceCount = groups.original_inputs.length + groups.continuation_outputs.length;
   setText("#mobileV3ReferenceCount", `原图 ${groups.original_inputs.length} · 成片 ${groups.continuation_outputs.length}`);
@@ -5410,6 +5619,54 @@ function mobileV3UploadedProductReference(ref) {
   return ["product", "product_identity"].includes(String(ref?.use_policy || "").trim().toLowerCase());
 }
 
+function mobileV3EcommerceProjectView(project = mobileV3State.currentProject) {
+  const view = project?.metadata?.ecommerce_project_view;
+  if (!view || typeof view !== "object") return null;
+  if (view.schema_version !== "doc263_ecommerce_project_view_v1") return null;
+  if (!view.groups || typeof view.groups !== "object") return null;
+  return view;
+}
+
+function mobileV3EcommerceProjectViewGroup(view, key) {
+  const group = view?.groups?.[key];
+  return group && typeof group === "object" ? group : {};
+}
+
+function mobileV3EcommerceProjectViewItems(view, key) {
+  const items = mobileV3EcommerceProjectViewGroup(view, key).items;
+  return Array.isArray(items) ? items.filter(Boolean) : [];
+}
+
+function mobileV3EcommerceProjectViewHistory(view) {
+  const group = mobileV3EcommerceProjectViewGroup(view, "generated_and_review_history");
+  return {
+    delivered_outputs: Array.isArray(group.delivered_outputs) ? group.delivered_outputs.filter(Boolean) : [],
+    review_withheld_outputs: Array.isArray(group.review_withheld_outputs) ? group.review_withheld_outputs.filter(Boolean) : [],
+    failed_attempts: Array.isArray(group.failed_attempts) ? group.failed_attempts.filter(Boolean) : [],
+  };
+}
+
+function mobileV3EcommerceProjectReferenceGroups(project = mobileV3State.currentProject) {
+  const view = mobileV3EcommerceProjectView(project);
+  if (!view) return null;
+  const original_inputs = mobileV3EcommerceProjectViewItems(view, "original_product_inputs").map((item) => ({
+    ...item,
+    source_type: "uploaded",
+    use_policy: "product",
+    label: item.label || "原始商品图",
+  }));
+  const continuation_outputs = mobileV3EcommerceProjectViewItems(view, "selected_continuation_directions").map((item) => ({
+    ...item,
+    source_type: "generated_selected",
+    asset_ref_id: item.output_id || item.asset_ref_id,
+    created_from_output_id: item.output_id,
+    created_from_job_id: item.job_id,
+    label: item.label || "已选成片方向",
+    use_policy: "style",
+  }));
+  return { original_inputs, continuation_outputs };
+}
+
 function mobileV3LegacyContinuationReference(ref) {
   return {
     reference_id: ref.output_ref_id,
@@ -5426,6 +5683,8 @@ function mobileV3LegacyContinuationReference(ref) {
 }
 
 function mobileV3ProjectReferenceGroups(project = mobileV3State.currentProject) {
+  const ecommerceGroups = mobileV3EcommerceProjectReferenceGroups(project);
+  if (ecommerceGroups) return ecommerceGroups;
   const original_inputs = [];
   const continuation_outputs = [];
   const continuation_ids = new Set();
@@ -5458,6 +5717,8 @@ function mobileV3ProjectReferenceGroups(project = mobileV3State.currentProject) 
 }
 
 function mobileV3UsefulReferences(project = mobileV3State.currentProject) {
+  const ecommerceGroups = mobileV3EcommerceProjectReferenceGroups(project);
+  if (ecommerceGroups) return [...ecommerceGroups.original_inputs, ...ecommerceGroups.continuation_outputs];
   const active = Array.isArray(project?.reference_assets) ? project.reference_assets.filter((item) => item && item.status !== "inactive") : [];
   if (active.length) return active;
   return (Array.isArray(project?.selected_output_refs) ? project.selected_output_refs : []).filter(Boolean).map(mobileV3LegacyContinuationReference);
