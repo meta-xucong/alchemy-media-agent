@@ -175,3 +175,89 @@ def test_ecommerce_job_product_truth_pool_dedupes_reuploaded_same_bytes(tmp_path
     assert job["ecommerce"]["product_truth"]["evidence_sources"] == [f"uploaded_asset:{original_id}"]
     assert job["metadata"]["project_context_snapshot"]["uploaded_reference_assets"][0]["asset_ref_id"] == original_id
     assert [item["asset_ref_id"] for item in _active_product_references(loaded["project"])] == [original_id]
+
+
+def test_ecommerce_legacy_duplicate_pool_repairs_to_four_originals_before_continuation(tmp_path) -> None:
+    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+    from alchemy_creative_agent_3_0.app.project_mode.contracts import ProjectReferenceAsset
+    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+
+    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    originals = [
+        _ready_upload(
+            handlers,
+            tmp_path,
+            filename=f"swimwear-original-{index}.png",
+            content=_png_base64((80 + index, 130 + index, 180 + index)),
+        )
+        for index in range(4)
+    ]
+    duplicates = [
+        _ready_upload(
+            handlers,
+            tmp_path,
+            filename=f"swimwear-duplicate-{index}.png",
+            content=_png_base64((80 + index, 130 + index, 180 + index)),
+        )
+        for index in range(4)
+    ]
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create ecommerce images for the uploaded swimwear.",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    project_id = project["project_id"]
+
+    for asset_id in originals:
+        handlers.post_project_reference(
+            project_id,
+            {"asset_ref_id": asset_id, "source_type": "uploaded", "use_policy": "product"},
+        )
+
+    durable = handlers.project_service.project_store.get_project(project_id)
+    assert durable is not None
+    original_refs = list(durable.reference_assets)
+    for original_ref, duplicate_id in zip(original_refs, duplicates, strict=True):
+        duplicate_upload = handlers.service.get_uploaded_asset(duplicate_id)
+        assert duplicate_upload is not None
+        duplicate_ref = ProjectReferenceAsset(
+            reference_id=f"{original_ref.reference_id}_duplicate",
+            project_id=project_id,
+            source_type=original_ref.source_type,
+            asset_ref_id=duplicate_id,
+            preview_url=duplicate_upload.content_url,
+            created_at=original_ref.created_at,
+            label="duplicate transport record",
+            use_policy=original_ref.use_policy,
+            metadata={"content_sha256": duplicate_upload.content_sha256},
+        )
+        durable.reference_assets.append(duplicate_ref)
+        durable.uploaded_asset_refs.append(
+            {
+                "asset_id": duplicate_id,
+                "source": "project_reference",
+                "role": "product",
+                "reference_id": duplicate_ref.reference_id,
+                "status": "active",
+                "content_sha256": duplicate_upload.content_sha256,
+            }
+        )
+    handlers.project_service.project_store.save_project(durable)
+
+    loaded = handlers.get_project(project_id)
+    active_products = _active_product_references(loaded["project"])
+    continuation = handlers.post_project_job(
+        project_id,
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Continue with a sunny ecommerce product image.",
+        },
+    )
+
+    assert [item["asset_ref_id"] for item in active_products] == originals
+    assert len([item for item in loaded["project"]["reference_assets"] if item["status"] == "inactive"]) == 4
+    assert [item["asset_ref_id"] for item in loaded["context"]["uploaded_reference_assets"]] == originals
+    assert continuation["ecommerce"]["product_truth"]["evidence_sources"] == [
+        f"uploaded_asset:{asset_id}" for asset_id in originals
+    ]

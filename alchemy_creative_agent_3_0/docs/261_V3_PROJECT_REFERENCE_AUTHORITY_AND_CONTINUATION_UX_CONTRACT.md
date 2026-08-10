@@ -73,6 +73,13 @@ The UI must visibly label the two groups. It must not use one ambiguous board
 or one aggregate count that makes a product source image and a generated
 continuation image appear equivalent.
 
+Compact project summaries, compose cards, review steps, selection steps, and
+continuation steps follow the same distinction. A count of uploaded source
+truth must not be presented as a count of selected continuation directions.
+For an older project that still contains duplicate active product references,
+the public workspace also shows one original-input card per
+`content_sha256` while the server repairs the durable project record.
+
 The promotion action on an output is named "set as continuation direction".
 It is an explicit user decision. It does not mutate original-input evidence,
 visual-asset bindings, or review authority.

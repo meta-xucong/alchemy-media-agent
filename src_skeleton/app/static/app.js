@@ -2921,9 +2921,9 @@ function v3ProjectSummaryFromProject(project) {
   if (!project?.project_id) return null;
   if (project.memory_summary?.project_id) return project.memory_summary;
   const templateId = v3ProjectTemplateId(project);
-  const activeReferences = v3ActiveProjectReferences(project);
+  const referenceGroups = v3ProjectReferenceGroups(project);
   const selectedRefs = v3SelectedOutputRefs(project);
-  const referenceThumbs = activeReferences
+  const continuationThumbs = referenceGroups.continuation_outputs
     .map((ref) => ref.preview_url || ref.thumbnail_url || ref.download_url)
     .filter(Boolean)
     .slice(0, 3);
@@ -2934,13 +2934,13 @@ function v3ProjectSummaryFromProject(project) {
     primary_template_id: templateId || null,
     scenario_id: templateId ? v3ScenarioForTemplate(templateId) : null,
     active_template_label: v3ProjectTemplateLabel(project),
-    latest_thumbnail_urls: referenceThumbs.length
-      ? referenceThumbs
+    latest_thumbnail_urls: continuationThumbs.length
+      ? continuationThumbs
       : selectedRefs.map((ref) => ref.thumbnail_url || ref.preview_url).filter(Boolean).slice(0, 3),
     confirmed_style_chips: project.confirmed_style_summary
       ? [project.confirmed_style_summary]
       : [v3ProjectTemplateLabel(project)],
-    selected_asset_count: activeReferences.length || selectedRefs.length,
+    selected_asset_count: referenceGroups.continuation_outputs.length || selectedRefs.length,
     job_count: Array.isArray(project.job_ids) ? project.job_ids.length : 0,
     latest_job_status: project.latest_job_status
       || (v3State.currentJob?.project_id === project.project_id ? v3State.currentJob.status : null),
@@ -3526,9 +3526,9 @@ function renderV3PhotographyRoleBoard(job = v3State.currentJob) {
 function v3ProjectNextSuggestion(project = v3State.currentProject) {
   if (!project?.project_id) return "先从首页创建或打开一个项目";
   const hasImages = Boolean(v3AllProjectImageItems(project).length);
-  const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
+  const hasContinuation = v3ProjectReferenceGroups(project).continuation_outputs.length > 0;
   if (!hasImages) return v3State.selectedScenario === "ecommerce" ? "打开制作页，填写需求后生成商品图片" : "打开制作页，生成第一张图片";
-  if (!hasSelectedRefs) return "挑一张满意的图，设为后续参考";
+  if (!hasContinuation) return "挑一张满意的图，设为后续参考";
   return "点击“继续生成”，沿着当前方向再做一张";
 }
 
@@ -3542,7 +3542,7 @@ function renderV3ProjectSnapshot() {
     return;
   }
   els.v3ProjectSnapshot.classList.remove("empty-v3-list");
-  const refs = v3UsefulReferenceItems(project);
+  const referenceGroups = v3ProjectReferenceGroups(project);
   const generatedCount = v3AllProjectImageItems(project).length;
   const jobCount = Array.isArray(project.job_ids) ? project.job_ids.length : 0;
   const boundAssetCount = Array.isArray(v3State.projectVisualAssetBindings)
@@ -3560,9 +3560,14 @@ function renderV3ProjectSnapshot() {
       note: "后续生成都会围绕这个目标",
     },
     {
-      label: "已确认参考",
-      value: `${refs.length} 个`,
-      note: refs.length ? "后续会沿用这些方向" : "选中满意图片后会出现在这里",
+      label: "原始参考图",
+      value: `${referenceGroups.original_inputs.length} 张`,
+      note: referenceGroups.original_inputs.length ? "来自你的上传，是本次生成依据" : "可在继续生成时补充原图",
+    },
+    {
+      label: "延续方向",
+      value: `${referenceGroups.continuation_outputs.length} 张`,
+      note: referenceGroups.continuation_outputs.length ? "来自你选中的项目成片" : "满意成片可单独设为后续方向",
     },
     {
       label: "视觉资产",
@@ -3626,6 +3631,15 @@ function v3ReferenceContinuationIdentity(ref) {
   return String(ref?.created_from_output_id || ref?.output_id || ref?.asset_ref_id || ref?.reference_id || "").trim();
 }
 
+function v3ReferenceContentDigest(ref) {
+  return String(ref?.content_sha256 || ref?.metadata?.content_sha256 || "").trim().toLowerCase();
+}
+
+function v3UploadedProductReference(ref) {
+  if (v3ReferenceSourceType(ref) !== "uploaded") return false;
+  return ["product", "product_identity"].includes(String(ref?.use_policy || "").trim().toLowerCase());
+}
+
 function v3LegacyContinuationReference(ref) {
   return {
     reference_id: ref.output_ref_id,
@@ -3645,6 +3659,7 @@ function v3ProjectReferenceGroups(project = v3State.currentProject) {
   const original_inputs = [];
   const continuation_outputs = [];
   const continuation_ids = new Set();
+  const uploaded_product_digests = new Set();
 
   v3ActiveProjectReferences(project).forEach((ref) => {
     if (v3ReferenceSourceType(ref) === "generated_selected") {
@@ -3652,6 +3667,11 @@ function v3ProjectReferenceGroups(project = v3State.currentProject) {
       if (identity) continuation_ids.add(identity);
       continuation_outputs.push(ref);
       return;
+    }
+    const contentDigest = v3ReferenceContentDigest(ref);
+    if (v3UploadedProductReference(ref) && contentDigest) {
+      if (uploaded_product_digests.has(contentDigest)) return;
+      uploaded_product_digests.add(contentDigest);
     }
     original_inputs.push(ref);
   });
@@ -4499,7 +4519,7 @@ async function rejectV3ProjectReference(outputId, plainText) {
 function renderV3ProjectWorkflow() {
   if (!els.v3ProjectWorkflow) return;
   const project = v3State.currentProject;
-  const selectedRefs = v3UsefulReferenceItems(project);
+  const selectedRefs = v3ProjectReferenceGroups(project).continuation_outputs;
   const hasGenerated = Boolean(v3State.currentJob?.status === "generated" || v3TimelineHasType("job_generated"));
   renderV3WorkflowArtifacts();
   if (v3State.selectedScenario === "ecommerce") {
@@ -4733,12 +4753,14 @@ function v3BrainPromptGuidance(metadataArtifacts = {}) {
   return {};
 }
 
-function renderV3ProductionEntry({ project, imageCount, refCount, avoidCount, isEcommerce }) {
+function renderV3ProductionEntry({ project, imageCount, originalCount, continuationCount, avoidCount, isEcommerce }) {
   const hasProject = Boolean(project?.project_id);
   const title = isEcommerce ? "继续制作商品图片" : "继续生成图片";
-  const body = refCount
-    ? `沿用 ${refCount} 个已选参考继续。`
-    : "先生成，再挑满意方向。";
+  const body = continuationCount
+    ? `沿用 ${continuationCount} 个已选成片方向继续。`
+    : originalCount
+      ? `保留 ${originalCount} 张原始参考图作为生成依据；满意成片可单独设为延续方向。`
+      : "先生成，再挑满意方向。";
   const imageLabel = imageCount ? `${imageCount} 张图片` : "还未出图";
   const avoidLabel = avoidCount ? `${avoidCount} 条避开方向` : "暂无避开方向";
   return `
@@ -4747,7 +4769,7 @@ function renderV3ProductionEntry({ project, imageCount, refCount, avoidCount, is
       <strong>${escapeHtml(title)}</strong>
       <small>${escapeHtml(body)} 结果会自动回到项目里。</small>
       <span class="v3-production-meta" aria-label="项目续作状态">
-        <em>${escapeHtml(refCount ? `${refCount} 个已确认参考` : "可先生成再选")}</em>
+        <em>${escapeHtml(continuationCount ? `${continuationCount} 个已选方向` : originalCount ? `${originalCount} 张原始参考图` : "可先生成再选")}</em>
         <em>${escapeHtml(imageLabel)}</em>
         <em>${escapeHtml(avoidLabel)}</em>
       </span>
@@ -4759,7 +4781,7 @@ function renderV3StepCards() {
   if (!els.v3StepCards) return;
   const project = v3State.currentProject;
   const outputItems = v3CurrentJobImageItems();
-  const selectedRefs = v3UsefulReferenceItems(project);
+  const referenceGroups = v3ProjectReferenceGroups(project);
   const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
   const imageCount = outputItems.length;
   const isEcommerce = v3State.selectedScenario === "ecommerce";
@@ -4767,7 +4789,8 @@ function renderV3StepCards() {
   els.v3StepCards.innerHTML = renderV3ProductionEntry({
     project,
     imageCount,
-    refCount: selectedRefs.length,
+    originalCount: referenceGroups.original_inputs.length,
+    continuationCount: referenceGroups.continuation_outputs.length,
     avoidCount,
     isEcommerce,
   });
@@ -4823,9 +4846,17 @@ function renderV3ProjectSubpageScene(stepKey = "compose") {
 function v3SceneStats() {
   const project = v3State.currentProject;
   const images = v3CurrentJobImageItems();
-  const refs = v3UsefulReferenceItems(project);
+  const referenceGroups = v3ProjectReferenceGroups(project);
+  const refs = referenceGroups.continuation_outputs;
   const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
-  return { project, images, refs, avoidCount, isEcommerce: v3State.selectedScenario === "ecommerce" };
+  return {
+    project,
+    images,
+    refs,
+    originalRefs: referenceGroups.original_inputs,
+    avoidCount,
+    isEcommerce: v3State.selectedScenario === "ecommerce",
+  };
 }
 
 function renderV3SceneRows(rows) {
@@ -4847,7 +4878,7 @@ function renderV3SceneRows(rows) {
 }
 
 function renderV3BriefScene() {
-  const { project, refs, isEcommerce } = v3SceneStats();
+  const { project, refs, originalRefs, isEcommerce } = v3SceneStats();
   const avoidCount = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes.length : 0;
   const isPhotography = v3ScenarioForTemplate(v3ProjectTemplateId(project)) === "photography";
   const modeText = isEcommerce
@@ -4855,7 +4886,11 @@ function renderV3BriefScene() {
     : isPhotography
       ? (v3State.selectedPreset === "professional_set" ? "三张专业套图" : "单张摄影")
       : "通用套图";
-  const referenceText = refs.length ? `沿用 ${refs.length} 个已确认参考` : "生成后再挑满意方向";
+  const referenceText = refs.length
+    ? `沿用 ${refs.length} 个已选成片方向`
+    : originalRefs.length
+      ? `保留 ${originalRefs.length} 张原始参考图作为生成依据`
+      : "生成后再挑满意方向";
   const avoidText = avoidCount ? `避开 ${avoidCount} 条不喜欢方向` : "暂无避开方向";
   return `
     <div class="v3-production-context">

@@ -37,6 +37,11 @@ def test_doc261_desktop_groups_uploaded_inputs_and_generated_continuations() -> 
     groups = _function(source, "v3ProjectReferenceGroups", "v3UsefulReferenceItems")
     compatibility = _function(source, "v3UsefulReferenceItems", "v3ReferenceImageCandidates")
     board = _function(source, "renderV3UsefulReferences", "handleV3ReferenceBoardClick")
+    snapshot = _function(source, "renderV3ProjectSnapshot", "renderV3ProjectVisualAssetPanel")
+    project_summary = _function(source, "v3ProjectSummaryFromProject", "v3ProjectEmptyImageLabel")
+    production = _function(source, "renderV3ProductionEntry", "renderV3StepCards")
+    scene_stats = _function(source, "v3SceneStats", "renderV3SceneRows")
+    brief = _function(source, "renderV3BriefScene", "renderV3ReviewScene")
 
     assert 'id="v3ProjectReferencePanel"' in index
     assert "本次生成依据与延续方向" in index
@@ -51,6 +56,16 @@ def test_doc261_desktop_groups_uploaded_inputs_and_generated_continuations() -> 
     assert "设为延续方向" in source
     assert "if (activeReferences.length) return activeReferences;" in compatibility
     assert ".v3-project-reference-group" in css
+    assert "v3ReferenceContentDigest" in source
+    assert "uploaded_product_digests" in groups
+    assert "referenceGroups.continuation_outputs" in project_summary
+    assert "continuationThumbs" in project_summary
+    assert "原始参考图" in snapshot
+    assert "延续方向" in snapshot
+    assert "originalCount" in production
+    assert "continuationCount" in production
+    assert "referenceGroups.continuation_outputs" in scene_stats
+    assert "originalRefs.length" in brief
 
 
 def test_doc261_mobile_keeps_the_same_reference_groups_visible() -> None:
