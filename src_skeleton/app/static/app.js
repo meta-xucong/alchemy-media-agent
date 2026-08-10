@@ -2879,11 +2879,33 @@ function writeV3LocalProjects(items) {
   }
 }
 
+function syncV3ProjectResponseMetadata(payload) {
+  if (!v3State.currentProject || !payload?.metadata || typeof payload.metadata !== "object") return;
+  const metadata = payload.metadata;
+  const hasEcommerceView = metadata.ecommerce_project_view && typeof metadata.ecommerce_project_view === "object";
+  const hasCurrentOperation = Object.prototype.hasOwnProperty.call(metadata, "current_operation");
+  if (!hasEcommerceView && !hasCurrentOperation) return;
+  const nextMetadata = { ...(v3State.currentProject.metadata || {}) };
+  if (hasEcommerceView) {
+    nextMetadata.ecommerce_project_view = metadata.ecommerce_project_view;
+  }
+  if (hasCurrentOperation && metadata.current_operation && typeof metadata.current_operation === "object") {
+    nextMetadata.current_operation = metadata.current_operation;
+  } else if (hasCurrentOperation || hasEcommerceView) {
+    delete nextMetadata.current_operation;
+  }
+  v3State.currentProject = {
+    ...v3State.currentProject,
+    metadata: nextMetadata,
+  };
+}
+
 function syncV3ProjectOutputsFromPayload(payload) {
   const items = payload?.metadata?.project_outputs;
   if (Array.isArray(items)) v3State.projectOutputs = items;
   const reviewItems = payload?.metadata?.review_items;
   if (Array.isArray(reviewItems)) v3State.projectReviewOutputs = reviewItems;
+  syncV3ProjectResponseMetadata(payload);
 }
 
 function syncV3ProjectOutputsFromList(items, projectId = v3State.currentProject?.project_id, reviewItems = null) {
@@ -3029,6 +3051,9 @@ async function createV3Project() {
     }
     await loadV3ProjectTimeline(v3State.currentProject?.project_id, { silent: true });
     await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
+    if (createBindingApplied) {
+      await refreshV3CurrentProject({ silent: true });
+    }
     openV3ScenarioWorkspace(scenarioId);
     openV3ProjectSubpage("compose");
     updateV3Notice(
@@ -3640,6 +3665,59 @@ function v3UploadedProductReference(ref) {
   return ["product", "product_identity"].includes(String(ref?.use_policy || "").trim().toLowerCase());
 }
 
+function v3EcommerceProjectView(project = v3State.currentProject) {
+  const view = project?.metadata?.ecommerce_project_view;
+  if (!view || typeof view !== "object") return null;
+  if (view.schema_version !== "doc263_ecommerce_project_view_v1") return null;
+  if (!view.groups || typeof view.groups !== "object") return null;
+  return view;
+}
+
+function v3EcommerceProjectViewGroup(view, key) {
+  const group = view?.groups?.[key];
+  return group && typeof group === "object" ? group : {};
+}
+
+function v3EcommerceProjectViewItems(view, key) {
+  const items = v3EcommerceProjectViewGroup(view, key).items;
+  return Array.isArray(items) ? items.filter(Boolean) : [];
+}
+
+function v3EcommerceProjectViewHistory(view) {
+  const group = v3EcommerceProjectViewGroup(view, "generated_and_review_history");
+  return {
+    delivered_outputs: Array.isArray(group.delivered_outputs) ? group.delivered_outputs.filter(Boolean) : [],
+    review_withheld_outputs: Array.isArray(group.review_withheld_outputs) ? group.review_withheld_outputs.filter(Boolean) : [],
+    failed_attempts: Array.isArray(group.failed_attempts) ? group.failed_attempts.filter(Boolean) : [],
+  };
+}
+
+function v3EcommerceProjectReferenceGroups(project = v3State.currentProject) {
+  const view = v3EcommerceProjectView(project);
+  if (!view) return null;
+  const original_inputs = v3EcommerceProjectViewItems(view, "original_product_inputs").map((item) => ({
+    ...item,
+    source_type: "uploaded",
+    use_policy: "product",
+    label: item.label || "原始商品图",
+  }));
+  const continuation_outputs = v3EcommerceProjectViewItems(view, "selected_continuation_directions").map((item) => ({
+    ...item,
+    source_type: "generated_selected",
+    asset_ref_id: item.output_id || item.asset_ref_id,
+    created_from_output_id: item.output_id,
+    created_from_job_id: item.job_id,
+    label: item.label || "已选成片方向",
+    use_policy: "style",
+  }));
+  return { original_inputs, continuation_outputs };
+}
+
+function v3ProjectCurrentOperation(project = v3State.currentProject) {
+  const operation = project?.metadata?.current_operation;
+  return operation && typeof operation === "object" ? operation : null;
+}
+
 function v3LegacyContinuationReference(ref) {
   return {
     reference_id: ref.output_ref_id,
@@ -3656,6 +3734,8 @@ function v3LegacyContinuationReference(ref) {
 }
 
 function v3ProjectReferenceGroups(project = v3State.currentProject) {
+  const ecommerceGroups = v3EcommerceProjectReferenceGroups(project);
+  if (ecommerceGroups) return ecommerceGroups;
   const original_inputs = [];
   const continuation_outputs = [];
   const continuation_ids = new Set();
@@ -3687,6 +3767,8 @@ function v3ProjectReferenceGroups(project = v3State.currentProject) {
 }
 
 function v3UsefulReferenceItems(project = v3State.currentProject) {
+  const ecommerceGroups = v3EcommerceProjectReferenceGroups(project);
+  if (ecommerceGroups) return [...ecommerceGroups.original_inputs, ...ecommerceGroups.continuation_outputs];
   const activeReferences = v3ActiveProjectReferences(project);
   if (activeReferences.length) return activeReferences;
   return v3SelectedOutputRefs(project).map(v3LegacyContinuationReference);
@@ -4343,9 +4425,166 @@ async function rejectV3OutputItem(item) {
   }
 }
 
+function renderV3EcommerceProjectViewReferences(project, ecommerceView) {
+  const originalInputs = v3EcommerceProjectViewItems(ecommerceView, "original_product_inputs");
+  const lockedIdentity = v3EcommerceProjectViewItems(ecommerceView, "locked_person_identity");
+  const selectedDirections = v3EcommerceProjectViewItems(ecommerceView, "selected_continuation_directions");
+  const history = v3EcommerceProjectViewHistory(ecommerceView);
+  const historyCount = history.delivered_outputs.length + history.review_withheld_outputs.length + history.failed_attempts.length;
+  const totalCount = originalInputs.length + lockedIdentity.length + selectedDirections.length + historyCount;
+  els.v3UsefulReferenceBoard.innerHTML = "";
+  els.v3UsefulReferenceBoard.classList.toggle("empty-v3-list", totalCount === 0);
+  if (!totalCount) {
+    els.v3UsefulReferenceBoard.textContent = "还没有原始商品图、人物资产、延续方向或复核记录。";
+    return;
+  }
+
+  const renderImageGroup = ({ key, title, description, refs, sourceKind }) => {
+    if (!refs.length) return;
+    const group = document.createElement("section");
+    group.className = `v3-project-reference-group ${escapeHtml(key)}`;
+    group.innerHTML = `
+      <div class="v3-project-reference-group-head">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(description)}</p>
+        </div>
+        <span>${refs.length} 张</span>
+      </div>
+      <div class="v3-project-reference-group-grid"></div>
+    `;
+    const grid = group.querySelector(".v3-project-reference-group-grid");
+    refs.forEach((item, index) => {
+      const ref = sourceKind === "selected_continuation_directions"
+        ? {
+            ...item,
+            source_type: "generated_selected",
+            asset_ref_id: item.output_id || item.asset_ref_id,
+            created_from_output_id: item.output_id,
+            created_from_job_id: item.job_id,
+            use_policy: "style",
+          }
+        : {
+            ...item,
+            source_type: "uploaded",
+            use_policy: "product",
+          };
+      const urls = v3ReferenceImageCandidates(ref);
+      const outputId = ref.created_from_output_id || ref.output_id || ref.asset_ref_id || "";
+      const isGeneratedReference = sourceKind === "selected_continuation_directions";
+      const removalLabel = isGeneratedReference ? "取消沿用" : "不再作为商品依据";
+      const note = isGeneratedReference
+        ? "项目成片只作为延续方向；项目成片不会进入原始商品图。"
+        : "用户上传的原始商品图，作为当前商品事实依据。";
+      const tile = document.createElement("article");
+      tile.className = "v3-useful-reference-tile";
+      tile.innerHTML = `
+        ${
+          urls.length
+            ? `<img alt="${escapeHtml(title)} ${index + 1}" />`
+            : `<div class="v3-reference-placeholder">${isGeneratedReference ? "方向" : "商品图"}</div>`
+        }
+        <div>
+          <span class="v3-reference-origin">${isGeneratedReference ? "已选成片方向" : "原始商品图"}</span>
+          <strong>${escapeHtml(item.label || (isGeneratedReference ? "已选延续方向" : "上传商品图"))}</strong>
+          <p>${escapeHtml(note)}</p>
+          <div class="v3-reference-actions">
+            <button type="button" data-v3-reference-action="remove" data-v3-reference-source="${escapeHtml(ref.source_type)}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}">${removalLabel}</button>
+            ${isGeneratedReference ? `<button type="button" data-v3-reference-action="reject" data-v3-reference-source="${escapeHtml(ref.source_type)}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}">不喜欢这个方向</button>` : ""}
+          </div>
+        </div>
+      `;
+      const image = tile.querySelector("img");
+      if (image) bindImageWithFallback(image, urls, { emptyAlt: "Project reference unavailable" });
+      grid?.appendChild(tile);
+    });
+    els.v3UsefulReferenceBoard.appendChild(group);
+  };
+
+  renderImageGroup({
+    key: "original_product_inputs",
+    title: "原始商品图",
+    description: "只放用户上传并被服务器确认为商品事实的原图；生成成片不会混进这里。",
+    refs: originalInputs,
+    sourceKind: "original_product_inputs",
+  });
+
+  if (lockedIdentity.length) {
+    const group = document.createElement("section");
+    group.className = "v3-project-reference-group locked_person_identity";
+    group.innerHTML = `
+      <div class="v3-project-reference-group-head">
+        <div>
+          <strong>人物视觉资产</strong>
+          <p>绑定的人物身份/脸模只负责人物一致性，不会被当作商品原图。</p>
+        </div>
+        <span>${lockedIdentity.length} 个</span>
+      </div>
+      <div class="v3-project-reference-group-grid"></div>
+    `;
+    const grid = group.querySelector(".v3-project-reference-group-grid");
+    lockedIdentity.forEach((item) => {
+      const tile = document.createElement("article");
+      tile.className = "v3-useful-reference-tile v3-locked-identity-tile";
+      tile.innerHTML = `
+        <div class="v3-reference-placeholder">人物</div>
+        <div>
+          <span class="v3-reference-origin">锁定人物资产</span>
+          <strong>${escapeHtml(item.asset_type || "people")}</strong>
+          <p>${escapeHtml(v3ShortText(item.visual_asset_id || item.selected_version_id || "已绑定当前启用版本", 68))}</p>
+        </div>
+      `;
+      grid?.appendChild(tile);
+    });
+    els.v3UsefulReferenceBoard.appendChild(group);
+  }
+
+  renderImageGroup({
+    key: "selected_continuation_directions",
+    title: "已选延续方向",
+    description: "只来自你确认过的项目成片，用来延续画面方向，不覆盖原始商品事实。",
+    refs: selectedDirections,
+    sourceKind: "selected_continuation_directions",
+  });
+
+  if (historyCount) {
+    const group = document.createElement("section");
+    group.className = "v3-project-reference-group generated_and_review_history";
+    const rows = [
+      { label: "正式成果", value: `${history.delivered_outputs.length} 张`, note: "展示在下方项目成果里" },
+      { label: "复核记录", value: `${history.review_withheld_outputs.length} 张`, note: "未进入正式交付，只供查看确认" },
+      { label: "失败尝试", value: `${history.failed_attempts.length} 次`, note: "只保留状态，不展示内部错误细节" },
+    ];
+    group.innerHTML = `
+      <div class="v3-project-reference-group-head">
+        <div>
+          <strong>生成与复核历史</strong>
+          <p>正式图、复核图和失败尝试分开记录；首页只取正式交付图。</p>
+        </div>
+        <span>${historyCount} 条</span>
+      </div>
+      <div class="v3-ecommerce-history-summary">
+        ${rows.map((row) => `
+          <article>
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value)}</strong>
+            <p>${escapeHtml(row.note)}</p>
+          </article>
+        `).join("")}
+      </div>
+    `;
+    els.v3UsefulReferenceBoard.appendChild(group);
+  }
+}
+
 function renderV3UsefulReferences() {
   if (!els.v3UsefulReferenceBoard) return;
   const project = v3State.currentProject;
+  const ecommerceView = v3EcommerceProjectView(project);
+  if (project && ecommerceView) {
+    renderV3EcommerceProjectViewReferences(project, ecommerceView);
+    return;
+  }
   const groups = v3ProjectReferenceGroups(project);
   const referenceCount = groups.original_inputs.length + groups.continuation_outputs.length;
   els.v3UsefulReferenceBoard.innerHTML = "";
@@ -5125,6 +5364,7 @@ function renderV3ProjectNextActions() {
   const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
   const hasSelectableJob = Boolean(v3State.currentJob?.job_id && Array.isArray(v3State.currentJob.candidates) && v3State.currentJob.candidates.length);
   const ecommerceActive = v3State.selectedScenario === "ecommerce";
+  const operation = v3ProjectCurrentOperation(project);
   const status = String(job?.status || project?.latest_job_status || "").toLowerCase();
   const withheld = Boolean(job && v3JobDeliveryWithheld(job));
   const visibleCount = job ? v3JobVisibleImageCount(job) : 0;
@@ -5134,9 +5374,9 @@ function renderV3ProjectNextActions() {
   let title = "继续完善这个项目";
   let detail = "可以补充商品信息、上传参考图，或继续生成。";
 
-  if (["blocked", "failed", "not_found"].includes(status)) {
+  if (["blocked", "failed", "not_found"].includes(status) || operation?.state === "failed_no_delivery") {
     title = "这次暂时无法生成";
-    detail = failure || "项目已保存。请检查商品图或补充信息后重新尝试。";
+    detail = failure || "项目已保存。请检查商品图、补充信息，或重新尝试一次。";
     actionRows.push(
       '<button class="button primary compact" type="button" data-v3-project-action="edit_ecommerce_details">补充商品信息</button>',
       '<button class="button secondary compact" type="button" data-v3-project-action="upload_reference_continue">更换商品图</button>',
@@ -5376,6 +5616,7 @@ function handleV3ProjectActionClick(event) {
     return;
   }
   const projectScenario = v3ScenarioForTemplate(v3ProjectTemplateId(v3State.currentProject));
+  const currentOperation = v3ProjectCurrentOperation(v3State.currentProject);
   if (v3State.selectedScenario !== projectScenario) setV3Scenario(projectScenario);
   const goal = v3State.currentProject.user_goal || v3State.currentProject.short_summary || "";
   if (action === "continue_photography") {
@@ -5411,6 +5652,11 @@ function handleV3ProjectActionClick(event) {
       els.v3PromptInput.focus();
     }
     openV3ProjectSubpage("compose");
+    const ecommerceRecovery = projectScenario === "ecommerce" && currentOperation?.state === "failed_no_delivery";
+    if (ecommerceRecovery) {
+      updateV3Notice("已打开恢复编辑区。请先确认原始商品图和需求，再明确点击生成。", "info");
+      return;
+    }
     updateV3Notice(v3State.selectedScenario === "ecommerce" ? "已打开生成区，正在开始生成新电商图。" : "已打开生成区，正在开始生成第一组图片。", "info");
     void generateV3Job();
     return;
@@ -7040,6 +7286,7 @@ async function confirmV3VisualAssetBinding() {
       });
     }
     await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
+    await refreshV3CurrentProject({ silent: true });
     closeV3VisualAssetBindingDialog();
     updateV3Notice("视觉资产已绑定到这个项目。之后新任务会冻结当前启用版本；历史任务不会改变。", "success");
   } catch (error) {
@@ -7064,6 +7311,7 @@ async function clearV3ProjectVisualAssetBinding() {
       });
     }
     await loadV3ProjectVisualAssetBindings({ silent: true, force: true });
+    await refreshV3CurrentProject({ silent: true });
     closeV3VisualAssetBindingDialog();
     updateV3Notice("已解除视觉资产选择。后续任务会按项目本身的需求继续，不会影响历史任务。", "success");
   } catch (error) {

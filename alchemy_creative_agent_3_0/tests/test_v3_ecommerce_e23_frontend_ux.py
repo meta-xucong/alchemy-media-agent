@@ -115,12 +115,50 @@ def test_e23_next_actions_restore_human_recovery_for_blocked_held_and_completed_
     actions = _section(script, "function renderV3ProjectNextActions()", "function renderV3BrandMemoryPanel()")
 
     assert 'els.v3ProjectNextActions.hidden = false;' in actions
+    assert "v3ProjectCurrentOperation(project)" in actions
+    assert "operation?.state === \"failed_no_delivery\"" in actions
     assert '"edit_ecommerce_details"' in actions
     assert '"upload_reference_continue"' in actions
     assert '"start_first_generation"' in actions
     assert '"show_project_results"' in actions
     assert '"return_to_project"' in actions
     assert "生成第一组套图" not in actions
+
+
+def test_e23_ecommerce_project_reference_surface_consumes_server_view() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    payload_sync = _section(script, "function syncV3ProjectResponseMetadata", "function syncV3ProjectOutputsFromPayload")
+    groups = _section(script, "function v3ProjectReferenceGroups", "function v3UsefulReferenceItems")
+    renderer = _section(script, "function renderV3EcommerceProjectViewReferences", "async function handleV3ReferenceBoardClick")
+
+    assert "ecommerce_project_view" in payload_sync
+    assert "current_operation" in payload_sync
+    assert "v3EcommerceProjectReferenceGroups(project)" in groups
+    assert "if (ecommerceGroups) return ecommerceGroups;" in groups
+    assert "v3EcommerceProjectView(project)" in renderer
+    assert "renderV3EcommerceProjectViewReferences(project, ecommerceView)" in renderer
+    assert "original_product_inputs" in renderer
+    assert "locked_person_identity" in renderer
+    assert "selected_continuation_directions" in renderer
+    assert "generated_and_review_history" in renderer
+    assert "项目成片不会进入原始商品图" in renderer
+
+
+def test_e23_mobile_ecommerce_reference_surface_consumes_server_view() -> None:
+    script = MOBILE_JS.read_text(encoding="utf-8")
+    metadata_sync = _section(script, "function mobileV3ProjectWithResponseMetadata", "async function loadMobileV3Projects")
+    groups = _section(script, "function mobileV3ProjectReferenceGroups", "function mobileV3UsefulReferences")
+    renderer = _section(script, "function renderMobileV3EcommerceProjectViewReferences", "async function selectMobileV3OutputItem")
+
+    assert "ecommerce_project_view" in metadata_sync
+    assert "mobileV3EcommerceProjectReferenceGroups(project)" in groups
+    assert "if (ecommerceGroups) return ecommerceGroups;" in groups
+    assert "renderMobileV3EcommerceProjectViewReferences(project, ecommerceView)" in renderer
+    assert "original_product_inputs" in renderer
+    assert "locked_person_identity" in renderer
+    assert "selected_continuation_directions" in renderer
+    assert "generated_and_review_history" in renderer
+    assert "项目成片不会进入原始商品图" in renderer
 
 
 def test_e23_local_product_truth_binding_failure_has_actionable_browser_copy() -> None:

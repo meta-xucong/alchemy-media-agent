@@ -64,8 +64,8 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3ProjectSnapshot"' in index.text
     assert 'id="v3PersistentDisplayRegion"' in index.text
     assert index.text.count('id="v3PersistentDisplayRegion"') == 1
-    assert "/static/styles.css?v=20260809-v3-terminal-delivery-cachebust" in index.text
-    assert "/static/app.js?v=20260809-v3-terminal-delivery-cachebust" in index.text
+    assert "/static/styles.css?v=20260810-doc263-ecommerce-view" in index.text
+    assert "/static/app.js?v=20260810-doc263-ecommerce-view" in index.text
     assert 'id="v3ProjectOutputBoard"' in index.text
     assert 'id="v3UsefulReferenceBoard"' in index.text
     assert 'id="v3ProjectWorkflow"' in index.text
@@ -272,7 +272,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-optional-details" in styles.text
     assert "grid-template-columns: repeat(auto-fit, minmax(160px, 1fr))" in styles.text
     assert mobile_styles.status_code == 200
-    assert "/mobile-static/mobile.js?v=20260809-v3-terminal-delivery-cachebust" in mobile_index.text
+    assert "/mobile-static/mobile.js?v=20260810-doc263-ecommerce-view" in mobile_index.text
     assert ".tab.v3-link-tab" in mobile_styles.text
     assert ".module-tabs .tab.v3-link-tab" in mobile_styles.text
     assert ".v3-mobile-upload-button::before" in mobile_styles.text
@@ -456,7 +456,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function handleV3ProjectOutputBoardClick" in script.text
     assert "async function selectV3OutputItem" in script.text
     assert "async function rejectV3OutputItem" in script.text
-    assert "async function deleteV3OutputItem" in script.text
+    assert "async function removeV3OutputFromProject" in script.text
     assert "function v3LooksCorruptedText" in script.text
     assert "function v3ReadableText" in script.text
     assert "function v3ProjectDisplayTitle" in script.text
