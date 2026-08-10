@@ -3,7 +3,7 @@
 Status: Doc127 Phase 4 acceptance preparation; one historical controlled Gate C
 case is recorded, while current-release Gate C re-certification and Gate D
 remain pending
-Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E25
+Document family: `E00-E11`, corrected by V3 Doc111 and extended by E17-E26
 Branch: `codex/ecommerce-module-docs`
 
 ## Purpose
@@ -30,8 +30,10 @@ commerce-specific deliverables.
 9. E20 Doc127 Phase 4 execution pack.
 10. E24 Creative Risk Preflight Contract, once reviewer-approved.
 11. E25 Professional E-Commerce Pose Acceptance Contract, once reviewer-approved.
-12. This E-Commerce module family.
-13. Implementation notes and examples.
+12. E26 / Doc264 Legacy Product Reference Recovery Contract, once
+    reviewer-approved for its respective phase.
+13. This E-Commerce module family.
+14. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -111,6 +113,13 @@ when the validated Professional E-Commerce pose contract is present; historical
 General, Photography, Standard, and non-pose E-Commerce responses require no
 migration.
 
+E26 / Doc264 records the recovery authority for legacy Professional E-Commerce
+project product references. It narrows the repair to Project Mode canonical
+current references, Product API legacy upload re-attestation, fresh Doc263
+commands, and safe E-Commerce public projection. It does not authorize browser
+truth, Provider repair, General/Photography behavior changes, or external
+generation.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -135,3 +144,6 @@ Before implementation starts, the team must have accepted:
 14. E25 pose acceptance contract, after reviewer acceptance, for Professional
     E-Commerce requests whose exact-N deliverable coverage explicitly requires
     closed pose roles such as seated and standing.
+15. E26 / Doc264 legacy product-reference recovery contract, after reviewer
+    acceptance, before a legacy reference migration/runtime implementation or
+    any guarded recovery validation.
