@@ -216,6 +216,7 @@ class V3UploadedAssetStore:
                 "upload_status": record.status.value,
                 "uploaded_filename": record.filename,
                 "content_url": record.content_url,
+                "content_sha256": record.content_sha256,
                 "v3_owned_upload": True,
             },
         )

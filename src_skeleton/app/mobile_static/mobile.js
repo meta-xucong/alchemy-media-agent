@@ -4046,6 +4046,15 @@ function closeMobileV3FullPrompt() {
   document.body.classList.remove("modal-open");
 }
 
+function clearMobileV3PendingUploads({ render = false } = {}) {
+  mobileV3State.files = [];
+  mobileV3State.uploadedAssets = [];
+  mobileV3State.uploadFingerprints = {};
+  const input = document.querySelector("#mobileV3ReferenceInput");
+  if (input) input.value = "";
+  if (render) renderMobileV3ReferenceUploads();
+}
+
 function handleMobileV3ReferenceFiles(event) {
   const files = Array.from(event.target?.files || []).filter((file) => file?.type?.startsWith("image/"));
   if (!files.length) {
@@ -4053,6 +4062,8 @@ function handleMobileV3ReferenceFiles(event) {
     return;
   }
   mobileV3State.files = [...mobileV3State.files, ...files].slice(0, 6);
+  mobileV3State.uploadedAssets = [];
+  mobileV3State.uploadFingerprints = {};
   renderMobileV3ReferenceUploads();
   updateMobileV3Status(`已加入 ${mobileV3State.files.length} 张参考图`);
   if (event.target) event.target.value = "";
@@ -4426,6 +4437,7 @@ async function generateMobileV3Job() {
     setMobileV3Progress("planning", "V3 正在理解需求并整理画面方向");
     const payload = buildMobileV3JobPayload(uploadedAssets);
     const created = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}/jobs`, { method: "POST", body: payload });
+    if (uploadedAssets.length) clearMobileV3PendingUploads({ render: true });
     mobileV3State.currentJob = created;
     const jobId = created.job_id || created.job?.job_id || created.id;
     mobileV3MergeProjectOutputs(projectId, created?.metadata?.project_outputs || []);
@@ -4583,6 +4595,7 @@ function renderMobileV3ProjectGallery(project) {
 
 function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   mobileV3State.currentProject = project;
+  clearMobileV3PendingUploads({ render: true });
   const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
   if (!templateId) {
     updateMobileV3Status("这个项目的类型还没有确认。为避免误用通用模板，暂时不能继续生成。");

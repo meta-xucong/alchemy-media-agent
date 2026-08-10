@@ -280,6 +280,7 @@ class V3ProjectModeService:
     def get_project(self, project_id: str) -> ProjectResponse:
         project = self._require_project(project_id)
         self._reconcile_project_outputs(project)
+        self._ensure_project_product_reference_integrity(project)
         project.latest_context = self._build_context(project)
         project.memory_summary = self._memory_summary(project)
         self.project_store.save_project(project)
@@ -303,6 +304,7 @@ class V3ProjectModeService:
 
     def get_project_context(self, project_id: str) -> ProjectContextPackage:
         project = self._require_project(project_id)
+        self._ensure_project_product_reference_integrity(project)
         return self._refresh_project_context(project)
 
     def archive_project(self, project_id: str) -> ProjectResponse:
@@ -756,6 +758,8 @@ class V3ProjectModeService:
             raise ValueError(
                 "ecommerce_static_slot_request_retired: the Central Brain decides the requested image set from facts and user intent."
             )
+        if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
+            self._ensure_project_product_reference_integrity(project)
         uploaded_asset_ids = list(dict.fromkeys([*self._project_asset_ids(project), *job_request.uploaded_asset_ids]))
         ecommerce_text_to_image_fallback = False
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
@@ -2550,22 +2554,24 @@ class V3ProjectModeService:
         product_asset_ids: list[str] = []
         invalid_request_ids: list[str] = []
 
+        request_product_ids: list[str] = []
         for asset_id in request_asset_ids:
             clean_id = str(asset_id or "").strip()
             if not clean_id:
                 continue
             if self._is_ready_product_upload(clean_id):
-                product_asset_ids.append(clean_id)
+                request_product_ids.append(clean_id)
             else:
                 invalid_request_ids.append(clean_id)
 
         for asset_id in self._project_product_reference_candidates(project):
             if self._is_ready_product_upload(asset_id):
                 product_asset_ids.append(asset_id)
+        product_asset_ids.extend(request_product_ids)
 
         if invalid_request_ids:
             raise ValueError("商品图还没有上传完成或不是有效的商品参考图，请重新上传商品图。")
-        return list(dict.fromkeys(product_asset_ids))
+        return self._dedupe_uploaded_asset_ids_by_content(product_asset_ids)
 
     def _project_product_reference_candidates(self, project: ProjectRecord) -> list[str]:
         candidate_ids = [
@@ -2579,8 +2585,121 @@ class V3ProjectModeService:
             str(item.get("asset_id") or "").strip()
             for item in project.uploaded_asset_refs
             if str(item.get("role") or "").strip() in PROJECT_PRODUCT_REFERENCE_ROLES
+            and str(item.get("status") or "").strip().lower() != ProjectReferenceStatus.INACTIVE.value
         ]
-        return [asset_id for asset_id in dict.fromkeys([*candidate_ids, *legacy_ids]) if asset_id]
+        return self._dedupe_uploaded_asset_ids_by_content(
+            [asset_id for asset_id in dict.fromkeys([*candidate_ids, *legacy_ids]) if asset_id]
+        )
+
+    def _ensure_project_product_reference_integrity(self, project: ProjectRecord) -> None:
+        changed = self._soft_suppress_duplicate_product_references(
+            project,
+            now=_utc_now_iso(),
+            reason="content_sha256_duplicate_product_reference",
+        )
+        if changed:
+            project.updated_at = _utc_now_iso()
+            self.project_store.save_project(project)
+
+    def _soft_suppress_duplicate_product_references(
+        self,
+        project: ProjectRecord,
+        *,
+        now: str,
+        reason: str,
+    ) -> bool:
+        changed = False
+        canonical_by_key: dict[str, tuple[str, str]] = {}
+        for reference in project.reference_assets:
+            if not self._is_active_uploaded_product_reference(reference):
+                continue
+            key = self._uploaded_asset_content_key(reference.asset_ref_id)
+            if not key:
+                continue
+            canonical = canonical_by_key.get(key)
+            if canonical is None:
+                canonical_by_key[key] = (reference.reference_id, reference.asset_ref_id)
+                continue
+            reference.status = ProjectReferenceStatus.INACTIVE
+            reference.metadata.update(
+                {
+                    "duplicate_product_reference_suppressed": True,
+                    "duplicate_product_reference_reason": reason,
+                    "canonical_reference_id": canonical[0],
+                    "canonical_asset_ref_id": canonical[1],
+                    "suppressed_at": now,
+                }
+            )
+            changed = True
+
+        for item in project.uploaded_asset_refs:
+            asset_id = str(item.get("asset_id") or "").strip()
+            if not asset_id or str(item.get("status") or "").strip().lower() == ProjectReferenceStatus.INACTIVE.value:
+                continue
+            role = str(item.get("role") or "").strip()
+            if role not in PROJECT_PRODUCT_REFERENCE_ROLES:
+                continue
+            key = self._uploaded_asset_content_key(asset_id)
+            if not key:
+                continue
+            canonical = canonical_by_key.get(key)
+            if canonical is None:
+                canonical_by_key[key] = (str(item.get("reference_id") or ""), asset_id)
+                continue
+            if asset_id == canonical[1]:
+                continue
+            item.update(
+                {
+                    "status": ProjectReferenceStatus.INACTIVE.value,
+                    "duplicate_product_reference_suppressed": True,
+                    "duplicate_product_reference_reason": reason,
+                    "canonical_reference_id": canonical[0],
+                    "canonical_asset_ref_id": canonical[1],
+                    "suppressed_at": now,
+                }
+            )
+            changed = True
+        return changed
+
+    def _is_active_uploaded_product_reference(self, reference: ProjectReferenceAsset) -> bool:
+        return (
+            reference.status == ProjectReferenceStatus.ACTIVE
+            and reference.source_type == ProjectReferenceSourceType.UPLOADED
+            and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
+        )
+
+    def _dedupe_uploaded_asset_ids_by_content(self, asset_ids: list[str]) -> list[str]:
+        canonical: list[str] = []
+        seen: set[str] = set()
+        for asset_id in asset_ids:
+            clean_id = str(asset_id or "").strip()
+            if not clean_id:
+                continue
+            key = self._uploaded_asset_content_key(clean_id) or f"asset_id:{clean_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            canonical.append(clean_id)
+        return canonical
+
+    def _uploaded_asset_content_key(self, asset_id: str) -> str:
+        upload_record = self.product_service.get_uploaded_asset(str(asset_id or "").strip())
+        digest = self._uploaded_asset_content_sha256(upload_record)
+        return f"sha256:{digest}" if digest else ""
+
+    def _uploaded_asset_content_sha256(self, upload_record: V3UploadedAssetRecord | None) -> str:
+        if upload_record is None:
+            return ""
+        digest = str(
+            upload_record.content_sha256
+            or (upload_record.metadata or {}).get("content_sha256")
+            or ""
+        ).strip().lower()
+        if digest:
+            return digest
+        if upload_record.file_path:
+            return self._file_content_fingerprint(Path(upload_record.file_path)).strip().lower()
+        return ""
 
     def _merge_commerce_profile(
         self,
@@ -3436,6 +3555,41 @@ class V3ProjectModeService:
                 metadata=reference_metadata,
             )
             reference_metadata.setdefault("effective_use_policy", use_policy.value)
+            digest = self._uploaded_asset_content_sha256(upload_record)
+            if digest:
+                reference_metadata.setdefault("content_sha256", digest)
+            if use_policy == ProjectReferenceUsePolicy.PRODUCT:
+                content_key = self._uploaded_asset_content_key(asset_ref_id)
+                canonical = self._active_product_reference_for_content(
+                    project,
+                    asset_ref_id=asset_ref_id,
+                    content_key=content_key,
+                )
+                if canonical is not None:
+                    canonical.metadata.setdefault("duplicate_product_reference_reused", True)
+                    return canonical
+                canonical_asset_id = self._legacy_product_asset_id_for_content(
+                    project,
+                    asset_ref_id=asset_ref_id,
+                    content_key=content_key,
+                )
+                if canonical_asset_id and canonical_asset_id != asset_ref_id:
+                    return self._upsert_project_reference(
+                        project,
+                        source_type=source_type,
+                        asset_ref_id=canonical_asset_id,
+                        now=now,
+                        label=label,
+                        user_note=user_note,
+                        use_policy=use_policy,
+                        created_from_job_id=created_from_job_id,
+                        created_from_output_id=created_from_output_id,
+                        preview_url=preview_url,
+                        metadata={
+                            **reference_metadata,
+                            "duplicate_product_reference_reused_asset_ref_id": asset_ref_id,
+                        },
+                    )
         existing = next((item for item in project.reference_assets if item.reference_id == reference_id), None)
         if existing is None:
             existing = ProjectReferenceAsset(
@@ -3464,6 +3618,45 @@ class V3ProjectModeService:
         if source_type == ProjectReferenceSourceType.UPLOADED:
             self._ensure_legacy_uploaded_ref(project, existing)
         return existing
+
+    def _active_product_reference_for_content(
+        self,
+        project: ProjectRecord,
+        *,
+        asset_ref_id: str,
+        content_key: str,
+    ) -> ProjectReferenceAsset | None:
+        if not content_key:
+            return None
+        for reference in project.reference_assets:
+            if not self._is_active_uploaded_product_reference(reference):
+                continue
+            if reference.asset_ref_id == asset_ref_id:
+                continue
+            if self._uploaded_asset_content_key(reference.asset_ref_id) == content_key:
+                return reference
+        return None
+
+    def _legacy_product_asset_id_for_content(
+        self,
+        project: ProjectRecord,
+        *,
+        asset_ref_id: str,
+        content_key: str,
+    ) -> str | None:
+        if not content_key:
+            return None
+        for item in project.uploaded_asset_refs:
+            candidate_id = str(item.get("asset_id") or "").strip()
+            if not candidate_id or candidate_id == asset_ref_id:
+                continue
+            if str(item.get("status") or "").strip().lower() == ProjectReferenceStatus.INACTIVE.value:
+                continue
+            if str(item.get("role") or "").strip() not in PROJECT_PRODUCT_REFERENCE_ROLES:
+                continue
+            if self._uploaded_asset_content_key(candidate_id) == content_key:
+                return candidate_id
+        return None
 
     def _persist_job_uploaded_references(
         self,
@@ -3558,16 +3751,31 @@ class V3ProjectModeService:
         )
 
     def _ensure_legacy_uploaded_ref(self, project: ProjectRecord, reference: ProjectReferenceAsset) -> None:
-        existing_ids = {str(item.get("asset_id")) for item in project.uploaded_asset_refs if item.get("asset_id")}
-        if reference.asset_ref_id not in existing_ids:
-            project.uploaded_asset_refs.append(
+        digest = self._uploaded_asset_content_sha256(self.product_service.get_uploaded_asset(reference.asset_ref_id))
+        for item in project.uploaded_asset_refs:
+            if str(item.get("asset_id") or "") != reference.asset_ref_id:
+                continue
+            item.update(
                 {
-                    "asset_id": reference.asset_ref_id,
                     "source": "project_reference",
                     "role": reference.use_policy.value,
                     "reference_id": reference.reference_id,
+                    "status": ProjectReferenceStatus.ACTIVE.value,
                 }
             )
+            if digest:
+                item["content_sha256"] = digest
+            return
+        payload = {
+            "asset_id": reference.asset_ref_id,
+            "source": "project_reference",
+            "role": reference.use_policy.value,
+            "reference_id": reference.reference_id,
+            "status": ProjectReferenceStatus.ACTIVE.value,
+        }
+        if digest:
+            payload["content_sha256"] = digest
+        project.uploaded_asset_refs.append(payload)
 
     def _require_ready_uploaded_reference(
         self,
@@ -3862,6 +4070,7 @@ class V3ProjectModeService:
                 "uri": upload_record.content_url,
                 "filename": upload_record.filename,
                 "mime_type": upload_record.mime_type,
+                "content_sha256": self._uploaded_asset_content_sha256(upload_record),
             }
         output_store = getattr(self.product_service, "output_store", None)
         output_id = reference.created_from_output_id or reference.asset_ref_id
@@ -3958,6 +4167,7 @@ class V3ProjectModeService:
             for item in project.uploaded_asset_refs
             if str(item.get("asset_id") or "").strip() not in inactive_asset_ids
             and str(item.get("reference_id") or "").strip() not in inactive_reference_ids
+            and str(item.get("status") or "").strip().lower() != ProjectReferenceStatus.INACTIVE.value
         ]
         active_generated_references: list[dict[str, Any]] = []
         unresolved_generated_references: list[dict[str, Any]] = []
@@ -5645,6 +5855,7 @@ class V3ProjectModeService:
             str(item["asset_id"])
             for item in project.uploaded_asset_refs
             if item.get("asset_id") and str(item["asset_id"]) not in inactive_ids
+            and str(item.get("status") or "").strip().lower() != ProjectReferenceStatus.INACTIVE.value
         ]
         return list(dict.fromkeys([*active_reference_ids, *legacy_ids]))
 

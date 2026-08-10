@@ -1896,6 +1896,14 @@ async function initV3Shell({ force = false } = {}) {
   }
 }
 
+function clearV3PendingUploads({ render = false } = {}) {
+  v3State.files = [];
+  v3State.uploadedAssets = [];
+  v3State.uploadFingerprints = {};
+  if (els.v3AssetInput) els.v3AssetInput.value = "";
+  if (render) renderV3Assets();
+}
+
 function handleV3ScenarioClick(button) {
   const scenarioId = button.dataset.v3Scenario || "general_creative";
   if (button.dataset.v3Placeholder === "true" || !v3ScenarioCanCreate(scenarioId)) {
@@ -1916,9 +1924,7 @@ function openV3Home({ silent = false } = {}) {
   v3State.pendingNegativeFeedbackOutputId = "";
   v3State.projectTimeline = [];
   v3State.activeProjectStep = "compose";
-  v3State.files = [];
-  v3State.uploadedAssets = [];
-  v3State.uploadFingerprints = {};
+  clearV3PendingUploads();
   renderV3ViewState();
   renderV3ScenarioState();
   renderV3HomeTemplateChooser();
@@ -7023,6 +7029,7 @@ async function openV3Project(projectId) {
   v3State.view = "workspace";
   v3State.projectOpening = true;
   v3State.pendingNegativeFeedbackOutputId = "";
+  clearV3PendingUploads({ render: true });
   if (els.v3WorkspaceView) els.v3WorkspaceView.dataset.v3Opening = "true";
   setV3PageLoading(true, "正在进入项目", "正在读取项目图片、记录和上下文。");
   closeV3ProjectSubpage({ silent: true });
@@ -7414,7 +7421,11 @@ function v3ProjectHasProductReference(project) {
   const references = Array.isArray(project?.reference_assets) ? project.reference_assets : [];
   const hasProductReference = references.some((item) => item?.status !== "inactive" && item?.use_policy === "product");
   const uploadedRefs = Array.isArray(project?.uploaded_asset_refs) ? project.uploaded_asset_refs : [];
-  return hasProductReference || uploadedRefs.some((item) => item?.asset_id);
+  return hasProductReference || uploadedRefs.some((item) => (
+    item?.asset_id
+    && item?.status !== "inactive"
+    && ["product", "product_reference", "subject_reference"].includes(item?.role)
+  ));
 }
 
 function v3EcommerceCopyLocaleValue() {
@@ -7795,6 +7806,7 @@ async function createV3Job() {
     updateV3Notice(copy.planningNotice, "info");
     const projectId = encodeURIComponent(v3State.currentProject.project_id);
     const created = await request(`${v3ApiBase}/projects/${projectId}/jobs`, { method: "POST", body: payload });
+    if (uploadedAssets.length) clearV3PendingUploads({ render: true });
     v3State.currentJob = created;
     v3State.selectedResult = null;
     syncV3ProjectOutputsFromPayload(created);
@@ -7865,6 +7877,7 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
     renderV3Job(v3State.currentJob);
   }
   await maybePersistV3UploadedReferences(uploadedAssets);
+  if (uploadedAssets.length) clearV3PendingUploads({ render: true });
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     openV3ProjectSubpage("compose");
   }
@@ -8232,11 +8245,8 @@ function resetV3Workspace() {
   v3State.currentJob = null;
   v3State.selectedResult = null;
   v3State.activeProjectStep = "compose";
-  v3State.files = [];
-  v3State.uploadedAssets = [];
-  v3State.uploadFingerprints = {};
+  clearV3PendingUploads();
   if (els.v3PromptInput) els.v3PromptInput.value = "";
-  if (els.v3AssetInput) els.v3AssetInput.value = "";
   if (els.v3BrandNameInput) els.v3BrandNameInput.value = "";
   if (els.v3BrandToneInput) els.v3BrandToneInput.value = "";
   if (els.v3EcommercePlatformInput) els.v3EcommercePlatformInput.value = "generic";
@@ -8801,7 +8811,7 @@ function renderV3ResultBoard(job) {
       notice.innerHTML = `
         <div class="v3-card-head">
           <strong>${escapeHtml(reviewCertification ? v3ReviewCertificationLabel(reviewCertification) : "自动审查未通过")}</strong>
-          <span class="mini-pill">已结束 · 未交付</span>
+          <span class="mini-pill">已结束 · 需要确认</span>
         </div>
         <p>${escapeHtml(reviewCertification ? v3ReviewCertificationNotice(reviewCertification) : v3JobFinalDeliveryNotice(job))}</p>
         ${reviewLines.length ? `<ul class="v3-review-reasons">${reviewLines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : ""}
@@ -8905,7 +8915,7 @@ function renderV3ResultBoard(job) {
     const metadata = item.metadata || {};
     const photographyRole = metadata.photography_lineage_role || metadata.role_key || item.role_key || "";
     const title = scenarioId === "ecommerce"
-      ? `鍥剧墖 ${index + 1}`
+      ? `图片 ${index + 1}`
       : scenarioId === "photography"
         ? `${v3PhotographyRoleLabel(photographyRole)} ${index + 1}`
         : `创意图片 ${index + 1}`;
