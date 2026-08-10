@@ -315,6 +315,33 @@ def test_doc263_public_project_operation_replaces_terminal_preparing_with_one_co
     assert "sha256:secret" not in str(operation)
 
 
+def test_doc263_latest_settled_job_clears_stale_failed_current_operation(tmp_path) -> None:
+    handlers, _catalog = _handlers(tmp_path)
+    product_id = _ready_product_upload(handlers, filename="product.png", color=(115, 145, 85))
+    project = _ecommerce_project(handlers)
+    project_id = project["project_id"]
+    old_job = _job(handlers, project_id, product_id=product_id, key="doc263-stale-operation-old")
+    old_record = handlers.service.get_job_record(old_job["job_id"])
+    assert old_record is not None
+    old_record.status = ProductJobStatusValue.BLOCKED
+    old_record.warnings.append("old failure must remain history only")
+    old_record.lifecycle = handlers.service._build_lifecycle(old_record)  # noqa: SLF001
+    handlers.service.job_store.save(old_record)
+    current_job = _job(handlers, project_id, product_id=product_id, key="doc263-stale-operation-current")
+    current_record = handlers.service.get_job_record(current_job["job_id"])
+    assert current_record is not None
+    current_record.status = ProductJobStatusValue.GENERATED
+    current_record.lifecycle = handlers.service._build_lifecycle(current_record)  # noqa: SLF001
+    handlers.service.job_store.save(current_record)
+
+    payload = handlers.get_project(project_id)
+    history = payload["metadata"]["ecommerce_project_view"]["groups"]["generated_and_review_history"]
+
+    assert payload["metadata"].get("current_operation") is None
+    assert [item["job_id"] for item in history["failed_attempts"]] == [old_job["job_id"]]
+    assert "old failure must remain history only" not in str(history)
+
+
 def test_doc263_project_view_keeps_review_output_and_failed_attempt_in_history(tmp_path, monkeypatch) -> None:
     handlers, _catalog = _handlers(tmp_path)
     product_id = _ready_product_upload(handlers, filename="product.png", color=(130, 110, 190))

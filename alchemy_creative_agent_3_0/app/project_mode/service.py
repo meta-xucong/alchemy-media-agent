@@ -5160,11 +5160,13 @@ class V3ProjectModeService:
             if state_map.get(self._output_identity(ref), ProjectOutputSelectionStateValue.SELECTED)
             == ProjectOutputSelectionStateValue.SELECTED
         ]
-        latest_thumbnails = [
-            ref.thumbnail_url or ref.preview_url
-            for ref in selected_refs
-            if ref.thumbnail_url or ref.preview_url
-        ][:3]
+        latest_thumbnails: list[str] = []
+        if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
+            latest_thumbnails = [
+                ref.thumbnail_url or ref.preview_url
+                for ref in selected_refs
+                if ref.thumbnail_url or ref.preview_url
+            ][:3]
         if not latest_thumbnails:
             latest_thumbnails = self._latest_generated_thumbnail_urls(project)
         last_action = timeline[-1].title if timeline else "项目已创建"
@@ -5209,6 +5211,19 @@ class V3ProjectModeService:
         return None
 
     def _latest_generated_thumbnail_urls(self, project: ProjectRecord, limit: int = 3) -> list[str]:
+        if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
+            urls: list[str] = []
+            for item in self._project_output_items(
+                project,
+                limit=max(12, int(limit or 3) * 4),
+                compact=True,
+            ):
+                url = item.get("thumbnail_url") or item.get("preview_url") or item.get("download_url")
+                if url and not str(url).startswith("mock://"):
+                    urls.append(str(url))
+                if len(dict.fromkeys(urls)) >= limit:
+                    break
+            return list(dict.fromkeys(urls))[:limit]
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None:
             return []
@@ -5359,6 +5374,192 @@ class V3ProjectModeService:
             if len(review_items) >= max(1, int(limit or 60)):
                 break
         return review_items
+
+    def _ecommerce_project_view(self, project: ProjectRecord) -> dict[str, Any]:
+        """Build the Doc263 public read model from Project Mode-owned records."""
+
+        if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
+            return {}
+
+        original_inputs: list[dict[str, Any]] = []
+        seen_original_asset_ids: set[str] = set()
+        selected_directions: list[dict[str, Any]] = []
+        seen_direction_ids: set[str] = set()
+        for reference in self._active_references(project):
+            if (
+                reference.source_type == ProjectReferenceSourceType.UPLOADED
+                and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
+                and reference.asset_ref_id not in seen_original_asset_ids
+            ):
+                seen_original_asset_ids.add(reference.asset_ref_id)
+                original_inputs.append(
+                    {
+                        "reference_id": reference.reference_id,
+                        "asset_ref_id": reference.asset_ref_id,
+                        "label": reference.label,
+                        "preview_url": reference.preview_url,
+                        "created_at": reference.created_at,
+                    }
+                )
+            if reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
+                output_id = str(reference.created_from_output_id or reference.asset_ref_id or "").strip()
+                if output_id and output_id not in seen_direction_ids:
+                    seen_direction_ids.add(output_id)
+                    selected_directions.append(
+                        {
+                            "reference_id": reference.reference_id,
+                            "output_id": output_id,
+                            "job_id": reference.created_from_job_id,
+                            "preview_url": reference.preview_url,
+                            "created_at": reference.created_at,
+                        }
+                    )
+
+        state_map = self._selected_output_state_map(project)
+        for reference in project.selected_output_refs:
+            output_id = self._output_identity(reference)
+            if (
+                output_id
+                and output_id not in seen_direction_ids
+                and state_map.get(output_id) == ProjectOutputSelectionStateValue.SELECTED
+            ):
+                seen_direction_ids.add(output_id)
+                selected_directions.append(
+                    {
+                        "reference_id": reference.output_ref_id,
+                        "output_id": output_id,
+                        "job_id": reference.job_id,
+                        "preview_url": reference.preview_url,
+                        "created_at": reference.selected_at,
+                    }
+                )
+
+        locked_person_identity: list[dict[str, Any]] = []
+        if self.project_visual_asset_binding_service is not None:
+            binding_set = self.project_visual_asset_binding_service.current(project_id=project.project_id)
+            if str(getattr(binding_set, "state", "")) == "valid":
+                for binding in getattr(binding_set, "bindings", []):
+                    if str(getattr(binding, "status", "")) != "active":
+                        continue
+                    locked_person_identity.append(
+                        {
+                            "binding_id": str(getattr(binding, "binding_id", "") or ""),
+                            "visual_asset_id": str(getattr(binding, "visual_asset_id", "") or ""),
+                            "selected_version_id": str(getattr(binding, "selected_version_id", "") or ""),
+                            "asset_type": str(getattr(binding, "asset_type", "") or ""),
+                        }
+                    )
+
+        delivered_outputs = [
+            self._ecommerce_public_history_output(item)
+            for item in self._project_output_items(project, limit=60, compact=True)
+        ]
+        review_withheld_outputs = [
+            self._ecommerce_public_history_output(item)
+            for item in self._project_review_output_items(project, limit=60, compact=True)
+        ]
+        failed_attempts = self._ecommerce_failed_attempts(project)
+        return {
+            "schema_version": "doc263_ecommerce_project_view_v1",
+            "groups": {
+                "original_product_inputs": {"items": original_inputs},
+                "locked_person_identity": {"items": locked_person_identity},
+                "selected_continuation_directions": {"items": selected_directions},
+                "generated_and_review_history": {
+                    "delivered_outputs": delivered_outputs,
+                    "review_withheld_outputs": review_withheld_outputs,
+                    "failed_attempts": failed_attempts,
+                },
+            },
+        }
+
+    @staticmethod
+    def _ecommerce_public_history_output(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "output_id": item.get("output_id"),
+            "job_id": item.get("job_id"),
+            "preview_url": item.get("preview_url"),
+            "thumbnail_url": item.get("thumbnail_url"),
+            "download_url": item.get("download_url"),
+            "created_at": item.get("created_at"),
+            "delivery_state": item.get("delivery_state"),
+            "certification_state": item.get("certification_state"),
+            "review_only": bool(item.get("review_only")),
+            "review_reason": item.get("review_reason"),
+        }
+
+    def _ecommerce_failed_attempts(self, project: ProjectRecord) -> list[dict[str, Any]]:
+        attempts: list[dict[str, Any]] = []
+        for job_id in reversed(project.job_ids):
+            try:
+                status = self.product_service.get_job(job_id)
+            except Exception:
+                continue
+            value = getattr(status, "status", None)
+            normalized = str(getattr(value, "value", value) or "").strip().lower()
+            if normalized not in {
+                ProductJobStatusValue.BLOCKED.value,
+                ProductJobStatusValue.FAILED.value,
+            }:
+                continue
+            attempts.append(
+                {
+                    "job_id": job_id,
+                    "state": "failed_no_delivery",
+                    "terminal": True,
+                    "next_actions": [{"id": "continue"}],
+                }
+            )
+        return attempts
+
+    def _ecommerce_current_operation(self, project: ProjectRecord) -> dict[str, Any] | None:
+        """Expose one sanitized operation fact without forwarding Job warnings."""
+
+        if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
+            return None
+        for job_id in reversed(project.job_ids):
+            try:
+                status = self.product_service.get_job(job_id)
+            except Exception:
+                continue
+            value = getattr(status, "status", None)
+            normalized = str(getattr(value, "value", value) or "").strip().lower()
+            if not normalized or normalized == ProductJobStatusValue.NOT_FOUND.value:
+                continue
+            if normalized in {
+                ProductJobStatusValue.BLOCKED.value,
+                ProductJobStatusValue.FAILED.value,
+            }:
+                return {
+                    "job_id": job_id,
+                    "state": "failed_no_delivery",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [{"id": "continue"}],
+                }
+            if normalized in {
+                ProductJobStatusValue.GENERATING.value,
+                ProductJobStatusValue.FINALIZING.value,
+            }:
+                return {
+                    "job_id": job_id,
+                    "state": "queued_or_generating",
+                    "terminal": False,
+                    "pending": True,
+                    "next_actions": [],
+                }
+            if normalized == ProductJobStatusValue.PLANNED.value:
+                return {
+                    "job_id": job_id,
+                    "state": "planning",
+                    "terminal": False,
+                    "pending": True,
+                    "next_actions": [],
+                }
+            # The newest readable settled operation is authoritative. Older
+            # blocked/failed attempts remain append-only history only.
+            return None
+        return None
 
     @staticmethod
     def _public_project_output_identity(item: dict[str, Any]) -> str:
@@ -6112,16 +6313,22 @@ class V3ProjectModeService:
 
     def _project_response(self, project: ProjectRecord) -> ProjectResponse:
         public_project = self._public_project_record(project)
+        metadata = {
+            **self._metadata(),
+            "project_outputs": self._project_output_items(project, limit=60),
+        }
+        if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
+            metadata["ecommerce_project_view"] = self._ecommerce_project_view(project)
+            operation = self._ecommerce_current_operation(project)
+            if operation is not None:
+                metadata["current_operation"] = operation
         return ProjectResponse(
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}",
             project=public_project,
             templates=self.template_cards(),
             context=project.latest_context,
-            metadata={
-                **self._metadata(),
-                "project_outputs": self._project_output_items(project, limit=60),
-            },
+            metadata=metadata,
         )
 
     @staticmethod
