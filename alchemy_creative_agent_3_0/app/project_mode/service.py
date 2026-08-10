@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -758,15 +759,59 @@ class V3ProjectModeService:
             raise ValueError(
                 "ecommerce_static_slot_request_retired: the Central Brain decides the requested image set from facts and user intent."
             )
-        if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
-            self._ensure_project_product_reference_integrity(project)
-        uploaded_asset_ids = list(dict.fromkeys([*self._project_asset_ids(project), *job_request.uploaded_asset_ids]))
         ecommerce_text_to_image_fallback = False
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
-            uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(project, job_request.uploaded_asset_ids)
+            requested_product_ids = [
+                str(item).strip()
+                for item in job_request.uploaded_asset_ids
+                if str(item).strip()
+            ]
+            if requested_product_ids:
+                # A browser upload selector is admitted only by resolving the
+                # V3 upload record, then persisted as a project-owned
+                # reference before the canonical pool is read.
+                self._ecommerce_product_reference_asset_ids(project, requested_product_ids)
+                self._persist_job_uploaded_references(
+                    project,
+                    requested_product_ids,
+                    template_id=template_manifest.template_id,
+                    user_input=job_request.user_input or project.user_goal,
+                )
+            # Explicit selectors have now been admitted into Project Mode.
+            # Reconcile canonical refs before deriving command identity so a
+            # first submission and its immediate replay observe the same
+            # server-owned product pool.
+            self._ensure_project_product_reference_integrity(project)
+            uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(project, [])
+            current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
+            idempotency_key = str(job_request.metadata.get("idempotency_key") or "").strip()
+            existing = self._existing_ecommerce_command(
+                project,
+                idempotency_key=idempotency_key,
+                current_reference_binding_digest=current_reference_binding_digest,
+            )
+            if existing is not None:
+                return existing
+            supersedes_job_id = self._reference_projection_drift_superseded_job_id(project)
+            job_request = job_request.model_copy(
+                update={
+                    "metadata": {
+                        **dict(job_request.metadata or {}),
+                        # This value is always rebuilt from active canonical
+                        # project references, never trusted from the browser.
+                        "current_reference_binding_digest": current_reference_binding_digest,
+                    }
+                }
+            )
             ecommerce_text_to_image_fallback = not uploaded_asset_ids
             commerce_profile = self._merge_commerce_profile(project, job_request)
         else:
+            uploaded_asset_ids = list(
+                dict.fromkeys([*self._project_asset_ids(project), *job_request.uploaded_asset_ids])
+            )
+            current_reference_binding_digest = ""
+            idempotency_key = ""
+            supersedes_job_id = None
             commerce_profile = None
         if template_manifest.template_id not in project.allowed_template_ids:
             project.allowed_template_ids.append(template_manifest.template_id)
@@ -853,10 +898,26 @@ class V3ProjectModeService:
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
                 "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
                 "ecommerce_slot_lineage_seed": template_manifest.template_id == ECOMMERCE_TEMPLATE_ID,
+                **(
+                    {
+                        "current_reference_binding_digest": current_reference_binding_digest,
+                        "idempotency_key": idempotency_key,
+                    }
+                    if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
+                    else {}
+                ),
+                **({"supersedes_job_id": supersedes_job_id} if supersedes_job_id else {}),
             },
         }
         status = (
-            self.product_service.create_trusted_photography_continuation_job(create_payload)
+            self.product_service.create_project_ecommerce_job(
+                create_payload,
+                canonical_product_asset_ids=uploaded_asset_ids,
+                binding_service=self.project_visual_asset_binding_service,
+            )
+            if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
+            and not _trusted_capability_continuation
+            else self.product_service.create_trusted_photography_continuation_job(create_payload)
             if _trusted_photography_continuation
             else self.product_service.create_trusted_capability_continuation_job(create_payload)
             if _trusted_capability_continuation
@@ -892,6 +953,15 @@ class V3ProjectModeService:
                 "ecommerce_text_to_image_fallback": ecommerce_text_to_image_fallback,
                 "has_product_reference": bool(uploaded_asset_ids) if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
                 "ecommerce_slot_lineage": status.metadata.get("ecommerce_slot_lineage"),
+                **(
+                    {
+                        "current_reference_binding_digest": current_reference_binding_digest,
+                        "idempotency_key": idempotency_key,
+                    }
+                    if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
+                    else {}
+                ),
+                **({"supersedes_job_id": supersedes_job_id} if supersedes_job_id else {}),
                 "photographer_profile_binding": (
                     photographer_profile_binding.model_dump(mode="json") if photographer_profile_binding is not None else None
                 ),
@@ -2600,6 +2670,106 @@ class V3ProjectModeService:
         if changed:
             project.updated_at = _utc_now_iso()
             self.project_store.save_project(project)
+
+    def _ecommerce_current_reference_binding_digest(self, project: ProjectRecord) -> str:
+        """Hash current canonical project inputs without trusting request metadata."""
+
+        sources: list[dict[str, str]] = []
+        for reference in self._active_project_references(project):
+            asset_id = str(reference.asset_ref_id or "").strip()
+            if not asset_id:
+                continue
+            upload = self.product_service.get_uploaded_asset(asset_id)
+            if reference.source_type == ProjectReferenceSourceType.UPLOADED:
+                sources.append(
+                    {
+                        "asset_id": asset_id,
+                        "source_type": reference.source_type.value,
+                        "use_policy": reference.use_policy.value,
+                        "content_sha256": self._uploaded_asset_content_sha256(upload) or "",
+                    }
+                )
+            elif reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
+                sources.append(
+                    {
+                        "asset_id": asset_id,
+                        "source_type": reference.source_type.value,
+                        "use_policy": reference.use_policy.value,
+                        "content_sha256": str(
+                            reference.metadata.get("source_integrity_id") or ""
+                        ).strip(),
+                    }
+                )
+        payload = {
+            "schema_version": "doc263_current_reference_binding_v1",
+            "project_id": project.project_id,
+            "sources": sources,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    @staticmethod
+    def _active_project_references(project: ProjectRecord) -> list[ProjectReferenceAsset]:
+        return [
+            reference
+            for reference in project.reference_assets
+            if reference.status == ProjectReferenceStatus.ACTIVE
+        ]
+
+    def _existing_ecommerce_command(
+        self,
+        project: ProjectRecord,
+        *,
+        idempotency_key: str,
+        current_reference_binding_digest: str,
+    ) -> ProductJobStatus | None:
+        if not idempotency_key:
+            return None
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            metadata = dict(record.request.metadata or {})
+            if (
+                str(metadata.get("idempotency_key") or "").strip() == idempotency_key
+                and str(metadata.get("current_reference_binding_digest") or "").strip()
+                == current_reference_binding_digest
+            ):
+                return self.product_service.get_job(job_id)
+        return None
+
+    def _reference_projection_drift_superseded_job_id(self, project: ProjectRecord) -> str | None:
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None or record.status not in {
+                ProductJobStatusValue.BLOCKED,
+                ProductJobStatusValue.FAILED,
+            }:
+                continue
+            metadata = dict(record.request.metadata or {})
+            receipt = metadata.get("doc263_reference_projection_drift_receipt")
+            if (
+                isinstance(receipt, dict)
+                and set(receipt) == {
+                    "schema_version",
+                    "authority",
+                    "job_id",
+                    "project_id",
+                    "failure_code",
+                    "source",
+                }
+                and receipt.get("schema_version")
+                == "doc263_reference_projection_drift_receipt_v1"
+                and receipt.get("authority") == "v3_product_api"
+                and receipt.get("job_id") == record.job_id
+                and str(receipt.get("project_id") or "").strip()
+                == str(project.project_id).strip()
+                and receipt.get("failure_code") == "reference_projection_drift"
+                and receipt.get("source") == "provider_pre_dispatch_contract"
+            ):
+                return record.job_id
+        return None
 
     def _soft_suppress_duplicate_product_references(
         self,

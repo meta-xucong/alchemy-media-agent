@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from io import BytesIO
 from pathlib import Path
 
@@ -17,6 +18,11 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projection import (
+    ProductTruthSource,
+    build_physical_product_projection,
+    build_product_truth_admission,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryVisualAssetCreateRequest,
     ProjectVisualAssetBindingService,
@@ -150,7 +156,7 @@ def _generation_request(
         purpose="professional ecommerce product image",
         priority=1,
     )
-    return GenerationRequest(
+    request = GenerationRequest(
         asset_spec=asset,
         prompt_compilation=PromptCompilationResult(
             prompt_compilation_id="prompt_ecommerce_truth_scope",
@@ -179,6 +185,77 @@ def _generation_request(
             ),
         },
     )
+    by_asset_id = {str(item["asset_id"]): item for item in references}
+    sources = []
+    for asset_id in pool_product_ids:
+        path = Path(str(by_asset_id[asset_id]["file_path"]))
+        content_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        consent = f"fixture:{asset_id}:consent"
+        rights = f"fixture:{asset_id}:rights"
+        receipt_digest = hashlib.sha256(
+            "|".join(
+                (
+                    "v3_upload_authorization_receipt_v1",
+                    asset_id,
+                    content_sha256,
+                    "product_reference",
+                    "product_truth",
+                    consent,
+                    rights,
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        sources.append(
+            ProductTruthSource(
+                asset_id=asset_id,
+                content_sha256=content_sha256,
+                consent_reference=consent,
+                rights_reference=rights,
+                receipt_digest=receipt_digest,
+                role="product_reference",
+                product_truth_channel="product_truth",
+                readiness="ready",
+                file_integrity="sha256_verified",
+                provenance="fixture_product_api",
+            )
+        )
+    admission = build_product_truth_admission(
+        project_id="ecommerce_scope_project",
+        job_id="ecommerce_scope_job",
+        sources=sources,
+        product_truth_plan_digest=hashlib.sha256(
+            b"ecommerce_scope_plan_digest"
+        ).hexdigest(),
+    )
+    request.metadata.update(
+        {
+            "project_id": admission.project_id,
+            "job_id": admission.job_id,
+            "professional_ecommerce_contract_authority": "v3_product_api",
+            "professional_ecommerce_product_truth_admission": admission.model_dump(),
+        }
+    )
+    if selected_product_ids is not None:
+        projection = build_physical_product_projection(
+            job_id=admission.job_id,
+            output_index=1,
+            admission=admission,
+            selected_product_asset_ids=selected_product_ids,
+            selection_source="remote_brain_image_set_plan.evidence_dimensions_by_output",
+            selection_role=(
+                "product_detail_or_print_view"
+                if len(selected_product_ids) == 2
+                else "lifestyle_primary_product_view"
+            ),
+            cap_reservation=2,
+        )
+        request.metadata["professional_ecommerce_physical_product_projection"] = (
+            projection.model_dump()
+        )
+        request.metadata["professional_ecommerce_physical_product_projections"] = {
+            "1": projection.model_dump()
+        }
+    return request
 
 
 def test_professional_ecommerce_truth_pool_suppresses_only_product_role_conflict(tmp_path) -> None:

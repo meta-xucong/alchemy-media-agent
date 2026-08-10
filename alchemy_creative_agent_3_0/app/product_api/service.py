@@ -38,6 +38,12 @@ from ..photography_profiles import (
     default_photographer_profile_catalog,
 )
 from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner
+from ..scenario_packs.ecommerce.reference_projection import (
+    ProductTruthAdmission,
+    ProductTruthSource,
+    build_physical_product_projection,
+    build_product_truth_admission,
+)
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest
 from ..visual_assets import (
@@ -108,6 +114,7 @@ from .contracts import (
     StyleContinuationSummary,
     V3AssetContentUploadRequest,
     V3AssetUploadCreateRequest,
+    V3AssetUploadStatusValue,
     V3ExportDownloadPayload,
     V3ExportPackageResponse,
     V3JobHistoryItem,
@@ -1108,6 +1115,21 @@ class V3ProductApiService:
             project_visual_asset_binding_service=binding_service,
         )
 
+    def create_project_ecommerce_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+        *,
+        canonical_product_asset_ids: list[str],
+        binding_service: ProjectVisualAssetBindingService | None = None,
+    ) -> ProductJobStatus:
+        """Internal Project Mode entry with a canonical product-reference pool."""
+
+        return self._create_creative_job(
+            request,
+            project_visual_asset_binding_service=binding_service,
+            project_ecommerce_canonical_product_asset_ids=canonical_product_asset_ids,
+        )
+
     def create_trusted_photography_continuation_job(
         self,
         request: CreateCreativeJobRequest | dict[str, Any],
@@ -1180,6 +1202,7 @@ class V3ProductApiService:
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
+        project_ecommerce_canonical_product_asset_ids: list[str] | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         if generation_channel == "mcp" and not (
@@ -1220,6 +1243,26 @@ class V3ProductApiService:
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
         )
         self._bind_server_job_instance_id(create_request)
+        if project_ecommerce_canonical_product_asset_ids is not None:
+            canonical_ids = [
+                str(item).strip()
+                for item in project_ecommerce_canonical_product_asset_ids
+                if str(item).strip()
+            ]
+            if not canonical_ids or len(canonical_ids) != len(set(canonical_ids)):
+                raise ValueError("product_truth_admission_invalid")
+            # Project Mode is the authority for the active canonical pool.
+            # Replace any browser/API upload selector before planning so
+            # downstream context and admission construction cannot read a
+            # caller-owned list as product truth.
+            create_request = create_request.model_copy(
+                update={"uploaded_asset_ids": canonical_ids}
+            )
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                "doc263_project_reference_authority": "v3_project_mode",
+                "doc263_project_canonical_product_asset_ids": canonical_ids,
+            }
         if project_visual_asset_binding_service is not None:
             self._bind_project_visual_asset_library_snapshot(
                 create_request,
@@ -1496,6 +1539,13 @@ class V3ProductApiService:
         }
         if activation_metadata:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
+        if planning_result is not None:
+            self._bind_ecommerce_physical_projections(
+                create_request,
+                planning_result=planning_result,
+                runtime_metadata=runtime_result.metadata,
+                job_id=job_id,
+            )
         if planning_result is None:
             generation_lifecycle_failure = self._generation_lifecycle_failure_from_runtime_result(runtime_result)
             create_request.metadata = self._without_raw_remote_brain_outcome(create_request.metadata)
@@ -2686,6 +2736,24 @@ class V3ProductApiService:
                     "generation_lifecycle_failure": self._product_api_runtime_failure_from_exception(exc),
                 }
             detail = getattr(exc, "detail", None)
+            if (
+                isinstance(detail, dict)
+                and str(detail.get("reference_input_failure_code") or "").strip()
+                == "reference_projection_drift"
+            ):
+                record.request.metadata = {
+                    **dict(record.request.metadata),
+                    "doc263_reference_projection_drift_receipt": {
+                        "schema_version": "doc263_reference_projection_drift_receipt_v1",
+                        "authority": "v3_product_api",
+                        "job_id": record.job_id,
+                        "project_id": str(
+                            record.request.metadata.get("project_id") or ""
+                        ).strip(),
+                        "failure_code": "reference_projection_drift",
+                        "source": "provider_pre_dispatch_contract",
+                    },
+                }
             handoff_id = str(detail.get("handoff_id") or "").strip() if isinstance(detail, dict) else ""
             if handoff_id:
                 handoff_failure_code = str(detail.get("failure_code") or getattr(exc, "code", "") or "").strip()
@@ -4746,6 +4814,16 @@ class V3ProductApiService:
             if not text:
                 continue
             lowered = text.lower()
+            if lowered.startswith("reference_projection_drift:"):
+                projected.append(
+                    "The current product references were refreshed for a clean continuation attempt."
+                )
+                continue
+            if lowered.startswith("product_truth_admission_invalid:"):
+                projected.append(
+                    "The current product reference needs attention before continuing."
+                )
+                continue
             looks_raw_provider = any(marker in lowered for marker in raw_provider_markers)
             looks_legacy_local_contract = (
                 legacy_local_contract_warning
@@ -8314,6 +8392,7 @@ class V3ProductApiService:
                 **self._workflow_artifacts_metadata(record, result),
                 **self._project_mode_status_metadata(record),
                 **self._ecommerce_runtime_provenance_status_metadata(record),
+                **self._doc263_terminal_status_metadata(record),
             },
         )
 
@@ -8688,8 +8767,23 @@ class V3ProductApiService:
                 "lifecycle": self._lifecycle_summary(record),
                 **self._project_mode_status_metadata(record),
                 **self._ecommerce_runtime_provenance_status_metadata(record),
+                **self._doc263_terminal_status_metadata(record),
             },
         )
+
+    @staticmethod
+    def _doc263_terminal_status_metadata(record: ProductJobRecord) -> dict[str, Any]:
+        scenario_id = (
+            record.scenario_resolution.manifest.scenario_id
+            if record.scenario_resolution
+            else ""
+        )
+        if scenario_id != "ecommerce" or record.status not in {
+            ProductJobStatusValue.BLOCKED,
+            ProductJobStatusValue.FAILED,
+        }:
+            return {}
+        return {"terminal": True, "next_action": "continue"}
 
     @staticmethod
     def _ecommerce_runtime_provenance_status_metadata(record: ProductJobRecord) -> dict[str, Any]:
@@ -8742,6 +8836,9 @@ class V3ProductApiService:
             "photography_role_lineage",
             "capability_plan_amendment",
             "continuation_evidence_asset_ids",
+            "current_reference_binding_digest",
+            "idempotency_key",
+            "supersedes_job_id",
             "capability_activation_plan_id",
             "capability_catalog_version",
             "capability_activation_mode",
@@ -11002,6 +11099,13 @@ class V3ProductApiService:
             "visual_asset_library_execution",
             "professional_product_truth_required",
             "professional_ecommerce_product_truth_pool_asset_ids",
+            "professional_ecommerce_contract_authority",
+            "professional_ecommerce_product_truth_admission",
+            "professional_ecommerce_physical_product_projection",
+            "professional_ecommerce_physical_product_projections",
+            "doc263_reference_projection_drift_receipt",
+            "doc263_project_reference_authority",
+            "doc263_project_canonical_product_asset_ids",
         }
     )
 
@@ -11016,6 +11120,13 @@ class V3ProductApiService:
             "professional_character_card_body_refresh_target_age_scope",
             "professional_product_truth_required",
             "professional_ecommerce_product_truth_pool_asset_ids",
+            "professional_ecommerce_contract_authority",
+            "professional_ecommerce_product_truth_admission",
+            "professional_ecommerce_physical_product_projection",
+            "professional_ecommerce_physical_product_projections",
+            "doc263_reference_projection_drift_receipt",
+            "doc263_project_reference_authority",
+            "doc263_project_canonical_product_asset_ids",
         }
     )
 
@@ -11731,6 +11842,14 @@ class V3ProductApiService:
             metadata["professional_ecommerce_product_truth_pool_asset_ids"] = list(
                 product_truth_pool_asset_ids
             )
+            metadata["professional_ecommerce_product_truth_admission"] = (
+                self._build_ecommerce_product_truth_admission(
+                    request,
+                    metadata=metadata,
+                    product_truth_pool_asset_ids=product_truth_pool_asset_ids,
+                ).model_dump()
+            )
+            metadata["professional_ecommerce_contract_authority"] = "v3_product_api"
         metadata["ecommerce_creative_context"] = context.model_dump(mode="json")
         metadata["ecommerce_creative_context_server_owned"] = True
         request.metadata = metadata
@@ -11759,10 +11878,25 @@ class V3ProductApiService:
             and str(frozen_binding.get("state") or "").strip().lower() in {"valid", "empty"}
         )
         trusted_professional = metadata.get("professional_mode") is True
-        if not frozen_binding_active and not trusted_professional:
+        trusted_project_ecommerce = (
+            metadata.get("doc263_project_reference_authority") == "v3_project_mode"
+            and isinstance(metadata.get("doc263_project_canonical_product_asset_ids"), list)
+        )
+        if not frozen_binding_active and not trusted_professional and not trusted_project_ecommerce:
             return []
 
-        resolved_assets = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
+        canonical_project_ids = (
+            [str(item).strip() for item in metadata["doc263_project_canonical_product_asset_ids"] if str(item).strip()]
+            if trusted_project_ecommerce
+            else list(request.uploaded_asset_ids)
+        )
+        if trusted_project_ecommerce and (
+            not canonical_project_ids
+            or canonical_project_ids != list(request.uploaded_asset_ids)
+            or len(canonical_project_ids) != len(set(canonical_project_ids))
+        ):
+            raise ValueError("product_truth_admission_invalid")
+        resolved_assets = self.asset_store.resolve_uploaded_assets(canonical_project_ids)
         product_ids: list[str] = []
         for asset in resolved_assets:
             asset_metadata = asset.metadata if isinstance(asset.metadata, dict) else {}
@@ -11776,6 +11910,225 @@ class V3ProductApiService:
                     raise ValueError("professional_ecommerce_product_truth_asset_not_materialized")
                 product_ids.append(asset.asset_id)
         return list(dict.fromkeys(product_ids))
+
+    def _build_ecommerce_product_truth_admission(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        metadata: dict[str, Any],
+        product_truth_pool_asset_ids: list[str],
+    ):
+        """Freeze product originals from V3 upload records before Brain planning."""
+
+        product_ids = list(product_truth_pool_asset_ids)
+        sources: list[ProductTruthSource] = []
+        for asset_id in product_ids:
+            record = self.asset_store.get_upload(asset_id)
+            if record is None or record.status != V3AssetUploadStatusValue.READY:
+                raise ValueError("product_truth_admission_invalid")
+            role = str(record.role or "").strip().lower()
+            if role != "product_reference":
+                raise ValueError("product_truth_admission_invalid")
+            path = Path(str(record.file_path or ""))
+            expected_digest = str(record.content_sha256 or "").strip().lower()
+            if not path.is_file() or not expected_digest:
+                raise ValueError("product_truth_admission_invalid")
+            try:
+                actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise ValueError("product_truth_admission_invalid") from exc
+            if actual_digest != expected_digest:
+                raise ValueError("product_truth_admission_invalid")
+            receipt = record.metadata.get("upload_authorization_receipt")
+            if not isinstance(receipt, dict):
+                raise ValueError("product_truth_admission_invalid")
+            expected_receipt_keys = {
+                "schema_version",
+                "authority",
+                "asset_id",
+                "content_sha256",
+                "persisted_role",
+                "reference_channel",
+                "consent_basis",
+                "rights_basis",
+                "receipt_digest",
+            }
+            if set(receipt) != expected_receipt_keys:
+                raise ValueError("product_truth_admission_invalid")
+            consent_reference = str(receipt.get("consent_basis") or "").strip()
+            rights_reference = str(receipt.get("rights_basis") or "").strip()
+            receipt_digest = str(receipt.get("receipt_digest") or "").strip().lower()
+            receipt_role = str(receipt.get("persisted_role") or "").strip().lower()
+            receipt_channel = str(receipt.get("reference_channel") or "").strip().lower()
+            receipt_payload = "|".join(
+                (
+                    "v3_upload_authorization_receipt_v1",
+                    asset_id,
+                    actual_digest,
+                    role,
+                    "product_truth",
+                    consent_reference,
+                    rights_reference,
+                )
+            )
+            expected_receipt_digest = hashlib.sha256(receipt_payload.encode("utf-8")).hexdigest()
+            if (
+                receipt.get("schema_version") != "v3_upload_authorization_receipt_v1"
+                or receipt.get("authority") != "v3_uploaded_asset_store"
+                or str(receipt.get("asset_id") or "").strip() != asset_id
+                or str(receipt.get("content_sha256") or "").strip().lower() != actual_digest
+                or receipt_role != role
+                or receipt_channel != "product_truth"
+                or not consent_reference
+                or not rights_reference
+                or receipt_digest != expected_receipt_digest
+            ):
+                raise ValueError("product_truth_admission_invalid")
+            sources.append(
+                ProductTruthSource(
+                    asset_id=asset_id,
+                    content_sha256=expected_digest,
+                    consent_reference=consent_reference,
+                    rights_reference=rights_reference,
+                    receipt_digest=receipt_digest,
+                    role="product_reference",
+                    product_truth_channel="product_truth",
+                    readiness="ready",
+                    file_integrity="sha256_verified",
+                    provenance="v3_uploaded_project_reference",
+                )
+            )
+        plan_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "project_id": str(metadata.get("project_id") or ""),
+                    "canonical_asset_ids": product_ids,
+                    "current_reference_binding_digest": str(
+                        metadata.get("current_reference_binding_digest") or ""
+                    ),
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return build_product_truth_admission(
+            project_id=str(metadata.get("project_id") or "ecommerce_project"),
+            job_id=str(metadata.get("v3_job_instance_id") or "pending_ecommerce_job"),
+            sources=sources,
+            product_truth_plan_digest=plan_digest,
+        )
+
+    def _bind_ecommerce_physical_projections(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        planning_result: PlanningResult,
+        runtime_metadata: dict[str, Any],
+        job_id: str,
+    ) -> None:
+        metadata = dict(request.metadata or {})
+        raw_admission = metadata.get("professional_ecommerce_product_truth_admission")
+        if not isinstance(raw_admission, dict):
+            return
+        try:
+            admission = ProductTruthAdmission.from_mapping(raw_admission)
+        except ValueError as exc:
+            raise ValueError("product_truth_admission_invalid") from exc
+        admission = build_product_truth_admission(
+            project_id=admission.project_id,
+            job_id=job_id,
+            sources=list(admission.sources),
+            product_truth_plan_digest=admission.product_truth_plan_digest,
+        )
+        raw_admission = admission.model_dump()
+        metadata["professional_ecommerce_product_truth_admission"] = raw_admission
+        raw_plan = runtime_metadata.get("template_deliverable_plan")
+        if (
+            not isinstance(raw_plan, dict)
+            or not isinstance(raw_plan.get("deliverables"), list)
+            or not raw_plan["deliverables"]
+        ):
+            raise ValueError("ecommerce_product_truth_selection_missing")
+        projections: dict[str, dict[str, Any]] = {}
+        for deliverable in raw_plan["deliverables"]:
+            if not isinstance(deliverable, dict):
+                raise ValueError("ecommerce_product_truth_selection_invalid")
+            raw_index = deliverable.get("output_index")
+            if (
+                not isinstance(raw_index, int)
+                or isinstance(raw_index, bool)
+                or raw_index <= 0
+            ):
+                raise ValueError("ecommerce_product_truth_selection_invalid")
+            output_index = raw_index
+            deliverable_metadata = deliverable.get("metadata")
+            if not isinstance(deliverable_metadata, dict):
+                raise ValueError("ecommerce_product_truth_selection_missing")
+            selected = [
+                str(item).strip()
+                for item in deliverable_metadata.get("selected_product_truth_asset_ids", [])
+                if str(item).strip()
+            ]
+            selection_source = str(
+                deliverable_metadata.get("product_truth_selection_source") or ""
+            ).strip()
+            selection_role = str(
+                deliverable_metadata.get("product_truth_selection_role") or ""
+            ).strip()
+            try:
+                cap_reservation = int(
+                    deliverable_metadata.get("max_product_truth_source_refs_per_output")
+                )
+            except (TypeError, ValueError):
+                cap_reservation = 0
+            try:
+                projection = build_physical_product_projection(
+                    job_id=admission.job_id,
+                    output_index=output_index,
+                    admission=admission,
+                    selected_product_asset_ids=selected,
+                    selection_source=selection_source,
+                    selection_role=selection_role,
+                    cap_reservation=cap_reservation,
+                )
+            except ValueError as exc:
+                raise ValueError("ecommerce_product_truth_selection_invalid") from exc
+            projections[str(output_index)] = projection.model_dump()
+        expected_projection_keys = {
+            str(item["output_index"]) for item in raw_plan["deliverables"]
+        }
+        if (
+            len(projections) != len(raw_plan["deliverables"])
+            or set(projections) != expected_projection_keys
+        ):
+            raise ValueError("ecommerce_product_truth_selection_invalid")
+        metadata["professional_ecommerce_physical_product_projections"] = projections
+        metadata["professional_ecommerce_physical_product_projection"] = (
+            projections.get("1") or next(iter(projections.values()))
+        )
+        request.metadata = metadata
+        planning_result.metadata = {
+            **dict(planning_result.metadata or {}),
+            **{
+                "professional_ecommerce_contract_authority": "v3_product_api",
+                "professional_ecommerce_product_truth_admission": raw_admission,
+                "professional_ecommerce_physical_product_projections": projections,
+                "professional_ecommerce_physical_product_projection": metadata[
+                    "professional_ecommerce_physical_product_projection"
+                ],
+            },
+        }
+        for generation_plan in planning_result.generation_plans:
+            generation_plan.metadata = {
+                **dict(generation_plan.metadata or {}),
+                "professional_ecommerce_contract_authority": "v3_product_api",
+                "professional_ecommerce_product_truth_admission": raw_admission,
+                "professional_ecommerce_physical_product_projections": projections,
+                "professional_ecommerce_physical_product_projection": metadata[
+                    "professional_ecommerce_physical_product_projection"
+                ],
+            }
 
     def _record_ecommerce_runtime_provenance(self, request: CreateCreativeJobRequest, runtime_result: Any, *, stage: str) -> None:
         """Persist factual inputs and fail-closed reasons without replaying a recipe.

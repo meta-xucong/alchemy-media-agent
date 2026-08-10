@@ -148,11 +148,46 @@ class V3UploadedAssetStore:
         if validation_error:
             failed = self._fail_record(record, "invalid_image_content", validation_error)
             raise ValueError(failed.error["message"] if failed.error else "Uploaded image content is invalid.")
+        content_sha256 = str(record.content_sha256 or "").strip().lower()
+        persisted_role = str(record.role or "").strip().lower()
+        reference_channel = (
+            "product_truth"
+            if persisted_role in {"product_reference", "subject_reference"}
+            else "portrait_identity"
+            if persisted_role in {"face_reference", "portrait_identity", "identity_reference"}
+            else "other"
+        )
+        receipt_payload = "|".join(
+            (
+                "v3_upload_authorization_receipt_v1",
+                record.asset_id,
+                content_sha256,
+                persisted_role,
+                reference_channel,
+                "user_uploaded_asset_for_v3_generation",
+                "uploader_attestation_v3_upload_terms",
+            )
+        )
+        receipt_digest = hashlib.sha256(receipt_payload.encode("utf-8")).hexdigest()
         ready = record.model_copy(
             update={
                 "status": V3AssetUploadStatusValue.READY,
                 "updated_at": _now_iso(),
-                "metadata": {**record.metadata, "ready_for_v3_runtime": True},
+                "metadata": {
+                    **record.metadata,
+                    "ready_for_v3_runtime": True,
+                    "upload_authorization_receipt": {
+                        "schema_version": "v3_upload_authorization_receipt_v1",
+                        "authority": "v3_uploaded_asset_store",
+                        "asset_id": record.asset_id,
+                        "content_sha256": content_sha256,
+                        "persisted_role": persisted_role,
+                        "reference_channel": reference_channel,
+                        "consent_basis": "user_uploaded_asset_for_v3_generation",
+                        "rights_basis": "uploader_attestation_v3_upload_terms",
+                        "receipt_digest": receipt_digest,
+                    },
+                },
             }
         )
         return self._save_record(ready)

@@ -50,6 +50,10 @@ from ..visual_assets.body_proportion_evidence_profile import (
     BodyRefreshAnalysisContext,
     require_current_body_refresh_analysis_context,
 )
+from ..scenario_packs.ecommerce.reference_projection import (
+    PhysicalProductReferenceProjection,
+    ProductTruthAdmission,
+)
 from app.providers.base import ProviderRuntimeError
 from .mcp_materialization import (
     McpMaterializationError,
@@ -224,6 +228,18 @@ def build_provider_generation_request(
             ),
             "professional_ecommerce_product_truth_pool_asset_ids": metadata.get(
                 "professional_ecommerce_product_truth_pool_asset_ids"
+            ),
+            "professional_ecommerce_contract_authority": metadata.get(
+                "professional_ecommerce_contract_authority"
+            ),
+            "professional_ecommerce_product_truth_admission": metadata.get(
+                "professional_ecommerce_product_truth_admission"
+            ),
+            "professional_ecommerce_physical_product_projection": metadata.get(
+                "professional_ecommerce_physical_product_projection"
+            ),
+            "professional_ecommerce_physical_product_projections": metadata.get(
+                "professional_ecommerce_physical_product_projections"
             ),
             # Professional serial anchor stages are an explicit opt-in
             # materialization policy.  Preserve the server-owned strategy and
@@ -2060,13 +2076,20 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
                 for item in combined_assets
             ]
+        elif self._has_doc263_ecommerce_contract(request):
+            # Doc263 admission owns the complete canonical product pool.  The
+            # physical projection must be frozen before generic adaptive
+            # ranking can omit any non-required source.
+            combined_assets = self._reference_input_scope(request, combined_assets)
+            combined_assets = self._apply_adaptive_reference_selection(request, combined_assets)
         else:
             combined_assets = self._apply_adaptive_reference_selection(request, combined_assets)
         # Specialized routes may separate server-owned evidence from the
         # physical renderer inputs before this base method resolves files and
         # enforces the route's reference cap.  The default preserves the
         # historical provider behavior.
-        combined_assets = self._reference_input_scope(request, combined_assets)
+        if not self._has_doc263_ecommerce_contract(request):
+            combined_assets = self._reference_input_scope(request, combined_assets)
         assets: list[dict[str, Any]] = []
         seen_evidence: dict[tuple[str, str], int] = {}
         resolution_audit: dict[str, Any] = {
@@ -2249,6 +2272,97 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
         return assets
 
+    def _has_doc263_ecommerce_contract(self, request: GenerationRequest) -> bool:
+        metadata = self._generation_request_metadata(request)
+        return any(
+            metadata.get(key) is not None
+            for key in (
+                "professional_ecommerce_product_truth_admission",
+                "professional_ecommerce_physical_product_projection",
+                "professional_ecommerce_physical_product_projections",
+            )
+        )
+
+    def _doc263_ecommerce_contract(
+        self,
+        request: GenerationRequest,
+    ) -> tuple[ProductTruthAdmission, PhysicalProductReferenceProjection]:
+        metadata = self._generation_request_metadata(request)
+        if metadata.get("professional_ecommerce_contract_authority") != "v3_product_api":
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth admission is not server-issued.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "product_truth_admission_invalid",
+                    "fallback": "blocked",
+                },
+            )
+        try:
+            admission = ProductTruthAdmission.from_mapping(
+                metadata.get("professional_ecommerce_product_truth_admission")
+            )
+            raw_projections = metadata.get("professional_ecommerce_physical_product_projections")
+            if not isinstance(raw_projections, dict) or any(
+                not isinstance(key, str) for key in raw_projections
+            ):
+                raise ReferenceInputAdmissionError(
+                    "Professional E-Commerce product truth selection projection receipt is missing.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "ecommerce_product_truth_selection_missing",
+                        "fallback": "blocked",
+                    },
+                )
+            output_key = str(getattr(request.asset_spec, "priority", 1) or 1)
+            raw_projection = raw_projections.get(output_key)
+            if raw_projection is None:
+                raise ReferenceInputAdmissionError(
+                    "Professional E-Commerce product truth selection is missing.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "ecommerce_product_truth_selection_missing",
+                        "fallback": "blocked",
+                    },
+                )
+            projection = PhysicalProductReferenceProjection.from_mapping(raw_projection)
+            projection.validate_against(admission)
+            authoritative_job_id = str(
+                metadata.get("job_id")
+                or request.generation_plan.metadata.get("job_id")
+                or ""
+            ).strip()
+            authoritative_project_id = str(metadata.get("project_id") or "").strip()
+            authoritative_output_index = int(getattr(request.asset_spec, "priority", 1) or 1)
+            if (
+                not authoritative_job_id
+                or admission.job_id != authoritative_job_id
+                or projection.job_id != authoritative_job_id
+                or not authoritative_project_id
+                or admission.project_id != authoritative_project_id
+                or projection.output_index != authoritative_output_index
+            ):
+                raise ValueError("doc263_ecommerce_binding_mismatch")
+            if authoritative_output_index == 1:
+                singular = metadata.get("professional_ecommerce_physical_product_projection")
+                if (
+                    not isinstance(singular, dict)
+                    or PhysicalProductReferenceProjection.from_mapping(singular)
+                    != projection
+                ):
+                    raise ValueError("doc263_ecommerce_projection_receipt_mismatch")
+        except ReferenceInputAdmissionError:
+            raise
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce product truth admission or projection is invalid.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "product_truth_admission_invalid",
+                    "fallback": "blocked",
+                },
+            ) from exc
+        return admission, projection
+
     def _reference_input_scope(
         self,
         request: GenerationRequest,
@@ -2257,8 +2371,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
         """Return the server-owned physical reference scope for this route."""
 
         metadata = self._generation_request_metadata(request)
-        if not metadata.get("professional_product_truth_required"):
+        if not self._has_doc263_ecommerce_contract(request):
+            if metadata.get("professional_product_truth_required"):
+                raise ReferenceInputAdmissionError(
+                    "Professional E-Commerce product truth admission is missing.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "product_truth_admission_invalid",
+                        "fallback": "blocked",
+                    },
+                )
             return combined_assets
+        admission, projection = self._doc263_ecommerce_contract(request)
 
         plan = metadata.get("template_deliverable_plan")
         if not isinstance(plan, dict) or str(plan.get("scenario_id") or "").strip() != "ecommerce":
@@ -2270,12 +2394,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "fallback": "blocked",
                 },
             )
-        raw_pool = metadata.get("professional_ecommerce_product_truth_pool_asset_ids")
-        pool_ids = [
-            str(item).strip()
-            for item in raw_pool
-            if str(item).strip()
-        ] if isinstance(raw_pool, list) else []
+        pool_ids = list(admission.canonical_asset_ids)
         if not pool_ids or len(pool_ids) != len(set(pool_ids)):
             raise ReferenceInputAdmissionError(
                 "Professional E-Commerce product truth pool is missing or malformed.",
@@ -2295,6 +2414,64 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "fallback": "blocked",
                 },
             )
+        raw_projections = metadata.get("professional_ecommerce_physical_product_projections")
+        expected_output_indexes: list[int] = []
+        for item in deliverables:
+            raw_output_index = item.get("output_index") if isinstance(item, dict) else None
+            if (
+                not isinstance(raw_output_index, int)
+                or isinstance(raw_output_index, bool)
+                or raw_output_index <= 0
+            ):
+                raise ReferenceInputAdmissionError(
+                    "Professional E-Commerce product truth deliverable receipt is invalid.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "ecommerce_product_truth_selection_invalid",
+                        "fallback": "blocked",
+                    },
+                )
+            expected_output_indexes.append(raw_output_index)
+        if (
+            len(expected_output_indexes) != len(set(expected_output_indexes))
+            or not isinstance(raw_projections, dict)
+            or set(raw_projections) != {str(index) for index in expected_output_indexes}
+        ):
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce physical projection receipt is incomplete.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "ecommerce_product_truth_selection_missing",
+                    "fallback": "blocked",
+                },
+            )
+        for expected_output_index in expected_output_indexes:
+            try:
+                mapped_projection = PhysicalProductReferenceProjection.from_mapping(
+                    raw_projections[str(expected_output_index)]
+                )
+                mapped_projection.validate_against(admission)
+            except (TypeError, ValueError, KeyError) as exc:
+                raise ReferenceInputAdmissionError(
+                    "Professional E-Commerce physical projection receipt is invalid.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "product_truth_admission_invalid",
+                        "fallback": "blocked",
+                    },
+                ) from exc
+            if (
+                mapped_projection.job_id != admission.job_id
+                or mapped_projection.output_index != expected_output_index
+            ):
+                raise ReferenceInputAdmissionError(
+                    "Professional E-Commerce physical projection receipt is mismatched.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "product_truth_admission_invalid",
+                        "fallback": "blocked",
+                    },
+                )
         try:
             output_index = int(getattr(request.asset_spec, "priority", 1) or 1)
         except (TypeError, ValueError):
@@ -2326,7 +2503,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             for item in deliverable_metadata.get("product_truth_pool_asset_ids", [])
             if str(item).strip()
         ]
-        selected = [
+        selected_from_plan = [
             str(item).strip()
             for item in deliverable_metadata.get("selected_product_truth_asset_ids", [])
             if str(item).strip()
@@ -2350,16 +2527,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             max_product_refs = 0
         if (
             declared_pool != pool_ids
-            or not selected
-            or len(selected) != len(set(selected))
-            or admitted != selected
+            or not selected_from_plan
+            or len(selected_from_plan) != len(set(selected_from_plan))
+            or admitted != selected_from_plan
             or selection_source
             != "remote_brain_image_set_plan.evidence_dimensions_by_output"
             or max_product_refs not in {1, 2}
-            or len(selected) > max_product_refs
-            or len(selected) > 2
-            or not set(selected).issubset(set(pool_ids))
-            or (len(selected) == 2 and selection_role != "product_detail_or_print_view")
+            or len(selected_from_plan) > max_product_refs
+            or len(selected_from_plan) > 2
+            or not set(selected_from_plan).issubset(set(pool_ids))
+            or (len(selected_from_plan) == 2 and selection_role != "product_detail_or_print_view")
         ):
             raise ReferenceInputAdmissionError(
                 "Professional E-Commerce product truth selection is invalid.",
@@ -2369,28 +2546,89 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "fallback": "blocked",
                 },
             )
+        selected = list(projection.selected_product_asset_ids)
+        if (
+            selected != selected_from_plan
+            or projection.output_index != output_index
+            or projection.cap_reservation != max_product_refs
+        ):
+            raise ReferenceInputAdmissionError(
+                "Professional E-Commerce physical product projection does not match the Brain plan.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "reference_projection_drift",
+                    "fallback": "blocked",
+                },
+            )
+
+        def product_reference_claim(data: dict[str, Any]) -> tuple[bool, str, str]:
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            scopes = [metadata]
+            asset_metadata = metadata.get("asset_metadata")
+            if isinstance(asset_metadata, dict):
+                scopes.append(asset_metadata)
+                candidate_metadata = asset_metadata.get("candidate_metadata")
+                if isinstance(candidate_metadata, dict):
+                    scopes.append(candidate_metadata)
+            candidate_metadata = metadata.get("candidate_metadata")
+            if isinstance(candidate_metadata, dict):
+                scopes.append(candidate_metadata)
+            role_claims = [
+                str(value or "").strip().lower()
+                for value in [data.get("role"), *(scope.get("role") for scope in scopes)]
+                if str(value or "").strip()
+            ]
+            channel_claims = [
+                str(value or "").strip().lower()
+                for scope in scopes
+                for value in (
+                    scope.get("codex_native_reference_channel"),
+                    scope.get("reference_truth_channel"),
+                )
+                if str(value or "").strip()
+            ]
+            role = str(data.get("role") or "").strip().lower()
+            channel = str(metadata.get("codex_native_reference_channel") or "").strip().lower()
+            is_product = "product_reference" in role_claims or "product_truth" in channel_claims
+            if is_product and (
+                role != "product_reference"
+                or any(claim != "product_reference" for claim in role_claims)
+                or not channel_claims
+                or any(claim != "product_truth" for claim in channel_claims)
+            ):
+                raise ReferenceInputAdmissionError(
+                    "A canonical Professional E-Commerce product reference has a conflicting claim.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "product_truth_admission_invalid",
+                        "fallback": "blocked",
+                    },
+                )
+            return is_product, role, channel
 
         actual_product_ids = []
         for item in combined_assets:
             data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
-            item_metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-            role = str(data.get("role") or "").strip().lower()
-            channel = str(item_metadata.get("codex_native_reference_channel") or "").strip().lower()
-            if role == "product_reference" or channel == "product_truth":
+            is_product, _role, _channel = product_reference_claim(data)
+            if is_product:
                 asset_id = str(data.get("asset_id") or data.get("source_id") or "").strip()
                 if asset_id:
                     actual_product_ids.append(asset_id)
-        actual_product_id_set = set(actual_product_ids)
-        if actual_product_id_set != set(pool_ids):
+        if actual_product_ids != pool_ids or len(actual_product_ids) != len(set(actual_product_ids)):
+            failure_code = (
+                "reference_projection_drift"
+                if projection.projection_state == "legacy_drift_recovery"
+                else "product_truth_admission_invalid"
+            )
             raise ReferenceInputAdmissionError(
-                "Professional E-Commerce product truth pool does not match bound product references.",
+                "Professional E-Commerce product truth admission does not match current canonical references.",
                 provider=self.provider_name,
                 detail={
-                    "reference_input_failure_code": "ecommerce_product_truth_pool_mismatch",
+                    "reference_input_failure_code": failure_code,
                     "fallback": "blocked",
                 },
             )
-        if not actual_product_id_set.intersection(selected):
+        if not set(actual_product_ids).intersection(selected):
             raise ReferenceInputAdmissionError(
                 "Selected Professional E-Commerce product truth is unavailable.",
                 provider=self.provider_name,
@@ -2400,17 +2638,56 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 },
             )
 
+        source_by_id = {item.asset_id: item for item in admission.sources}
+        for item in combined_assets:
+            data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
+            item_metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            is_product, role, channel = product_reference_claim(data)
+            if not is_product:
+                continue
+            asset_id = str(data.get("asset_id") or data.get("source_id") or "").strip()
+            source = source_by_id.get(asset_id)
+            path = Path(str(data.get("file_path") or ""))
+            if (
+                source is None
+                or role != "product_reference"
+                or channel != "product_truth"
+                or not path.is_file()
+            ):
+                raise ReferenceInputAdmissionError(
+                    "A canonical Professional E-Commerce product reference is unavailable.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "product_truth_admission_invalid",
+                        "fallback": "blocked",
+                    },
+                )
+            actual_digest = self._reference_content_fingerprint(path)
+            if actual_digest != source.content_sha256:
+                raise ReferenceInputAdmissionError(
+                    "A canonical Professional E-Commerce product reference changed after admission.",
+                    provider=self.provider_name,
+                    detail={
+                        "reference_input_failure_code": "product_truth_admission_invalid",
+                        "fallback": "blocked",
+                    },
+                )
         suppressed = [asset_id for asset_id in pool_ids if asset_id not in selected]
         scoped: list[dict[str, Any]] = []
         for item in combined_assets:
             data = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item or {})
             item_metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-            role = str(data.get("role") or "").strip().lower()
-            channel = str(item_metadata.get("codex_native_reference_channel") or "").strip().lower()
-            if role == "product_reference" or channel == "product_truth":
+            is_product, _role, _channel = product_reference_claim(data)
+            if is_product:
                 asset_id = str(data.get("asset_id") or data.get("source_id") or "").strip()
                 if asset_id not in selected:
                     continue
+                data["provider_input_required"] = True
+                data["metadata"] = {
+                    **item_metadata,
+                    "provider_input_required": True,
+                    "doc263_physical_product_reference_required": True,
+                }
             scoped.append(data)
         request.metadata["professional_ecommerce_product_truth_projection"] = {
             "output_index": output_index,

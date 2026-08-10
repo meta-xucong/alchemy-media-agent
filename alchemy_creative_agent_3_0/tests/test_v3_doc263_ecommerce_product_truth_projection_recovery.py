@@ -7,6 +7,7 @@ lands. They must remain deterministic and must not reach an external provider.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from io import BytesIO
 from pathlib import Path
@@ -22,6 +23,12 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
     ReferenceInputAdmissionError,
 )
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projection import (
+    ProductTruthAdmission,
+    ProductTruthSource,
+    build_physical_product_projection,
+    build_product_truth_admission,
+)
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -148,7 +155,7 @@ def _generation_request(
         purpose="professional ecommerce product image",
         priority=1,
     )
-    return GenerationRequest(
+    request = GenerationRequest(
         asset_spec=asset,
         prompt_compilation=PromptCompilationResult(
             prompt_compilation_id="prompt_doc263_product_truth",
@@ -178,6 +185,88 @@ def _generation_request(
             "visual_cluster": _adaptive_cluster(pool_product_ids),
         },
     )
+    return _attach_server_owned_ecommerce_contract(
+        request,
+        references=references,
+        pool_product_ids=pool_product_ids,
+        selected_product_ids=selected_product_ids,
+    )
+
+
+def _attach_server_owned_ecommerce_contract(
+    request: GenerationRequest,
+    *,
+    references: list[dict[str, object]],
+    pool_product_ids: list[str],
+    selected_product_ids: list[str],
+    projection_state: str = "ready",
+    historical_lineage_id: str | None = None,
+) -> GenerationRequest:
+    by_asset_id = {str(item["asset_id"]): item for item in references}
+    sources = []
+    for asset_id in pool_product_ids:
+        reference = by_asset_id[asset_id]
+        path = Path(str(reference["file_path"]))
+        content_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        sources.append(
+            ProductTruthSource(
+                asset_id=asset_id,
+                content_sha256=content_sha256,
+                consent_reference=f"fixture:{asset_id}:consent",
+                rights_reference=f"fixture:{asset_id}:rights",
+                receipt_digest=hashlib.sha256(
+                    "|".join(
+                        (
+                            "v3_upload_authorization_receipt_v1",
+                            asset_id,
+                            content_sha256,
+                            "product_reference",
+                            "product_truth",
+                            f"fixture:{asset_id}:consent",
+                            f"fixture:{asset_id}:rights",
+                        )
+                    ).encode("utf-8")
+                ).hexdigest(),
+                role="product_reference",
+                product_truth_channel="product_truth",
+                readiness="ready",
+                file_integrity="sha256_verified",
+                provenance="fixture_product_api",
+            )
+        )
+    admission = build_product_truth_admission(
+        project_id="doc263_project",
+        job_id="doc263_server_job",
+        sources=sources,
+        product_truth_plan_digest=hashlib.sha256(
+            b"doc263_fixture_plan_digest"
+        ).hexdigest(),
+    )
+    projection = build_physical_product_projection(
+        job_id=admission.job_id,
+        output_index=1,
+        admission=admission,
+        selected_product_asset_ids=selected_product_ids,
+        selection_source="remote_brain_image_set_plan.evidence_dimensions_by_output",
+        selection_role=(
+            "product_detail_or_print_view"
+            if len(selected_product_ids) == 2
+            else "lifestyle_primary_product_view"
+        ),
+        cap_reservation=2,
+        projection_state=projection_state,
+        historical_lineage_id=historical_lineage_id,
+    )
+    request.metadata = {
+        **request.metadata,
+        "project_id": admission.project_id,
+        "job_id": admission.job_id,
+        "professional_ecommerce_contract_authority": "v3_product_api",
+        "professional_ecommerce_product_truth_admission": admission.model_dump(),
+        "professional_ecommerce_physical_product_projection": projection.model_dump(),
+        "professional_ecommerce_physical_product_projections": {"1": projection.model_dump()},
+    }
+    return request
 
 
 def _doc263_references(
@@ -266,6 +355,14 @@ def _persist_projection_drift_failure(handlers, job_id: str) -> None:
     record.status = ProductJobStatusValue.BLOCKED
     record.request.metadata = {
         **dict(record.request.metadata),
+        "doc263_reference_projection_drift_receipt": {
+            "schema_version": "doc263_reference_projection_drift_receipt_v1",
+            "authority": "v3_product_api",
+            "job_id": job_id,
+            "project_id": record.request.metadata["project_id"],
+            "failure_code": "reference_projection_drift",
+            "source": "provider_pre_dispatch_contract",
+        },
         "historical_reference_projection": {
             "failure_code": "reference_projection_drift",
             "stale_input_asset_ids": ["stale_failed_job_product"],
@@ -279,7 +376,7 @@ def _persist_projection_drift_failure(handlers, job_id: str) -> None:
     handlers.service.job_store.save(record)
 
 
-def test_doc263_reproduces_legacy_adaptive_projection_drift_without_provider_dispatch(tmp_path) -> None:
+def test_doc263_admitted_projection_reaches_pre_dispatch_materialization_without_provider_call(tmp_path) -> None:
     references, product_ids, _face_ids = _doc263_references(tmp_path)
     provider = _NoProviderDispatch()
     request = _generation_request(
@@ -288,9 +385,9 @@ def test_doc263_reproduces_legacy_adaptive_projection_drift_without_provider_dis
         selected_product_ids=["product_3"],
     )
 
-    with pytest.raises(ReferenceInputAdmissionError, match="truth pool"):
-        provider.generate(request)
+    assets = provider._reference_assets(request)  # noqa: SLF001
 
+    assert [item["asset_id"] for item in assets] == ["product_3", "face_0", "face_1", "face_2"]
     assert provider.dispatch_calls == 0
 
 
@@ -331,15 +428,19 @@ def test_doc263_freezes_selected_physical_product_projection_before_adaptive_sel
 
 def test_doc263_missing_canonical_source_fails_as_admission_before_projection(tmp_path) -> None:
     references, product_ids, _face_ids = _doc263_references(tmp_path)
-    missing_current_product = [
-        item for item in references if item["asset_id"] != "product_0"
-    ]
     request = _generation_request(
-        references=missing_current_product,
+        references=references,
         pool_product_ids=product_ids,
         selected_product_ids=["product_3"],
     )
-    request.metadata.pop("visual_cluster", None)
+    request = request.model_copy(
+        update={
+            "metadata": {
+                **request.metadata,
+                "uploaded_assets": [item for item in references if item["asset_id"] != "product_0"],
+            }
+        }
+    )
 
     assert _failure_code(
         ProductionImageGenerationProvider(),
@@ -354,10 +455,14 @@ def test_doc263_injected_legacy_projection_loss_is_reference_projection_drift(tm
         pool_product_ids=product_ids,
         selected_product_ids=["product_3"],
     )
-    request.metadata["legacy_reference_projection"] = {
-        "selected_product_truth_asset_ids": ["product_3"],
-        "projection_status": "lost_after_admission",
-    }
+    request = _attach_server_owned_ecommerce_contract(
+        request,
+        references=references,
+        pool_product_ids=product_ids,
+        selected_product_ids=["product_3"],
+        projection_state="legacy_drift_recovery",
+        historical_lineage_id="job_historical_projection_drift",
+    )
     injected_projection = [
         references[3],
         references[4],
@@ -369,6 +474,533 @@ def test_doc263_injected_legacy_projection_loss_is_reference_projection_drift(tm
         ProductionImageGenerationProvider(),
         request.model_copy(update={"metadata": {**request.metadata, "uploaded_assets": injected_projection}}),
     ) == "reference_projection_drift"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "forged_admission",
+        "forged_projection",
+        "admission_schema",
+        "projection_digest",
+        "job_binding",
+        "project_binding",
+        "missing_consent",
+        "file_digest_drift",
+        "duplicate_product_input",
+        "role_channel_drift",
+        "nested_claimed_channel_drift",
+        "projection_map_missing",
+        "projection_map_extra",
+        "projection_map_cross_continuation",
+    ],
+)
+def test_doc263_provider_rejects_forged_or_drifted_server_contract_before_dispatch(
+    tmp_path,
+    mutation: str,
+) -> None:
+    references, product_ids, _face_ids = _doc263_references(tmp_path)
+    request = _generation_request(
+        references=references,
+        pool_product_ids=product_ids,
+        selected_product_ids=["product_3"],
+    )
+    metadata = dict(request.metadata)
+    if mutation == "forged_admission":
+        metadata["professional_ecommerce_product_truth_admission"] = {"forged": True}
+    elif mutation == "forged_projection":
+        metadata["professional_ecommerce_physical_product_projection"] = {"forged": True}
+    elif mutation == "admission_schema":
+        admission = dict(metadata["professional_ecommerce_product_truth_admission"])
+        admission["schema_version"] = "forged_schema"
+        metadata["professional_ecommerce_product_truth_admission"] = admission
+    elif mutation == "projection_digest":
+        projection = dict(metadata["professional_ecommerce_physical_product_projection"])
+        projection["projection_digest"] = "forged"
+        metadata["professional_ecommerce_physical_product_projection"] = projection
+    elif mutation == "job_binding":
+        admission = build_product_truth_admission(
+            project_id="doc263_project",
+            job_id="other_server_job",
+            sources=[
+                ProductTruthSource(**source)
+                for source in metadata["professional_ecommerce_product_truth_admission"]["sources"]
+            ],
+            product_truth_plan_digest=hashlib.sha256(
+                b"doc263_fixture_plan_digest"
+            ).hexdigest(),
+        )
+        projection = build_physical_product_projection(
+            job_id=admission.job_id,
+            output_index=1,
+            admission=admission,
+            selected_product_asset_ids=["product_3"],
+            selection_source="remote_brain_image_set_plan.evidence_dimensions_by_output",
+            selection_role="lifestyle_primary_product_view",
+            cap_reservation=1,
+        )
+        metadata["professional_ecommerce_product_truth_admission"] = admission.model_dump()
+        metadata["professional_ecommerce_physical_product_projection"] = projection.model_dump()
+    elif mutation == "project_binding":
+        admission = build_product_truth_admission(
+            project_id="other_project",
+            job_id="doc263_server_job",
+            sources=[
+                ProductTruthSource(**source)
+                for source in metadata["professional_ecommerce_product_truth_admission"]["sources"]
+            ],
+            product_truth_plan_digest=hashlib.sha256(
+                b"doc263_fixture_plan_digest"
+            ).hexdigest(),
+        )
+        projection = build_physical_product_projection(
+            job_id=admission.job_id,
+            output_index=1,
+            admission=admission,
+            selected_product_asset_ids=["product_3"],
+            selection_source="remote_brain_image_set_plan.evidence_dimensions_by_output",
+            selection_role="lifestyle_primary_product_view",
+            cap_reservation=1,
+        )
+        metadata["professional_ecommerce_product_truth_admission"] = admission.model_dump()
+        metadata["professional_ecommerce_physical_product_projection"] = projection.model_dump()
+    elif mutation == "missing_consent":
+        admission = dict(metadata["professional_ecommerce_product_truth_admission"])
+        sources = [dict(item) for item in admission["sources"]]
+        sources[0]["consent_reference"] = ""
+        admission["sources"] = sources
+        metadata["professional_ecommerce_product_truth_admission"] = admission
+    elif mutation == "duplicate_product_input":
+        metadata["uploaded_assets"] = [*references, references[-4]]
+    elif mutation == "role_channel_drift":
+        drifted = [dict(item) for item in references]
+        drifted[0] = {
+            **drifted[0],
+            "metadata": {
+                **dict(drifted[0]["metadata"]),
+                "codex_native_reference_channel": "portrait_identity",
+            },
+        }
+        metadata["uploaded_assets"] = drifted
+    elif mutation == "nested_claimed_channel_drift":
+        drifted = [dict(item) for item in references]
+        drifted[0] = {
+            **drifted[0],
+            "metadata": {
+                **dict(drifted[0]["metadata"]),
+                "asset_metadata": {
+                    "candidate_metadata": {
+                        "reference_truth_channel": "unknown_channel",
+                    }
+                },
+            },
+        }
+        metadata["uploaded_assets"] = drifted
+    elif mutation == "projection_map_missing":
+        metadata.pop("professional_ecommerce_physical_product_projections")
+    elif mutation == "projection_map_extra":
+        projections = dict(metadata["professional_ecommerce_physical_product_projections"])
+        projections["2"] = dict(projections["1"])
+        metadata["professional_ecommerce_physical_product_projections"] = projections
+    elif mutation == "projection_map_cross_continuation":
+        metadata["job_id"] = "doc263_fresh_continuation_job"
+    else:
+        Path(str(references[0]["file_path"])).write_bytes(_png_bytes((1, 2, 3)))
+    request = request.model_copy(update={"metadata": metadata})
+
+    expected_failure = (
+        "ecommerce_product_truth_selection_missing"
+        if mutation in {"projection_map_missing", "projection_map_extra"}
+        else "product_truth_admission_invalid"
+    )
+    assert _failure_code(ProductionImageGenerationProvider(), request) == expected_failure
+
+
+def test_doc263_multi_output_projection_map_is_complete_and_job_bound(tmp_path) -> None:
+    references, product_ids, _face_ids = _doc263_references(tmp_path)
+    request = _generation_request(
+        references=references,
+        pool_product_ids=product_ids,
+        selected_product_ids=["product_3"],
+    )
+    metadata = dict(request.metadata)
+    plan = dict(metadata["template_deliverable_plan"])
+    first = dict(plan["deliverables"][0])
+    second = {
+        **first,
+        "deliverable_id": "doc263_deliverable_2",
+        "output_index": 2,
+        "metadata": {
+            **dict(first["metadata"]),
+            "product_truth_selection_role": "product_detail_or_print_view",
+            "selected_product_truth_asset_ids": ["product_2", "product_3"],
+            "admitted_product_truth_asset_ids": ["product_2", "product_3"],
+        },
+    }
+    plan["requested_image_count"] = 2
+    plan["effective_image_count"] = 2
+    plan["deliverables"] = [first, second]
+    admission = ProductTruthAdmission.from_mapping(
+        metadata["professional_ecommerce_product_truth_admission"]
+    )
+    second_projection = build_physical_product_projection(
+        job_id=admission.job_id,
+        output_index=2,
+        admission=admission,
+        selected_product_asset_ids=["product_2", "product_3"],
+        selection_source="remote_brain_image_set_plan.evidence_dimensions_by_output",
+        selection_role="product_detail_or_print_view",
+        cap_reservation=2,
+    )
+    metadata["template_deliverable_plan"] = plan
+    metadata["professional_ecommerce_physical_product_projections"] = {
+        **dict(metadata["professional_ecommerce_physical_product_projections"]),
+        "2": second_projection.model_dump(),
+    }
+    request = request.model_copy(
+        update={
+            "asset_spec": request.asset_spec.model_copy(update={"priority": 2}),
+            "metadata": metadata,
+        }
+    )
+
+    assets = ProductionImageGenerationProvider()._reference_assets(request)  # noqa: SLF001
+
+    assert [item["asset_id"] for item in assets] == [
+        "product_2",
+        "product_3",
+        "face_0",
+        "face_1",
+        "face_2",
+    ]
+    assert len(assets) == 5
+
+
+def test_doc263_multi_output_projection_map_rejects_missing_output_and_cross_job_reuse(tmp_path) -> None:
+    references, product_ids, _face_ids = _doc263_references(tmp_path)
+    request = _generation_request(
+        references=references,
+        pool_product_ids=product_ids,
+        selected_product_ids=["product_3"],
+    )
+    metadata = dict(request.metadata)
+    plan = dict(metadata["template_deliverable_plan"])
+    first = dict(plan["deliverables"][0])
+    second = {
+        **first,
+        "deliverable_id": "doc263_deliverable_2",
+        "output_index": 2,
+        "metadata": {
+            **dict(first["metadata"]),
+            "product_truth_selection_role": "product_detail_or_print_view",
+            "selected_product_truth_asset_ids": ["product_2", "product_3"],
+            "admitted_product_truth_asset_ids": ["product_2", "product_3"],
+        },
+    }
+    plan["deliverables"] = [first, second]
+    admission = ProductTruthAdmission.from_mapping(
+        metadata["professional_ecommerce_product_truth_admission"]
+    )
+    second_projection = build_physical_product_projection(
+        job_id=admission.job_id,
+        output_index=2,
+        admission=admission,
+        selected_product_asset_ids=["product_2", "product_3"],
+        selection_source="remote_brain_image_set_plan.evidence_dimensions_by_output",
+        selection_role="product_detail_or_print_view",
+        cap_reservation=2,
+    )
+    metadata["template_deliverable_plan"] = plan
+    metadata["professional_ecommerce_physical_product_projections"] = {
+        "1": metadata["professional_ecommerce_physical_product_projections"]["1"],
+        "2": second_projection.model_dump(),
+    }
+    second_output_request = request.model_copy(
+        update={
+            "asset_spec": request.asset_spec.model_copy(update={"priority": 2}),
+            "metadata": metadata,
+        }
+    )
+
+    missing = dict(second_output_request.metadata)
+    missing["professional_ecommerce_physical_product_projections"] = {
+        "1": missing["professional_ecommerce_physical_product_projections"]["1"]
+    }
+    assert _failure_code(
+        ProductionImageGenerationProvider(),
+        second_output_request.model_copy(update={"metadata": missing}),
+    ) == "ecommerce_product_truth_selection_missing"
+
+    reused = dict(second_output_request.metadata)
+    reused["job_id"] = "doc263_new_continuation_job"
+    assert _failure_code(
+        ProductionImageGenerationProvider(),
+        second_output_request.model_copy(update={"metadata": reused}),
+    ) == "product_truth_admission_invalid"
+
+
+def test_doc263_product_api_issues_projection_from_current_project_pool_and_brain_plan(tmp_path) -> None:
+    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+
+    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers.service.asset_store.storage_root = tmp_path / "uploads"
+    product_ids = [
+        _ready_product_upload(handlers, tmp_path, color=(100 + index, 120, 140))
+        for index in range(4)
+    ]
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create a professional ecommerce product image set.",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    for product_id in product_ids:
+        handlers.post_project_reference(
+            project["project_id"],
+            {
+                "asset_ref_id": product_id,
+                "source_type": "uploaded",
+                "use_policy": "product",
+            },
+        )
+
+    created = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create the current canonical product image set.",
+        },
+    )
+    record = handlers.service.get_job_record(created["job_id"])
+    assert record is not None
+    metadata = record.request.metadata
+    admission = metadata["professional_ecommerce_product_truth_admission"]
+    projections = metadata["professional_ecommerce_physical_product_projections"]
+    plan = metadata["template_deliverable_plan"]
+
+    assert metadata["professional_ecommerce_contract_authority"] == "v3_product_api"
+    assert admission["canonical_asset_ids"] == product_ids
+    for deliverable in plan["deliverables"]:
+        output_index = str(deliverable["output_index"])
+        expected = deliverable["metadata"]["selected_product_truth_asset_ids"]
+        assert projections[output_index]["selected_product_asset_ids"] == expected
+        assert projections[output_index]["admission_binding_digest"] == admission["source_binding_digest"]
+
+
+def test_doc263_tampered_server_upload_authorization_receipt_closes_before_planning(tmp_path) -> None:
+    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+
+    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    product_id = _ready_product_upload(handlers, tmp_path)
+    upload = handlers.service.get_uploaded_asset(product_id)
+    assert upload is not None
+    tampered_metadata = {
+        **upload.metadata,
+        "upload_authorization_receipt": {
+            **upload.metadata["upload_authorization_receipt"],
+            "receipt_digest": "forged",
+        },
+    }
+    handlers.service.asset_store._save_record(  # noqa: SLF001
+        upload.model_copy(update={"metadata": tampered_metadata})
+    )
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create a professional ecommerce product image.",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": product_id,
+            "source_type": "uploaded",
+            "use_policy": "product",
+        },
+    )
+
+    with pytest.raises(ValueError, match="product_truth_admission_invalid"):
+        handlers.post_project_job(
+            project["project_id"],
+            {
+                "template_id": "ecommerce_template",
+                "user_input": "Create from the current product original.",
+            },
+        )
+
+
+def test_doc263_does_not_change_ordinary_reference_materialization(tmp_path) -> None:
+    reference = _reference(
+        asset_id="ordinary_product",
+        role="product_reference",
+        path=_image(tmp_path / "ordinary.png", (80, 120, 160)),
+        provider_input_required=False,
+    )
+    request = _generation_request(
+        references=[reference],
+        pool_product_ids=["ordinary_product"],
+        selected_product_ids=["ordinary_product"],
+    )
+    request = request.model_copy(
+        update={
+            "metadata": {
+                "uploaded_assets": [reference],
+                "visual_cluster": request.metadata["visual_cluster"],
+                "professional_product_truth_required": False,
+            }
+        }
+    )
+
+    assert [
+        item["asset_id"]
+        for item in ProductionImageGenerationProvider()._reference_assets(request)  # noqa: SLF001
+    ] == ["ordinary_product"]
+
+
+def test_doc263_client_drift_marker_cannot_upgrade_missing_admission_to_projection_drift(tmp_path) -> None:
+    references, product_ids, _face_ids = _doc263_references(tmp_path)
+    request = _generation_request(
+        references=references,
+        pool_product_ids=product_ids,
+        selected_product_ids=["product_3"],
+    )
+    request = request.model_copy(
+        update={
+            "metadata": {
+                **request.metadata,
+                "legacy_reference_projection": {"projection_status": "lost_after_admission"},
+                "uploaded_assets": [item for item in references if item["asset_id"] != "product_0"],
+            }
+        }
+    )
+
+    assert _failure_code(ProductionImageGenerationProvider(), request) == "product_truth_admission_invalid"
+
+
+def test_doc263_public_projection_map_and_drift_receipt_cannot_be_forged() -> None:
+    from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+
+    service = V3ProductApiService()
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_job(
+            {
+                "user_input": "Create a professional ecommerce product image.",
+                "scenario_selection": {"scenario_id": "ecommerce"},
+                "metadata": {
+                    "professional_ecommerce_physical_product_projections": {"1": {}},
+                },
+            }
+        )
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service.create_job(
+            {
+                "user_input": "Continue a professional ecommerce product image.",
+                "scenario_selection": {"scenario_id": "ecommerce"},
+                "metadata": {
+                    "doc263_reference_projection_drift_receipt": {
+                        "schema_version": "doc263_reference_projection_drift_receipt_v1",
+                    },
+                },
+            }
+        )
+
+
+def test_doc263_public_historical_drift_marker_cannot_create_superseding_job(tmp_path) -> None:
+    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+
+    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    product_id = _ready_product_upload(handlers, tmp_path)
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create a professional ecommerce product image.",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    original = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create from the current product original.",
+            "uploaded_asset_ids": [product_id],
+            "metadata": {"idempotency_key": "doc263-public-marker-original"},
+        },
+    )
+    old_record = handlers.service.get_job_record(original["job_id"])
+    assert old_record is not None
+    old_record.status = ProductJobStatusValue.BLOCKED
+    old_record.request.metadata = {
+        **dict(old_record.request.metadata),
+        "historical_reference_projection": {"failure_code": "reference_projection_drift"},
+        "legacy_reference_projection": {"projection_status": "lost_after_admission"},
+    }
+    old_record.warnings.append("reference_projection_drift: public marker only")
+    old_record.lifecycle = handlers.service._build_lifecycle(old_record)  # noqa: SLF001
+    handlers.service.job_store.save(old_record)
+
+    next_job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create again from current canonical originals.",
+            "metadata": {"idempotency_key": "doc263-public-marker-next"},
+        },
+    )
+
+    assert next_job["job_id"] != original["job_id"]
+    assert "supersedes_job_id" not in next_job["metadata"]
+
+
+def test_doc263_product_api_records_server_owned_drift_receipt_from_pre_dispatch_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+
+    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    product_id = _ready_product_upload(handlers, tmp_path)
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create a professional ecommerce product image.",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    created = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create from the current product original.",
+            "uploaded_asset_ids": [product_id],
+        },
+    )
+
+    def fail_pre_dispatch(*_args, **_kwargs):
+        raise ReferenceInputAdmissionError(
+            "Injected local projection receipt mismatch.",
+            provider="fixture_provider",
+            detail={
+                "reference_input_failure_code": "reference_projection_drift",
+                "fallback": "blocked",
+            },
+        )
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "generate_job", fail_pre_dispatch)
+    blocked = handlers.service.generate_asset_series(created["job_id"])
+    record = handlers.service.get_job_record(created["job_id"])
+
+    assert blocked.status == ProductJobStatusValue.BLOCKED
+    assert record is not None
+    assert record.request.metadata["doc263_reference_projection_drift_receipt"] == {
+        "schema_version": "doc263_reference_projection_drift_receipt_v1",
+        "authority": "v3_product_api",
+        "job_id": created["job_id"],
+        "project_id": project["project_id"],
+        "failure_code": "reference_projection_drift",
+        "source": "provider_pre_dispatch_contract",
+    }
 
 
 def test_doc263_repeated_current_reference_command_has_one_identity(tmp_path) -> None:
@@ -427,6 +1059,42 @@ def test_doc263_repeated_current_reference_command_has_one_identity(tmp_path) ->
         assert forged_digest != "fixture-current-binding"
 
 
+def test_doc263_first_selected_product_command_is_immediately_idempotent(tmp_path) -> None:
+    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+
+    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    product_id = _ready_product_upload(handlers, tmp_path)
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create a professional ecommerce product image set.",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    command_payload = {
+        "template_id": "ecommerce_template",
+        "user_input": "Create from this selected current product original.",
+        "uploaded_asset_ids": [product_id],
+        "metadata": {
+            "idempotency_key": "doc263-first-selected-product-replay",
+            "current_reference_binding_digest": "client-forged-stale-digest",
+        },
+    }
+
+    first = handlers.post_project_job(project["project_id"], command_payload)
+    replay = handlers.post_project_job(project["project_id"], command_payload)
+    loaded = handlers.get_project(project["project_id"])["project"]
+    active_products = _active_product_references(loaded)
+    derived_digest = str(first["metadata"].get("current_reference_binding_digest") or "")
+
+    assert first["job_id"] == replay["job_id"]
+    assert len(loaded["job_ids"]) == 1
+    assert [item["asset_ref_id"] for item in active_products] == [product_id]
+    assert derived_digest
+    assert derived_digest != "client-forged-stale-digest"
+    assert replay["metadata"]["current_reference_binding_digest"] == derived_digest
+
+
 def test_doc263_projection_drift_continuation_is_clean_and_superseding(tmp_path) -> None:
     from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
     from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
@@ -477,7 +1145,11 @@ def test_doc263_projection_drift_continuation_is_clean_and_superseding(tmp_path)
 
     assert continuation["job_id"] != old_job["job_id"]
     assert continuation["metadata"]["supersedes_job_id"] == old_job["job_id"]
-    assert continuation["metadata"]["product_truth_admission"]["canonical_asset_ids"] == product_ids
+    continuation_record = handlers.service.get_job_record(continuation["job_id"])
+    assert continuation_record is not None
+    assert continuation_record.request.metadata["professional_ecommerce_product_truth_admission"][
+        "canonical_asset_ids"
+    ] == product_ids
     assert continuation["ecommerce"]["product_truth"]["evidence_sources"] == [
         f"uploaded_asset:{product_id}" for product_id in product_ids
     ]
