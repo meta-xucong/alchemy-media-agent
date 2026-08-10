@@ -3538,7 +3538,7 @@ function renderV3ProjectSnapshot() {
   els.v3ProjectSnapshot.innerHTML = "";
   if (!project?.project_id) {
     els.v3ProjectSnapshot.classList.add("empty-v3-list");
-    els.v3ProjectSnapshot.textContent = "打开项目后，这里会用最简单的方式告诉你：项目类型、已确认参考、生成进度和下一步建议。";
+    els.v3ProjectSnapshot.textContent = "打开项目后，这里会用最简单的方式告诉你：项目类型、原始参考图、延续方向、生成进度和下一步建议。";
     return;
   }
   els.v3ProjectSnapshot.classList.remove("empty-v3-list");
@@ -4130,7 +4130,7 @@ function renderV3ProjectOutputBoard() {
     els.v3ProjectOutputBoard.textContent = "正式交付图片会显示在这里。满意的成果可以单独设为下一步的延续方向。";
     return;
   }
-  items.slice(0, 6).forEach((item, index) => {
+  items.forEach((item, index) => {
     const urls = v3OutputImageCandidates(item);
     const isSelected = v3IsOutputItemSelected(item, project);
     const title = isSelected ? `已选延续成片 ${index + 1}` : `项目图片 ${index + 1}`;
@@ -4153,7 +4153,7 @@ function renderV3ProjectOutputBoard() {
       <div class="v3-output-actions">
         ${ecommerceProject ? "" : `<button type="button" data-v3-output-action="prompt" data-v3-output-index="${index}">提示词</button>`}
         <button type="button" data-v3-output-action="select" data-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>${isSelected ? "已设为延续方向" : "设为延续方向"}</button>
-        <button type="button" data-v3-output-action="delete" data-v3-output-index="${index}">删除这张</button>
+        <button type="button" data-v3-output-action="remove_from_project" data-v3-output-index="${index}">从项目成果移除</button>
       </div>
     `;
     const image = card.querySelector(".v3-project-output-preview img");
@@ -4180,7 +4180,7 @@ function renderV3ProjectOutputBoard() {
       <div class="v3-review-output-grid"></div>
     `;
     const grid = details.querySelector(".v3-review-output-grid");
-    reviewItems.slice(0, 24).forEach((item, index) => {
+    reviewItems.forEach((item, index) => {
       const title = `复核图 ${index + 1}`;
       const urls = v3OutputImageCandidates(item);
       const card = document.createElement("article");
@@ -4218,8 +4218,8 @@ async function handleV3ProjectOutputBoardClick(event) {
     });
   } else if (action === "select") {
     await selectV3OutputItem(item);
-  } else if (action === "delete") {
-    await deleteV3OutputItem(item);
+  } else if (action === "remove_from_project") {
+    await removeV3OutputFromProject(item);
   }
 }
 
@@ -4264,21 +4264,23 @@ async function selectV3OutputItem(item) {
   }
 }
 
-async function deleteV3OutputItem(item) {
+async function removeV3OutputFromProject(item) {
   const projectId = v3State.currentProject?.project_id;
   const outputId = v3OutputItemIdentity(item);
   if (!projectId || !outputId) {
     updateV3Notice("这张图暂时没有可移除的记录。", "warning");
     return;
   }
-  const ok = window.confirm("从这个项目里移除这张图？不会影响其他图片。");
+  const ok = window.confirm(
+    "从当前项目成果中移除这张图？\n\n它不会删除服务器中的图片文件或项目历史，只会停止把这张图作为当前项目成果和后续生成方向。",
+  );
   if (!ok) return;
   try {
-    setV3Busy(true, "正在移除这张图...");
+    setV3Busy(true, "正在从项目成果中移除...");
     const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/outputs/${encodeURIComponent(outputId)}/unselect`, {
       method: "POST",
       body: {
-        plain_text: "用户从项目图片里移除了这张图。",
+        plain_text: "用户从当前项目成果中移除了这张图。",
         metadata: { frontend_surface: "commercial_v3_project_mode", removed_from: "image_card" },
       },
     });
@@ -4289,7 +4291,7 @@ async function deleteV3OutputItem(item) {
     await loadV3ProjectOutputs({ silent: true, force: true });
     renderV3Job(v3State.currentJob);
     renderV3ProjectDetail();
-    updateV3Notice("已从这个项目里移除这张图。后续生成不会再优先沿用它。", "success");
+    updateV3Notice("已从当前项目成果中移除。这张图仍保留在项目历史里，后续生成不会再沿用它。", "success");
   } catch (error) {
     updateV3Notice(`移除失败：${friendlyError(error)}`, "error");
   } finally {
@@ -4383,7 +4385,7 @@ function renderV3UsefulReferences() {
       <div class="v3-project-reference-group-grid"></div>
     `;
     const grid = group.querySelector(".v3-project-reference-group-grid");
-    refs.slice(0, 6).forEach((ref, index) => {
+    refs.forEach((ref, index) => {
       const urls = v3ReferenceImageCandidates(ref);
       const outputId = ref.created_from_output_id || ref.asset_ref_id || ref.reference_id || "";
       const isGeneratedReference = sourceKind === "continuation_outputs";
@@ -4571,7 +4573,7 @@ function renderV3ProjectWorkflow() {
     },
     {
       label: "整理参考",
-      text: selectedRefs.length ? `已记录 ${selectedRefs.length} 张后续参考` : "选中喜欢的图后会自动进入参考",
+      text: selectedRefs.length ? `已记录 ${selectedRefs.length} 个已选延续方向` : "选中喜欢的图后会进入延续方向",
       state: selectedRefs.length ? "done" : project ? "active" : "todo",
     },
     {
@@ -4607,7 +4609,7 @@ function v3WorkflowArtifact() {
   const metadataArtifacts = v3State.currentJob?.metadata?.workflow_artifacts || {};
   const brainSummary = v3BrainUserSummary(metadataArtifacts);
   const brainGuidance = v3BrainPromptGuidance(metadataArtifacts);
-  const selectedRefs = v3UsefulReferenceItems(project);
+  const referenceGroups = v3ProjectReferenceGroups(project);
   const avoidNotes = Array.isArray(project?.rejected_direction_notes) ? project.rejected_direction_notes : [];
   const tone = project?.latest_context?.confirmed_visual_tone || project?.memory_summary?.confirmed_style_chips || [];
   return {
@@ -4638,7 +4640,9 @@ function v3WorkflowArtifact() {
         brainGuidance.optimized_direction,
     ),
     restoredWithoutPrompt: Boolean(metadataArtifacts.restored_from_output_store && !metadataArtifacts.final_prompt_available && !metadataArtifacts.prompt_available),
-    selectedReferenceCount: selectedRefs.length,
+    originalReferenceCount: referenceGroups.original_inputs.length,
+    continuationReferenceCount: referenceGroups.continuation_outputs.length,
+    selectedReferenceCount: referenceGroups.original_inputs.length + referenceGroups.continuation_outputs.length,
     avoidNotes,
   };
 }
@@ -4688,7 +4692,7 @@ function renderV3WorkflowArtifacts() {
     return;
   }
   const artifact = v3WorkflowArtifact();
-  const styleLine = artifact.styleNotes.length ? artifact.styleNotes.join("、") : "根据项目目标和已确认参考自动整理";
+  const styleLine = artifact.styleNotes.length ? artifact.styleNotes.join("、") : "根据项目目标和当前参考结构自动整理";
   const layoutLine = artifact.layoutNotes.length ? artifact.layoutNotes.join("、") : "优先保证主体清晰、画面干净、留出可用空间";
   const checkLine = artifact.qualityChecks.length ? artifact.qualityChecks.slice(0, 3).join("、") : "已检查需求、参考和画面方向";
   const avoidLine = artifact.avoidNotes.length ? artifact.avoidNotes.slice(0, 3).join("；") : "暂无需要避开的方向";
@@ -4697,7 +4701,7 @@ function renderV3WorkflowArtifacts() {
     <div class="v3-artifact-card">
       <span>V3 理解到的目标</span>
       <strong>${escapeHtml(v3ShortText(artifact.userRequest || "继续这个项目", 92))}</strong>
-      <p>后续生成都会围绕这个项目目标，并优先读取已确认参考。</p>
+      <p>后续生成都会围绕这个项目目标，并分别读取原始参考图和已选延续方向。</p>
     </div>
     <div class="v3-artifact-card">
       <span>优化后的画面方向</span>
@@ -4707,11 +4711,23 @@ function renderV3WorkflowArtifacts() {
     </div>
     <div class="v3-artifact-card">
       <span>一致性怎么保持</span>
-      <strong>${artifact.selectedReferenceCount ? `沿用 ${artifact.selectedReferenceCount} 个已确认参考` : "等待你确认参考"}</strong>
+      <strong>${
+         artifact.originalReferenceCount && artifact.continuationReferenceCount
+           ? `保留 ${artifact.originalReferenceCount} 张原始参考图，沿用 ${artifact.continuationReferenceCount} 个成片方向`
+           : artifact.originalReferenceCount
+             ? `保留 ${artifact.originalReferenceCount} 张原始参考图`
+             : artifact.continuationReferenceCount
+               ? `沿用 ${artifact.continuationReferenceCount} 个成片方向`
+               : "等待你选择参考"
+       }</strong>
       <p>${escapeHtml(
         v3ShortText(
           artifact.consistencyStrategy ||
-            (artifact.selectedReferenceCount ? "后续生成会优先参考已选图片的风格和画面感觉。" : "在图片卡点“设为后续参考”后，一致性会明显更稳。"),
+            (artifact.continuationReferenceCount
+              ? "后续生成会保留原始参考图的事实，并沿用已选成片允许继承的方向。"
+              : artifact.originalReferenceCount
+                ? "后续生成会优先保留原始参考图的事实；满意成片可单独设为延续方向。"
+                : "在图片卡点“设为后续参考”后，一致性会明显更稳。"),
           110,
         ),
       )}</p>
@@ -4928,7 +4944,7 @@ function renderV3SelectScene() {
     {
       label: "作用",
       value: "锁定后续方向",
-      hint: "满意图片会进入“已确认参考”，后续生成优先沿用它的风格和画面感觉。",
+      hint: "满意图片会进入“已选延续方向”，后续生成只沿用允许继承的画面方向。",
     },
     {
       label: "可选",
@@ -4938,7 +4954,7 @@ function renderV3SelectScene() {
     {
       label: "已选",
       value: `${refs.length} 个方向`,
-      hint: refs.length ? "可以在项目主页的确认参考区移除。" : "选中后会成为项目续作依据。",
+      hint: refs.length ? "可以在项目主页的“已选延续方向”里取消沿用。" : "选中后会成为项目续作依据。",
     },
   ]);
 }
@@ -4952,7 +4968,7 @@ function renderV3ContinueScene() {
     {
       label: "续作依据",
       value: continueRefs.length ? `${continueRefs.length} 个已确认方向` : "还缺少确认方向",
-      hint: continueRefs.length ? "后续会优先读取这些已选图片和参考图，继续保持同一套画面感觉。" : "先把满意图片设为后续参考，再继续生成会更稳。",
+      hint: continueRefs.length ? "后续会优先读取原始参考图，并沿用已选延续方向允许继承的画面感觉。" : "先把满意图片设为后续参考，再继续生成会更稳。",
     },
     {
       label: "长期风格",
@@ -7146,7 +7162,7 @@ function renderV3ProjectOpeningState(projectId) {
   }
   if (els.v3UsefulReferenceBoard) {
     els.v3UsefulReferenceBoard.classList.add("empty-v3-list");
-    els.v3UsefulReferenceBoard.innerHTML = "正在读取已确认参考。";
+    els.v3UsefulReferenceBoard.innerHTML = "正在读取原始参考图和已选延续方向。";
   }
   if (els.v3ProjectSnapshot) {
     els.v3ProjectSnapshot.innerHTML = `
@@ -8980,7 +8996,7 @@ function renderV3ResultBoard(job) {
       </div>
       <div class="v3-output-actions">
         <button type="button" data-v3-result-action="select" data-v3-result-index="${index}" ${isSelected ? "disabled" : ""}>设为后续参考</button>
-        <button type="button" data-v3-result-action="delete" data-v3-result-index="${index}">删除这张</button>
+        <button type="button" data-v3-result-action="remove_from_project" data-v3-result-index="${index}">从项目成果移除</button>
       </div>
     `;
     const image = card.querySelector(".v3-result-preview img");
@@ -9016,7 +9032,7 @@ function renderV3ResultBoard(job) {
         const resultItem = v3State.resultItems[Number(button.dataset.v3ResultIndex || 0)];
         if (!resultItem) return;
         if (button.dataset.v3ResultAction === "select") await selectV3OutputItem(resultItem);
-        if (button.dataset.v3ResultAction === "delete") await deleteV3OutputItem(resultItem);
+        if (button.dataset.v3ResultAction === "remove_from_project") await removeV3OutputFromProject(resultItem);
       });
     });
     els.v3ResultBoard.appendChild(card);

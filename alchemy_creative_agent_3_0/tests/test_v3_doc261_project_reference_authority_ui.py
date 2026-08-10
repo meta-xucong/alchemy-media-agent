@@ -37,6 +37,7 @@ def test_doc261_desktop_groups_uploaded_inputs_and_generated_continuations() -> 
     groups = _function(source, "v3ProjectReferenceGroups", "v3UsefulReferenceItems")
     compatibility = _function(source, "v3UsefulReferenceItems", "v3ReferenceImageCandidates")
     board = _function(source, "renderV3UsefulReferences", "handleV3ReferenceBoardClick")
+    output_board = _function(source, "renderV3ProjectOutputBoard", "handleV3ProjectOutputBoardClick")
     snapshot = _function(source, "renderV3ProjectSnapshot", "renderV3ProjectVisualAssetPanel")
     project_summary = _function(source, "v3ProjectSummaryFromProject", "v3ProjectEmptyImageLabel")
     production = _function(source, "renderV3ProductionEntry", "renderV3StepCards")
@@ -49,11 +50,19 @@ def test_doc261_desktop_groups_uploaded_inputs_and_generated_continuations() -> 
     assert 'source_type === "generated_selected"' in source_type
     assert "original_inputs" in groups
     assert "continuation_outputs" in groups
+    assert "uploaded_product_digests" in groups
     assert "原始参考图" in board
     assert "已选延续方向" in board
     assert "不再作为生成依据" in board
     assert "取消沿用" in board
+    assert "refs.slice(0, 6)" not in board
+    assert "items.slice(0, 6)" not in output_board
+    assert "reviewItems.slice(0, 24)" not in output_board
     assert "设为延续方向" in source
+    assert "从项目成果移除" in source
+    assert "不会删除服务器中的图片文件或项目历史" in source
+    assert "原始参考图和已选延续方向" in source
+    assert "已确认参考" not in source
     assert "if (activeReferences.length) return activeReferences;" in compatibility
     assert ".v3-project-reference-group" in css
     assert "v3ReferenceContentDigest" in source
@@ -76,16 +85,33 @@ def test_doc261_mobile_keeps_the_same_reference_groups_visible() -> None:
     groups = _function(source, "mobileV3ProjectReferenceGroups", "mobileV3UsefulReferences")
     compatibility = _function(source, "mobileV3UsefulReferences", "mobileV3ReferenceThumb")
     board = _function(source, "renderMobileV3ReferenceBoard", "renderMobileV3Timeline")
+    select_output = _function(source, "selectMobileV3OutputItem", "removeMobileV3OutputFromProject")
+    remove_output = _function(source, "removeMobileV3OutputFromProject", "removeMobileV3ProjectReference")
+    remove_reference = _function(source, "removeMobileV3ProjectReference", "renderMobileV3Timeline")
 
     assert "本次生成依据与延续方向" in index
     assert 'id="mobileV3ReferenceCount"' in index
     assert 'source_type === "generated_selected"' in source_type
     assert "original_inputs" in groups
     assert "continuation_outputs" in groups
+    assert "uploaded_product_digests" in groups
+    assert "mobileV3ReferenceContentDigest" in groups
     assert "原始参考图" in board
     assert "已选延续方向" in board
+    assert "data-mobile-v3-reference-action" in board
+    assert "refs.slice(0, 6)" not in board
+    assert "reviewItems.slice(0, 8)" not in source
+    assert "processItems.slice(0, 24)" not in source
     assert "if (active.length) return active;" in compatibility
+    assert "data-mobile-v3-output-action" in source
+    assert "/jobs/${encodeURIComponent(jobId)}/select" in select_output
+    assert "/outputs/${encodeURIComponent(outputId)}/unselect" in remove_output
+    assert "/references/${encodeURIComponent(referenceId)}/remove" in remove_reference
+    assert "不会删除服务器中的图片文件或项目历史" in remove_output
+    assert "已确认参考" not in source
     assert ".v3-mobile-reference-group" in css
+    assert ".v3-mobile-reference-actions" in css
+    assert ".v3-mobile-output-actions" in css
 
 
 def test_doc261_preserves_visual_assets_and_review_only_separation() -> None:

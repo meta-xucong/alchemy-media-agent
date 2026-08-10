@@ -84,6 +84,18 @@ The promotion action on an output is named "set as continuation direction".
 It is an explicit user decision. It does not mutate original-input evidence,
 visual-asset bindings, or review authority.
 
+The project reference board and project output board must not silently hide the
+seventh and later current items. Every active original input, every selected
+continuation direction, and every currently visible formal delivery output
+remains visible and independently manageable. Desktop and mobile both expose
+the same explicit actions:
+
+- stop using an original input as generation evidence;
+- set a formal delivery output as a continuation direction;
+- cancel a selected continuation direction;
+- remove an output from the current project result surface without claiming
+  that its durable media file or append-only history was deleted.
+
 ## 5. Compatibility And Safety
 
 - Existing `ProjectReferenceAsset.source_type` and `OutputRef` records remain
@@ -108,3 +120,11 @@ visual-asset bindings, or review authority.
 5. Review-only images cannot become continuation directions.
 6. Desktop and mobile source grouping regressions pass without changes to
    generation, provider, review, or persistence contracts.
+7. Neither desktop nor mobile silently truncates current reference or current
+   formal delivery cards.
+8. A mobile user can manage original inputs and continuation directions with
+   the same server-owned actions as a desktop user.
+9. "Remove from project results" is never labeled as deletion of the durable
+   output file or project history.
+10. Project review-only and process records are not silently counted as
+    visible while hiding older records from the project detail.
