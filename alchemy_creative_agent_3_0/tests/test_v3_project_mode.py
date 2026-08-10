@@ -2141,11 +2141,12 @@ def test_v3_terminal_failure_never_uses_successful_image_ready_copy() -> None:
     renderer_end = source.index("\nfunction v3ProgressElapsedLabel()", renderer_start)
     renderer = source[renderer_start:renderer_end]
 
-    failed_branch = renderer.index("els.v3SummaryFootnote.textContent = failed")
+    footnote_branch = renderer.index("els.v3SummaryFootnote.textContent = deliveryWithheld")
+    withheld_copy = renderer.index("图片已生成，但未通过自动质量审查；项目已保留，可以查看复核图或修改需求后重新生成。")
     success_copy = renderer.index("图片已准备好，下一步可以挑选满意方向。")
     no_delivery_copy = renderer.index("本次没有交付图片，项目记录已保留；不会自动重复提交。")
 
-    assert failed_branch < no_delivery_copy < success_copy
+    assert footnote_branch < withheld_copy < no_delivery_copy < success_copy
 
 
 def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:

@@ -3610,21 +3610,60 @@ function v3ActiveProjectReferences(project = v3State.currentProject) {
     : [];
 }
 
-function v3UsefulReferenceItems(project = v3State.currentProject) {
-  const activeReferences = v3ActiveProjectReferences(project);
-  if (activeReferences.length) return activeReferences;
-  return v3SelectedOutputRefs(project).map((ref) => ({
+function v3ReferenceSourceType(ref) {
+  const source_type = String(ref?.source_type || "").trim().toLowerCase();
+  if (source_type === "generated_selected" || ref?.created_from_output_id) return "generated_selected";
+  return "uploaded";
+}
+
+function v3ReferenceContinuationIdentity(ref) {
+  return String(ref?.created_from_output_id || ref?.output_id || ref?.asset_ref_id || ref?.reference_id || "").trim();
+}
+
+function v3LegacyContinuationReference(ref) {
+  return {
     reference_id: ref.output_ref_id,
     source_type: "generated_selected",
     asset_ref_id: v3OutputRefIdentity(ref),
     preview_url: ref.thumbnail_url || ref.preview_url,
-    label: "继续参考",
+    label: "已选成片方向",
     user_note: ref.selection_reason,
     use_policy: "style",
     created_from_job_id: ref.job_id,
     created_from_output_id: ref.output_id || v3OutputRefIdentity(ref),
     _legacyOutputRef: ref,
-  }));
+  };
+}
+
+function v3ProjectReferenceGroups(project = v3State.currentProject) {
+  const original_inputs = [];
+  const continuation_outputs = [];
+  const continuation_ids = new Set();
+
+  v3ActiveProjectReferences(project).forEach((ref) => {
+    if (v3ReferenceSourceType(ref) === "generated_selected") {
+      const identity = v3ReferenceContinuationIdentity(ref);
+      if (identity) continuation_ids.add(identity);
+      continuation_outputs.push(ref);
+      return;
+    }
+    original_inputs.push(ref);
+  });
+
+  v3SelectedOutputRefs(project).forEach((ref) => {
+    const identity = v3OutputRefIdentity(ref);
+    if (!identity || continuation_ids.has(identity)) return;
+    continuation_outputs.push(v3LegacyContinuationReference(ref));
+    continuation_ids.add(identity);
+  });
+
+  return { original_inputs, continuation_outputs };
+}
+
+function v3UsefulReferenceItems(project = v3State.currentProject) {
+  const activeReferences = v3ActiveProjectReferences(project);
+  if (activeReferences.length) return activeReferences;
+  return v3SelectedOutputRefs(project).map(v3LegacyContinuationReference);
 }
 
 function v3ReferenceImageCandidates(ref) {
@@ -4062,13 +4101,13 @@ function renderV3ProjectOutputBoard() {
     return;
   }
   if (!items.length && !reviewItems.length) {
-    els.v3ProjectOutputBoard.textContent = "生成后的最终图片会放在这里。满意的图可以直接设为后续参考，让这个项目越做越一致。";
+    els.v3ProjectOutputBoard.textContent = "正式交付图片会显示在这里。满意的成果可以单独设为下一步的延续方向。";
     return;
   }
   items.slice(0, 6).forEach((item, index) => {
     const urls = v3OutputImageCandidates(item);
     const isSelected = v3IsOutputItemSelected(item, project);
-    const title = isSelected ? `已确认方向 ${index + 1}` : `项目图片 ${index + 1}`;
+    const title = isSelected ? `已选延续成片 ${index + 1}` : `项目图片 ${index + 1}`;
     const reason = v3ProjectOutputReason(item);
     const reviewNotice = v3ProjectOutputReviewNotice(item);
     const downloadUrl = v3OutputDownloadUrl(item) || v3OutputFullImageUrl(item) || v3OutputPreviewImageUrl(item) || "";
@@ -4081,13 +4120,13 @@ function renderV3ProjectOutputBoard() {
         <p>${escapeHtml(reason)}</p>
       </div>
       <div class="v3-result-meta">
-        <span>${isSelected ? "后续会参考" : "可继续使用"}</span>
+        <span>${isSelected ? "已用于延续方向" : "可设为延续方向"}</span>
         ${reviewNotice ? `<span>${escapeHtml(reviewNotice)}</span>` : ""}
         ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
       </div>
       <div class="v3-output-actions">
         ${ecommerceProject ? "" : `<button type="button" data-v3-output-action="prompt" data-v3-output-index="${index}">提示词</button>`}
-        <button type="button" data-v3-output-action="select" data-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>设为后续参考</button>
+        <button type="button" data-v3-output-action="select" data-v3-output-index="${index}" ${isSelected ? "disabled" : ""}>${isSelected ? "已设为延续方向" : "设为延续方向"}</button>
         <button type="button" data-v3-output-action="delete" data-v3-output-index="${index}">删除这张</button>
       </div>
     `;
@@ -4098,7 +4137,7 @@ function renderV3ProjectOutputBoard() {
       preview.addEventListener("click", () => {
         openV3OutputLightbox(item, {
           title,
-          meta: isSelected ? "已设为项目后续参考" : "项目生成图片",
+          meta: isSelected ? "已选为项目延续方向" : "项目生成图片",
         });
       });
     }
@@ -4191,7 +4230,7 @@ async function selectV3OutputItem(item) {
     if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
       openV3ProjectSubpage("compose");
     }
-    updateV3Notice("已设为后续参考。这个项目后面会优先沿用它。", "success");
+    updateV3Notice("已设为延续方向。后续会沿用允许继承的画面方向，原始参考图和人物资产仍然优先。", "success");
   } catch (error) {
     updateV3Notice(`选中失败：${friendlyError(error)}`, "error");
   } finally {
@@ -4279,56 +4318,95 @@ async function rejectV3OutputItem(item) {
 function renderV3UsefulReferences() {
   if (!els.v3UsefulReferenceBoard) return;
   const project = v3State.currentProject;
-  const refs = v3UsefulReferenceItems(project);
+  const groups = v3ProjectReferenceGroups(project);
+  const referenceCount = groups.original_inputs.length + groups.continuation_outputs.length;
   els.v3UsefulReferenceBoard.innerHTML = "";
-  els.v3UsefulReferenceBoard.classList.toggle("empty-v3-list", !refs.length);
+  els.v3UsefulReferenceBoard.classList.toggle("empty-v3-list", !referenceCount);
   if (!project) {
-    els.v3UsefulReferenceBoard.textContent = "打开项目后，已确认的图片和参考图会显示在这里。";
+    els.v3UsefulReferenceBoard.textContent = "打开项目后，原始参考图和已选延续方向会分别显示在这里。";
     return;
   }
-  if (!refs.length) {
-    els.v3UsefulReferenceBoard.textContent = "还没有确认参考。在上方图片卡点“设为后续参考”，V3 后续会沿着它继续。";
+  if (!referenceCount) {
+    els.v3UsefulReferenceBoard.textContent = "还没有原始参考图或已选延续方向。正式交付图可单独设为延续方向。";
     return;
   }
-  refs.slice(0, 6).forEach((ref, index) => {
-    const urls = v3ReferenceImageCandidates(ref);
-    const outputId = ref.created_from_output_id || ref.asset_ref_id || ref.reference_id || "";
-    const isGeneratedReference = ref.source_type === "generated_selected";
-    const isCollectingNegativeFeedback = isGeneratedReference && outputId === v3State.pendingNegativeFeedbackOutputId;
-    const tile = document.createElement("article");
-    tile.className = "v3-useful-reference-tile";
-    tile.innerHTML = `
-      ${
-        urls.length
-          ? `<img alt="项目参考图 ${index + 1}" />`
-          : `<div class="v3-reference-placeholder">参考图</div>`
-      }
-      <div>
-        <strong>${escapeHtml(ref.label || (ref.source_type === "uploaded" ? "上传参考" : "继续参考"))}</strong>
-        <p>${escapeHtml(v3ShortText(ref.user_note || ref._legacyOutputRef?.selection_reason || "这张图会作为本项目后续参考。", 52))}</p>
-        ${
-          isCollectingNegativeFeedback
-            ? `<div class="v3-reference-feedback-form">
-                <label>
-                  <span>告诉 V3 要避开什么</span>
-                  <textarea data-v3-negative-feedback-input placeholder="例如：避免当前的近景角度，保留主体和光线"></textarea>
-                </label>
-                <div class="v3-reference-actions">
-                  <button type="button" data-v3-reference-action="confirm_reject" data-v3-output-id="${escapeHtml(outputId)}">确认避开</button>
-                  <button type="button" data-v3-reference-action="cancel_reject">取消</button>
-                </div>
-              </div>`
-            : `<div class="v3-reference-actions">
-                <button type="button" data-v3-reference-action="remove" data-v3-reference-source="${escapeHtml(ref.source_type || "")}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}">移出参考</button>
-                <button type="button" data-v3-reference-action="reject" data-v3-reference-source="${escapeHtml(ref.source_type || "")}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}" ${isGeneratedReference ? "" : "disabled"}>不喜欢这个方向</button>
-              </div>`
-        }
+
+  const usePolicyLabels = {
+    product: "商品外观",
+    product_identity: "商品外观",
+    identity: "人物身份",
+    composition: "构图",
+    lighting: "光线",
+    mood: "氛围",
+    brand_asset: "品牌信息",
+    style: "画面方向",
+    general: "生成依据",
+  };
+  const renderGroup = (title, description, refs, sourceKind) => {
+    if (!refs.length) return;
+    const group = document.createElement("section");
+    group.className = `v3-project-reference-group ${sourceKind}`;
+    group.innerHTML = `
+      <div class="v3-project-reference-group-head">
+        <div>
+          <strong>${escapeHtml(title)}</strong>
+          <p>${escapeHtml(description)}</p>
+        </div>
+        <span>${refs.length} 张</span>
       </div>
+      <div class="v3-project-reference-group-grid"></div>
     `;
-    const image = tile.querySelector("img");
-    if (image) bindImageWithFallback(image, urls, { emptyAlt: "Selected project reference unavailable" });
-    els.v3UsefulReferenceBoard.appendChild(tile);
-  });
+    const grid = group.querySelector(".v3-project-reference-group-grid");
+    refs.slice(0, 6).forEach((ref, index) => {
+      const urls = v3ReferenceImageCandidates(ref);
+      const outputId = ref.created_from_output_id || ref.asset_ref_id || ref.reference_id || "";
+      const isGeneratedReference = sourceKind === "continuation_outputs";
+      const isCollectingNegativeFeedback = isGeneratedReference && outputId === v3State.pendingNegativeFeedbackOutputId;
+      const purpose = usePolicyLabels[String(ref.use_policy || "").trim().toLowerCase()] || "生成依据";
+      const defaultNote = isGeneratedReference
+        ? `来自项目成片，延续${purpose}；不会替代原始参考图或人物资产。`
+        : `原始输入，用于${purpose}。`;
+      const removalLabel = isGeneratedReference ? "取消沿用" : "不再作为生成依据";
+      const tile = document.createElement("article");
+      tile.className = "v3-useful-reference-tile";
+      tile.innerHTML = `
+        ${
+          urls.length
+            ? `<img alt="${escapeHtml(title)} ${index + 1}" />`
+            : `<div class="v3-reference-placeholder">参考图</div>`
+        }
+        <div>
+          <span class="v3-reference-origin">${isGeneratedReference ? "项目成片" : "用户原图"}</span>
+          <strong>${escapeHtml(ref.label || (isGeneratedReference ? "已选成片方向" : "上传参考图"))}</strong>
+          <p>${escapeHtml(v3ShortText(ref.user_note || ref._legacyOutputRef?.selection_reason || defaultNote, 68))}</p>
+          ${
+            isCollectingNegativeFeedback
+              ? `<div class="v3-reference-feedback-form">
+                  <label>
+                    <span>告诉 V3 要避开什么</span>
+                    <textarea data-v3-negative-feedback-input placeholder="例如：避免当前的近景角度，保留主体和光线"></textarea>
+                  </label>
+                  <div class="v3-reference-actions">
+                    <button type="button" data-v3-reference-action="confirm_reject" data-v3-output-id="${escapeHtml(outputId)}">确认避开</button>
+                    <button type="button" data-v3-reference-action="cancel_reject">取消</button>
+                  </div>
+                </div>`
+              : `<div class="v3-reference-actions">
+                  <button type="button" data-v3-reference-action="remove" data-v3-reference-source="${escapeHtml(v3ReferenceSourceType(ref))}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}">${removalLabel}</button>
+                  ${isGeneratedReference ? `<button type="button" data-v3-reference-action="reject" data-v3-reference-source="${escapeHtml(v3ReferenceSourceType(ref))}" data-v3-reference-id="${escapeHtml(ref.reference_id || "")}" data-v3-output-id="${escapeHtml(outputId)}">不喜欢这个方向</button>` : ""}
+                </div>`
+          }
+        </div>
+      `;
+      const image = tile.querySelector("img");
+      if (image) bindImageWithFallback(image, urls, { emptyAlt: "Project reference unavailable" });
+      grid?.appendChild(tile);
+    });
+    els.v3UsefulReferenceBoard.appendChild(group);
+  };
+
+  renderGroup("原始参考图", "来自你的上传，是本项目的生成依据。", groups.original_inputs, "original_inputs");
+  renderGroup("已选延续方向", "来自本项目成片，只延续允许继承的画面方向。", groups.continuation_outputs, "continuation_outputs");
 }
 
 async function handleV3ReferenceBoardClick(event) {
@@ -4376,7 +4454,7 @@ async function removeV3ProjectReference(referenceId, outputId, sourceType = "") 
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
     renderV3ProjectDetail();
-    updateV3Notice("已移出后续参考。它仍会保留在项目记录里。", "success");
+    updateV3Notice(sourceType === "generated_selected" ? "已取消沿用这张成片。它仍会保留在项目成果里。" : "已停止把这张原图作为后续生成依据。上传记录仍会保留。", "success");
   } catch (error) {
     updateV3Notice(`参考更新失败：${friendlyError(error)}`, "error");
   } finally {

@@ -26,7 +26,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260809-v3-provider-contract-boundary" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260810-v3-reference-authority" />
   </head>
   <body data-active-module="image">
     <div class="app-shell">
@@ -1475,8 +1475,26 @@
                 </section>
                 <div id="v3PersistentDisplayRegion" class="v3-persistent-display-region" aria-label="项目成果展示区">
                   <section id="v3PhotographyRoleBoard" class="v3-photography-role-board" hidden aria-live="polite" aria-label="专业套图进度"></section>
-                  <div id="v3ProjectOutputBoard" class="v3-project-output-board empty-v3-list" aria-live="polite">生成图片后，会优先显示在这里。</div>
-                  <div id="v3UsefulReferenceBoard" class="v3-useful-reference-board empty-v3-list" aria-live="polite">选中的图片会成为后续参考。</div>
+                  <section id="v3ProjectReferencePanel" class="v3-project-reference-panel" aria-label="本次生成依据与延续方向">
+                    <div class="v3-project-surface-heading">
+                      <div>
+                        <p class="eyebrow">Generation inputs</p>
+                        <h4>本次生成依据与延续方向</h4>
+                        <p>原始参考图、人物视觉资产和已选成片分别负责不同信息；已选成片不会替代原图或人物资产。</p>
+                      </div>
+                    </div>
+                    <div id="v3UsefulReferenceBoard" class="v3-useful-reference-board empty-v3-list" aria-live="polite">还没有原始参考图或已选延续方向。</div>
+                  </section>
+                  <section class="v3-project-output-section" aria-label="项目成果">
+                    <div class="v3-project-surface-heading">
+                      <div>
+                        <p class="eyebrow">Delivery outputs</p>
+                        <h4>项目成果</h4>
+                        <p>这里只显示正式交付图片。满意的成果可以单独设为下一步的延续方向。</p>
+                      </div>
+                    </div>
+                    <div id="v3ProjectOutputBoard" class="v3-project-output-board empty-v3-list" aria-live="polite">正式交付图片会显示在这里。</div>
+                  </section>
                   <details class="v3-artifact-details">
                     <summary>
                       <span>项目产物与记录</span>
@@ -2226,6 +2244,6 @@
       </article>
     </template>
 
-    <script src="/static/app.js?v=20260809-v3-provider-contract-boundary" defer></script>
+    <script src="/static/app.js?v=20260810-v3-reference-authority" defer></script>
   </body>
 </html>

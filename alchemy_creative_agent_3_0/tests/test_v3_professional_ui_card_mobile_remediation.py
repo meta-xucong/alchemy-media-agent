@@ -13,7 +13,7 @@ DOC_PATH = (
     / "visual_assets"
     / "PROFESSIONAL_MODE_V3_UI_CARD_AND_MOBILE_REMEDIATION_20260726.md"
 )
-FRONTEND_VERSION = "20260809-v3-provider-contract-boundary"
+FRONTEND_VERSION = "20260810-v3-reference-authority"
 
 
 def _read(path: Path) -> str:
