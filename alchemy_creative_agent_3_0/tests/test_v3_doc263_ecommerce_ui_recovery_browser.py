@@ -159,6 +159,20 @@ def _needs_input_project() -> dict:
     return project
 
 
+def _doc265_continuation_reference_project() -> dict:
+    project = _ecommerce_project()
+    project["job_ids"] = ["doc265-stale-planned-job"]
+    project["latest_job_status"] = "planned"
+    project["metadata"]["current_operation"] = {
+        "state": "continuation_reference_unavailable",
+        "terminal": True,
+        "pending": False,
+        "channel": "selected_continuation_directions",
+        "next_actions": [{"id": "review_selected_references"}],
+    }
+    return project
+
+
 def test_doc263_desktop_recovery_is_deliberate_and_uses_exact_server_projection() -> None:
     project = _ecommerce_project()
     with sync_playwright() as playwright:
@@ -223,6 +237,51 @@ def test_doc263_desktop_recovery_is_deliberate_and_uses_exact_server_projection(
             browser.close()
 
 
+def test_doc265_desktop_continuation_reference_terminal_wins_over_stale_planned_job() -> None:
+    project = _doc265_continuation_reference_project()
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            page.evaluate(
+                """
+                ({ project }) => {
+                  window.__doc263ServerProject = project;
+                  v3State.currentProject = project;
+                  v3State.currentJob = {
+                    job_id: "doc265-stale-planned-job",
+                    status: "planned",
+                    metadata: { template_id: "ecommerce_template" },
+                    warnings: [],
+                  };
+                  v3State.selectedScenario = "ecommerce";
+                  v3State.templateCatalogStatus = "ready";
+                  v3State.templates = [{ template_id: "ecommerce_template", project_can_create_jobs: true }];
+                  document.querySelector("#v3ProjectNextActions").addEventListener("click", handleV3ProjectActionClick);
+                  renderV3ProjectDetail();
+                  document.querySelectorAll('[hidden]').forEach((node) => { node.hidden = false; });
+                }
+                """,
+                {"project": project},
+            )
+
+            action_text = page.locator("#v3ProjectNextActions").inner_text()
+            assert "已选延续方向需要确认" in action_text
+            assert "检查延续方向" in action_text
+            assert "商品原图需要重新确认" not in action_text
+            assert "准备生成商品图片" not in action_text
+            assert "重新尝试一次" not in action_text
+            assert page.locator("[data-v3-project-action='review_continuation_references']").count() == 1
+            assert page.locator("[data-v3-project-action='start_first_generation']").count() == 0
+
+            page.locator("[data-v3-project-action='review_continuation_references']").click()
+
+            assert page.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0
+            assert "请在已选延续方向或生成与复核历史中重新确认可用成片" in page.locator("#v3NoticeBar").inner_text()
+        finally:
+            browser.close()
+
+
 def test_doc263_desktop_needs_input_is_specific_and_does_not_offer_blind_retry() -> None:
     project = _needs_input_project()
     created = _needs_input_job()
@@ -254,6 +313,60 @@ def test_doc263_desktop_needs_input_is_specific_and_does_not_offer_blind_retry()
             assert page.evaluate(
                 "window.__doc263Requests.filter((item) => /\\/jobs\\/doc263-needs-input-job$/.test(item.url)).length"
             ) == 0
+        finally:
+            browser.close()
+
+
+def test_doc265_mobile_continuation_reference_terminal_wins_over_stale_planned_job() -> None:
+    project = _doc265_continuation_reference_project()
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            page.evaluate(
+                """
+                ({ project }) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  window.__doc263ServerProject = project;
+                  mobileV3State.currentProject = project;
+                  mobileV3State.projects = [project];
+                  mobileV3State.currentJob = {
+                    job_id: "doc265-stale-planned-job",
+                    status: "planned",
+                    metadata: { template_id: "ecommerce_template" },
+                    warnings: [],
+                  };
+                  mobileV3State.selectedTemplate = "ecommerce_template";
+                  mobileV3State.outputs = [];
+                  mobileV3State.reviewOutputs = [];
+                  mobileV3State.outputsLoaded = true;
+                  renderMobileV3ReferenceBoard(project);
+                  renderMobileV3ProjectCards();
+                  renderMobileV3ProjectCurrentOperation(project);
+                  openMobileSurface("v3-project-detail");
+                }
+                """,
+                {"project": project},
+            )
+
+            operation_text = page.locator("#mobileV3ProjectCurrentOperation").inner_text()
+            assert "已选延续方向需要确认" in operation_text
+            assert "检查延续方向" in operation_text
+            assert "商品原图需要重新确认" not in operation_text
+            assert "准备中" not in page.locator("#mobileV3ProgressElapsed").inner_text()
+            assert "进行中" not in page.locator("#mobileV3ProgressElapsed").inner_text()
+            assert page.locator("#mobileV3ProgressTitle").inner_text() == "需重试"
+            assert page.locator("[data-mobile-v3-project-action='review_continuation_references']").count() == 1
+            assert page.locator("[data-mobile-v3-project-action='continue_recovery']").count() == 0
+            assert page.locator("#mobileV3GenerateBtn").is_disabled() is False
+
+            page.locator("[data-mobile-v3-project-action='review_continuation_references']").click()
+
+            assert page.evaluate("document.body.dataset.mobileActiveSurface") == "v3-project-detail"
+            assert page.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0
+            assert "已选延续方向需要重新确认" in page.locator("#mobileV3ProgressDetail").inner_text()
+            assert "商品原图需要重新确认" not in page.locator("#mobileV3ProgressDetail").inner_text()
         finally:
             browser.close()
 

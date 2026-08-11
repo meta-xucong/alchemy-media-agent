@@ -3716,6 +3716,19 @@ function handleMobileV3Click(event) {
     return;
   }
   const projectActionButton = event.target.closest("[data-mobile-v3-project-action]");
+  if (projectActionButton?.dataset.mobileV3ProjectAction === "review_continuation_references") {
+    const project = mobileV3State.currentProject;
+    if (!project?.project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMobileV3Busy(false);
+    setMobileV3Progress("failed", mobileV3EcommerceContinuationReferenceMessage());
+    updateMobileV3Status("请在项目参考区重新确认可用的已选成片。系统不会自动重新提交生成。");
+    renderMobileV3ReferenceBoard(project);
+    openMobileSurface("v3-project-detail", projectActionButton);
+    document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    return;
+  }
   if (projectActionButton?.dataset.mobileV3ProjectAction === "continue_recovery") {
     const project = mobileV3State.currentProject;
     if (!project?.project_id) return;
@@ -4917,6 +4930,10 @@ function mobileV3EcommerceNeedsInputMessage() {
   return "商品原图需要重新确认：当前项目里的商品参考图缺少可验证的文件、角色或授权记录，尚未发送生图请求。请检查原始参考图，删除失效或重复的商品图，重新上传正确商品图后再生成。";
 }
 
+function mobileV3EcommerceContinuationReferenceMessage() {
+  return "已选延续方向需要重新确认：某张已选生成图不能作为这次续作方向。请回到项目参考区重新选择可用成片；原始商品图不会被要求重新上传。";
+}
+
 function mobileV3JobNeedsProductInputReview(job) {
   const operation = job?.metadata?.current_operation;
   return Boolean(
@@ -4932,18 +4949,27 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
   const operation = mobileV3ProjectCurrentOperation(project);
   const needsInput = isEcommerce && operation?.state === "needs_input";
+  const continuationReferenceUnavailable = isEcommerce && operation?.state === "continuation_reference_unavailable";
   const failedNoDelivery = isEcommerce && operation?.state === "failed_no_delivery";
-  node.hidden = !(needsInput || failedNoDelivery);
+  node.hidden = !(needsInput || continuationReferenceUnavailable || failedNoDelivery);
   node.innerHTML = "";
-  if (!needsInput && !failedNoDelivery) return;
+  if (!needsInput && !continuationReferenceUnavailable && !failedNoDelivery) return;
   setMobileV3Busy(false);
-  setMobileV3Progress("failed", needsInput ? mobileV3EcommerceNeedsInputMessage() : "本次没有交付图片。项目原图和记录已保留，确认后可继续。");
+  setMobileV3Progress(
+    "failed",
+    needsInput
+      ? mobileV3EcommerceNeedsInputMessage()
+      : continuationReferenceUnavailable
+        ? mobileV3EcommerceContinuationReferenceMessage()
+        : "本次没有交付图片。项目原图和记录已保留，确认后可继续。",
+  );
+  const action = continuationReferenceUnavailable ? "review_continuation_references" : "continue_recovery";
   node.innerHTML = `
     <div>
-      <strong>${needsInput ? "商品原图需要重新确认" : "这次暂时没有交付图片"}</strong>
-      <span>${needsInput ? "请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : "请先确认原始商品图和需求。继续只会打开编辑区，不会自动重新提交。"}</span>
+      <strong>${needsInput ? "商品原图需要重新确认" : continuationReferenceUnavailable ? "已选延续方向需要确认" : "这次暂时没有交付图片"}</strong>
+      <span>${needsInput ? "请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : continuationReferenceUnavailable ? "请回到项目参考区重新选择可用成片。系统不会自动重新提交生成。" : "请先确认原始商品图和需求。继续只会打开编辑区，不会自动重新提交。"}</span>
     </div>
-    <button class="button primary compact" type="button" data-mobile-v3-project-action="continue_recovery">${needsInput ? "检查原图" : "继续"}</button>
+    <button class="button primary compact" type="button" data-mobile-v3-project-action="${action}">${needsInput ? "检查原图" : continuationReferenceUnavailable ? "检查延续方向" : "继续"}</button>
   `;
 }
 

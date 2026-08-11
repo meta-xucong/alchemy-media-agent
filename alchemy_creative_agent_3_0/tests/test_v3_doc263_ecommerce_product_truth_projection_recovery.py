@@ -1264,8 +1264,16 @@ def test_doc263_continuation_dedupes_product_content_and_does_not_promote_genera
             "use_policy": "product",
         },
     )
+    history_job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create a prior project image for continuation direction.",
+            "metadata": {"idempotency_key": "doc263-generated-review-history"},
+        },
+    )
     generated = output_store.save_base64_output(
-        job_id="doc263-generated-review-job",
+        job_id=history_job["job_id"],
         candidate_id="doc263-generated-review-candidate",
         asset_id="doc263-generated-review-asset",
         provider="fixture",

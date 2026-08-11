@@ -96,6 +96,7 @@ PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
 _ECOMMERCE_IGNORED_CLIENT_METADATA = frozenset(
     {
         "current_reference_binding_digest",
+        "doc265_reference_channel_recovery",
         "supersedes_job_id",
         "historical_reference_projection",
         "legacy_reference_projection",
@@ -406,6 +407,40 @@ class V3ProjectModeService:
         project = self._require_project(project_id)
         reference_request = self._coerce_reference_request(request)
         now = _utc_now_iso()
+        preview_url: str | None = None
+        if (
+            project.primary_template_id == ECOMMERCE_TEMPLATE_ID
+            and reference_request.source_type == ProjectReferenceSourceType.GENERATED_SELECTED
+        ):
+            try:
+                output_record = self._require_ecommerce_selected_output_reference(project, reference_request)
+            except ValueError:
+                self._record_ecommerce_reference_channel_issue(
+                    project,
+                    issue_code="invalid_selected_continuation_output",
+                    now=now,
+                )
+                raise
+            preview_url = output_record.thumbnail_url or output_record.preview_url
+            reference_request = reference_request.model_copy(
+                update={
+                    "asset_ref_id": output_record.output_id,
+                    "created_from_job_id": output_record.job_id,
+                    "created_from_output_id": output_record.output_id,
+                    "metadata": {
+                        **dict(reference_request.metadata or {}),
+                        "canonical_output_binding": True,
+                        "output_id": output_record.output_id,
+                        "asset_id": output_record.asset_id,
+                        "candidate_id": output_record.candidate_id,
+                        "source_integrity_id": self._doc265_output_source_integrity_id(output_record),
+                        "doc265_channel": "selected_continuation_directions",
+                    },
+                }
+            )
+            self._clear_ecommerce_reference_channel_issue(project)
+        elif project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
+            self._clear_ecommerce_reference_channel_issue(project)
         reference = self._upsert_project_reference(
             project,
             source_type=reference_request.source_type,
@@ -416,6 +451,7 @@ class V3ProjectModeService:
             use_policy=reference_request.use_policy,
             created_from_job_id=reference_request.created_from_job_id,
             created_from_output_id=reference_request.created_from_output_id,
+            preview_url=preview_url,
             metadata=reference_request.metadata,
         )
         context = self._refresh_project_context(project)
@@ -779,11 +815,26 @@ class V3ProjectModeService:
                     }
                 }
             )
-            requested_product_ids = [
+            requested_reference_ids = [
                 str(item).strip()
                 for item in job_request.uploaded_asset_ids
                 if str(item).strip()
             ]
+            requested_product_ids: list[str] = []
+            legacy_output_ids: list[str] = []
+            if requested_reference_ids:
+                requested_product_ids, legacy_output_ids, invalid_reference_ids, invalid_product_ids = (
+                    self._classify_ecommerce_legacy_reference_ids(project, requested_reference_ids)
+                )
+                if invalid_reference_ids:
+                    self._record_ecommerce_reference_channel_issue(
+                        project,
+                        issue_code="invalid_legacy_reference_channel",
+                        now=_utc_now_iso(),
+                    )
+                    raise ValueError("reference channel input invalid")
+                if invalid_product_ids:
+                    self._ecommerce_product_reference_asset_ids(project, invalid_product_ids)
             if requested_product_ids:
                 # A browser upload selector is admitted only by resolving the
                 # V3 upload record, then persisted as a project-owned
@@ -795,6 +846,21 @@ class V3ProjectModeService:
                     template_id=template_manifest.template_id,
                     user_input=job_request.user_input or project.user_goal,
                 )
+            if legacy_output_ids:
+                job_request = job_request.model_copy(
+                    update={
+                        "metadata": {
+                            **dict(job_request.metadata or {}),
+                            "doc265_reference_channel_recovery": {
+                                "schema_version": "doc265_reference_channel_recovery_v1",
+                                "authority": "v3_project_mode",
+                                "legacy_uploaded_output_ids": legacy_output_ids,
+                                "recovered_product_asset_ids": requested_product_ids,
+                            },
+                        }
+                    }
+                )
+            self._ensure_ecommerce_selected_output_integrity(project)
             # Explicit selectors have now been admitted into Project Mode.
             # Reconcile canonical refs before deriving command identity so a
             # first submission and its immediate replay observe the same
@@ -2641,6 +2707,203 @@ class V3ProjectModeService:
         except ValueError:
             return False
 
+    def _classify_ecommerce_legacy_reference_ids(
+        self,
+        project: ProjectRecord,
+        reference_ids: list[str],
+    ) -> tuple[list[str], list[str], list[str], list[str]]:
+        product_asset_ids: list[str] = []
+        historical_output_ids: list[str] = []
+        invalid_reference_ids: list[str] = []
+        invalid_product_ids: list[str] = []
+        for raw_id in reference_ids:
+            clean_id = str(raw_id or "").strip()
+            if not clean_id:
+                continue
+            if self._is_ready_product_upload(clean_id):
+                product_asset_ids.append(clean_id)
+                continue
+            output_matches = self._ecommerce_generated_output_record_matches_for_identifier(clean_id)
+            if len(output_matches) == 1:
+                output_record = output_matches[0]
+                if str(getattr(output_record, "job_id", "") or "").strip() in set(project.job_ids):
+                    historical_output_ids.append(output_record.output_id)
+                else:
+                    invalid_reference_ids.append(clean_id)
+                continue
+            if len(output_matches) > 1 or clean_id.startswith("v3_output_"):
+                invalid_reference_ids.append(clean_id)
+                continue
+            if self.product_service.get_uploaded_asset(clean_id) is not None:
+                invalid_product_ids.append(clean_id)
+                continue
+            invalid_product_ids.append(clean_id)
+        return (
+            list(dict.fromkeys(product_asset_ids)),
+            list(dict.fromkeys(historical_output_ids)),
+            list(dict.fromkeys(invalid_reference_ids)),
+            list(dict.fromkeys(invalid_product_ids)),
+        )
+
+    def _ecommerce_generated_output_record_matches_for_identifier(self, identifier: str) -> list[Any]:
+        selector = str(identifier or "").strip()
+        if not selector:
+            return []
+        output_store = getattr(self.product_service, "output_store", None)
+        if output_store is None:
+            return []
+        record = output_store.get_output(selector)
+        if record is not None:
+            return [record]
+        if selector.startswith("v3_output_"):
+            return []
+        try:
+            records = output_store.list_outputs(limit=10000)
+        except Exception:
+            return []
+        matches: list[Any] = []
+        seen_output_ids: set[str] = set()
+        for candidate in records:
+            if selector not in {
+                str(getattr(candidate, "asset_id", "") or ""),
+                str(getattr(candidate, "candidate_id", "") or ""),
+            }:
+                continue
+            output_id = str(getattr(candidate, "output_id", "") or "")
+            if output_id in seen_output_ids:
+                continue
+            seen_output_ids.add(output_id)
+            matches.append(candidate)
+        return matches
+
+    def _ecommerce_generated_output_record_for_identifier(self, identifier: str) -> Any | None:
+        matches = self._ecommerce_generated_output_record_matches_for_identifier(identifier)
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
+    def _require_ecommerce_selected_output_reference(
+        self,
+        project: ProjectRecord,
+        request: ProjectReferenceRequest,
+    ) -> Any:
+        asset_selector = str(request.asset_ref_id or "").strip()
+        output_selector = str(request.created_from_output_id or asset_selector or "").strip()
+        job_selector = str(request.created_from_job_id or "").strip()
+        if not output_selector:
+            raise ValueError("continuation output reference invalid")
+        record = self._ecommerce_generated_output_record_for_identifier(output_selector)
+        if record is None and asset_selector and asset_selector != output_selector:
+            record = self._ecommerce_generated_output_record_for_identifier(asset_selector)
+        if record is None:
+            raise ValueError("continuation output reference unavailable")
+        record_output_id = str(getattr(record, "output_id", "") or "").strip()
+        record_job_id = str(getattr(record, "job_id", "") or "").strip()
+        if str(request.created_from_output_id or "").strip() and request.created_from_output_id != record_output_id:
+            raise ValueError("continuation output reference mismatch")
+        if asset_selector and asset_selector not in {
+            record_output_id,
+            str(getattr(record, "asset_id", "") or "").strip(),
+            str(getattr(record, "candidate_id", "") or "").strip(),
+        }:
+            raise ValueError("continuation output reference mismatch")
+        if not record_job_id or record_job_id not in set(project.job_ids):
+            raise ValueError("continuation output reference project mismatch")
+        if job_selector and job_selector != record_job_id:
+            raise ValueError("continuation output reference project mismatch")
+        file_path = Path(str(getattr(record, "file_path", "") or ""))
+        if not file_path.is_file() or not self._doc265_output_source_integrity_id(record):
+            raise ValueError("continuation output reference unavailable")
+        return record
+
+    def _ensure_ecommerce_selected_output_integrity(self, project: ProjectRecord) -> None:
+        """Revalidate persisted Doc265 selections before a new command exists."""
+
+        for reference in self._active_project_references(project):
+            if reference.source_type != ProjectReferenceSourceType.GENERATED_SELECTED:
+                continue
+            try:
+                self._validate_ecommerce_selected_output_reference(project, reference)
+            except ValueError as exc:
+                self._record_ecommerce_reference_channel_issue(
+                    project,
+                    issue_code="selected_continuation_output_integrity_invalid",
+                    now=_utc_now_iso(),
+                )
+                raise ValueError("continuation output reference unavailable") from exc
+
+    def _validate_ecommerce_selected_output_reference(
+        self,
+        project: ProjectRecord,
+        reference: ProjectReferenceAsset,
+    ) -> Any:
+        output_store = getattr(self.product_service, "output_store", None)
+        output_id = str(reference.created_from_output_id or "").strip()
+        if output_store is None or not output_id:
+            raise ValueError("selected output binding missing")
+        record = output_store.get_output(output_id)
+        if record is None:
+            raise ValueError("selected output record missing")
+
+        record_output_id = str(getattr(record, "output_id", "") or "").strip()
+        record_job_id = str(getattr(record, "job_id", "") or "").strip()
+        record_asset_id = str(getattr(record, "asset_id", "") or "").strip()
+        record_candidate_id = str(getattr(record, "candidate_id", "") or "").strip()
+        if (
+            not record_output_id
+            or output_id != record_output_id
+            or str(reference.asset_ref_id or "").strip() != record_output_id
+            or str(reference.created_from_job_id or "").strip() != record_job_id
+            or not record_job_id
+            or record_job_id not in set(project.job_ids)
+        ):
+            raise ValueError("selected output project binding mismatch")
+
+        metadata = dict(reference.metadata or {})
+        if metadata.get("canonical_output_binding") is not True:
+            raise ValueError("selected output is not canonical")
+        if any(
+            str(metadata.get(key) or "").strip() != expected
+            for key, expected in {
+                "output_id": record_output_id,
+                "asset_id": record_asset_id,
+                "candidate_id": record_candidate_id,
+            }.items()
+        ):
+            raise ValueError("selected output binding mismatch")
+
+        source_integrity_id = str(metadata.get("source_integrity_id") or "").strip()
+        actual_integrity_id = self._doc265_output_source_integrity_id(record)
+        if not actual_integrity_id or source_integrity_id != actual_integrity_id:
+            raise ValueError("selected output source integrity mismatch")
+        return record
+
+    def _record_ecommerce_reference_channel_issue(
+        self,
+        project: ProjectRecord,
+        *,
+        issue_code: str,
+        now: str | None = None,
+    ) -> None:
+        metadata = dict(project.metadata or {})
+        metadata["doc265_reference_channel_needs_attention"] = {
+            "schema_version": "doc265_reference_channel_needs_attention_v1",
+            "authority": "v3_project_mode",
+            "issue_code": issue_code,
+        }
+        project.metadata = metadata
+        project.updated_at = now or _utc_now_iso()
+        self.project_store.save_project(project)
+
+    def _clear_ecommerce_reference_channel_issue(self, project: ProjectRecord) -> None:
+        metadata = dict(project.metadata or {})
+        if "doc265_reference_channel_needs_attention" not in metadata:
+            return
+        metadata.pop("doc265_reference_channel_needs_attention", None)
+        project.metadata = metadata
+        project.updated_at = _utc_now_iso()
+        self.project_store.save_project(project)
+
     def _ecommerce_product_reference_asset_ids(
         self,
         project: ProjectRecord,
@@ -3993,6 +4256,7 @@ class V3ProjectModeService:
             preview_url=ref.thumbnail_url or ref.preview_url,
             metadata={
                 "output_ref_id": ref.output_ref_id,
+                "output_id": ref.output_id,
                 "candidate_id": ref.candidate_id,
                 "asset_id": ref.asset_id,
                 "canonical_output_binding": bool(ref.metadata.get("canonical_output_binding")),
@@ -5611,6 +5875,17 @@ class V3ProjectModeService:
 
         if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
             return None
+        if isinstance(
+            dict(project.metadata or {}).get("doc265_reference_channel_needs_attention"),
+            dict,
+        ):
+            return {
+                "state": "continuation_reference_unavailable",
+                "terminal": True,
+                "pending": False,
+                "channel": "selected_continuation_directions",
+                "next_actions": [{"id": "review_selected_references"}],
+            }
         for job_id in reversed(project.job_ids):
             record = self.product_service.get_job_record(job_id)
             if (
@@ -6302,9 +6577,13 @@ class V3ProjectModeService:
         )
 
     def _output_source_integrity_id(self, record: Any) -> str:
+        strict_integrity_id = self._doc265_output_source_integrity_id(record)
+        return strict_integrity_id or f"output:{record.output_id}"
+
+    def _doc265_output_source_integrity_id(self, record: Any) -> str:
         file_path = Path(str(getattr(record, "file_path", "") or ""))
         digest = self._file_content_fingerprint(file_path)
-        return f"sha256:{digest}" if digest else f"output:{record.output_id}"
+        return f"sha256:{digest}" if digest else ""
 
     def _file_content_fingerprint(self, file_path: Path) -> str:
         try:

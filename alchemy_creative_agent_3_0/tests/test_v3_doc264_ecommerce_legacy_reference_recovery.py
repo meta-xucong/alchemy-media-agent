@@ -802,8 +802,16 @@ def test_doc264_generated_and_review_history_never_enter_recovered_product_truth
             "use_policy": "product",
         },
     )
+    history_job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create a prior project image for continuation direction.",
+            "metadata": {"idempotency_key": "doc264-history-output"},
+        },
+    )
     output = handlers.service.output_store.save_base64_output(
-        job_id="doc264-history-job",
+        job_id=history_job["job_id"],
         candidate_id="doc264-history-candidate",
         asset_id="doc264-history-asset",
         provider="fixture",

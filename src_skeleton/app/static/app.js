@@ -5374,6 +5374,14 @@ function renderV3ProjectNextActions() {
       && String(jobOperation.state || "").trim().toLowerCase() === "needs_input"
     )
   );
+  const continuationReferenceUnavailable = ecommerceActive && (
+    String(operation?.state || "").trim().toLowerCase() === "continuation_reference_unavailable"
+    || (
+      jobOperation
+      && typeof jobOperation === "object"
+      && String(jobOperation.state || "").trim().toLowerCase() === "continuation_reference_unavailable"
+    )
+  );
   const status = String(job?.status || project?.latest_job_status || "").toLowerCase();
   const withheld = Boolean(job && v3JobDeliveryWithheld(job));
   const visibleCount = job ? v3JobVisibleImageCount(job) : 0;
@@ -5383,7 +5391,14 @@ function renderV3ProjectNextActions() {
   let title = "继续完善这个项目";
   let detail = "可以补充商品信息、上传参考图，或继续生成。";
 
-  if (needsProductInput) {
+  if (continuationReferenceUnavailable) {
+    title = "已选延续方向需要确认";
+    detail = "某张已选生成图不能作为这次续作方向。请回到项目参考区重新选择可用成片；原始商品图不会被要求重新上传。";
+    actionRows.push(
+      '<button class="button primary compact" type="button" data-v3-project-action="review_continuation_references">检查延续方向</button>',
+      '<button class="button ghost compact" type="button" data-v3-project-action="return_to_project">返回项目</button>',
+    );
+  } else if (needsProductInput) {
     title = "商品原图需要重新确认";
     detail = v3EcommerceFailureMessage(job) || "当前商品参考图需要先处理；系统没有发送生图请求，也不会自动重复提交。";
     actionRows.push(
@@ -5625,6 +5640,14 @@ function handleV3ProjectActionClick(event) {
     target?.querySelector?.("button, a")?.focus?.({ preventScroll: true });
     return;
   }
+  if (action === "review_continuation_references") {
+    closeV3ProjectSubpage({ silent: true });
+    renderV3UsefulReferences();
+    els.v3UsefulReferenceBoard?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    els.v3UsefulReferenceBoard?.querySelector?.("button, a")?.focus?.({ preventScroll: true });
+    updateV3Notice("请在已选延续方向或生成与复核历史中重新确认可用成片。系统不会自动重新提交生成。", "info");
+    return;
+  }
   if (action === "edit_ecommerce_details") {
     if (els.v3EcommerceAdvanced) els.v3EcommerceAdvanced.open = true;
     els.v3EcommerceAdvanced?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -5669,9 +5692,9 @@ function handleV3ProjectActionClick(event) {
       els.v3PromptInput.focus();
     }
     openV3ProjectSubpage("compose");
-    const ecommerceRecovery = projectScenario === "ecommerce" && ["failed_no_delivery", "needs_input"].includes(String(currentOperation?.state || ""));
+    const ecommerceRecovery = projectScenario === "ecommerce" && ["failed_no_delivery", "needs_input", "continuation_reference_unavailable"].includes(String(currentOperation?.state || ""));
     if (ecommerceRecovery) {
-      updateV3Notice(currentOperation?.state === "needs_input" ? "已打开编辑区。请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : "已打开恢复编辑区。请先确认原始商品图和需求，再明确点击生成。", "info");
+      updateV3Notice(currentOperation?.state === "needs_input" ? "已打开编辑区。请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : currentOperation?.state === "continuation_reference_unavailable" ? "已打开编辑区。请先检查已选延续方向，重新确认可用成片后再生成。" : "已打开恢复编辑区。请先确认原始商品图和需求，再明确点击生成。", "info");
       return;
     }
     updateV3Notice(v3State.selectedScenario === "ecommerce" ? "已打开生成区，正在开始生成新电商图。" : "已打开生成区，正在开始生成第一组图片。", "info");
@@ -8399,8 +8422,12 @@ function v3EcommerceFailureMessage(job) {
   const status = String(job?.status || "").trim().toLowerCase();
   const operation = metadata.current_operation;
   const needsProductInput = operation && typeof operation === "object" && String(operation.state || "").trim().toLowerCase() === "needs_input";
+  const continuationReferenceUnavailable = operation && typeof operation === "object" && String(operation.state || "").trim().toLowerCase() === "continuation_reference_unavailable";
   if (!["blocked", "failed"].includes(status)) return "";
-  if (scenarioId !== "ecommerce" && templateId !== "ecommerce_template" && !needsProductInput) return "";
+  if (scenarioId !== "ecommerce" && templateId !== "ecommerce_template" && !needsProductInput && !continuationReferenceUnavailable) return "";
+  if (continuationReferenceUnavailable) {
+    return "已选延续方向需要重新确认：某张已选生成图不能作为这次续作方向。请回到项目参考区重新选择可用成片；原始商品图不会被要求重新上传。";
+  }
   if (operation && typeof operation === "object" && String(operation.state || "").trim().toLowerCase() === "needs_input") {
     return "商品原图需要重新确认：当前项目里的商品参考图缺少可验证的文件、角色或授权记录，尚未发送生图请求。请检查原始参考图，删除失效或重复的商品图，重新上传正确商品图后再生成。";
   }
