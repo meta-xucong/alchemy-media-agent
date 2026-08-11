@@ -8,11 +8,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
+from alchemy_creative_agent_3_0.app.generation_router import (
+    GenerationRouter,
+    GenerationRequest,
+    MockGenerationProvider,
+    ProductionImageGenerationProvider,
+)
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projection import (
+    PhysicalProductReferenceProjection,
+    ProductTruthAdmission,
+    build_product_truth_admission,
+)
 from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_recovery import (
     LEGACY_VISUAL_ASSET_NAME,
     _forbid_planning_and_dispatch,
@@ -20,6 +32,9 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_
     _png_base64,
     _project,
     _ready_product_upload,
+)
+from alchemy_creative_agent_3_0.tests.test_v3_ecommerce_product_truth_provider_scope import (
+    _active_face_card,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.library import LibraryVisualAssetCreateRequest
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
@@ -83,6 +98,335 @@ def _job_payload(*, uploaded_asset_ids: list[str], key: str) -> dict:
         "uploaded_asset_ids": uploaded_asset_ids,
         "metadata": {"idempotency_key": key},
     }
+
+
+class _CapturingMockGenerationProvider(MockGenerationProvider):
+    """Keep the renderer request local while asserting the production contract."""
+
+    def __init__(self) -> None:
+        self.requests: list[GenerationRequest] = []
+
+    def generate(self, request: GenerationRequest):  # noqa: ANN201
+        self.requests.append(request.model_copy(deep=True))
+        return super().generate(request)
+
+
+def _bind_locked_person_identity(handlers, catalog, *, project_id: str) -> list[str]:
+    person = catalog.create(
+        owner_scope="local_default",
+        request=LibraryVisualAssetCreateRequest(
+            display_name=LEGACY_VISUAL_ASSET_NAME,
+            asset_type="people",
+            root_source_asset_id="doc265-contract-person-root",
+            consent_reference="doc265-contract-person-consent",
+            preparation_intent="Locked identity evidence for an E-Commerce project.",
+        ),
+    )
+    output_ids = [
+        handlers.service.output_store.save_base64_output(
+            job_id=f"doc265-contract-face-job-{index}",
+            candidate_id=f"doc265-contract-face-candidate-{index}",
+            asset_id=f"doc265-contract-face-asset-{index}",
+            provider="fixture",
+            model="fixture",
+            encoded_image=_png_base64((150 + index * 10, 120, 105)),
+        ).output_id
+        for index in range(3)
+    ]
+    active = catalog.activate_version(
+        owner_scope="local_default",
+        visual_asset_id=person.visual_asset_id,
+        version_id="doc265-contract-person-version",
+        approved_evidence_ids=["doc265-contract-face-evidence"],
+    )
+    catalog.save(
+        active.model_copy(
+            update={
+                "character_card": _active_face_card(
+                    visual_asset_id=person.visual_asset_id,
+                    output_ids=output_ids,
+                )
+            }
+        )
+    )
+    handlers.post_project_visual_asset_binding(
+        project_id,
+        {
+            "visual_asset_id": person.visual_asset_id,
+            "selected_version_id": active.active_version_id,
+            "confirm_binding": True,
+        },
+    )
+    return output_ids
+
+
+def test_doc265_project_ecommerce_persists_one_final_product_contract_at_provider_handoff(
+    tmp_path,
+) -> None:
+    handlers, catalog = _handlers(tmp_path)
+    provider = _CapturingMockGenerationProvider()
+    handlers.service.scenario_runtime.generation_router = GenerationRouter(provider=provider)
+    project = _project(handlers)
+    product_ids = [
+        _ready_product_upload(
+            handlers,
+            filename=f"doc265-contract-product-{index}.png",
+            color=(75 + index * 20, 130, 165),
+        )
+        for index in range(4)
+    ]
+    _add_product_references(handlers, project["project_id"], product_ids)
+    identity_output_ids = _bind_locked_person_identity(
+        handlers,
+        catalog,
+        project_id=project["project_id"],
+    )
+
+    payload = _job_payload(uploaded_asset_ids=product_ids, key="doc265-final-contract")
+    payload["metadata"]["requested_image_count"] = 1
+    created = handlers.post_project_job(project["project_id"], payload)
+    record = handlers.service.get_job_record(created["job_id"])
+
+    assert record is not None and record.planning_result is not None
+    assert record.job_id == created["job_id"]
+    request_admission = ProductTruthAdmission.from_mapping(
+        record.request.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    request_projection = PhysicalProductReferenceProjection.from_mapping(
+        record.request.metadata["professional_ecommerce_physical_product_projections"]["1"]
+    )
+    request_projection.validate_against(request_admission)
+    plan = record.planning_result
+    generation_plan = plan.generation_plans[0]
+    result_admission = ProductTruthAdmission.from_mapping(
+        plan.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    result_projection = PhysicalProductReferenceProjection.from_mapping(
+        plan.metadata["professional_ecommerce_physical_product_projections"]["1"]
+    )
+    result_projection.validate_against(result_admission)
+    plan_admission = ProductTruthAdmission.from_mapping(
+        generation_plan.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    plan_projection = PhysicalProductReferenceProjection.from_mapping(
+        generation_plan.metadata["professional_ecommerce_physical_product_projections"]["1"]
+    )
+    plan_projection.validate_against(plan_admission)
+    assert {
+        request_admission.job_id,
+        request_projection.job_id,
+        plan.creative_job.job_id,
+        result_admission.job_id,
+        result_projection.job_id,
+        plan_admission.job_id,
+        plan_projection.job_id,
+    } == {record.job_id}
+
+    generated = handlers.post_project_job_generate(project["project_id"], record.job_id)
+
+    assert generated["status"] == "generated"
+    assert len(provider.requests) == 1
+    provider_request = provider.requests[0]
+    provider_admission = ProductTruthAdmission.from_mapping(
+        provider_request.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    provider_projection = PhysicalProductReferenceProjection.from_mapping(
+        provider_request.metadata["professional_ecommerce_physical_product_projections"]["1"]
+    )
+    assert {
+        provider_request.metadata["job_id"],
+        provider_request.generation_plan.metadata["job_id"],
+        provider_admission.job_id,
+        provider_projection.job_id,
+    } == {record.job_id}
+    provider_projection.validate_against(provider_admission)
+    physical_assets = ProductionImageGenerationProvider()._reference_assets(provider_request)  # noqa: SLF001
+    physical_product_ids = [
+        item["asset_id"] for item in physical_assets if item["role"] == "product_reference"
+    ]
+    assert physical_product_ids == list(provider_projection.selected_product_asset_ids)
+    assert len(physical_product_ids) == len(set(physical_product_ids))
+    assert set(product_ids) - set(provider_projection.selected_product_asset_ids)
+    physical_identity_output_ids = [
+        item.get("output_id") for item in physical_assets if item["role"] == "face_reference"
+    ]
+    assert sorted(physical_identity_output_ids) == sorted(identity_output_ids)
+    assert len(physical_identity_output_ids) == len(set(physical_identity_output_ids))
+
+
+def test_doc265_stale_request_contract_creates_one_fresh_canonical_continuation_without_mutating_history(
+    tmp_path,
+) -> None:
+    handlers, _catalog = _handlers(tmp_path)
+    project = _project(handlers)
+    product_ids = [
+        _ready_product_upload(
+            handlers,
+            filename=f"doc265-stale-contract-product-{index}.png",
+            color=(95 + index * 20, 135, 170),
+        )
+        for index in range(4)
+    ]
+    _add_product_references(handlers, project["project_id"], product_ids)
+    legacy = handlers.post_project_job(
+        project["project_id"],
+        _job_payload(uploaded_asset_ids=product_ids, key="doc265-stale-contract-source"),
+    )
+    legacy_record = handlers.service.get_job_record(legacy["job_id"])
+    assert legacy_record is not None and legacy_record.planning_result is not None
+    current_admission = ProductTruthAdmission.from_mapping(
+        legacy_record.request.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    stale_admission = build_product_truth_admission(
+        project_id=current_admission.project_id,
+        job_id="legacy_temporary_plan_identifier",
+        sources=list(current_admission.sources),
+        product_truth_plan_digest=current_admission.product_truth_plan_digest,
+    )
+    legacy_record.status = ProductJobStatusValue.BLOCKED
+    legacy_record.request.metadata = {
+        **dict(legacy_record.request.metadata),
+        "professional_ecommerce_product_truth_admission": stale_admission.model_dump(),
+    }
+    legacy_record.warnings.append(
+        "reference_input_contract_invalid: legacy request admission did not bind the persisted job."
+    )
+    legacy_record.lifecycle = handlers.service._build_lifecycle(legacy_record)  # noqa: SLF001
+    handlers.service.job_store.save(legacy_record)
+    legacy_metadata_before = deepcopy(legacy_record.request.metadata)
+    legacy_warnings_before = list(legacy_record.warnings)
+
+    command = _job_payload(uploaded_asset_ids=[], key="doc265-stale-contract-recovery")
+    fresh = handlers.post_project_job(project["project_id"], command)
+    replay = handlers.post_project_job(project["project_id"], command)
+    fresh_record = handlers.service.get_job_record(fresh["job_id"])
+    historical = handlers.service.get_job_record(legacy["job_id"])
+    loaded = handlers.get_project(project["project_id"])["project"]
+
+    assert fresh["job_id"] != legacy["job_id"]
+    assert replay["job_id"] == fresh["job_id"]
+    assert loaded["job_ids"] == [legacy["job_id"], fresh["job_id"]]
+    assert fresh["metadata"]["supersedes_job_id"] == legacy["job_id"]
+    assert fresh_record is not None
+    assert fresh_record.request.uploaded_asset_ids == product_ids
+    fresh_admission = ProductTruthAdmission.from_mapping(
+        fresh_record.request.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    assert fresh_admission.job_id == fresh_record.job_id
+    assert fresh_admission.canonical_asset_ids == tuple(product_ids)
+    assert historical is not None
+    assert historical.status == ProductJobStatusValue.BLOCKED
+    assert historical.request.metadata == legacy_metadata_before
+    assert historical.warnings == legacy_warnings_before
+
+
+def test_doc265_persisted_request_contract_drift_closes_before_provider_materialization(
+    tmp_path,
+) -> None:
+    handlers, _catalog = _handlers(tmp_path)
+    provider = _CapturingMockGenerationProvider()
+    handlers.service.scenario_runtime.generation_router = GenerationRouter(provider=provider)
+    project = _project(handlers)
+    product = _ready_product_upload(
+        handlers,
+        filename="doc265-persisted-contract-drift-product.png",
+        color=(145, 150, 175),
+    )
+    _add_product_references(handlers, project["project_id"], [product])
+    created = handlers.post_project_job(
+        project["project_id"],
+        _job_payload(uploaded_asset_ids=[product], key="doc265-persisted-contract-drift"),
+    )
+    record = handlers.service.get_job_record(created["job_id"])
+    assert record is not None and record.planning_result is not None
+    admission = ProductTruthAdmission.from_mapping(
+        record.request.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    stale_admission = build_product_truth_admission(
+        project_id=admission.project_id,
+        job_id="persisted_contract_drift_temporary_id",
+        sources=list(admission.sources),
+        product_truth_plan_digest=admission.product_truth_plan_digest,
+    )
+    plan_metadata_before = deepcopy(record.planning_result.generation_plans[0].metadata)
+    record.request.metadata = {
+        **dict(record.request.metadata),
+        "professional_ecommerce_product_truth_admission": stale_admission.model_dump(),
+    }
+    handlers.service.job_store.save(record)
+
+    blocked = handlers.post_project_job_generate(project["project_id"], record.job_id)
+    stored = handlers.service.get_job_record(record.job_id)
+
+    assert blocked["status"] == "blocked"
+    assert provider.requests == []
+    assert stored is not None and stored.status == ProductJobStatusValue.BLOCKED
+    assert stored.planning_result is not None
+    assert stored.planning_result.generation_plans[0].metadata == plan_metadata_before
+
+
+def test_doc265_different_product_truth_plan_facts_are_not_final_id_drift_supersession(
+    tmp_path,
+) -> None:
+    handlers, _catalog = _handlers(tmp_path)
+    project = _project(handlers)
+    product = _ready_product_upload(
+        handlers,
+        filename="doc265-non-id-contract-drift-product.png",
+        color=(155, 135, 175),
+    )
+    _add_product_references(handlers, project["project_id"], [product])
+    legacy = handlers.post_project_job(
+        project["project_id"],
+        _job_payload(uploaded_asset_ids=[product], key="doc265-non-id-contract-drift-source"),
+    )
+    legacy_record = handlers.service.get_job_record(legacy["job_id"])
+    assert legacy_record is not None and legacy_record.planning_result is not None
+    request_admission = ProductTruthAdmission.from_mapping(
+        legacy_record.request.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    stale_request_admission = build_product_truth_admission(
+        project_id=request_admission.project_id,
+        job_id="legacy_non_id_drift_temporary_id",
+        sources=list(request_admission.sources),
+        product_truth_plan_digest=request_admission.product_truth_plan_digest,
+    )
+    different_plan_admission = build_product_truth_admission(
+        project_id=request_admission.project_id,
+        job_id=legacy_record.job_id,
+        sources=list(request_admission.sources),
+        product_truth_plan_digest=hashlib.sha256(b"different durable plan facts").hexdigest(),
+    )
+    legacy_record.status = ProductJobStatusValue.BLOCKED
+    legacy_record.request.metadata = {
+        **dict(legacy_record.request.metadata),
+        "professional_ecommerce_product_truth_admission": stale_request_admission.model_dump(),
+    }
+    legacy_record.planning_result.metadata = {
+        **dict(legacy_record.planning_result.metadata),
+        "professional_ecommerce_product_truth_admission": different_plan_admission.model_dump(),
+    }
+    for plan in legacy_record.planning_result.generation_plans:
+        plan.metadata = {
+            **dict(plan.metadata),
+            "professional_ecommerce_product_truth_admission": different_plan_admission.model_dump(),
+        }
+    handlers.service.job_store.save(legacy_record)
+
+    command = _job_payload(uploaded_asset_ids=[], key="doc265-non-id-contract-drift-recovery")
+    fresh = handlers.post_project_job(project["project_id"], command)
+    replay = handlers.post_project_job(project["project_id"], command)
+    historical = handlers.service.get_job_record(legacy["job_id"])
+
+    assert fresh["job_id"] != legacy["job_id"]
+    assert replay["job_id"] == fresh["job_id"]
+    assert "supersedes_job_id" not in fresh["metadata"]
+    assert historical is not None
+    assert historical.status == ProductJobStatusValue.BLOCKED
+    assert historical.planning_result is not None
+    assert historical.planning_result.metadata[
+        "professional_ecommerce_product_truth_admission"
+    ] == different_plan_admission.model_dump()
 
 
 def test_doc265_legacy_mixed_uploaded_list_recovers_product_truth_only(tmp_path) -> None:

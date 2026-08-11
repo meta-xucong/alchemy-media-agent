@@ -28,6 +28,10 @@ from ..scenario_packs.photography import (
     PhotographySetContinuationRequest,
 )
 from ..scenario_packs.photography.continuation import PhotographySetContinuationDirector
+from ..scenario_packs.ecommerce.reference_projection import (
+    PhysicalProductReferenceProjection,
+    ProductTruthAdmission,
+)
 from ..schemas import BrandProfile, ReferenceAsset
 from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityPlanAmendment
 from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
@@ -3084,6 +3088,9 @@ class V3ProjectModeService:
         drift_job_id = self._reference_projection_drift_superseded_job_id(project)
         if drift_job_id:
             return drift_job_id
+        contract_drift_job_id = self._ecommerce_final_contract_drift_superseded_job_id(project)
+        if contract_drift_job_id:
+            return contract_drift_job_id
         current_product_asset_ids = set(self._project_product_reference_candidates(project))
         for job_id in reversed(project.job_ids):
             record = self.product_service.get_job_record(job_id)
@@ -3112,6 +3119,105 @@ class V3ProjectModeService:
                 for warning in record.warnings
             ):
                 return record.job_id
+        return None
+
+    def _ecommerce_final_contract_drift_superseded_job_id(
+        self,
+        project: ProjectRecord,
+    ) -> str | None:
+        """Recognize only the durable final-ID drift shape from old E-Commerce jobs."""
+
+        current_product_asset_ids = set(self._project_product_reference_candidates(project))
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None or record.status not in {
+                ProductJobStatusValue.BLOCKED,
+                ProductJobStatusValue.FAILED,
+            }:
+                continue
+            metadata = dict(record.request.metadata or {})
+            if (
+                str(metadata.get("project_id") or "").strip() != project.project_id
+                or str(metadata.get("template_id") or "").strip() != ECOMMERCE_TEMPLATE_ID
+                or metadata.get("professional_ecommerce_contract_authority")
+                != "v3_product_api"
+                or record.planning_result is None
+                or record.planning_result.creative_job.job_id != record.job_id
+            ):
+                continue
+            try:
+                request_admission = ProductTruthAdmission.from_mapping(
+                    metadata.get("professional_ecommerce_product_truth_admission")
+                )
+                request_projections = metadata.get(
+                    "professional_ecommerce_physical_product_projections"
+                )
+                if (
+                    request_admission.project_id != project.project_id
+                    or request_admission.job_id == record.job_id
+                    or not request_projections
+                    or not isinstance(request_projections, dict)
+                    or list(record.request.uploaded_asset_ids)
+                    != list(request_admission.canonical_asset_ids)
+                    or not set(request_admission.canonical_asset_ids).issubset(
+                        current_product_asset_ids
+                    )
+                ):
+                    continue
+                request_projection_records = {
+                    key: PhysicalProductReferenceProjection.from_mapping(value)
+                    for key, value in request_projections.items()
+                    if isinstance(key, str) and isinstance(value, dict)
+                }
+                if (
+                    len(request_projection_records) != len(request_projections)
+                    or not request_projection_records
+                    or any(
+                        key != str(item.output_index) or item.job_id != record.job_id
+                        for key, item in request_projection_records.items()
+                    )
+                ):
+                    continue
+                plan_metadata = dict(record.planning_result.metadata or {})
+                plan_admission = ProductTruthAdmission.from_mapping(
+                    plan_metadata.get("professional_ecommerce_product_truth_admission")
+                )
+                plan_projections = plan_metadata.get(
+                    "professional_ecommerce_physical_product_projections"
+                )
+                if (
+                    plan_admission.project_id != project.project_id
+                    or plan_admission.job_id != record.job_id
+                    or plan_projections != request_projections
+                    or plan_admission.canonical_asset_ids
+                    != request_admission.canonical_asset_ids
+                    or plan_admission.sources != request_admission.sources
+                    or plan_admission.product_truth_plan_digest
+                    != request_admission.product_truth_plan_digest
+                    or plan_admission.model_dump()
+                    == request_admission.model_dump()
+                ):
+                    continue
+                for raw_projection in plan_projections.values():
+                    projection = PhysicalProductReferenceProjection.from_mapping(raw_projection)
+                    projection.validate_against(plan_admission)
+                    if projection.job_id != record.job_id:
+                        raise ValueError("plan projection job mismatch")
+                if not record.planning_result.generation_plans or any(
+                    dict(plan.metadata or {}).get(
+                        "professional_ecommerce_product_truth_admission"
+                    )
+                    != plan_admission.model_dump()
+                    or dict(plan.metadata or {}).get(
+                        "professional_ecommerce_physical_product_projections"
+                    )
+                    != plan_projections
+                    for plan in record.planning_result.generation_plans
+                ):
+                    continue
+            except (TypeError, ValueError, KeyError, AttributeError):
+                continue
+            return record.job_id
         return None
 
     def _soft_suppress_duplicate_product_references(

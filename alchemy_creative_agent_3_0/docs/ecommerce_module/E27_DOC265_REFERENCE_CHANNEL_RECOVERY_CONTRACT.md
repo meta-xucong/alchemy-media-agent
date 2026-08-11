@@ -1,8 +1,8 @@
 # E27 / Doc265 Reference Channel Recovery Contract
 
-Status: Phase 0 contract and deterministic red-test milestone only. This
-document authorizes no runtime change, Provider/MCP/ImageGen call, deployment,
-or production-record mutation.
+Status: Phase 1 implementation in the isolated E-Commerce worktree. This
+document authorizes no Provider/MCP/ImageGen call, deployment, or
+production-record mutation.
 
 ## 1. Scope And Authority
 
@@ -87,6 +87,14 @@ request list.
 8. The server derives the final typed channel payload before idempotency and
    command identity. Replaying the same continuation action returns the same
    command and does not re-add old output IDs to product truth.
+9. Once the Product API has the durable `ProductJobRecord.job_id`, it rebuilds
+   and freezes every ProductTruthAdmission and per-output physical projection
+   to that exact ID. The request record, planning result, every generation
+   plan, and renderer request carry byte-equivalent typed contract copies.
+   Generate-stage context refresh may validate that final contract but must
+   not replace it with an instance/pending ID. A mismatched persisted contract
+   closes before materialization; Provider metadata precedence is never used
+   as a recovery rule.
 
 ## 5. Legacy Recovery And Compatibility
 
@@ -106,6 +114,13 @@ Doc265 is a read/continuation migration, not a destructive cleanup.
   error body.
 - No ImageGen, MCP, or Provider request is sent when the only resolvable
   references are invalid output selectors or unresolved product facts.
+- A historical blocked E-Commerce record may be superseded only when trusted
+  persisted request admission/projection facts prove the final-ID drift shape:
+  its request admission binds a different ID, while the same record's
+  persisted planning result and every generation plan bind the record ID with
+  a valid typed projection. Project Mode creates one new command from the
+  current canonical originals and records trusted lineage; it never mutates
+  the historical record or accepts a browser-supplied supersession claim.
 
 ## 6. Frontend Contract
 

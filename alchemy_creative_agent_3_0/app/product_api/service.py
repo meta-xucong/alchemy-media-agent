@@ -39,6 +39,7 @@ from ..photography_profiles import (
 )
 from ..scenario_packs.ecommerce import EcommercePackOutput, EcommerceScenarioPackPlanner
 from ..scenario_packs.ecommerce.reference_projection import (
+    PhysicalProductReferenceProjection,
     ProductTruthAdmission,
     ProductTruthSource,
     build_physical_product_projection,
@@ -2744,6 +2745,7 @@ class V3ProductApiService:
                 submitted_mcp_generation_result = self._consume_submitted_body_mcp_artifact(record)
                 submitted_mcp_contract_invalid = submitted_mcp_generation_result is None
             else:
+                self._assert_ecommerce_final_contract_for_record(record)
                 record.request.metadata = self._without_transient_generation_failure_metadata(record.request.metadata)
                 record.status = ProductJobStatusValue.GENERATING
                 record.lifecycle = self._build_lifecycle(record)
@@ -10968,7 +10970,25 @@ class V3ProductApiService:
         has_frozen_plan = isinstance(metadata.get("capability_activation_plan"), dict)
         trusted_reuse = has_frozen_plan if trusted_capability_plan_reuse is None else trusted_capability_plan_reuse
         resolved_uploads = self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
-        uploaded_assets: list[Any] = list(resolved_uploads)
+        product_truth_asset_ids = {
+            str(item).strip()
+            for item in metadata.get("professional_ecommerce_product_truth_pool_asset_ids", [])
+            if str(item).strip()
+        }
+        uploaded_assets: list[Any] = [
+            asset.model_copy(
+                update={
+                    "metadata": {
+                        **dict(asset.metadata or {}),
+                        "codex_native_reference_channel": "product_truth",
+                        "provider_input_required": True,
+                    }
+                }
+            )
+            if getattr(asset, "asset_id", None) in product_truth_asset_ids
+            else asset
+            for asset in resolved_uploads
+        ]
         anchored_reference_groups = (
             metadata.get("professional_anchor_reference_assets"),
             metadata.get("visual_asset_library_reference_assets"),
@@ -11007,11 +11027,12 @@ class V3ProductApiService:
             ]
             metadata["reference_assets"] = [
                 *[
-                    item.model_dump(mode="json")
-                    if hasattr(item, "model_dump")
-                    else dict(item)
-                    for item in resolved_uploads
-                ],
+                item.model_dump(mode="json")
+                if hasattr(item, "model_dump")
+                else dict(item)
+                for item in resolved_uploads
+                if getattr(item, "asset_id", None) not in product_truth_asset_ids
+            ],
                 *renderer_reference_assets,
             ]
         payload = {
@@ -11149,6 +11170,7 @@ class V3ProductApiService:
             "professional_product_truth_required",
             "professional_ecommerce_product_truth_pool_asset_ids",
             "professional_ecommerce_contract_authority",
+            "professional_ecommerce_contract_job_id",
             "professional_ecommerce_product_truth_admission",
             "professional_ecommerce_physical_product_projection",
             "professional_ecommerce_physical_product_projections",
@@ -11170,6 +11192,7 @@ class V3ProductApiService:
             "professional_product_truth_required",
             "professional_ecommerce_product_truth_pool_asset_ids",
             "professional_ecommerce_contract_authority",
+            "professional_ecommerce_contract_job_id",
             "professional_ecommerce_product_truth_admission",
             "professional_ecommerce_physical_product_projection",
             "professional_ecommerce_physical_product_projections",
@@ -11891,13 +11914,26 @@ class V3ProductApiService:
             metadata["professional_ecommerce_product_truth_pool_asset_ids"] = list(
                 product_truth_pool_asset_ids
             )
-            metadata["professional_ecommerce_product_truth_admission"] = (
-                self._build_ecommerce_product_truth_admission(
-                    request,
-                    metadata=metadata,
-                    product_truth_pool_asset_ids=product_truth_pool_asset_ids,
-                ).model_dump()
-            )
+            final_contract_job_id = str(
+                metadata.get("professional_ecommerce_contract_job_id") or ""
+            ).strip()
+            if final_contract_job_id:
+                # A persisted ProductJobRecord already owns this contract.
+                # Generation may refresh the creative context, but it must
+                # never rebuild a second admission under a transient request
+                # identity and let it overwrite the final output contract.
+                self._validate_ecommerce_final_contract_metadata(
+                    metadata,
+                    job_id=final_contract_job_id,
+                )
+            else:
+                metadata["professional_ecommerce_product_truth_admission"] = (
+                    self._build_ecommerce_product_truth_admission(
+                        request,
+                        metadata=metadata,
+                        product_truth_pool_asset_ids=product_truth_pool_asset_ids,
+                    ).model_dump()
+                )
             metadata["professional_ecommerce_contract_authority"] = "v3_product_api"
         metadata["ecommerce_creative_context"] = context.model_dump(mode="json")
         metadata["ecommerce_creative_context_server_owned"] = True
@@ -12195,6 +12231,8 @@ class V3ProductApiService:
         )
         raw_admission = admission.model_dump()
         metadata["professional_ecommerce_product_truth_admission"] = raw_admission
+        metadata["professional_ecommerce_contract_job_id"] = job_id
+        metadata["job_id"] = job_id
         raw_plan = runtime_metadata.get("template_deliverable_plan")
         if (
             not isinstance(raw_plan, dict)
@@ -12264,6 +12302,8 @@ class V3ProductApiService:
             **dict(planning_result.metadata or {}),
             **{
                 "professional_ecommerce_contract_authority": "v3_product_api",
+                "professional_ecommerce_contract_job_id": job_id,
+                "job_id": job_id,
                 "professional_ecommerce_product_truth_admission": raw_admission,
                 "professional_ecommerce_physical_product_projections": projections,
                 "professional_ecommerce_physical_product_projection": metadata[
@@ -12275,12 +12315,93 @@ class V3ProductApiService:
             generation_plan.metadata = {
                 **dict(generation_plan.metadata or {}),
                 "professional_ecommerce_contract_authority": "v3_product_api",
+                "professional_ecommerce_contract_job_id": job_id,
+                "job_id": job_id,
                 "professional_ecommerce_product_truth_admission": raw_admission,
                 "professional_ecommerce_physical_product_projections": projections,
                 "professional_ecommerce_physical_product_projection": metadata[
                     "professional_ecommerce_physical_product_projection"
                 ],
             }
+
+    @staticmethod
+    def _validate_ecommerce_final_contract_metadata(
+        metadata: dict[str, Any],
+        *,
+        job_id: str,
+    ) -> tuple[ProductTruthAdmission, dict[str, dict[str, Any]], dict[str, Any]]:
+        """Validate one final E-Commerce contract without selecting a fallback copy."""
+
+        if (
+            str(metadata.get("professional_ecommerce_contract_authority") or "")
+            != "v3_product_api"
+            or str(metadata.get("professional_ecommerce_contract_job_id") or "").strip()
+            != job_id
+            or str(metadata.get("job_id") or "").strip() != job_id
+        ):
+            raise ValueError("ecommerce_final_contract_binding_invalid")
+        raw_admission = metadata.get("professional_ecommerce_product_truth_admission")
+        raw_projections = metadata.get("professional_ecommerce_physical_product_projections")
+        singular_projection = metadata.get("professional_ecommerce_physical_product_projection")
+        if not isinstance(raw_admission, dict) or not isinstance(raw_projections, dict):
+            raise ValueError("ecommerce_final_contract_missing")
+        try:
+            admission = ProductTruthAdmission.from_mapping(raw_admission)
+        except ValueError as exc:
+            raise ValueError("ecommerce_final_contract_admission_invalid") from exc
+        if admission.job_id != job_id or not raw_projections:
+            raise ValueError("ecommerce_final_contract_binding_invalid")
+        projections: dict[str, dict[str, Any]] = {}
+        for output_key, raw_projection in raw_projections.items():
+            if not isinstance(output_key, str) or not isinstance(raw_projection, dict):
+                raise ValueError("ecommerce_final_contract_projection_invalid")
+            try:
+                projection = PhysicalProductReferenceProjection.from_mapping(raw_projection)
+                projection.validate_against(admission)
+            except ValueError as exc:
+                raise ValueError("ecommerce_final_contract_projection_invalid") from exc
+            if projection.job_id != job_id or output_key != str(projection.output_index):
+                raise ValueError("ecommerce_final_contract_binding_invalid")
+            projections[output_key] = raw_projection
+        primary = projections.get("1") or next(iter(projections.values()))
+        if singular_projection != primary:
+            raise ValueError("ecommerce_final_contract_projection_invalid")
+        return admission, projections, primary
+
+    def _assert_ecommerce_final_contract_for_record(self, record: ProductJobRecord) -> None:
+        """Require exact request/result/plan parity before E-Commerce materialization."""
+
+        if not self._is_ecommerce_request(record.request):
+            return
+        request_metadata = dict(record.request.metadata or {})
+        if request_metadata.get("professional_product_truth_required") is not True:
+            return
+        _admission, projections, primary = self._validate_ecommerce_final_contract_metadata(
+            request_metadata,
+            job_id=record.job_id,
+        )
+        planning_result = record.planning_result
+        if planning_result is None or planning_result.creative_job.job_id != record.job_id:
+            raise ValueError("ecommerce_final_contract_planning_binding_invalid")
+        contract_keys = (
+            "professional_ecommerce_contract_authority",
+            "professional_ecommerce_contract_job_id",
+            "job_id",
+            "professional_ecommerce_product_truth_admission",
+            "professional_ecommerce_physical_product_projections",
+            "professional_ecommerce_physical_product_projection",
+        )
+        expected = {key: request_metadata.get(key) for key in contract_keys}
+        for metadata in [dict(planning_result.metadata or {}), *[
+            dict(plan.metadata or {}) for plan in planning_result.generation_plans
+        ]]:
+            if any(metadata.get(key) != value for key, value in expected.items()):
+                raise ValueError("ecommerce_final_contract_copy_mismatch")
+            self._validate_ecommerce_final_contract_metadata(metadata, job_id=record.job_id)
+        if not projections or primary != request_metadata.get(
+            "professional_ecommerce_physical_product_projection"
+        ):
+            raise ValueError("ecommerce_final_contract_projection_invalid")
 
     def _record_ecommerce_runtime_provenance(self, request: CreateCreativeJobRequest, runtime_result: Any, *, stage: str) -> None:
         """Persist factual inputs and fail-closed reasons without replaying a recipe.
