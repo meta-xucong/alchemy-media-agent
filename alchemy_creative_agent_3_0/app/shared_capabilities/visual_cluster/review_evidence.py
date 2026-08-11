@@ -383,9 +383,16 @@ class ExactReviewEvidenceResolver:
         evidence_ids = tuple(str(item["source_id"]) for item in entries if item.get("source_id"))
         source_types = {str(item.get("source_type") or "") for item in entries if item.get("source_type")}
         reasons = tuple(
-            f"review_evidence_{name}_{item['reason']}"
-            for item in entries
-            if item.get("reason")
+            dict.fromkeys(
+                "review_evidence_"
+                + (
+                    str(item["reason"])
+                    if str(item["reason"]).startswith(f"{name}_")
+                    else f"{name}_{item['reason']}"
+                )
+                for item in entries
+                if item.get("reason")
+            )
         )
         return ReviewEvidenceChannel(
             applicability="required",

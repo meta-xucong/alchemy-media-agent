@@ -84,6 +84,10 @@ from ..shared_capabilities.visual_cluster.human_photorealism import (
     normalize_human_realism_issue_code,
 )
 from ..shared_capabilities.visual_cluster.review_evidence import ExactReviewEvidenceResolver, review_plan_digest
+from ..shared_capabilities.visual_cluster.vision_provider import (
+    VisionInspectionProviderError,
+    VisionInspectionProviderUnavailable,
+)
 from ..schemas import (
     AssetType,
     BrandProfile,
@@ -583,6 +587,16 @@ class ProductJobRecord:
 
 class EcommerceProductInputNeedsAttention(ValueError):
     """Closed E-Commerce admission outcome that must never reach Brain planning."""
+
+
+class PostGenerationReviewFinalizationClosed(ValueError):
+    """A typed, safe signal emitted only after persisted pixels are closed for review."""
+
+    code = "post_generation_review_finalization_failed"
+    v3_status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("Generated pixels require manual review before final delivery.")
 
 
 class InMemoryProductJobStore:
@@ -2553,6 +2567,10 @@ class V3ProductApiService:
         ):
             return self._status_from_record(record)
         requested_code = str(failure_code).strip()
+        if requested_code == "post_generation_review_finalization_failed":
+            closed = self._close_post_generation_review_finalization(record)
+            if closed is not None:
+                return closed
         normalized_code = (
             requested_code
             if requested_code
@@ -2592,6 +2610,155 @@ class V3ProductApiService:
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)
+
+    def _close_post_generation_review_finalization(self, record: ProductJobRecord) -> ProductJobStatus | None:
+        """Retain persisted pixels when only review finalization cannot complete."""
+
+        pixel_bindings: list[dict[str, str]] = []
+        for output in self.output_store.list_by_job(record.job_id):
+            path = Path(output.file_path) if output.file_path else None
+            expected_sha256 = str(dict(output.metadata or {}).get("content_sha256") or "").strip()
+            if path is None or not path.is_file() or not expected_sha256:
+                return None
+            try:
+                actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                return None
+            if actual_sha256 != expected_sha256:
+                return None
+            pixel_bindings.append(
+                {
+                    "output_id": output.output_id,
+                    "asset_id": output.asset_id,
+                    "candidate_id": output.candidate_id,
+                    "content_sha256": actual_sha256,
+                }
+            )
+        if not pixel_bindings:
+            return None
+
+        existing = dict(record.request.metadata or {}).get("post_generation_review_closure")
+        if isinstance(existing, dict) and existing.get("job_id") == record.job_id:
+            return self._status_from_record(record)
+
+        closure = {
+            "schema_version": "doc267_post_generation_review_closure_v1",
+            "authority": "v3_product_api",
+            "state": "review_withheld_finalization_failed",
+            "job_id": record.job_id,
+            "output_ids": [binding["output_id"] for binding in pixel_bindings],
+            "pixel_bindings": pixel_bindings,
+            "history_only": True,
+            "real_pixel_review": False,
+            "automatic_delivery_available": False,
+            "manual_confirmation_required": True,
+            "automatic_replay": False,
+            "refine_budget_consumed": 0,
+            "reject_recommendation_created": False,
+        }
+        record.request.metadata = {
+            **dict(record.request.metadata),
+            "post_generation_review_closure": closure,
+            "generation_lifecycle_failure": {
+                "failure_code": "post_generation_review_finalization_failed",
+                "status": "terminal_failure",
+                "owner": "v3_product_api_post_generation_review",
+                "automatic_replay": False,
+            },
+        }
+        if record.generation_result is not None:
+            record.generation_result = self._review_withheld_generation_result(record, pixel_bindings)
+        record.status = ProductJobStatusValue.BLOCKED
+        record.warnings.append(
+            "Generated pixels were retained for manual review; automatic review finalization did not complete."
+        )
+        record.lifecycle = self._build_lifecycle(record)
+        self.job_store.save(record)
+        return self._status_from_record(record)
+
+    def _review_withheld_generation_result(
+        self,
+        record: ProductJobRecord,
+        pixel_bindings: list[dict[str, str]],
+    ) -> PlanningResult:
+        """Attach a closed review package without inventing a review outcome."""
+
+        assert record.generation_result is not None
+        result = record.generation_result
+        resolutions = [
+            {
+                "resolution_id": stable_id("doc267_review_closure_resolution", record.job_id, binding["output_id"]),
+                "project_id": str(record.request.metadata.get("project_id") or "").strip() or None,
+                "job_id": record.job_id,
+                "candidate_id": binding["candidate_id"],
+                "asset_id": binding["asset_id"],
+                "output_id": binding["output_id"],
+                "status": "ready",
+                "metadata": {"content_sha256": binding["content_sha256"]},
+            }
+            for binding in pixel_bindings
+        ]
+        package = {
+            "package_id": stable_id("doc267_post_generation_review_closure", record.job_id),
+            "project_id": str(record.request.metadata.get("project_id") or "").strip() or None,
+            "job_id": record.job_id,
+            "resolutions": resolutions,
+            "inspections": [],
+            "quality_review_reports": [],
+            "auto_retry_decisions": [],
+            "real_review_signal_package": None,
+            "recommended_output_ids": [],
+            "hidden_output_ids": [],
+            "user_visible_summary": [
+                "Generated pixels are retained for manual review; automatic refinement and delivery are unavailable."
+            ],
+            "review_evidence_plans": {},
+            "review_evidence_plan_digests": {},
+            "review_evidence_receipt_status": "closed",
+            "review_evidence_receipt_errors": ["post_generation_review_finalization_failed"],
+            "real_pixel_review": False,
+            "metadata": {
+                "doc": "267",
+                "post_generation": True,
+                "review_disposition": "manual_review_only",
+                "automatic_refinement_allowed": False,
+                "automatic_delivery_allowed": False,
+            },
+        }
+        metadata = dict(result.metadata)
+        visual_cluster = dict(metadata.get("visual_cluster") or {})
+        visual_cluster.update(
+            {
+                "post_generation_review_package": package,
+                "has_post_generation_review": True,
+                "auto_retry_decisions": [],
+            }
+        )
+        shared_capabilities = dict(metadata.get("shared_capabilities") or {})
+        shared_capabilities["visual_cluster"] = visual_cluster
+        metadata.update(
+            {
+                "shared_capabilities": shared_capabilities,
+                "visual_cluster": visual_cluster,
+                "post_generation_review_package": package,
+                "post_generation_review_summary": list(package["user_visible_summary"]),
+                "visual_auto_retry": {
+                    "enabled": False,
+                    "executed_count": 0,
+                    "max_attempts": 0,
+                    "issue_codes": [],
+                    "records": [],
+                    "append_only": True,
+                },
+            }
+        )
+        asset_pack = result.asset_pack.model_copy(
+            update={
+                "manifest": {**dict(result.asset_pack.manifest), "post_generation_review_package": package},
+                "metadata": {**dict(result.asset_pack.metadata), "post_generation_review_package": package},
+            }
+        )
+        return result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
 
     def list_history(self, limit: int = 20) -> V3JobHistoryResponse:
         bounded_limit = max(1, min(int(limit or 20), 100))
@@ -2923,7 +3090,12 @@ class V3ProductApiService:
         checkpoint_status = self._checkpoint_mcp_generation_result(record, generation_result)
         if checkpoint_status is not None:
             return checkpoint_status
-        generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        try:
+            generation_result = self._attach_post_generation_review(record, generation_result, generate_request)
+        except (ValidationError, VisionInspectionProviderError, VisionInspectionProviderUnavailable) as exc:
+            if self._close_post_generation_review_finalization(record) is None:
+                raise
+            raise PostGenerationReviewFinalizationClosed() from exc
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
         self._clear_superseded_pre_generation_review_warning(record, generation_result)
@@ -5085,15 +5257,6 @@ class V3ProductApiService:
             review_evidence_receipt_errors=tuple(dict.fromkeys(receipt_errors)),
             max_attempts=self._visual_auto_retry_max_attempts(generate_request),
         )
-        real_pixel_review = (
-            package.review_evidence_receipt_status == "complete"
-            and any(
-                inspection.verification_state == "verified"
-                and bool(inspection.evidence.get("provider_pixel_result_certified"))
-                for inspection in inspections
-            )
-        )
-        package = package.model_copy(update={"real_pixel_review": real_pixel_review})
         package_payload = package.model_dump(mode="json")
         metadata = dict(generation_result.metadata)
         shared_capabilities = dict(metadata.get("shared_capabilities") or {})
@@ -5124,13 +5287,16 @@ class V3ProductApiService:
             *existing_reports,
             *[report.model_dump(mode="json") for report in package.quality_review_reports],
         ]
-        visual_cluster["auto_retry_decisions"] = self._auto_retry_decisions_with_mode_review(
-            package.auto_retry_decisions,
-            mode_review=mode_review,
-            job_id=generation_result.creative_job.job_id,
-            project_id=project_id,
-            max_attempts=self._visual_auto_retry_max_attempts(generate_request),
-        )
+        if package.metadata.get("review_disposition") == "manual_review_only":
+            visual_cluster["auto_retry_decisions"] = []
+        else:
+            visual_cluster["auto_retry_decisions"] = self._auto_retry_decisions_with_mode_review(
+                package.auto_retry_decisions,
+                mode_review=mode_review,
+                job_id=generation_result.creative_job.job_id,
+                project_id=project_id,
+                max_attempts=self._visual_auto_retry_max_attempts(generate_request),
+            )
         package_payload["auto_retry_decisions"] = list(visual_cluster["auto_retry_decisions"])
         if package.real_review_signal_package is not None:
             real_signal_payload = package.real_review_signal_package.model_dump(mode="json")

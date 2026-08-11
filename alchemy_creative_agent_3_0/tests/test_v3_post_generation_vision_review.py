@@ -829,7 +829,7 @@ def test_vision_inspector_real_provider_low_confidence_does_not_retry(tmp_path) 
     assert any(issue["code"] == "low_confidence_review" for issue in report.detected_issues)
 
 
-def test_product_api_doc55_signal_triggers_doc53_retry_without_force_retry_metadata(tmp_path) -> None:
+def test_product_api_noncertified_doc55_signal_requires_manual_review_without_retry(tmp_path) -> None:
     service = _service(tmp_path)
     created = _create_general_job(service)
 
@@ -853,14 +853,14 @@ def test_product_api_doc55_signal_triggers_doc53_retry_without_force_retry_metad
 
     assert generated.status == ProductJobStatusValue.GENERATED
     assert review["inspections"][0]["status"] == "fail_retryable"
-    assert internal_review["real_review_signal_package"]["retryable_candidate_ids"]
-    assert retry_summary["executed_count"] == 1
-    assert retry_candidates
-    assert internal_retry["records"][0]["source"] == "real_review_signal_package"
-    assert internal_retry["records"][0]["retry_patch"]["target_candidate_ids"]
+    assert internal_review["real_review_signal_package"] is None
+    assert internal_review["metadata"]["review_disposition"] == "manual_review_only"
+    assert retry_summary["executed_count"] == 0
+    assert retry_candidates == []
+    assert internal_retry["records"] == []
 
 
-def test_product_api_aigc_provenance_issue_retries_by_default_in_standard_mode(tmp_path) -> None:
+def test_product_api_noncertified_aigc_provenance_issue_requires_manual_review(tmp_path) -> None:
     service = _service(
         tmp_path,
         output_resolver=_StaticReadyResolver(_openai_resolution_with_aigc_metadata(tmp_path)),
@@ -878,17 +878,16 @@ def test_product_api_aigc_provenance_issue_retries_by_default_in_standard_mode(t
     retry_summary = generated.metadata["visual_auto_retry"]
     review = generated.metadata["post_generation_review"]
     retry_candidates = [candidate for candidate in generated.candidates if candidate.metadata.get("visual_auto_retry_output")]
-    issue_codes = review["inspections"][0]["detected_issues"]
-    issue_codes = [issue["code"] for issue in issue_codes]
-
+    issue_codes = [issue["code"] for issue in review["inspections"][0]["detected_issues"]]
     assert generated.status == ProductJobStatusValue.GENERATED
     assert review["inspections"][0]["status"] == "fail_retryable"
+    assert review["real_pixel_review_certified"] is False
     assert "third_party_aigc_metadata" in issue_codes
     assert "provider_provenance_mismatch" in issue_codes
     assert retry_summary["enabled"] is True
     assert retry_summary["max_attempts"] == 1
-    assert retry_summary["executed_count"] == 1
-    assert retry_candidates
+    assert retry_summary["executed_count"] == 0
+    assert retry_candidates == []
 
 
 def test_product_api_low_confidence_doc55_signal_does_not_retry(tmp_path) -> None:

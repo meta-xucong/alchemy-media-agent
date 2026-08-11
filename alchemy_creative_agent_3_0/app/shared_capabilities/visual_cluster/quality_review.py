@@ -46,22 +46,38 @@ class OutputQualityReviewMerger:
         if receipt_status == "closed" and not receipt_errors and ready_output_ids.difference(plans):
             receipt_errors = ("review_evidence_plan_missing",)
         reports = [self._review_report(inspection) for inspection in inspections]
-        decisions = self._auto_retry_decisions(job_id, project_id, inspections, max_attempts=max_attempts)
-        real_review_signal_package = self._real_review_signal_package(
-            job_id=job_id,
-            project_id=project_id,
-            inspections=inspections,
+        certified_output_ids = self._certified_provider_pixel_output_ids(inspections)
+        manual_review_only = (
+            receipt_status != "complete"
+            or not ready_output_ids
+            or not ready_output_ids.issubset(certified_output_ids)
         )
-        recommended_output_ids = [
-            report.output_id
-            for report in reports
-            if report.output_id and report.status in {"pass", "warning"}
-        ]
-        hidden_output_ids = [
-            report.output_id
-            for report in reports
-            if report.output_id and report.status in {"fail_final"}
-        ]
+        if manual_review_only:
+            decisions = []
+            real_review_signal_package = None
+            recommended_output_ids = []
+            hidden_output_ids = []
+            summary = [
+                "Generated pixels are retained for manual review; automatic refinement and delivery are unavailable."
+            ]
+        else:
+            decisions = self._auto_retry_decisions(job_id, project_id, inspections, max_attempts=max_attempts)
+            real_review_signal_package = self._real_review_signal_package(
+                job_id=job_id,
+                project_id=project_id,
+                inspections=inspections,
+            )
+            recommended_output_ids = [
+                report.output_id
+                for report in reports
+                if report.output_id and report.status in {"pass", "warning"}
+            ]
+            hidden_output_ids = [
+                report.output_id
+                for report in reports
+                if report.output_id and report.status in {"fail_final"}
+            ]
+            summary = self._package_summary(inspections, decisions)
         return PostGenerationReviewPackage(
             package_id=stable_id("post_generation_review_package", project_id, job_id, len(inspections)),
             project_id=project_id,
@@ -73,19 +89,34 @@ class OutputQualityReviewMerger:
             real_review_signal_package=real_review_signal_package,
             recommended_output_ids=list(dict.fromkeys(recommended_output_ids)),
             hidden_output_ids=list(dict.fromkeys(hidden_output_ids)),
-            user_visible_summary=self._package_summary(inspections, decisions),
+            user_visible_summary=summary,
             review_evidence_plans=plans,
             review_evidence_plan_digests=digests,
             review_evidence_receipt_status=receipt_status,
             review_evidence_receipt_errors=receipt_errors,
+            real_pixel_review=not manual_review_only,
             metadata={
                 "doc": "55,66",
                 "post_generation": True,
                 "inspection_count": len(inspections),
                 "retry_decision_count": len(decisions),
-                "real_review_signal_package_id": real_review_signal_package.package_id,
+                "review_disposition": "manual_review_only" if manual_review_only else "certified_review",
+                "real_review_signal_package_id": (
+                    real_review_signal_package.package_id if real_review_signal_package is not None else None
+                ),
             },
         )
+
+    @staticmethod
+    def _certified_provider_pixel_output_ids(inspections: list[VisualInspectionReport]) -> set[str]:
+        return {
+            str(inspection.output_id).strip()
+            for inspection in inspections
+            if str(inspection.output_id or "").strip()
+            and str(inspection.mode or "").strip().lower() in {"vision_model", "hybrid"}
+            and str(inspection.verification_state or "").strip().lower() == "verified"
+            and bool(inspection.evidence.get("provider_pixel_result_certified"))
+        }
 
     def _review_report(self, inspection: VisualInspectionReport) -> VisualQualityReviewReport:
         passed_checks = ["resolved generated output", "checked output after generation"]

@@ -250,6 +250,25 @@ def test_doc267_background_taxonomy_keeps_invalid_v3_request_for_predispatch_onl
     assert status["metadata"]["generation_lifecycle_failure"]["failure_code"] == "background_generation_request_invalid"
 
 
+def test_doc267_unrelated_runtime_error_remains_generic_worker_failure(tmp_path, monkeypatch) -> None:
+    handlers, _catalog, project, record, _output, attempt_id = _ecommerce_job_with_persisted_pixel(tmp_path)
+    worker = _run_background_failure(
+        monkeypatch,
+        handlers=handlers,
+        project_id=project["project_id"],
+        job_id=record.job_id,
+        attempt_id=attempt_id,
+        failure=RuntimeError("unrelated local defect"),
+    )
+    status = handlers.get_job(record.job_id)
+    persisted = handlers.service.job_store.get(record.job_id)
+
+    assert worker.failure_codes == ["background_generation_worker_error"]
+    assert status["metadata"]["generation_lifecycle_failure"]["failure_code"] == "background_generation_worker_error"
+    assert persisted is not None
+    assert "post_generation_review_closure" not in persisted.request.metadata
+
+
 def test_doc267_locked_people_identity_overrides_generic_false_and_is_deduplicated(tmp_path) -> None:
     handlers, catalog = _handlers(tmp_path)
     provider = _CapturingMockGenerationProvider()

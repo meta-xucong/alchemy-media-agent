@@ -469,9 +469,12 @@ def _run_v3_project_generation_background(project_id: str, job_id: str, payload:
         _run_v3_handler(v3_route_handlers.post_project_job_generate, project_id, job_id, payload)
     except Exception as exc:
         detail = getattr(exc, "detail", None)
+        detail_code = str(detail.get("code") or "") if isinstance(detail, dict) else ""
         failure_code = (
-            "background_generation_request_invalid"
-            if isinstance(detail, dict) and str(detail.get("code") or "") == "invalid_v3_request"
+            "post_generation_review_finalization_failed"
+            if detail_code == "post_generation_review_finalization_failed"
+            else "background_generation_request_invalid"
+            if detail_code == "invalid_v3_request"
             else "background_generation_worker_error"
         )
         try:
