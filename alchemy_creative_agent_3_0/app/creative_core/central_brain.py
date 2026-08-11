@@ -135,6 +135,22 @@ class CentralCreativeBrain:
                 "professional_ecommerce_product_truth_pool_asset_ids": context.metadata.get(
                     "professional_ecommerce_product_truth_pool_asset_ids"
                 ),
+                # Product API issues these typed, output-bound contracts before
+                # planning. Keep them on every generation plan so the later
+                # execution pass cannot retain only the pool summary and lose
+                # the admission/projection authority needed by Provider.
+                "professional_ecommerce_contract_authority": context.metadata.get(
+                    "professional_ecommerce_contract_authority"
+                ),
+                "professional_ecommerce_product_truth_admission": context.metadata.get(
+                    "professional_ecommerce_product_truth_admission"
+                ),
+                "professional_ecommerce_physical_product_projection": context.metadata.get(
+                    "professional_ecommerce_physical_product_projection"
+                ),
+                "professional_ecommerce_physical_product_projections": context.metadata.get(
+                    "professional_ecommerce_physical_product_projections"
+                ),
                 # Renderer choice is transport provenance, not creative
                 # direction. Preserve it in the frozen plan so the shared
                 # output record cannot mislabel a Codex/MCP materialization
@@ -385,6 +401,18 @@ class CentralCreativeBrain:
                 ),
                 "professional_ecommerce_product_truth_pool_asset_ids": context.metadata.get(
                     "professional_ecommerce_product_truth_pool_asset_ids"
+                ),
+                "professional_ecommerce_contract_authority": context.metadata.get(
+                    "professional_ecommerce_contract_authority"
+                ),
+                "professional_ecommerce_product_truth_admission": context.metadata.get(
+                    "professional_ecommerce_product_truth_admission"
+                ),
+                "professional_ecommerce_physical_product_projection": context.metadata.get(
+                    "professional_ecommerce_physical_product_projection"
+                ),
+                "professional_ecommerce_physical_product_projections": context.metadata.get(
+                    "professional_ecommerce_physical_product_projections"
                 ),
                 # Keep the explicit renderer channel attached to every
                 # materialization plan. The shared Provider/MCP adapter reads

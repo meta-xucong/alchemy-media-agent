@@ -949,6 +949,26 @@ def _central_ecommerce_product_truth_metadata() -> dict[str, object]:
         },
         "professional_product_truth_required": True,
         "professional_ecommerce_product_truth_pool_asset_ids": ["product_a", "product_b"],
+        "professional_ecommerce_contract_authority": "v3_product_api",
+        "professional_ecommerce_product_truth_admission": {
+            "schema_version": "doc263_product_truth_admission_v1",
+            "canonical_asset_ids": ["product_a", "product_b"],
+            "source_binding_digest": "fixture-admission-digest",
+        },
+        "professional_ecommerce_physical_product_projection": {
+            "schema_version": "doc263_physical_product_reference_projection_v1",
+            "output_index": 1,
+            "selected_product_asset_ids": ["product_a"],
+            "projection_digest": "fixture-projection-digest",
+        },
+        "professional_ecommerce_physical_product_projections": {
+            "1": {
+                "schema_version": "doc263_physical_product_reference_projection_v1",
+                "output_index": 1,
+                "selected_product_asset_ids": ["product_a"],
+                "projection_digest": "fixture-projection-digest",
+            }
+        },
     }
 
 
@@ -961,3 +981,14 @@ def _assert_central_generation_metadata_preserves_product_truth_scope(metadata: 
     assert metadata["ecommerce_creative_context"]["provider_reference_budget"] == {
         "max_product_truth_source_refs_per_output": 2
     }
+    assert metadata["professional_ecommerce_contract_authority"] == "v3_product_api"
+    assert metadata["professional_ecommerce_product_truth_admission"]["canonical_asset_ids"] == [
+        "product_a",
+        "product_b",
+    ]
+    assert metadata["professional_ecommerce_physical_product_projection"][
+        "selected_product_asset_ids"
+    ] == ["product_a"]
+    assert metadata["professional_ecommerce_physical_product_projections"]["1"] == metadata[
+        "professional_ecommerce_physical_product_projection"
+    ]
