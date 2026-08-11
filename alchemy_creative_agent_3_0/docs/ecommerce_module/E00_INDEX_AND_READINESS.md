@@ -34,7 +34,9 @@ commerce-specific deliverables.
     reviewer-approved for its respective phase.
 13. E27 / Doc265 Reference Channel Recovery Contract, once reviewer-approved
     for its respective phase.
-14. This E-Commerce module family.
+14. E28 / Doc267 Post-Generation Review Closure and Professional E-Commerce
+    Delivery Contract, once reviewer-approved for its respective phase.
+15. This E-Commerce module family.
 15. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
@@ -131,6 +133,12 @@ those outputs as product truth. It does not authorize automatic promotion,
 browser-supplied channel authority, Provider-side classification, or changes
 to ordinary V3 outside the E-Commerce compatibility path.
 
+E28 / Doc267 records the post-generation closure authority for Professional
+E-Commerce pixels that have already been persisted when final review assembly
+or inspection fails. It preserves Doc263-265 reference authority, retains the
+output only for manual review/history, and requires one terminal public
+operation rather than a false request-invalid or generating projection.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -161,3 +169,7 @@ Before implementation starts, the team must have accepted:
 16. E27 / Doc265 reference-channel recovery contract, after reviewer
     acceptance, before implementation of mixed legacy input recovery or any
     guarded continuation validation.
+17. E28 / Doc267 post-generation review closure contract, after reviewer
+    acceptance, before implementation of persisted-pixel finalization closure,
+    Professional E-Commerce identity/reference-plan correction, or guarded
+    production acceptance.
