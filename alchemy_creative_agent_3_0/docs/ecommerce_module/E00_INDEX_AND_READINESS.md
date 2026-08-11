@@ -32,8 +32,10 @@ commerce-specific deliverables.
 11. E25 Professional E-Commerce Pose Acceptance Contract, once reviewer-approved.
 12. E26 / Doc264 Legacy Product Reference Recovery Contract, once
     reviewer-approved for its respective phase.
-13. This E-Commerce module family.
-14. Implementation notes and examples.
+13. E27 / Doc265 Reference Channel Recovery Contract, once reviewer-approved
+    for its respective phase.
+14. This E-Commerce module family.
+15. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -120,6 +122,15 @@ commands, and safe E-Commerce public projection. It does not authorize browser
 truth, Provider repair, General/Photography behavior changes, or external
 generation.
 
+E27 / Doc265 records the reference-channel recovery authority for the boundary
+between uploaded product originals, locked People Visual Assets, explicitly
+selected generated continuation directions, and generated/review history. It
+also defines how an old V3 project with generated output IDs mixed into the
+legacy uploaded-reference field is re-read and continued without treating
+those outputs as product truth. It does not authorize automatic promotion,
+browser-supplied channel authority, Provider-side classification, or changes
+to ordinary V3 outside the E-Commerce compatibility path.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -147,3 +158,6 @@ Before implementation starts, the team must have accepted:
 15. E26 / Doc264 legacy product-reference recovery contract, after reviewer
     acceptance, before a legacy reference migration/runtime implementation or
     any guarded recovery validation.
+16. E27 / Doc265 reference-channel recovery contract, after reviewer
+    acceptance, before implementation of mixed legacy input recovery or any
+    guarded continuation validation.
