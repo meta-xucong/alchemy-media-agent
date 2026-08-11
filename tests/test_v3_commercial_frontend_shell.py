@@ -9,6 +9,10 @@ from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import InMemoryProductJobStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
+    EcommerceRemoteBrainTestProvider,
+    ecommerce_test_service,
+)
 from app import main as app_main
 from app.main import app, v3_route_handlers
 
@@ -604,10 +608,19 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "controlnet" not in v3_block.lower()
 
 
-def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
-    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
-    v3_route_handlers.service.job_store = InMemoryProductJobStore()
-    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path, monkeypatch) -> None:
+    brain = EcommerceRemoteBrainTestProvider()
+    service = ecommerce_test_service(
+        brain_provider=brain,
+        asset_store=V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads"),
+        job_store=InMemoryProductJobStore(),
+        output_store=V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs"),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "v3_route_handlers",
+        V3ProductRouteHandlers(service=service, project_store=InMemoryProjectStore()),
+    )
     client = TestClient(app)
 
     scenarios = client.get("/api/v3/creative-agent/scenarios")
@@ -665,6 +678,11 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
     assert text_only_payload["ecommerce"]["image_recipes"] == []
     assert len(text_only_payload["ecommerce"]["remote_brain_output_intents"]) >= 1
     assert not any("product_truth_admission_invalid" in warning for warning in text_only_payload["warnings"])
+    assert brain.requests
+    assert [request["stage"] for request in brain.requests] == ["plan", "provider_prompt_finalize"]
+    assert all(request["template_id"] == "ecommerce_template" for request in brain.requests)
+    assert brain.provider == "ecommerce_remote_brain_test_double"
+    assert service.scenario_runtime.llm_brain_adapter.provider is brain
 
     product_asset_id = _create_ready_v3_upload(client, role="product_reference", filename="beverage.png")
     ecommerce_job = client.post(

@@ -335,7 +335,7 @@ def test_general_project_job_preserves_variation_mode_contract() -> None:
     assert job["metadata"]["effective_variation_mode"] == "selection_candidates"
 
 
-def test_project_generation_adds_visual_review_and_retry_timeline_items() -> None:
+def test_project_generation_with_unverified_metadata_review_stays_manual_without_retry_timeline() -> None:
     handlers = V3ProductRouteHandlers()
     project = handlers.post_projects(
         {
@@ -362,12 +362,19 @@ def test_project_generation_adds_visual_review_and_retry_timeline_items() -> Non
     timeline = handlers.get_project_timeline(project["project_id"])
     item_types = [item["item_type"] for item in timeline["items"]]
 
-    assert generated["metadata"]["post_generation_review"]["inspections"][0]["status"] == "fail_retryable"
-    assert generated["metadata"]["visual_auto_retry"]["executed_count"] == 1
+    review = generated["metadata"]["post_generation_review"]
+    retry = generated["metadata"]["visual_auto_retry"]
+
+    assert review["inspections"][0]["status"] == "fail_retryable"
+    assert review["review_evidence_receipt_status"] == "complete"
+    assert review["real_pixel_review_certified"] is False
+    assert all(item["verification_state"] == "unverified" for item in review["inspections"])
+    assert retry["executed_count"] == 0
+    assert retry["records"] == []
+    assert retry["issue_codes"] == []
     assert "visual_review" in item_types
-    assert "visual_retry" in item_types
-    assert timeline["items"][-2]["title"] == "V3 检查了生成结果"
-    assert timeline["items"][-1]["title"] == "V3 自动补做了一次"
+    assert "visual_retry" not in item_types
+    assert timeline["items"][-1]["title"] == "V3 检查了生成结果"
 
 
 def test_project_mode_scopes_same_user_input_jobs_by_project() -> None:
