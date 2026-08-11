@@ -5887,7 +5887,11 @@ class V3ProjectModeService:
         locked_person_identity: list[dict[str, Any]] = []
         if self.project_visual_asset_binding_service is not None:
             binding_set = self.project_visual_asset_binding_service.current(project_id=project.project_id)
-            if str(getattr(binding_set, "state", "")) == "valid":
+            # A stale catalog read must not erase the user's append-only
+            # project binding from the public projection. It is still blocked
+            # for new renderer admission; this branch only supplies the safe
+            # generic label for the history/view surface.
+            if str(getattr(binding_set, "state", "")) in {"valid", "blocked"}:
                 for binding in getattr(binding_set, "bindings", []):
                     if str(getattr(binding, "status", "")) != "active":
                         continue
@@ -5994,6 +5998,17 @@ class V3ProjectModeService:
             }
         for job_id in reversed(project.job_ids):
             record = self.product_service.get_job_record(job_id)
+            if record is not None and self._doc267_review_withheld_closure_is_valid(
+                dict(record.request.metadata or {}),
+                job_id=record.job_id,
+            ):
+                return {
+                    "job_id": record.job_id,
+                    "state": "review_withheld_finalization_failed",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [{"id": "review_generation_history"}],
+                }
             if (
                 record is not None
                 and dict(record.request.metadata or {}).get("doc264_ecommerce_product_input_needs_attention")
@@ -6191,12 +6206,23 @@ class V3ProjectModeService:
                 job_status = self.product_service.get_job(job_id)
             except Exception:
                 continue
+            job_record = self.product_service.get_job_record(job_id)
+            has_doc267_review_closure = (
+                job_record is not None
+                and self._doc267_review_withheld_closure_is_valid(
+                    dict(job_record.request.metadata or {}),
+                    job_id=job_id,
+                )
+            )
             if not self._job_delivery_is_settled(job_status):
                 # A terminal job may have generated pixels while a shared
                 # final-delivery gate is withholding them. Those pixels are
                 # review-only evidence, but must never appear on the normal
                 # delivery surface. In-flight jobs remain hidden everywhere.
-                if not include_hidden or not self._job_has_terminal_review_state(job_status):
+                if has_doc267_review_closure:
+                    if not include_hidden:
+                        continue
+                elif not include_hidden or not self._job_has_terminal_review_state(job_status):
                     continue
             try:
                 records = output_store.list_by_job(job_id)
@@ -6263,9 +6289,60 @@ class V3ProjectModeService:
         return not (isinstance(execution, dict) and bool(execution.get("final_delivery_withheld")))
 
     @staticmethod
+    def _doc267_review_withheld_closure_is_valid(
+        metadata: dict[str, Any],
+        *,
+        job_id: str,
+    ) -> bool:
+        """Recognize only the closed Product API receipt, never a browser flag."""
+
+        closure = metadata.get("post_generation_review_closure")
+        if not isinstance(closure, dict):
+            return False
+        output_ids = closure.get("output_ids")
+        pixel_bindings = closure.get("pixel_bindings")
+        if (
+            closure.get("schema_version") != "doc267_post_generation_review_closure_v1"
+            or closure.get("authority") != "v3_product_api"
+            or closure.get("state") != "review_withheld_finalization_failed"
+            or str(closure.get("job_id") or "").strip() != job_id
+            or closure.get("history_only") is not True
+            or closure.get("real_pixel_review") is not False
+            or closure.get("automatic_delivery_available") is not False
+            or closure.get("manual_confirmation_required") is not True
+            or closure.get("automatic_replay") is not False
+            or not isinstance(output_ids, list)
+            or not output_ids
+            or any(not isinstance(value, str) or not value.strip() for value in output_ids)
+            or len(output_ids) != len(set(output_ids))
+            or not isinstance(pixel_bindings, list)
+            or len(pixel_bindings) != len(output_ids)
+        ):
+            return False
+        binding_output_ids: list[str] = []
+        for binding in pixel_bindings:
+            if not isinstance(binding, dict):
+                return False
+            output_id = str(binding.get("output_id") or "").strip()
+            if (
+                not output_id
+                or not str(binding.get("asset_id") or "").strip()
+                or not str(binding.get("candidate_id") or "").strip()
+                or len(str(binding.get("content_sha256") or "").strip()) != 64
+            ):
+                return False
+            binding_output_ids.append(output_id)
+        return binding_output_ids == output_ids and len(binding_output_ids) == len(set(binding_output_ids))
+
+    @staticmethod
     def _job_has_terminal_review_state(job_status: ProductJobStatus) -> bool:
         """Allow ended withheld jobs into the review-only projection only."""
 
+        if V3ProjectModeService._doc267_review_withheld_closure_is_valid(
+            dict(job_status.metadata or {}),
+            job_id=job_status.job_id,
+        ):
+            return True
         return job_status.status not in {
             ProductJobStatusValue.GENERATING,
             ProductJobStatusValue.FINALIZING,

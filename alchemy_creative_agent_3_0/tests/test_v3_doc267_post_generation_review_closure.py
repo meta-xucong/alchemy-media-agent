@@ -285,6 +285,7 @@ def test_doc267_locked_people_identity_overrides_generic_false_and_is_deduplicat
         {
             "requested_image_count": 1,
             "advanced_reference_controls": {"preserve_person_identity": False},
+            "locked_person_identity": {"display_name": "browser-forged-person"},
         }
     )
     created = handlers.post_project_job(project["project_id"], payload)
@@ -305,11 +306,25 @@ def test_doc267_locked_people_identity_overrides_generic_false_and_is_deduplicat
     assert len({item["output_id"] for item in anchors}) == len(identity_output_ids)
     assert physical_identity_ids == identity_output_ids
     assert len(physical_identity_ids) == len(set(physical_identity_ids))
-    assert len(physical_identity_ids) <= provider_request.metadata["provider_reference_budget"]["max_identity_sources"]
+    provider_budget = provider_request.metadata["ecommerce_creative_context"]["provider_reference_budget"]
+    assert len(physical_identity_ids) <= provider_budget["max_identity_sources"]
     assert physical_product_ids == projection["selected_product_asset_ids"]
     assert len(physical_product_ids) == len(set(physical_product_ids))
     assert set(product_ids) - set(physical_product_ids)
     assert all(item["asset_id"] not in product_ids for item in anchors)
+    public_project = handlers.get_project(project["project_id"])
+    public_identity = public_project["metadata"]["ecommerce_project_view"]["groups"]["locked_person_identity"]["items"]
+    assert len(public_identity) == 1
+    assert public_identity[0]["display_name"] == catalog.list_assets(owner_scope="local_default")[0].display_name
+    assert "browser-forged-person" not in str(public_project)
+    asset = catalog.list_assets(owner_scope="local_default")[0]
+    catalog._assets.pop((asset.owner_scope, asset.visual_asset_id))  # noqa: SLF001
+    fallback_project = handlers.get_project(project["project_id"])
+    fallback_identity = fallback_project["metadata"]["ecommerce_project_view"]["groups"]["locked_person_identity"]["items"]
+    assert len(fallback_identity) == 1
+    assert fallback_identity[0]["visual_asset_id"] == asset.visual_asset_id
+    assert fallback_identity[0]["asset_type"] == "people"
+    assert fallback_identity[0]["display_name"] == "已绑定人物资产"
 
 
 def test_doc267_ecommerce_n1_keeps_product_primary_and_lifestyle_is_explicit(tmp_path) -> None:
@@ -326,6 +341,17 @@ def test_doc267_ecommerce_n1_keeps_product_primary_and_lifestyle_is_explicit(tmp
     deliverable = record.planning_result.metadata["template_deliverable_plan"]["deliverables"][0]
     assert deliverable["metadata"]["product_truth_selection_role"] == "product_primary_presentation"
     assert deliverable["metadata"]["product_truth_selection_role"] != "lifestyle_interaction"
+
+    multi_payload = _job_payload(uploaded_asset_ids=[product_id], key="doc267-explicit-multi-output")
+    multi_payload["metadata"]["requested_image_count"] = 2
+    multi = handlers.post_project_job(project["project_id"], multi_payload)
+    multi_record = handlers.service.get_job_record(multi["job_id"])
+    assert multi_record is not None and multi_record.planning_result is not None
+    multi_roles = [
+        item["metadata"]["product_truth_selection_role"]
+        for item in multi_record.planning_result.metadata["template_deliverable_plan"]["deliverables"]
+    ]
+    assert "product_primary_presentation" not in multi_roles
 
 
 def _review_withheld_project() -> dict:
@@ -360,25 +386,15 @@ def _review_withheld_project() -> dict:
 
 def test_doc267_public_project_projection_prefers_closed_review_operation_over_stale_generation(tmp_path) -> None:
     handlers, _catalog, project, record, output, _attempt_id = _ecommerce_job_with_persisted_pixel(tmp_path)
+    handlers.mark_project_job_generation_worker_failed(
+        project["project_id"],
+        record.job_id,
+        background_attempt_id=_attempt_id,
+        failure_code="post_generation_review_finalization_failed",
+    )
+    record = handlers.service.get_job_record(record.job_id)
+    assert record is not None
     record.status = ProductJobStatusValue.GENERATING
-    record.request.metadata = {
-        **dict(record.request.metadata),
-        "final_delivery": {
-            "delivery_gate_applies": True,
-            "final_delivery_status": "withheld_manual_confirmation",
-            "automatic_delivery_available": False,
-            "manual_confirmation_required": True,
-        },
-        "post_generation_review_closure": {
-            "schema_version": "doc267_post_generation_review_closure_v1",
-            "state": "review_withheld_finalization_failed",
-            "job_id": record.job_id,
-            "output_ids": [output.output_id],
-            "history_only": True,
-            "manual_confirmation_required": True,
-            "automatic_delivery_available": False,
-        },
-    }
     handlers.service.job_store.save(record)
 
     public_project = handlers.get_project(project["project_id"])

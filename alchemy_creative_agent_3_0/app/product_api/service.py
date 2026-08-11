@@ -1295,6 +1295,7 @@ class V3ProductApiService:
                 create_request,
                 binding_service=project_visual_asset_binding_service,
             )
+            self._bind_ecommerce_locked_identity_authority(create_request)
         if trusted_professional_anchor_preparation:
             if professional_anchor_view_role is None:
                 raise ValueError("professional_anchor_pack_preparation_stage_invalid")
@@ -11155,9 +11156,14 @@ class V3ProductApiService:
             else asset
             for asset in resolved_uploads
         ]
+        locked_identity_references = metadata.get("ecommerce_locked_identity_reference_assets")
         anchored_reference_groups = (
-            metadata.get("professional_anchor_reference_assets"),
-            metadata.get("visual_asset_library_reference_assets"),
+            (locked_identity_references,)
+            if isinstance(locked_identity_references, list)
+            else (
+                metadata.get("professional_anchor_reference_assets"),
+                metadata.get("visual_asset_library_reference_assets"),
+            )
         )
         frozen_anchor_references = [
             dict(item)
@@ -11301,6 +11307,8 @@ class V3ProductApiService:
             "professional_identity_reference_strategy",
             "professional_reference_stage",
             "professional_anchor_reference_assets",
+            "ecommerce_locked_identity_reference_assets",
+            "ecommerce_locked_identity_authority",
             "professional_anchor_initial_multi_source",
             "professional_anchor_capture_scope",
             "professional_absolute_portrait_realism_required",
@@ -11685,6 +11693,82 @@ class V3ProductApiService:
             "visual_asset_library_formal_face_chain_bindings": formal_face_chain_bindings,
         }
 
+    def _bind_ecommerce_locked_identity_authority(
+        self,
+        request: CreateCreativeJobRequest,
+    ) -> None:
+        """Freeze active People bindings as hard E-Commerce identity evidence.
+
+        The browser may ask for ordinary reference controls, but it cannot
+        weaken an explicit project-owned People binding.  This keeps the
+        E-Commerce renderer plan separate from generic library behavior while
+        preserving the existing catalog snapshot as provenance.
+        """
+
+        if not self._is_ecommerce_request(request):
+            return
+        metadata = dict(request.metadata or {})
+        frozen_binding = metadata.get("frozen_visual_asset_binding_set")
+        if not isinstance(frozen_binding, dict) or frozen_binding.get("state") != "valid":
+            return
+        bindings = frozen_binding.get("bindings")
+        if not isinstance(bindings, list) or not any(
+            isinstance(binding, dict)
+            and binding.get("asset_type") == "people"
+            for binding in bindings
+        ):
+            return
+
+        raw_references = metadata.get("visual_asset_library_reference_assets")
+        if not isinstance(raw_references, list):
+            raise ValueError("ecommerce_locked_identity_references_missing")
+        references: list[dict[str, Any]] = []
+        seen_output_ids: set[str] = set()
+        for item in raw_references:
+            if not isinstance(item, dict):
+                raise ValueError("ecommerce_locked_identity_references_invalid")
+            output_id = str(item.get("output_id") or "").strip()
+            item_metadata = dict(item.get("metadata") or {})
+            if (
+                not output_id
+                or item.get("role") != "face_reference"
+                or item.get("use_policy") != "identity"
+                or item_metadata.get("canonical_output_binding") is not True
+                or item_metadata.get("visual_asset_library_evidence") is not True
+            ):
+                raise ValueError("ecommerce_locked_identity_references_invalid")
+            if output_id in seen_output_ids:
+                continue
+            seen_output_ids.add(output_id)
+            references.append(
+                {
+                    **item,
+                    "provider_input_required": True,
+                    "metadata": {
+                        **item_metadata,
+                        "provider_input_required": True,
+                        "doc267_locked_people_identity": True,
+                    },
+                }
+            )
+        if not references:
+            raise ValueError("ecommerce_locked_identity_references_missing")
+
+        controls = dict(metadata.get("advanced_reference_controls") or {})
+        controls["preserve_person_identity"] = True
+        metadata.update(
+            {
+                "advanced_reference_controls": controls,
+                # Product API owns this E-Commerce-only renderer set.  It
+                # deliberately does not include uploads, continuations, or
+                # generic reference history.
+                "professional_anchor_reference_assets": references,
+                "ecommerce_locked_identity_reference_assets": references,
+                "ecommerce_locked_identity_authority": "v3_product_api",
+            }
+        )
+        request.metadata = metadata
+
     def _library_visual_asset_reference_assets(
         self,
         snapshot: FrozenVisualAssetBindingSet,
@@ -12062,6 +12146,20 @@ class V3ProductApiService:
             metadata.get("project_id"),
             metadata.get("project_job_sequence"),
         )
+        locked_identity_references = metadata.get("ecommerce_locked_identity_reference_assets")
+        locked_identity_count = (
+            len(locked_identity_references)
+            if isinstance(locked_identity_references, list)
+            else 0
+        )
+        provider_reference_budget = (
+            {"max_product_truth_source_refs_per_output": 2}
+            if product_truth_pool_asset_ids
+            else {}
+        )
+        if locked_identity_count:
+            provider_reference_budget["max_identity_sources"] = locked_identity_count
+            provider_reference_budget["max_total_reference_images"] = 5
         context = self.ecommerce_planner.build_creative_context(
             user_input=request.user_input,
             product_profile=dict(request.product_profile),
@@ -12069,11 +12167,7 @@ class V3ProductApiService:
             scenario_parameters=parameters,
             platform_profile=selection.platform_profile if selection is not None else None,
             job_key=job_key,
-            provider_reference_budget=(
-                {"max_product_truth_source_refs_per_output": 2}
-                if product_truth_pool_asset_ids
-                else {}
-            ),
+            provider_reference_budget=provider_reference_budget,
         )
         if product_truth_pool_asset_ids:
             metadata["professional_product_truth_required"] = True
@@ -12406,6 +12500,14 @@ class V3ProductApiService:
             or not raw_plan["deliverables"]
         ):
             raise ValueError("ecommerce_product_truth_selection_missing")
+        self._bind_ecommerce_n1_product_primary_presentation(raw_plan)
+        for plan_metadata in [
+            dict(planning_result.metadata or {}),
+            *[dict(plan.metadata or {}) for plan in planning_result.generation_plans],
+        ]:
+            copied_plan = plan_metadata.get("template_deliverable_plan")
+            if isinstance(copied_plan, dict):
+                self._bind_ecommerce_n1_product_primary_presentation(copied_plan)
         projections: dict[str, dict[str, Any]] = {}
         for deliverable in raw_plan["deliverables"]:
             if not isinstance(deliverable, dict):
@@ -12463,6 +12565,10 @@ class V3ProductApiService:
         metadata["professional_ecommerce_physical_product_projection"] = (
             projections.get("1") or next(iter(projections.values()))
         )
+        self._assert_ecommerce_locked_identity_capacity(
+            metadata,
+            projections=projections,
+        )
         request.metadata = metadata
         planning_result.metadata = {
             **dict(planning_result.metadata or {}),
@@ -12489,6 +12595,52 @@ class V3ProductApiService:
                     "professional_ecommerce_physical_product_projection"
                 ],
             }
+
+    @staticmethod
+    def _bind_ecommerce_n1_product_primary_presentation(raw_plan: dict[str, Any]) -> None:
+        """Issue the specialized N=1 product-primary role on fresh plans only."""
+
+        deliverables = raw_plan.get("deliverables")
+        if not isinstance(deliverables, list) or len(deliverables) != 1:
+            return
+        deliverable = deliverables[0]
+        if not isinstance(deliverable, dict) or deliverable.get("output_index") != 1:
+            raise ValueError("ecommerce_product_primary_presentation_invalid")
+        metadata = deliverable.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError("ecommerce_product_primary_presentation_invalid")
+        metadata["product_truth_selection_role"] = "product_primary_presentation"
+        metadata["product_primary_presentation_contract"] = "doc267_v3_product_api_n1"
+
+    @staticmethod
+    def _assert_ecommerce_locked_identity_capacity(
+        metadata: dict[str, Any],
+        *,
+        projections: dict[str, dict[str, Any]],
+    ) -> None:
+        """Fail closed before dispatch when a frozen identity/product plan cannot fit."""
+
+        references = metadata.get("ecommerce_locked_identity_reference_assets")
+        if not isinstance(references, list):
+            return
+        identity_count = len(references)
+        ecommerce_context = metadata.get("ecommerce_creative_context")
+        budget = (
+            ecommerce_context.get("provider_reference_budget")
+            if isinstance(ecommerce_context, dict)
+            and isinstance(ecommerce_context.get("provider_reference_budget"), dict)
+            else {}
+        )
+        try:
+            total_cap = int(budget.get("max_total_reference_images"))
+        except (TypeError, ValueError):
+            raise ValueError("ecommerce_locked_identity_capacity_missing") from None
+        if total_cap < 1:
+            raise ValueError("ecommerce_locked_identity_capacity_missing")
+        for raw_projection in projections.values():
+            projection = PhysicalProductReferenceProjection.from_mapping(raw_projection)
+            if identity_count + len(projection.selected_product_asset_ids) > total_cap:
+                raise ValueError("ecommerce_locked_identity_capacity_exceeded")
 
     @staticmethod
     def _validate_ecommerce_final_contract_metadata(
