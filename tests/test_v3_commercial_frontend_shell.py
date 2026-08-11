@@ -652,17 +652,19 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
     )
     assert text_only_ecommerce.status_code == 200
     text_only_payload = text_only_ecommerce.json()
-    assert text_only_payload["status"] == "blocked"
+    assert text_only_payload["status"] == "planned"
     assert text_only_payload["scenario"]["scenario_id"] == "ecommerce"
     assert text_only_payload["metadata"]["template_id"] == "ecommerce_template"
     assert text_only_payload["metadata"]["ecommerce_text_to_image_fallback"] is True
     assert text_only_payload["metadata"]["has_product_reference"] is False
     assert text_only_payload["metadata"]["scenario_parameters"]["text_to_image_fallback"] is True
     assert text_only_payload["metadata"]["scenario_parameters"]["has_product_reference"] is False
+    assert text_only_payload["metadata"].get("current_operation") is None
+    assert "professional_ecommerce_product_truth_admission" not in text_only_payload["metadata"]
     assert text_only_payload["ecommerce"]["product_truth"]["confidence"]["uploaded_image"] == 0.0
     assert text_only_payload["ecommerce"]["image_recipes"] == []
-    assert text_only_payload["ecommerce"]["remote_brain_output_intents"] == []
-    assert "capability_activation_failed: remote_creative_brain_required_for_template" in text_only_payload["warnings"]
+    assert len(text_only_payload["ecommerce"]["remote_brain_output_intents"]) >= 1
+    assert not any("product_truth_admission_invalid" in warning for warning in text_only_payload["warnings"])
 
     product_asset_id = _create_ready_v3_upload(client, role="product_reference", filename="beverage.png")
     ecommerce_job = client.post(
@@ -680,13 +682,17 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path) -> None:
     )
     assert ecommerce_job.status_code == 200
     ecommerce_payload = ecommerce_job.json()
-    assert ecommerce_payload["status"] == "blocked"
+    assert ecommerce_payload["status"] == "planned"
     assert ecommerce_payload["scenario"]["scenario_id"] == "ecommerce"
     assert ecommerce_payload["metadata"]["template_id"] == "ecommerce_template"
     assert ecommerce_payload["metadata"]["project_context_snapshot"]["template_id"] == "ecommerce_template"
+    assert ecommerce_payload["metadata"]["ecommerce_text_to_image_fallback"] is False
+    assert ecommerce_payload["metadata"]["has_product_reference"] is True
+    assert ecommerce_payload["metadata"].get("current_operation") is None
+    assert "professional_ecommerce_product_truth_admission" not in ecommerce_payload["metadata"]
     assert ecommerce_payload["ecommerce"]["image_recipes"] == []
-    assert ecommerce_payload["ecommerce"]["remote_brain_output_intents"] == []
-    assert "capability_activation_failed: remote_creative_brain_required_for_template" in ecommerce_payload["warnings"]
+    assert len(ecommerce_payload["ecommerce"]["remote_brain_output_intents"]) >= 1
+    assert not any("product_truth_admission_invalid" in warning for warning in ecommerce_payload["warnings"])
 
     created_job = client.post(
         f"/api/v3/creative-agent/projects/{project_id}/jobs",
