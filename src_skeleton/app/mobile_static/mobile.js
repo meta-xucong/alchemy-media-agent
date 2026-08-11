@@ -3721,9 +3721,11 @@ function handleMobileV3Click(event) {
     if (!project?.project_id) return;
     event.preventDefault();
     event.stopPropagation();
+    const operation = mobileV3ProjectCurrentOperation(project);
+    const needsInput = operation?.state === "needs_input";
     setMobileV3Busy(false);
-    setMobileV3Progress("failed", "已打开编辑区。确认后点击生成才会创建新的续作。");
-    updateMobileV3Status("已打开恢复编辑区。确认原始商品图和需求后，再点击生成。");
+    setMobileV3Progress("failed", needsInput ? mobileV3EcommerceNeedsInputMessage() : "已打开编辑区。确认后点击生成才会创建新的续作。");
+    updateMobileV3Status(needsInput ? "已打开编辑区。请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : "已打开恢复编辑区。确认原始商品图和需求后，再点击生成。");
     openMobileSurface("v3-compose", projectActionButton);
     return;
   }
@@ -4490,6 +4492,16 @@ async function generateMobileV3Job() {
     const created = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}/jobs`, { method: "POST", body: payload });
     if (uploadedAssets.length) clearMobileV3PendingUploads({ render: true });
     mobileV3State.currentJob = created;
+    mobileV3State.currentProject = mobileV3ProjectWithResponseMetadata(mobileV3State.currentProject, created);
+    if (mobileV3JobNeedsProductInputReview(created)) {
+      mobileV3MergeProjectOutputs(projectId, created?.metadata?.project_outputs || []);
+      renderMobileV3ProjectCurrentOperation(mobileV3State.currentProject);
+      renderMobileV3ProjectOutputs(mobileV3State.currentProject);
+      const message = mobileV3EcommerceNeedsInputMessage();
+      setMobileV3Progress("failed", message);
+      updateMobileV3Status(message);
+      return;
+    }
     const jobId = created.job_id || created.job?.job_id || created.id;
     mobileV3MergeProjectOutputs(projectId, created?.metadata?.project_outputs || []);
     renderMobileV3ProjectOutputs(mobileV3State.currentProject);
@@ -4901,23 +4913,37 @@ function mobileV3ProjectCurrentOperation(project = mobileV3State.currentProject)
   return operation && typeof operation === "object" ? operation : null;
 }
 
+function mobileV3EcommerceNeedsInputMessage() {
+  return "商品原图需要重新确认：当前项目里的商品参考图缺少可验证的文件、角色或授权记录，尚未发送生图请求。请检查原始参考图，删除失效或重复的商品图，重新上传正确商品图后再生成。";
+}
+
+function mobileV3JobNeedsProductInputReview(job) {
+  const operation = job?.metadata?.current_operation;
+  return Boolean(
+    operation
+      && typeof operation === "object"
+      && String(operation.state || "").trim().toLowerCase() === "needs_input"
+  );
+}
+
 function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentProject) {
   const node = document.querySelector("#mobileV3ProjectCurrentOperation");
   if (!node) return;
   const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
   const operation = mobileV3ProjectCurrentOperation(project);
+  const needsInput = isEcommerce && operation?.state === "needs_input";
   const failedNoDelivery = isEcommerce && operation?.state === "failed_no_delivery";
-  node.hidden = !failedNoDelivery;
+  node.hidden = !(needsInput || failedNoDelivery);
   node.innerHTML = "";
-  if (!failedNoDelivery) return;
+  if (!needsInput && !failedNoDelivery) return;
   setMobileV3Busy(false);
-  setMobileV3Progress("failed", "本次没有交付图片。项目原图和记录已保留，确认后可继续。");
+  setMobileV3Progress("failed", needsInput ? mobileV3EcommerceNeedsInputMessage() : "本次没有交付图片。项目原图和记录已保留，确认后可继续。");
   node.innerHTML = `
     <div>
-      <strong>这次暂时没有交付图片</strong>
-      <span>请先确认原始商品图和需求。继续只会打开编辑区，不会自动重新提交。</span>
+      <strong>${needsInput ? "商品原图需要重新确认" : "这次暂时没有交付图片"}</strong>
+      <span>${needsInput ? "请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : "请先确认原始商品图和需求。继续只会打开编辑区，不会自动重新提交。"}</span>
     </div>
-    <button class="button primary compact" type="button" data-mobile-v3-project-action="continue_recovery">继续</button>
+    <button class="button primary compact" type="button" data-mobile-v3-project-action="continue_recovery">${needsInput ? "检查原图" : "继续"}</button>
   `;
 }
 

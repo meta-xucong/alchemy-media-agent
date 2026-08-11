@@ -5363,8 +5363,17 @@ function renderV3ProjectNextActions() {
   els.v3ProjectNextActions.hidden = false;
   const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
   const hasSelectableJob = Boolean(v3State.currentJob?.job_id && Array.isArray(v3State.currentJob.candidates) && v3State.currentJob.candidates.length);
-  const ecommerceActive = v3State.selectedScenario === "ecommerce";
+  const ecommerceActive = projectScenario === "ecommerce";
   const operation = v3ProjectCurrentOperation(project);
+  const jobOperation = job?.metadata?.current_operation;
+  const needsProductInput = ecommerceActive && (
+    String(operation?.state || "").trim().toLowerCase() === "needs_input"
+    || (
+      jobOperation
+      && typeof jobOperation === "object"
+      && String(jobOperation.state || "").trim().toLowerCase() === "needs_input"
+    )
+  );
   const status = String(job?.status || project?.latest_job_status || "").toLowerCase();
   const withheld = Boolean(job && v3JobDeliveryWithheld(job));
   const visibleCount = job ? v3JobVisibleImageCount(job) : 0;
@@ -5374,7 +5383,15 @@ function renderV3ProjectNextActions() {
   let title = "继续完善这个项目";
   let detail = "可以补充商品信息、上传参考图，或继续生成。";
 
-  if (["blocked", "failed", "not_found"].includes(status) || operation?.state === "failed_no_delivery") {
+  if (needsProductInput) {
+    title = "商品原图需要重新确认";
+    detail = v3EcommerceFailureMessage(job) || "当前商品参考图需要先处理；系统没有发送生图请求，也不会自动重复提交。";
+    actionRows.push(
+      '<button class="button primary compact" type="button" data-v3-project-action="edit_ecommerce_details">补充商品信息</button>',
+      '<button class="button secondary compact" type="button" data-v3-project-action="upload_reference_continue">更换商品图</button>',
+      '<button class="button ghost compact" type="button" data-v3-project-action="return_to_project">返回项目</button>',
+    );
+  } else if (["blocked", "failed", "not_found"].includes(status) || operation?.state === "failed_no_delivery") {
     title = "这次暂时无法生成";
     detail = failure || "项目已保存。请检查商品图、补充信息，或重新尝试一次。";
     actionRows.push(
@@ -5652,9 +5669,9 @@ function handleV3ProjectActionClick(event) {
       els.v3PromptInput.focus();
     }
     openV3ProjectSubpage("compose");
-    const ecommerceRecovery = projectScenario === "ecommerce" && currentOperation?.state === "failed_no_delivery";
+    const ecommerceRecovery = projectScenario === "ecommerce" && ["failed_no_delivery", "needs_input"].includes(String(currentOperation?.state || ""));
     if (ecommerceRecovery) {
-      updateV3Notice("已打开恢复编辑区。请先确认原始商品图和需求，再明确点击生成。", "info");
+      updateV3Notice(currentOperation?.state === "needs_input" ? "已打开编辑区。请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : "已打开恢复编辑区。请先确认原始商品图和需求，再明确点击生成。", "info");
       return;
     }
     updateV3Notice(v3State.selectedScenario === "ecommerce" ? "已打开生成区，正在开始生成新电商图。" : "已打开生成区，正在开始生成第一组图片。", "info");
@@ -8379,6 +8396,10 @@ function v3EcommerceFailureMessage(job) {
   const scenarioId = String(job?.scenario?.scenario_id || "").trim().toLowerCase();
   const status = String(job?.status || "").trim().toLowerCase();
   if (scenarioId !== "ecommerce" || !["blocked", "failed"].includes(status)) return "";
+  const operation = job?.metadata?.current_operation;
+  if (operation && typeof operation === "object" && String(operation.state || "").trim().toLowerCase() === "needs_input") {
+    return "商品原图需要重新确认：当前项目里的商品参考图缺少可验证的文件、角色或授权记录，尚未发送生图请求。请检查原始参考图，删除失效或重复的商品图，重新上传正确商品图后再生成。";
+  }
   const providerFailure = job?.metadata?.provider_failure_retry;
   const providerFailureCode = String(
     providerFailure?.final_failure_code

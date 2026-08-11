@@ -32,7 +32,7 @@ window.fetch = async (input, init = {}) => {
   const project = window.__doc263ServerProject || {};
   let body = {};
   if (method === "POST" && /\\/projects\\/doc263-project\\/jobs$/.test(url)) {
-    body = { job_id: "doc263-new-job", status: "blocked", metadata: { project_outputs: [] } };
+    body = window.__doc263CreateJobResponse || { job_id: "doc263-new-job", status: "blocked", metadata: { project_outputs: [] } };
   } else if (/\\/projects\\/doc263-project\\/timeline/.test(url)) {
     body = { items: [] };
   } else if (/\\/project-outputs/.test(url)) {
@@ -126,6 +126,35 @@ def _withheld_review_output() -> dict:
     }
 
 
+def _needs_input_job() -> dict:
+    return {
+        "job_id": "doc263-needs-input-job",
+        "status": "blocked",
+        "scenario": {"scenario_id": "ecommerce"},
+        "warnings": [],
+        "metadata": {
+            "project_outputs": [],
+            "current_operation": {
+                "state": "needs_input",
+                "terminal": True,
+                "pending": False,
+                "next_actions": [{"id": "review_product_inputs"}],
+            },
+        },
+    }
+
+
+def _needs_input_project() -> dict:
+    project = _ecommerce_project()
+    project["metadata"]["current_operation"] = {
+        "state": "needs_input",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "review_product_inputs"}],
+    }
+    return project
+
+
 def test_doc263_desktop_recovery_is_deliberate_and_uses_exact_server_projection() -> None:
     project = _ecommerce_project()
     with sync_playwright() as playwright:
@@ -186,6 +215,41 @@ def test_doc263_desktop_recovery_is_deliberate_and_uses_exact_server_projection(
                 }
                 """
             )
+        finally:
+            browser.close()
+
+
+def test_doc263_desktop_needs_input_is_specific_and_does_not_offer_blind_retry() -> None:
+    project = _needs_input_project()
+    created = _needs_input_job()
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            page.evaluate(
+                """
+                ({ project, created }) => {
+                  window.__doc263ServerProject = project;
+                  window.__doc263CreateJobResponse = created;
+                  v3State.currentProject = project;
+                  v3State.currentJob = null;
+                  v3State.selectedScenario = "ecommerce";
+                  v3State.templateCatalogStatus = "ready";
+                  v3State.templates = [{ template_id: "ecommerce_template", project_can_create_jobs: true }];
+                  document.querySelector("#v3CreateJobBtn").addEventListener("click", createV3Job);
+                }
+                """,
+                {"project": project, "created": created},
+            )
+
+            page.locator("#v3CreateJobBtn").click()
+            page.wait_for_function("window.__doc263Requests.filter((item) => item.method === 'POST').length === 1")
+            page.wait_for_function("document.body.innerText.includes('商品原图需要重新确认')")
+
+            assert "当前生成暂时受阻，请检查输入后再试。" not in page.locator("body").inner_text()
+            assert page.evaluate(
+                "window.__doc263Requests.filter((item) => /\\/jobs\\/doc263-needs-input-job$/.test(item.url)).length"
+            ) == 0
         finally:
             browser.close()
 
@@ -253,5 +317,49 @@ def test_doc263_mobile_recovery_is_deliberate_and_does_not_leave_preparing_state
                 }
                 """
             )
+        finally:
+            browser.close()
+
+
+def test_doc263_mobile_needs_input_stops_before_job_polling_and_opens_review_path() -> None:
+    project = _needs_input_project()
+    created = _needs_input_job()
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            page.evaluate(
+                """
+                ({ project, created }) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  window.__doc263ServerProject = project;
+                  window.__doc263CreateJobResponse = created;
+                  mobileV3State.currentProject = project;
+                  mobileV3State.projects = [project];
+                  mobileV3State.currentJob = null;
+                  mobileV3State.selectedTemplate = "ecommerce_template";
+                  mobileV3State.outputs = [];
+                  mobileV3State.reviewOutputs = [];
+                  mobileV3State.outputsLoaded = true;
+                  document.querySelector("#mobileV3GenerateBtn").addEventListener("click", generateMobileV3Job);
+                  renderMobileV3ProjectCurrentOperation(project);
+                  openMobileSurface("v3-compose");
+                }
+                """,
+                {"project": project, "created": created},
+            )
+
+            assert "商品原图需要重新确认" in page.locator("#mobileV3ProjectCurrentOperation").inner_text()
+
+            page.locator("#mobileV3GenerateBtn").click()
+            page.wait_for_function("window.__doc263Requests.filter((item) => item.method === 'POST').length === 1")
+            page.wait_for_timeout(1400)
+
+            assert page.evaluate(
+                "window.__doc263Requests.filter((item) => /\\/jobs\\/doc263-needs-input-job$/.test(item.url)).length"
+            ) == 0
+            assert "商品原图需要重新确认" in page.locator("body").inner_text()
+            assert page.locator("#mobileV3GenerateBtn").is_disabled() is False
         finally:
             browser.close()
