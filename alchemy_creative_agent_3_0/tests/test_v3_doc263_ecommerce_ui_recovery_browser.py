@@ -130,9 +130,13 @@ def _needs_input_job() -> dict:
     return {
         "job_id": "doc263-needs-input-job",
         "status": "blocked",
-        "scenario": {"scenario_id": "ecommerce"},
+        # Real Doc264 pre-planning closures can return without a scenario
+        # object; the server-owned operation/template metadata is authoritative.
+        "scenario": None,
         "warnings": [],
         "metadata": {
+            "project_id": "doc263-project",
+            "template_id": "ecommerce_template",
             "project_outputs": [],
             "current_operation": {
                 "state": "needs_input",

@@ -8394,9 +8394,13 @@ function v3SpecializedProviderFailure(job) {
 
 function v3EcommerceFailureMessage(job) {
   const scenarioId = String(job?.scenario?.scenario_id || "").trim().toLowerCase();
+  const metadata = job?.metadata && typeof job.metadata === "object" ? job.metadata : {};
+  const templateId = String(metadata.template_id || metadata.template_manifest_id || "").trim().toLowerCase();
   const status = String(job?.status || "").trim().toLowerCase();
-  if (scenarioId !== "ecommerce" || !["blocked", "failed"].includes(status)) return "";
-  const operation = job?.metadata?.current_operation;
+  const operation = metadata.current_operation;
+  const needsProductInput = operation && typeof operation === "object" && String(operation.state || "").trim().toLowerCase() === "needs_input";
+  if (!["blocked", "failed"].includes(status)) return "";
+  if (scenarioId !== "ecommerce" && templateId !== "ecommerce_template" && !needsProductInput) return "";
   if (operation && typeof operation === "object" && String(operation.state || "").trim().toLowerCase() === "needs_input") {
     return "商品原图需要重新确认：当前项目里的商品参考图缺少可验证的文件、角色或授权记录，尚未发送生图请求。请检查原始参考图，删除失效或重复的商品图，重新上传正确商品图后再生成。";
   }
