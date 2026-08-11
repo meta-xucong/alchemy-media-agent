@@ -3483,7 +3483,10 @@ function renderV3ProjectDetail() {
   renderV3BrandMemoryPanel();
   renderV3ProjectVisualAssetPanel();
   renderV3ProjectTimeline();
-  if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
+  if (v3EcommerceReviewWithheldFinalizationOperation(project)) {
+    openV3ProjectSubpage("review");
+    renderV3ProjectNextActions();
+  } else if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     renderV3ProjectSubpageScene(v3State.activeProjectStep || "compose");
   }
 }
@@ -3573,6 +3576,7 @@ function renderV3ProjectSnapshot() {
   const boundAssetCount = Array.isArray(v3State.projectVisualAssetBindings)
     ? v3State.projectVisualAssetBindings.filter((item) => item?.status === "active").length
     : 0;
+  const reviewWithheldFinalization = v3EcommerceReviewWithheldFinalizationOperation(project);
   const items = [
     {
       label: "项目类型已固定",
@@ -3600,9 +3604,9 @@ function renderV3ProjectSnapshot() {
       note: boundAssetCount ? "新任务会固定使用当前确认的版本" : "需要一致性时再主动选择，不影响普通创作",
     },
     {
-      label: "当前进度",
-      value: generatedCount ? `${generatedCount} 张可查看图片` : (jobCount ? `${jobCount} 次尝试` : "还未生成"),
-      note: v3ProjectNextSuggestion(project),
+      label: reviewWithheldFinalization ? "复核状态" : "当前进度",
+      value: reviewWithheldFinalization ? "等待人工确认" : (generatedCount ? `${generatedCount} 张可查看图片` : (jobCount ? `${jobCount} 次尝试` : "还未生成")),
+      note: reviewWithheldFinalization ? "图片已保留在项目复核记录中，未进入正式交付" : v3ProjectNextSuggestion(project),
     },
   ];
   items.forEach((item) => {
@@ -3716,6 +3720,14 @@ function v3EcommerceProjectReferenceGroups(project = v3State.currentProject) {
 function v3ProjectCurrentOperation(project = v3State.currentProject) {
   const operation = project?.metadata?.current_operation;
   return operation && typeof operation === "object" ? operation : null;
+}
+
+function v3EcommerceReviewWithheldFinalizationOperation(project = v3State.currentProject) {
+  const operation = v3ProjectCurrentOperation(project);
+  return v3ScenarioForTemplate(v3ProjectTemplateId(project)) === "ecommerce"
+    && operation?.state === "review_withheld_finalization_failed"
+    && operation?.terminal === true
+    && operation?.pending === false;
 }
 
 function v3LegacyContinuationReference(ref) {
@@ -4760,6 +4772,16 @@ async function rejectV3ProjectReference(outputId, plainText) {
 function renderV3ProjectWorkflow() {
   if (!els.v3ProjectWorkflow) return;
   const project = v3State.currentProject;
+  if (v3EcommerceReviewWithheldFinalizationOperation(project)) {
+    if (els.v3WorkflowArtifacts) els.v3WorkflowArtifacts.innerHTML = "";
+    els.v3ProjectWorkflow.innerHTML = `
+      <div class="v3-workflow-step active">
+        <span>人工复核</span>
+        <p>图片已保留在复核记录中，未进入正式交付。</p>
+      </div>
+    `;
+    return;
+  }
   const selectedRefs = v3ProjectReferenceGroups(project).continuation_outputs;
   const hasGenerated = Boolean(v3State.currentJob?.status === "generated" || v3TimelineHasType("job_generated"));
   renderV3WorkflowArtifacts();
@@ -5366,6 +5388,22 @@ function renderV3ProjectNextActions() {
   const ecommerceActive = projectScenario === "ecommerce";
   const operation = v3ProjectCurrentOperation(project);
   const jobOperation = job?.metadata?.current_operation;
+  if (v3EcommerceReviewWithheldFinalizationOperation(project)) {
+    els.v3ProjectNextActions.innerHTML = `
+      <div class="v3-continuation-panel">
+        <div class="v3-continuation-main">
+          <span>人工复核</span>
+          <strong>图片已保留，等待人工确认</strong>
+          <p>这次图片没有进入正式交付。请查看项目复核记录后再决定下一步。</p>
+          <div class="v3-continuation-buttons">
+            <button class="button primary compact" type="button" data-v3-project-action="review_generation_history">查看复核记录</button>
+          </div>
+        </div>
+      </div>
+    `;
+    els.v3ProjectNextActions.hidden = false;
+    return;
+  }
   const needsProductInput = ecommerceActive && (
     String(operation?.state || "").trim().toLowerCase() === "needs_input"
     || (
@@ -5632,6 +5670,15 @@ function handleV3ProjectActionClick(event) {
   }
   if (action === "return_to_project") {
     closeV3ProjectSubpage();
+    return;
+  }
+  if (action === "review_generation_history") {
+    closeV3ProjectSubpage({ silent: true });
+    renderV3UsefulReferences();
+    const target = els.v3ProjectOutputBoard || els.v3UsefulReferenceBoard;
+    target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    target?.querySelector?.("summary, button, a")?.focus?.({ preventScroll: true });
+    updateV3Notice("图片已保留在项目复核记录中，未进入正式交付。", "info");
     return;
   }
   if (action === "show_project_results") {
@@ -8827,8 +8874,16 @@ function maybeUpdateV3LongRunningProgress() {
 }
 
 function renderV3Job(job) {
-  if (els.v3JobStatus) els.v3JobStatus.textContent = job ? v3StatusLabel(job.status) : "待创建";
-  if (els.v3JobId) els.v3JobId.textContent = job?.job_id ? shortOutputId(job.job_id) : "-";
+  const reviewWithheldFinalization = v3EcommerceReviewWithheldFinalizationOperation();
+  if (reviewWithheldFinalization) {
+    clearV3ProgressTimer();
+    clearV3RecoverPolling();
+    v3State.loading = false;
+    v3State.progressStartedAt = null;
+    v3State.progressDetail = "";
+  }
+  if (els.v3JobStatus) els.v3JobStatus.textContent = reviewWithheldFinalization ? "人工复核" : (job ? v3StatusLabel(job.status) : "待创建");
+  if (els.v3JobId) els.v3JobId.textContent = reviewWithheldFinalization ? "-" : (job?.job_id ? shortOutputId(job.job_id) : "-");
   renderV3ResultBoard(job);
   renderV3PhotographyRoleBoard(job);
   renderV3ProjectOutputBoard();
@@ -8883,6 +8938,14 @@ function v3EcommerceCategoryLabel(categoryId) {
 }
 
 function renderV3EcommerceSummary(summary, metadata = null, job = null) {
+  if (v3EcommerceReviewWithheldFinalizationOperation()) {
+    renderV3OutcomeItems([]);
+    renderV3ClosureChecks([]);
+    renderV3Warnings([]);
+    renderV3EcommercePlanList(null);
+    renderV3EcommerceExportList(null);
+    return;
+  }
   const categoryId = summary?.creative_context?.metadata?.category_id || summary?.product_truth?.product_category;
   const categoryLabel = v3EcommerceCategoryLabel(categoryId);
   const targetAudience = Array.isArray(summary?.target_audience) ? summary.target_audience.filter(Boolean).slice(0, 2) : [];
@@ -8918,6 +8981,19 @@ function renderV3EcommerceSummary(summary, metadata = null, job = null) {
 
 function renderV3OutcomeItems(entries) {
   if (!els.v3CapabilityList) return;
+  if (v3EcommerceReviewWithheldFinalizationOperation()) {
+    if (els.v3SummaryTitle) els.v3SummaryTitle.textContent = "等待人工确认";
+    if (els.v3SummaryPill) els.v3SummaryPill.textContent = "人工复核";
+    if (els.v3ProgressFill) els.v3ProgressFill.style.width = "100%";
+    if (els.v3SummaryIntro) els.v3SummaryIntro.textContent = "图片已保留在项目复核记录中。";
+    if (els.v3SummaryFootnote) els.v3SummaryFootnote.textContent = "未进入正式交付，也不会自动重试或继续生成。";
+    els.v3CapabilityList.innerHTML = "";
+    const step = document.createElement("span");
+    step.className = "run-progress-step done";
+    step.textContent = "请查看复核记录后再决定下一步";
+    els.v3CapabilityList.appendChild(step);
+    return;
+  }
   const items = uniqueNonEmpty(entries).slice(0, 5);
   const jobStatus = v3State.currentJob?.status || "";
   const deliveryWithheld = v3JobDeliveryWithheld(v3State.currentJob);
@@ -9145,6 +9221,20 @@ function renderV3ResultBoard(job) {
   const candidates = Array.isArray(job?.candidates) ? job.candidates : [];
   const warnings = Array.isArray(job?.warnings) ? job.warnings : [];
   els.v3ResultBoard.innerHTML = "";
+  if (v3EcommerceReviewWithheldFinalizationOperation()) {
+    v3State.resultItems = [];
+    els.v3ResultBoard.classList.remove("empty-v3-board");
+    els.v3ResultBoard.innerHTML = `
+      <article class="v3-result-card v3-result-card-wide v3-review-hold-card">
+        <div class="v3-card-head">
+          <strong>图片已保留，等待人工确认</strong>
+          <span class="mini-pill">人工复核</span>
+        </div>
+        <p>这次图片没有进入正式交付。请在项目复核记录中查看。</p>
+      </article>
+    `;
+    return;
+  }
   els.v3ResultBoard.classList.toggle("empty-v3-board", !job);
   if (!job) {
     v3State.resultItems = [];

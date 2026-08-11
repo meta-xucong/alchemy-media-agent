@@ -428,6 +428,7 @@ def test_doc267_desktop_and_mobile_render_one_terminal_review_operation_without_
                   v3State.templateCatalogStatus = "ready";
                   v3State.templates = [{ template_id: "ecommerce_template", project_can_create_jobs: true }];
                   document.querySelector("#v3ProjectNextActions").addEventListener("click", handleV3ProjectActionClick);
+                  renderV3Job(v3State.currentJob);
                   renderV3ProjectDetail();
                 }
                 """,
@@ -443,12 +444,24 @@ def test_doc267_desktop_and_mobile_render_one_terminal_review_operation_without_
                 """
             )
             assert desktop.locator("[data-v3-project-action='review_generation_history']").count() == 1
+            assert desktop.locator("#v3ProjectNextActions [data-v3-project-action]").count() == 1
             assert desktop.locator("[data-v3-project-action='start_first_generation']").count() == 0
             assert "准备生成" not in desktop.locator("#v3ProjectNextActions").inner_text()
             assert "生成中" not in desktop.locator("#v3ProjectNextActions").inner_text()
+            assert "生成图片" not in desktop.locator("#v3ProjectWorkflow").inner_text()
+            assert "准备生成" not in desktop.locator("#v3ProjectSnapshot").inner_text()
+            assert "生成中" not in desktop.locator("#v3SummaryTitle").inner_text()
+            assert "进行中" not in desktop.locator("#v3SummaryPill").inner_text()
+            assert desktop.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0
+            desktop_reference_channels = desktop.evaluate(
+                "JSON.stringify(v3State.currentProject.metadata.ecommerce_project_view)"
+            )
             desktop.locator("[data-v3-project-action='review_generation_history']").click()
             assert desktop.evaluate("document.body.dataset.doc267HistoryOpened") == "desktop"
             assert desktop.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0
+            assert desktop.evaluate(
+                "JSON.stringify(v3State.currentProject.metadata.ecommerce_project_view)"
+            ) == desktop_reference_channels
 
             mobile = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
             mobile.evaluate(
@@ -480,11 +493,21 @@ def test_doc267_desktop_and_mobile_render_one_terminal_review_operation_without_
                 """
             )
             assert mobile.locator("[data-mobile-v3-project-action='review_generation_history']").count() == 1
+            assert mobile.locator("#mobileV3ProjectCurrentOperation [data-mobile-v3-project-action]").count() == 1
             assert mobile.locator("[data-mobile-v3-project-action='continue_recovery']").count() == 0
+            assert mobile.locator("#mobileV3ProgressPanel").is_hidden()
             assert "准备中" not in mobile.locator("#mobileV3ProgressElapsed").inner_text()
             assert "进行中" not in mobile.locator("#mobileV3ProgressElapsed").inner_text()
+            assert "进入工作台生成" not in mobile.locator("#mobileV3ProjectSnapshot").inner_text()
+            assert mobile.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0
+            mobile_reference_channels = mobile.evaluate(
+                "JSON.stringify(mobileV3State.currentProject.metadata.ecommerce_project_view)"
+            )
             mobile.locator("[data-mobile-v3-project-action='review_generation_history']").click()
             assert mobile.evaluate("document.body.dataset.doc267HistoryOpened") == "mobile"
             assert mobile.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0
+            assert mobile.evaluate(
+                "JSON.stringify(mobileV3State.currentProject.metadata.ecommerce_project_view)"
+            ) == mobile_reference_channels
         finally:
             browser.close()

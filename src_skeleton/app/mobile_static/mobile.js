@@ -3716,6 +3716,18 @@ function handleMobileV3Click(event) {
     return;
   }
   const projectActionButton = event.target.closest("[data-mobile-v3-project-action]");
+  if (projectActionButton?.dataset.mobileV3ProjectAction === "review_generation_history") {
+    const project = mobileV3State.currentProject;
+    if (!project?.project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMobileV3Busy(false);
+    clearMobileV3Progress();
+    renderMobileV3ReferenceBoard(project);
+    openMobileSurface("v3-project-detail", projectActionButton);
+    document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    return;
+  }
   if (projectActionButton?.dataset.mobileV3ProjectAction === "review_continuation_references") {
     const project = mobileV3State.currentProject;
     if (!project?.project_id) return;
@@ -4620,6 +4632,18 @@ function setMobileV3Progress(stageKey, detail = "") {
   setText("#mobileV3ProgressDetail", detail || stage.label);
 }
 
+function clearMobileV3Progress() {
+  const panel = document.querySelector("#mobileV3ProgressPanel");
+  if (panel) panel.hidden = true;
+  setText("#mobileV3ProgressTitle", "");
+  setText("#mobileV3ProgressElapsed", "");
+  setText("#mobileV3ProgressDetail", "");
+  const fill = document.querySelector("#mobileV3ProgressFill");
+  if (fill) fill.style.width = "0%";
+  const steps = document.querySelector("#mobileV3ProgressSteps");
+  if (steps) steps.innerHTML = "";
+}
+
 function openMobileV3ProjectGallery(project) {
   mobileV3State.currentProject = project;
   mobileV3State.activeGalleryProjectId = project?.project_id || "";
@@ -4767,6 +4791,12 @@ async function refreshMobileV3ProjectDetail(projectId) {
 function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
   const grid = document.querySelector("#mobileV3OutputGrid");
   if (!grid || !project?.project_id) return;
+  if (mobileV3EcommerceReviewWithheldFinalizationOperation(project)) {
+    setText("#mobileV3OutputCount", "0 张");
+    grid.innerHTML = "";
+    grid.classList.remove("empty-v2-list");
+    return;
+  }
   const outputs = mobileV3DisplayOutputsForProject(project);
   const reviewById = new Map();
   [...mobileV3ReviewOutputsForProject(project.project_id), ...mobileV3ReviewOnlyJobImageItems()]
@@ -4906,12 +4936,17 @@ function renderMobileV3ProjectSnapshot(project = mobileV3State.currentProject) {
   node.innerHTML = "";
   const referenceGroups = mobileV3ProjectReferenceGroups(project);
   const outputs = mobileV3FinalOutputsForProject(project.project_id);
+  const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project);
   const items = [
     { label: "项目类型", value: mobileV3TemplateLabel(project.primary_template_id || mobileV3State.selectedTemplate), note: "项目中途不切换模板" },
     { label: "项目目标", value: mobileV3ShortText(project.short_summary || mobileV3ProjectGoal(project), 34), note: "后续生成都会围绕这个目标" },
     { label: "原始参考", value: `${referenceGroups.original_inputs.length} 个`, note: referenceGroups.original_inputs.length ? "作为本次生成依据" : "可上传商品、构图或风格原图" },
     { label: "延续方向", value: `${referenceGroups.continuation_outputs.length} 个`, note: referenceGroups.continuation_outputs.length ? "来自你选中的项目成片" : "满意成片可作为下一步方向" },
-    { label: "当前进度", value: outputs.length ? `${outputs.length} 张图片` : "还未出图", note: outputs.length ? "可以继续沿当前方向生成" : "进入工作台生成第一组图片" },
+    {
+      label: reviewWithheldFinalization ? "复核状态" : "当前进度",
+      value: reviewWithheldFinalization ? "等待人工确认" : (outputs.length ? `${outputs.length} 张图片` : "还未出图"),
+      note: reviewWithheldFinalization ? "图片已保留在项目复核记录中，未进入正式交付" : (outputs.length ? "可以继续沿当前方向生成" : "进入工作台生成第一组图片"),
+    },
   ];
   items.forEach((item) => {
     const card = document.createElement("article");
@@ -4924,6 +4959,14 @@ function renderMobileV3ProjectSnapshot(project = mobileV3State.currentProject) {
 function mobileV3ProjectCurrentOperation(project = mobileV3State.currentProject) {
   const operation = project?.metadata?.current_operation;
   return operation && typeof operation === "object" ? operation : null;
+}
+
+function mobileV3EcommerceReviewWithheldFinalizationOperation(project = mobileV3State.currentProject) {
+  const operation = mobileV3ProjectCurrentOperation(project);
+  return mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce"
+    && operation?.state === "review_withheld_finalization_failed"
+    && operation?.terminal === true
+    && operation?.pending === false;
 }
 
 function mobileV3EcommerceNeedsInputMessage() {
@@ -4948,12 +4991,25 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   if (!node) return;
   const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
   const operation = mobileV3ProjectCurrentOperation(project);
+  const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project);
   const needsInput = isEcommerce && operation?.state === "needs_input";
   const continuationReferenceUnavailable = isEcommerce && operation?.state === "continuation_reference_unavailable";
   const failedNoDelivery = isEcommerce && operation?.state === "failed_no_delivery";
-  node.hidden = !(needsInput || continuationReferenceUnavailable || failedNoDelivery);
+  node.hidden = !(reviewWithheldFinalization || needsInput || continuationReferenceUnavailable || failedNoDelivery);
   node.innerHTML = "";
-  if (!needsInput && !continuationReferenceUnavailable && !failedNoDelivery) return;
+  if (!reviewWithheldFinalization && !needsInput && !continuationReferenceUnavailable && !failedNoDelivery) return;
+  if (reviewWithheldFinalization) {
+    setMobileV3Busy(false);
+    clearMobileV3Progress();
+    node.innerHTML = `
+      <div>
+        <strong>图片已保留，等待人工确认</strong>
+        <span>这次图片没有进入正式交付。请查看项目复核记录后再决定下一步。</span>
+      </div>
+      <button class="button primary compact" type="button" data-mobile-v3-project-action="review_generation_history">查看复核记录</button>
+    `;
+    return;
+  }
   setMobileV3Busy(false);
   setMobileV3Progress(
     "failed",
