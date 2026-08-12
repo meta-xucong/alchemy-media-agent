@@ -2678,6 +2678,10 @@ const mobileV3State = {
   selectedTemplate: "general_template",
   currentProject: null,
   currentJob: null,
+  ecommerceSubmissionReceipt: null,
+  ecommerceRecoveryEpoch: 0,
+  ecommerceSubmissionDiagnostic: "",
+  ecommerceSubmissionErrorProjectId: "",
   currentTimeline: [],
   activeGalleryProjectId: "",
   outputsLoaded: false,
@@ -4271,6 +4275,81 @@ function mobileV3ScenarioForTemplate(templateId) {
   return "general_creative";
 }
 
+function mobileV3EcommerceReceiptForProject(project = mobileV3State.currentProject) {
+  const receipt = mobileV3State.ecommerceSubmissionReceipt;
+  const projectId = String(project?.project_id || "").trim();
+  const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
+  if (!isEcommerce || !projectId || receipt?.projectId !== projectId || !receipt?.jobId) return null;
+  return receipt;
+}
+
+function mobileV3EcommerceSubmissionErrorForProject(project = mobileV3State.currentProject) {
+  return Boolean(
+    mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce"
+      && project?.project_id
+      && mobileV3State.ecommerceSubmissionErrorProjectId === project.project_id,
+  );
+}
+
+function mobileV3SetEcommerceSubmissionReceipt(projectId, jobId) {
+  if (!projectId || !jobId) return;
+  mobileV3State.ecommerceSubmissionReceipt = { projectId: String(projectId), jobId: String(jobId) };
+}
+
+function mobileV3StartEcommerceRecovery(projectId, jobId) {
+  const epoch = mobileV3State.ecommerceRecoveryEpoch + 1;
+  mobileV3State.ecommerceRecoveryEpoch = epoch;
+  return { projectId: String(projectId || ""), jobId: String(jobId || ""), epoch };
+}
+
+function mobileV3RecoveryOwns(receipt) {
+  return Boolean(
+    receipt
+      && mobileV3State.ecommerceRecoveryEpoch === receipt.epoch
+      && mobileV3State.ecommerceSubmissionReceipt?.projectId === receipt.projectId
+      && mobileV3State.ecommerceSubmissionReceipt?.jobId === receipt.jobId
+      && !mobileV3IsActiveEcommerceTerminalReceipt(),
+  );
+}
+
+function mobileV3IsTerminalJob(job) {
+  return ["blocked", "failed", "not_found"].includes(String(job?.status || "").trim().toLowerCase());
+}
+
+function mobileV3IsActiveEcommerceTerminalReceipt(job = mobileV3State.currentJob, project = mobileV3State.currentProject) {
+  const receipt = mobileV3EcommerceReceiptForProject(project);
+  return Boolean(receipt && String(job?.job_id || "") === receipt.jobId && mobileV3IsTerminalJob(job));
+}
+
+function mobileV3EcommerceTerminalMessage(job) {
+  if (mobileV3JobNeedsProductInputReview(job)) return mobileV3EcommerceNeedsInputMessage();
+  return "本次没有交付图片。项目和原始参考已保留，请确认需求后再手动生成。";
+}
+
+function mobileV3SettleEcommerceTerminalReceipt(job) {
+  if (!mobileV3IsActiveEcommerceTerminalReceipt(job)) return false;
+  mobileV3State.ecommerceRecoveryEpoch += 1;
+  mobileV3State.currentJob = job;
+  const message = mobileV3EcommerceTerminalMessage(job);
+  setMobileV3Busy(false);
+  setMobileV3Progress("failed", message);
+  updateMobileV3Status(message);
+  return true;
+}
+
+function mobileV3SettleEcommerceSubmissionError(error) {
+  mobileV3State.ecommerceSubmissionDiagnostic = String(error?.message || error || "");
+  mobileV3State.ecommerceRecoveryEpoch += 1;
+  mobileV3State.ecommerceSubmissionReceipt = null;
+  mobileV3State.ecommerceSubmissionErrorProjectId = mobileV3State.currentProject?.project_id || "";
+  mobileV3State.currentJob = null;
+  setMobileV3Busy(false);
+  setMobileV3Progress("failed", "本次提交未完成。项目和原始参考已保留，请确认需求后再次尝试。");
+  updateMobileV3Status("本次提交未完成。项目和原始参考已保留，请确认需求后再次尝试。");
+  renderMobileV3ProjectCurrentOperation();
+  renderMobileV3ProjectOutputs();
+}
+
 function mobileV3TemplateIdForScenario(scenarioId) {
   if (scenarioId === "ecommerce") return "ecommerce_template";
   if (scenarioId === "photography") return "photographer_template";
@@ -4505,6 +4584,11 @@ async function generateMobileV3Job() {
   }
   const projectId = mobileV3State.currentProject.project_id;
   const scenarioId = mobileV3ScenarioForTemplate(mobileV3State.currentProject?.primary_template_id || mobileV3State.selectedTemplate);
+  if (scenarioId === "ecommerce") {
+    mobileV3State.ecommerceSubmissionReceipt = null;
+    mobileV3State.ecommerceSubmissionDiagnostic = "";
+    mobileV3State.ecommerceSubmissionErrorProjectId = "";
+  }
   const count = scenarioId === "photography"
     ? (mobileV3State.selectedPhotographyMode === "professional_set" ? 3 : 1)
     : mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
@@ -4518,6 +4602,8 @@ async function generateMobileV3Job() {
     if (uploadedAssets.length) clearMobileV3PendingUploads({ render: true });
     mobileV3State.currentJob = created;
     mobileV3State.currentProject = mobileV3ProjectWithResponseMetadata(mobileV3State.currentProject, created);
+    const jobId = created.job_id || created.job?.job_id || created.id;
+    if (scenarioId === "ecommerce" && jobId) mobileV3SetEcommerceSubmissionReceipt(projectId, jobId);
     if (mobileV3JobNeedsProductInputReview(created)) {
       mobileV3MergeProjectOutputs(projectId, created?.metadata?.project_outputs || []);
       renderMobileV3ProjectCurrentOperation(mobileV3State.currentProject);
@@ -4527,16 +4613,23 @@ async function generateMobileV3Job() {
       updateMobileV3Status(message);
       return;
     }
-    const jobId = created.job_id || created.job?.job_id || created.id;
     mobileV3MergeProjectOutputs(projectId, created?.metadata?.project_outputs || []);
     renderMobileV3ProjectOutputs(mobileV3State.currentProject);
+    if (mobileV3IsTerminalJob(created)) {
+      mobileV3SettleEcommerceTerminalReceipt(created);
+      await refreshMobileV3ProjectDetail(projectId);
+      return;
+    }
     setMobileV3Progress("generating", `已提交生成，正在等待 ${count} 张图片`);
-    const finalJob = await recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount: count, initialJob: created });
+    const recoveryReceipt = scenarioId === "ecommerce" ? mobileV3StartEcommerceRecovery(projectId, jobId) : null;
+    const finalJob = await recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount: count, initialJob: created, recoveryReceipt });
+    if (!finalJob) return;
     mobileV3State.currentJob = finalJob;
     mobileV3MergeProjectOutputs(projectId, finalJob?.metadata?.project_outputs || []);
     await refreshMobileV3ProjectDetail(projectId);
     const deliveryWithheld = mobileV3JobDeliveryWithheld(finalJob);
-    const terminalFailure = ["blocked", "failed", "not_found"].includes(String(finalJob?.status || "").trim().toLowerCase());
+    const terminalFailure = mobileV3IsTerminalJob(finalJob);
+    if (terminalFailure) mobileV3SettleEcommerceTerminalReceipt(finalJob);
     setMobileV3Progress(
       terminalFailure ? "failed" : deliveryWithheld ? "review_blocked" : "completed",
       terminalFailure
@@ -4547,12 +4640,16 @@ async function generateMobileV3Job() {
     );
     updateMobileV3Status(
       terminalFailure
-        ? `生成失败：${friendlyError(finalJob?.warnings?.[0] || "项目已保留，可以修改后重试")}`
+        ? mobileV3EcommerceTerminalMessage(finalJob)
         : deliveryWithheld
           ? mobileV3JobFinalDeliveryNotice(finalJob)
           : "生成完成",
     );
   } catch (error) {
+    if (scenarioId === "ecommerce") {
+      mobileV3SettleEcommerceSubmissionError(error);
+      return;
+    }
     setMobileV3Progress("failed", `生成失败：${friendlyError(error)}`);
     updateMobileV3Status(`生成失败：${friendlyError(error)}`);
   } finally {
@@ -4560,19 +4657,23 @@ async function generateMobileV3Job() {
   }
 }
 
-async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1, initialJob = null } = {}) {
+async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1, initialJob = null, recoveryReceipt = null } = {}) {
   if (!jobId) return initialJob || {};
   let lastJob = initialJob || {};
   for (let attempt = 1; attempt <= 120; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 1200 : 2500));
+    if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
     try {
       lastJob = await mobileV3Request(`/jobs/${encodeURIComponent(jobId)}`);
+      if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
       if (mobileV3JobHasTerminalOutcome(lastJob)) {
         mobileV3MergeProjectOutputs(projectId, lastJob?.metadata?.project_outputs || []);
         await loadMobileV3ProjectOutputs(projectId, { limit: 120 });
+        mobileV3SettleEcommerceTerminalReceipt(lastJob);
         return lastJob;
       }
       if (["generating", "finalizing", "planned"].includes(lastJob?.status)) {
+        if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
         setMobileV3Progress("recovering", `后台正在生成或完成交付收尾，已刷新 ${attempt} 次`);
         continue;
       }
@@ -4588,6 +4689,7 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
     } catch (_error) {
       // Keep polling project outputs; the job endpoint can lag behind.
     }
+    if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
     setMobileV3Progress("recovering", `后台正在生成，已刷新 ${attempt} 次`);
   }
   throw new Error("后台暂时没有返回完整图片，请稍后刷新项目");
@@ -4598,7 +4700,7 @@ function setMobileV3Busy(isBusy) {
   const generateBtn = document.querySelector("#mobileV3GenerateBtn");
   if (generateBtn) {
     generateBtn.disabled = mobileV3State.busy;
-    generateBtn.textContent = mobileV3State.busy ? "生成中..." : "生成图片";
+    generateBtn.textContent = mobileV3State.busy ? "生成中..." : (mobileV3IsActiveEcommerceTerminalReceipt() ? "再次尝试" : "生成图片");
   }
 }
 
@@ -4645,6 +4747,10 @@ function clearMobileV3Progress() {
 }
 
 function openMobileV3ProjectGallery(project) {
+  if (mobileV3State.currentProject?.project_id !== project?.project_id) {
+    mobileV3State.ecommerceSubmissionReceipt = null;
+    mobileV3State.ecommerceSubmissionErrorProjectId = "";
+  }
   mobileV3State.currentProject = project;
   mobileV3State.activeGalleryProjectId = project?.project_id || "";
   renderMobileV3ProjectGallery(project);
@@ -4694,6 +4800,10 @@ function renderMobileV3ProjectGallery(project) {
 }
 
 function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
+  if (mobileV3State.currentProject?.project_id !== project?.project_id) {
+    mobileV3State.ecommerceSubmissionReceipt = null;
+    mobileV3State.ecommerceSubmissionErrorProjectId = "";
+  }
   mobileV3State.currentProject = project;
   clearMobileV3PendingUploads({ render: true });
   const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
@@ -4766,7 +4876,19 @@ async function refreshMobileV3ProjectDetail(projectId) {
   renderMobileV3ProjectCurrentOperation(project);
   renderMobileV3ProjectOutputs(project);
   const latestJobId = Array.isArray(project?.job_ids) ? project.job_ids[project.job_ids.length - 1] : "";
-  if (latestJobId) {
+  const receipt = mobileV3EcommerceReceiptForProject(project);
+  if (receipt) {
+    try {
+      const receiptJob = await mobileV3Request(`/jobs/${encodeURIComponent(receipt.jobId)}`);
+      const recovered = mobileV3IsTerminalJob(receiptJob)
+        ? mobileV3RecoveredJobFromProjectOutputs(project.project_id, receipt.jobId, receiptJob, { allowPartial: true })
+        : null;
+      mobileV3State.currentJob = recovered || receiptJob;
+      mobileV3SettleEcommerceTerminalReceipt(mobileV3State.currentJob);
+    } catch (_error) {
+      if (mobileV3State.currentJob?.job_id !== receipt.jobId) mobileV3State.currentJob = null;
+    }
+  } else if (latestJobId) {
     try {
       const latestJob = await mobileV3Request(`/jobs/${encodeURIComponent(latestJobId)}`);
       const recovered = ["blocked", "failed", "not_found"].includes(String(latestJob?.status || "").trim().toLowerCase())
@@ -4780,6 +4902,7 @@ async function refreshMobileV3ProjectDetail(projectId) {
     mobileV3State.currentJob = null;
   }
   renderMobileV3ProjectOutputs(project);
+  renderMobileV3ProjectCurrentOperation(project);
   renderMobileV3PhotographyRoleBoard(mobileV3State.currentJob, project);
   renderMobileV3ReferenceBoard(project);
   renderMobileV3Timeline(mobileV3State.currentTimeline);
@@ -4995,6 +5118,35 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   const needsInput = isEcommerce && operation?.state === "needs_input";
   const continuationReferenceUnavailable = isEcommerce && operation?.state === "continuation_reference_unavailable";
   const failedNoDelivery = isEcommerce && operation?.state === "failed_no_delivery";
+  if (mobileV3EcommerceSubmissionErrorForProject(project)) {
+    node.hidden = false;
+    node.innerHTML = `
+      <div>
+        <strong>本次提交未完成</strong>
+        <span>项目记录和历史图片已保留。确认需求后可再次尝试，系统不会自动重新提交。</span>
+      </div>
+    `;
+    return;
+  }
+  if (isEcommerce && mobileV3EcommerceReceiptForProject(project)) {
+    if (!mobileV3IsActiveEcommerceTerminalReceipt(mobileV3State.currentJob, project)) {
+      node.hidden = true;
+      node.innerHTML = "";
+      return;
+    }
+    const message = mobileV3EcommerceTerminalMessage(mobileV3State.currentJob);
+    setMobileV3Busy(false);
+    setMobileV3Progress("failed", message);
+    node.hidden = false;
+    node.innerHTML = `
+      <div>
+        <strong>这次暂时没有交付图片</strong>
+        <span>项目和原始参考已保留。确认需求后可再次点击生成，系统不会自动重新提交。</span>
+      </div>
+      <button class="button primary compact" type="button" data-mobile-v3-project-action="continue_recovery">继续</button>
+    `;
+    return;
+  }
   node.hidden = !(reviewWithheldFinalization || needsInput || continuationReferenceUnavailable || failedNoDelivery);
   node.innerHTML = "";
   if (!reviewWithheldFinalization && !needsInput && !continuationReferenceUnavailable && !failedNoDelivery) return;

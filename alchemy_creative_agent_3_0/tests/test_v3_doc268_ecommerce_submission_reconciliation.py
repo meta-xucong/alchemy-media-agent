@@ -109,7 +109,23 @@ def _fresh_provider_policy_block() -> dict:
     }
 
 
-def _install_browser_transport(page, *, project: dict) -> None:  # noqa: ANN001
+def _fresh_terminal_job(status: str, *, needs_input: bool = False) -> dict:
+    job = {
+        "job_id": FRESH_JOB_ID,
+        "status": status,
+        "warnings": [FRESH_PROVIDER_FAILURE_CODE],
+        "metadata": {"project_outputs": []},
+    }
+    if needs_input:
+        job["metadata"]["current_operation"] = {
+            "state": "needs_input",
+            "terminal": True,
+            "pending": False,
+        }
+    return job
+
+
+def _install_browser_transport(page, *, project: dict, fresh: dict | None = None) -> None:  # noqa: ANN001
     page.evaluate(
         """
         ({ project, stale, staleOutput, fresh }) => {
@@ -145,7 +161,7 @@ def _install_browser_transport(page, *, project: dict) -> None:  # noqa: ANN001
             "project": project,
             "stale": _stale_terminal_job(),
             "staleOutput": _stale_project_output(),
-            "fresh": _fresh_provider_policy_block(),
+            "fresh": fresh or _fresh_provider_policy_block(),
         },
     )
 
@@ -242,6 +258,213 @@ def test_doc268_desktop_keeps_exact_fresh_receipt_over_stale_timeline_and_closes
             browser.close()
 
 
+def test_doc268_desktop_post_terminal_receipts_never_enter_recovery() -> None:
+    project = _browser_project(job_ids=[STALE_JOB_ID, FRESH_JOB_ID])
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            for status in ("failed", "not_found"):
+                page = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+                _install_browser_transport(page, project=project, fresh=_fresh_terminal_job(status))
+                page.evaluate(
+                    """
+                    (project) => {
+                      v3State.currentProject = project;
+                      v3State.currentJob = null;
+                      v3State.selectedScenario = "ecommerce";
+                      v3State.templateCatalogStatus = "ready";
+                      v3State.templates = [{ template_id: "ecommerce_template", project_can_create_jobs: true }];
+                      renderV3ScenarioState();
+                    }
+                    """,
+                    project,
+                )
+                page.evaluate("async () => { await createV3Job(); }")
+
+                assert page.evaluate("v3State.currentJob.job_id") == FRESH_JOB_ID
+                assert page.evaluate("v3State.currentJob.status") == status
+                assert page.evaluate("v3State.loading === false && v3State.progressStageKey === 'failed'") is True
+                assert page.evaluate(
+                    "v3State.progressTimer === null && v3State.recoverPollTimer === null && v3State.recoverPollAttempt === 0"
+                ) is True
+                assert page.evaluate("window.__doc268Requests.filter((item) => item.method === 'POST').length") == 1
+                assert page.evaluate(
+                    "window.__doc268Requests.filter((item) => /\\/jobs\\/job-e75-fresh$/.test(item.url)).length"
+                ) == 0
+                terminal_text = " ".join(
+                    [
+                        page.locator("#v3SummaryIntro").inner_text(),
+                        page.locator("#v3CreateJobBtn").inner_text(),
+                        page.locator("#v3ProjectNextActions").inner_text(),
+                    ]
+                )
+                assert all(term not in terminal_text for term in ("正在准备生成", "准备生成", "生成图片", "核对结果", "进行中"))
+                page.close()
+        finally:
+            browser.close()
+
+
+def test_doc268_needs_input_receipt_stays_exact_until_deliberate_project_change() -> None:
+    project = _browser_project(job_ids=[STALE_JOB_ID, FRESH_JOB_ID])
+    needs_input = _fresh_terminal_job("blocked", needs_input=True)
+    other_project = {**project, "project_id": "doc268-other-project", "job_ids": [STALE_JOB_ID]}
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            desktop = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            _install_browser_transport(desktop, project=project, fresh=needs_input)
+            desktop.evaluate(
+                """
+                (project) => {
+                  v3State.currentProject = project;
+                  v3State.selectedScenario = "ecommerce";
+                  v3State.templateCatalogStatus = "ready";
+                  v3State.templates = [{ template_id: "ecommerce_template", project_can_create_jobs: true }];
+                }
+                """,
+                project,
+            )
+            desktop.evaluate("async () => { await createV3Job(); await refreshV3CurrentProject({ silent: true }); }")
+            assert desktop.evaluate("v3State.currentJob.job_id") == FRESH_JOB_ID
+            assert desktop.evaluate("v3State.ecommerceSubmissionReceipt.jobId") == FRESH_JOB_ID
+            assert desktop.evaluate("window.__doc268Requests.filter((item) => /\\/jobs\\/job-e75-fresh$/.test(item.url)).length") == 0
+            desktop.evaluate("openV3Project('doc268-other-project').catch(() => {})")
+            assert desktop.evaluate("v3State.ecommerceSubmissionReceipt === null") is True
+
+            mobile = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            _install_browser_transport(mobile, project=project, fresh=needs_input)
+            mobile.evaluate(
+                """
+                (project) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  mobileV3State.currentProject = project;
+                  mobileV3State.projects = [project];
+                  mobileV3State.selectedTemplate = "ecommerce_template";
+                }
+                """,
+                project,
+            )
+            mobile.evaluate("async () => { await generateMobileV3Job(); }")
+            assert mobile.evaluate("mobileV3State.currentJob.job_id") == FRESH_JOB_ID
+            assert mobile.evaluate("mobileV3State.ecommerceSubmissionReceipt.jobId") == FRESH_JOB_ID
+            assert mobile.evaluate("window.__doc268Requests.filter((item) => /\\/jobs\\/job-e75-fresh$/.test(item.url)).length") == 0
+            mobile.evaluate("(project) => { openMobileV3ProjectDetail(project); }", other_project)
+            assert mobile.evaluate("mobileV3State.ecommerceSubmissionReceipt === null") is True
+        finally:
+            browser.close()
+
+
+def test_doc268_mobile_terminal_receipt_retires_delayed_recovery_progress() -> None:
+    project = _browser_project(job_ids=[FRESH_JOB_ID])
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            _install_browser_transport(page, project=project)
+            page.evaluate(
+                """
+                ({ project }) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  mobileV3State.currentProject = project;
+                  mobileV3State.currentJob = { job_id: 'job-e75-fresh', status: 'planned', metadata: {} };
+                  mobileV3State.ecommerceSubmissionReceipt = { projectId: project.project_id, jobId: 'job-e75-fresh' };
+                  mobileV3State.selectedTemplate = 'ecommerce_template';
+                  window.__doc268Recovery = mobileV3StartEcommerceRecovery(project.project_id, 'job-e75-fresh');
+                  window.__doc268RecoveryPromise = recoverMobileV3GeneratedJob(project.project_id, 'job-e75-fresh', {
+                    initialJob: mobileV3State.currentJob,
+                    recoveryReceipt: window.__doc268Recovery,
+                  });
+                  mobileV3SettleEcommerceTerminalReceipt({ job_id: 'job-e75-fresh', status: 'blocked', metadata: {} });
+                }
+                """,
+                {"project": project},
+            )
+            page.evaluate("async () => { await window.__doc268RecoveryPromise; }")
+            assert page.locator("#mobileV3ProgressTitle").inner_text() == "需重试"
+            assert page.locator("#mobileV3ProgressElapsed").inner_text() == "已结束"
+            assert "刷新结果" not in page.locator("#mobileV3ProgressDetail").inner_text()
+        finally:
+            browser.close()
+
+
+def test_doc268_ecommerce_submit_errors_keep_raw_transport_diagnostics_out_of_the_dom() -> None:
+    project = _browser_project(job_ids=[STALE_JOB_ID])
+    project["metadata"]["ecommerce_project_view"]["groups"]["generated_and_review_history"]["delivered_outputs"] = [
+        {"output_id": "doc268-delivered-history", "job_id": STALE_JOB_ID, "state": "delivered"},
+    ]
+    raw_detail = "private-provider-path /tmp/image_edit_invalid_request_unattributed sha256:abc"
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            desktop = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            _install_browser_transport(desktop, project=project)
+            desktop.evaluate(
+                """
+                (project) => {
+                  v3State.currentProject = project;
+                  v3State.currentJob = {
+                    job_id: 'job-770-stale',
+                    status: 'blocked',
+                    warnings: ['old-provider-secret /old/internal/path sha256:old'],
+                    metadata: { project_id: project.project_id, project_outputs: [] },
+                  };
+                  v3State.selectedScenario = 'ecommerce';
+                  v3State.templateCatalogStatus = 'ready';
+                  v3State.templates = [{ template_id: 'ecommerce_template', project_can_create_jobs: true }];
+                  window.fetch = async () => { throw new Error('private-provider-path /tmp/image_edit_invalid_request_unattributed sha256:abc'); };
+                }
+                """,
+                project,
+            )
+            desktop.evaluate("async () => { await createV3Job(); }")
+            assert raw_detail not in desktop.locator("body").inner_text()
+            assert "old-provider-secret" not in desktop.locator("body").inner_text()
+            assert "/old/internal/path" not in desktop.locator("body").inner_text()
+            assert desktop.evaluate(
+                "v3State.currentProject.metadata.ecommerce_project_view.groups.generated_and_review_history.delivered_outputs[0].output_id"
+            ) == "doc268-delivered-history"
+            assert "doc268-delivered-history" not in desktop.locator("body").inner_text()
+            assert desktop.evaluate("v3State.currentJob === null") is True
+            assert desktop.evaluate("window.__doc268Requests.filter((item) => item.method === 'POST').length") == 0
+            assert desktop.evaluate("v3State.ecommerceSubmissionDiagnostic.includes('private-provider-path')") is True
+
+            mobile = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            _install_browser_transport(mobile, project=project)
+            mobile.evaluate(
+                """
+                (project) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  mobileV3State.currentProject = project;
+                  mobileV3State.currentJob = {
+                    job_id: 'job-770-stale',
+                    status: 'blocked',
+                    warnings: ['old-provider-secret /old/internal/path sha256:old'],
+                    metadata: { project_id: project.project_id, project_outputs: [] },
+                  };
+                  mobileV3State.selectedTemplate = 'ecommerce_template';
+                  window.fetch = async () => { throw new Error('private-provider-path /tmp/image_edit_invalid_request_unattributed sha256:abc'); };
+                }
+                """,
+                project,
+            )
+            mobile.evaluate("async () => { await generateMobileV3Job(); }")
+            assert raw_detail not in mobile.locator("body").inner_text()
+            assert "old-provider-secret" not in mobile.locator("body").inner_text()
+            assert "/old/internal/path" not in mobile.locator("body").inner_text()
+            assert mobile.evaluate(
+                "mobileV3State.currentProject.metadata.ecommerce_project_view.groups.generated_and_review_history.delivered_outputs[0].output_id"
+            ) == "doc268-delivered-history"
+            assert "doc268-delivered-history" not in mobile.locator("body").inner_text()
+            assert mobile.evaluate("mobileV3State.currentJob === null") is True
+            assert mobile.evaluate("window.__doc268Requests.filter((item) => item.method === 'POST').length") == 0
+            assert mobile.evaluate("mobileV3State.ecommerceSubmissionDiagnostic.includes('private-provider-path')") is True
+        finally:
+            browser.close()
+
+
 def test_doc268_mobile_project_refresh_keeps_the_explicit_receipt_not_an_older_job() -> None:
     # This is a deliberately stale public project snapshot that arrives after
     # the tab already knows FRESH_JOB_ID. Normal durable project ordering still
@@ -260,6 +483,7 @@ def test_doc268_mobile_project_refresh_keeps_the_explicit_receipt_not_an_older_j
                   mobileV3State.currentProject = project;
                   mobileV3State.projects = [project];
                   mobileV3State.currentJob = fresh;
+                  mobileV3State.ecommerceSubmissionReceipt = { projectId: project.project_id, jobId: fresh.job_id };
                   mobileV3State.selectedTemplate = "ecommerce_template";
                   mobileV3State.outputs = [];
                   mobileV3State.reviewOutputs = [];

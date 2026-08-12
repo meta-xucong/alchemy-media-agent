@@ -351,6 +351,9 @@ const v3State = {
   files: [],
   uploadedAssets: [],
   currentJob: null,
+  ecommerceSubmissionReceipt: null,
+  ecommerceSubmissionDiagnostic: "",
+  ecommerceSubmissionErrorProjectId: "",
   projectOutputItems: [],
   projectOutputs: [],
   projectReviewOutputs: [],
@@ -1920,6 +1923,8 @@ function openV3Home({ silent = false } = {}) {
   closeV3ProjectSubpage({ silent: true });
   v3State.currentProject = null;
   v3State.currentJob = null;
+  v3State.ecommerceSubmissionReceipt = null;
+  v3State.ecommerceSubmissionErrorProjectId = "";
   v3State.selectedResult = null;
   v3State.pendingNegativeFeedbackOutputId = "";
   v3State.projectTimeline = [];
@@ -2563,7 +2568,9 @@ function renderV3ScenarioState() {
   if (selected === "photography") {
     setV3PhotographyScene(v3State.selectedPhotographyScene);
   }
-  if (els.v3CreateJobBtn && !v3State.loading) els.v3CreateJobBtn.textContent = copy.createLabel;
+  if (els.v3CreateJobBtn && !v3State.loading) {
+    els.v3CreateJobBtn.textContent = v3IsActiveEcommerceTerminalReceipt() ? "再次尝试" : copy.createLabel;
+  }
   if (els.v3GenerateBtn) els.v3GenerateBtn.textContent = copy.generateLabel;
   if (els.v3SelectBtn) els.v3SelectBtn.textContent = copy.selectLabel;
   document.querySelectorAll("[data-v3-preset-scope]").forEach((button) => {
@@ -3529,6 +3536,16 @@ function renderV3PhotographyRoleBoard(job = v3State.currentJob) {
   els.v3PhotographyRoleBoard.hidden = !isPhotography || !roles.length;
   if (!isPhotography || !roles.length) {
     els.v3PhotographyRoleBoard.innerHTML = "";
+    return;
+  }
+  if (v3EcommerceSubmissionErrorForProject(project)) {
+    if (els.v3WorkflowArtifacts) els.v3WorkflowArtifacts.innerHTML = "";
+    els.v3ProjectWorkflow.innerHTML = `
+      <div class="v3-workflow-step failed">
+        <span>本次提交未完成</span>
+        <p>项目记录和历史图片已保留。确认需求后可再次尝试，不会自动重新提交。</p>
+      </div>
+    `;
     return;
   }
   const isSet = roles.length === 3;
@@ -4782,6 +4799,16 @@ function renderV3ProjectWorkflow() {
     `;
     return;
   }
+  if (v3IsActiveEcommerceTerminalReceipt()) {
+    if (els.v3WorkflowArtifacts) els.v3WorkflowArtifacts.innerHTML = "";
+    els.v3ProjectWorkflow.innerHTML = `
+      <div class="v3-workflow-step failed">
+        <span>本次生成未交付</span>
+        <p>项目和原始参考已保留。确认需求后可再次点击生成，不会自动重新提交。</p>
+      </div>
+    `;
+    return;
+  }
   const selectedRefs = v3ProjectReferenceGroups(project).continuation_outputs;
   const hasGenerated = Boolean(v3State.currentJob?.status === "generated" || v3TimelineHasType("job_generated"));
   renderV3WorkflowArtifacts();
@@ -5388,6 +5415,19 @@ function renderV3ProjectNextActions() {
   const ecommerceActive = projectScenario === "ecommerce";
   const operation = v3ProjectCurrentOperation(project);
   const jobOperation = job?.metadata?.current_operation;
+  if (projectScenario === "ecommerce" && v3EcommerceSubmissionErrorForProject(project)) {
+    els.v3ProjectNextActions.innerHTML = `
+      <div class="v3-continuation-panel">
+        <div class="v3-continuation-main">
+          <span>本次提交未完成</span>
+          <strong>项目和历史图片已保留</strong>
+          <p>请确认需求后再次尝试。系统不会自动重新提交。</p>
+        </div>
+      </div>
+    `;
+    els.v3ProjectNextActions.hidden = false;
+    return;
+  }
   if (v3EcommerceReviewWithheldFinalizationOperation(project)) {
     els.v3ProjectNextActions.innerHTML = `
       <div class="v3-continuation-panel">
@@ -5424,7 +5464,9 @@ function renderV3ProjectNextActions() {
   const withheld = Boolean(job && v3JobDeliveryWithheld(job));
   const visibleCount = job ? v3JobVisibleImageCount(job) : 0;
   const expectedCount = job ? v3ExpectedImageCountForJob(job) : 0;
-  const failure = job ? (v3ProviderFailureUserMessage(job) || v3EcommerceFailureMessage(job)) : "";
+  const failure = job
+    ? (v3IsActiveEcommerceTerminalReceipt(job) ? v3EcommerceTerminalReceiptMessage(job) : (v3ProviderFailureUserMessage(job) || v3EcommerceFailureMessage(job)))
+    : "";
   const actionRows = [];
   let title = "继续完善这个项目";
   let detail = "可以补充商品信息、上传参考图，或继续生成。";
@@ -5916,11 +5958,92 @@ function v3LatestProjectJobId(project = v3State.currentProject) {
   return jobIds.length ? jobIds[jobIds.length - 1] : "";
 }
 
+function v3EcommerceReceiptForProject(project = v3State.currentProject) {
+  const receipt = v3State.ecommerceSubmissionReceipt;
+  const projectId = String(project?.project_id || "").trim();
+  const isEcommerce = v3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
+  if (!isEcommerce || !projectId || receipt?.projectId !== projectId || !receipt?.jobId) return null;
+  return receipt;
+}
+
+function v3EcommerceSubmissionErrorForProject(project = v3State.currentProject) {
+  return Boolean(
+    v3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce"
+      && project?.project_id
+      && v3State.ecommerceSubmissionErrorProjectId === project.project_id,
+  );
+}
+
+function v3SetEcommerceSubmissionReceipt(projectId, jobId) {
+  if (!projectId || !jobId) return;
+  v3State.ecommerceSubmissionReceipt = { projectId: String(projectId), jobId: String(jobId) };
+}
+
+function v3IsTerminalJob(job) {
+  return ["blocked", "failed", "not_found"].includes(String(job?.status || "").trim().toLowerCase());
+}
+
+function v3IsActiveEcommerceTerminalReceipt(job = v3State.currentJob) {
+  const receipt = v3EcommerceReceiptForProject();
+  return Boolean(receipt && String(job?.job_id || "") === receipt.jobId && v3IsTerminalJob(job));
+}
+
+function v3EcommerceTerminalReceiptMessage(job) {
+  const operation = job?.metadata?.current_operation;
+  if (String(operation?.state || "").trim().toLowerCase() === "needs_input") {
+    return v3EcommerceFailureMessage(job) || "商品原图需要重新确认后再手动尝试。";
+  }
+  return "本次未获得可交付图片。项目和原始参考已保留，请确认需求后再次尝试。";
+}
+
+function v3SettleEcommerceTerminalReceipt(job) {
+  if (!v3IsActiveEcommerceTerminalReceipt(job)) return false;
+  clearV3RecoverPolling();
+  clearV3ProgressTimer();
+  v3State.progressStartedAt = null;
+  v3State.progressDetail = "";
+  setV3Busy(false);
+  setV3Progress("failed", v3EcommerceTerminalReceiptMessage(job), "warning", { forceNotice: true });
+  return true;
+}
+
+function v3SettleEcommerceSubmissionError(error) {
+  v3State.ecommerceSubmissionDiagnostic = String(error?.message || error || "");
+  v3State.ecommerceSubmissionReceipt = null;
+  v3State.ecommerceSubmissionErrorProjectId = v3State.currentProject?.project_id || "";
+  v3State.currentJob = null;
+  v3State.selectedResult = null;
+  clearV3RecoverPolling();
+  clearV3ProgressTimer();
+  v3State.progressStartedAt = null;
+  v3State.progressDetail = "";
+  setV3Busy(false);
+  setV3Progress("failed", "本次提交未完成。项目和原始参考已保留，请确认需求后再次尝试。", "warning", { forceNotice: true });
+  renderV3Job(null);
+}
+
 function v3JobHasVisibleImages(job) {
   return v3CurrentJobImageItems(job).length > 0;
 }
 
 async function restoreV3LatestProjectJob(project = v3State.currentProject, { silent = true } = {}) {
+  const receipt = v3EcommerceReceiptForProject(project);
+  if (receipt) {
+    if (v3State.currentJob?.job_id === receipt.jobId) {
+      v3SettleEcommerceTerminalReceipt(v3State.currentJob);
+      return v3State.currentJob;
+    }
+    try {
+      const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(receipt.jobId)}`);
+      v3State.currentJob = job;
+      v3State.selectedResult = null;
+      v3SettleEcommerceTerminalReceipt(job);
+      return job;
+    } catch (error) {
+      if (!silent) showGlobalToast(`V3 project images could not be restored: ${friendlyError(error)}`, "warning");
+      return v3State.currentJob?.job_id === receipt.jobId ? v3State.currentJob : null;
+    }
+  }
   const jobId = v3LatestProjectJobId(project);
   if (!jobId) return null;
   if (v3State.currentJob?.job_id === jobId && v3JobDeliverySettled(v3State.currentJob) && v3JobHasVisibleImages(v3State.currentJob)) {
@@ -7412,6 +7535,10 @@ async function clearV3ProjectVisualAssetBinding() {
 async function openV3Project(projectId) {
   if (!projectId) return;
   if (v3State.projectOpening) return;
+  if (v3State.currentProject?.project_id !== projectId) {
+    v3State.ecommerceSubmissionReceipt = null;
+    v3State.ecommerceSubmissionErrorProjectId = "";
+  }
   v3State.view = "workspace";
   v3State.projectOpening = true;
   v3State.pendingNegativeFeedbackOutputId = "";
@@ -8166,6 +8293,11 @@ async function createV3Job() {
   }
   try {
     const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
+    if (v3State.selectedScenario === "ecommerce") {
+      v3State.ecommerceSubmissionReceipt = null;
+      v3State.ecommerceSubmissionDiagnostic = "";
+      v3State.ecommerceSubmissionErrorProjectId = "";
+    }
     setV3Busy(true, v3State.files.length ? "上传并生成中..." : copy.busyLabel);
     startV3Progress("uploading", v3State.files.length ? "正在上传并理解参考图。" : "正在准备项目上下文。");
     const uploadedAssets = await uploadV3Files();
@@ -8196,9 +8328,13 @@ async function createV3Job() {
     v3State.currentJob = created;
     v3State.selectedResult = null;
     syncV3ProjectOutputsFromPayload(created);
+    if (v3State.selectedScenario === "ecommerce" && created?.job_id) {
+      v3SetEcommerceSubmissionReceipt(v3State.currentProject?.project_id, created.job_id);
+      v3SettleEcommerceTerminalReceipt(created);
+    }
     renderV3Job(created);
     await refreshV3CurrentProject({ silent: true });
-    if (created.status !== "blocked") {
+    if (!v3IsTerminalJob(created)) {
       setV3Progress("generating", created?.metadata?.background_generation_started === false ? "后台已有同一任务在生成，正在同步结果。" : "后台已开始生成，页面会持续刷新结果。");
       const generated = await recoverV3GeneratedJob(v3State.currentProject.project_id, created.job_id, new Error("v3_background_generation_pending"), {
         expectedCount: generationSettings.count,
@@ -8206,7 +8342,7 @@ async function createV3Job() {
       await completeV3GeneratedJob(generated, uploadedAssets, copy);
       return;
     }
-    if (created.status === "blocked") {
+    if (v3IsTerminalJob(created)) {
       const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(created.job_id, created, { allowPartial: true });
       if (recoveredFromOutputs) {
         await completeV3GeneratedJob(recoveredFromOutputs, uploadedAssets, copy);
@@ -8214,7 +8350,8 @@ async function createV3Job() {
       }
       const ecommerceFailure = v3EcommerceFailureMessage(created);
       if (ecommerceFailure) {
-        updateV3Notice(ecommerceFailure, "warning");
+        v3SettleEcommerceTerminalReceipt(created);
+        updateV3Notice(v3IsActiveEcommerceTerminalReceipt(created) ? v3EcommerceTerminalReceiptMessage(created) : ecommerceFailure, "warning");
         return;
       }
       const photographyFailure = payload.template_id === "photographer_template" ? v3ProviderFailureUserMessage(created) : "";
@@ -8223,8 +8360,13 @@ async function createV3Job() {
         return;
       }
     }
-    updateV3Notice(created.status === "blocked" ? "当前生成暂时受阻，请检查输入后再试。" : "已理解需求，可以继续生成图片。", created.status === "blocked" ? "warning" : "success");
+    updateV3Notice(v3IsTerminalJob(created) ? "本次未获得可交付图片。项目和原始参考已保留，请确认需求后再次尝试。" : "已理解需求，可以继续生成图片。", v3IsTerminalJob(created) ? "warning" : "success");
   } catch (error) {
+    if (v3State.selectedScenario === "ecommerce") {
+      v3SettleEcommerceSubmissionError(error);
+      updateV3Notice("本次提交未完成。项目和原始参考已保留，请确认需求后再次尝试。", "warning");
+      return;
+    }
     const detail = friendlyError(error);
     const status = Number(error?.status || 0);
     if (status >= 400 && status < 500) {
@@ -8241,6 +8383,7 @@ async function createV3Job() {
 
 async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative")) {
   v3State.currentJob = generated;
+  v3SettleEcommerceTerminalReceipt(generated);
   v3State.activeProjectStep = "compose";
   syncV3ProjectOutputsFromPayload(generated);
   const partialRecovery = v3JobHasRecoverablePartialDelivery(generated);
@@ -8338,6 +8481,7 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
       }
       if (v3JobHasTerminalOutcome(job)) {
         v3State.currentJob = job;
+        v3SettleEcommerceTerminalReceipt(job);
         renderV3Job(job);
         await refreshV3CurrentProject({ silent: true });
         await loadV3ProjectTimeline(projectId, { silent: true });
@@ -8349,6 +8493,7 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
       }
       if (v3JobHasRecoverablePartialDelivery(job, expectedCount)) {
         v3State.currentJob = job;
+        v3SettleEcommerceTerminalReceipt(job);
         renderV3Job(job);
         await refreshV3CurrentProject({ silent: true });
         await loadV3ProjectTimeline(projectId, { silent: true });
@@ -8669,7 +8814,11 @@ function resetV3Workspace() {
 function setV3Busy(isBusy, label = "") {
   v3State.loading = Boolean(isBusy);
   const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
-  if (els.v3CreateJobBtn) els.v3CreateJobBtn.textContent = isBusy ? (label || copy.busyLabel) : copy.createLabel;
+  if (els.v3CreateJobBtn) {
+    els.v3CreateJobBtn.textContent = isBusy
+      ? (label || copy.busyLabel)
+      : (v3IsActiveEcommerceTerminalReceipt() ? "再次尝试" : copy.createLabel);
+  }
   renderV3ScenarioState();
 }
 
@@ -8874,6 +9023,7 @@ function maybeUpdateV3LongRunningProgress() {
 }
 
 function renderV3Job(job) {
+  v3SettleEcommerceTerminalReceipt(job);
   const reviewWithheldFinalization = v3EcommerceReviewWithheldFinalizationOperation();
   if (reviewWithheldFinalization) {
     clearV3ProgressTimer();
@@ -8883,7 +9033,7 @@ function renderV3Job(job) {
     v3State.progressDetail = "";
   }
   if (els.v3JobStatus) els.v3JobStatus.textContent = reviewWithheldFinalization ? "人工复核" : (job ? v3StatusLabel(job.status) : "待创建");
-  if (els.v3JobId) els.v3JobId.textContent = reviewWithheldFinalization ? "-" : (job?.job_id ? shortOutputId(job.job_id) : "-");
+  if (els.v3JobId) els.v3JobId.textContent = reviewWithheldFinalization || v3IsActiveEcommerceTerminalReceipt(job) ? "-" : (job?.job_id ? shortOutputId(job.job_id) : "-");
   renderV3ResultBoard(job);
   renderV3PhotographyRoleBoard(job);
   renderV3ProjectOutputBoard();
@@ -8953,7 +9103,9 @@ function renderV3EcommerceSummary(summary, metadata = null, job = null) {
   const approvedCopy = String(summary?.creative_context?.approved_literal_copy || metadata?.ecommerce_approved_literal_copy || "").trim();
   const copyPlanningLabel = copyLocale || approvedCopy ? v3EcommerceCopyLocaleLabel(copyLocale || summary?.creative_context?.copy_locale || summary?.export_package?.metadata?.copy_locale) : "";
   const outputIntents = Array.isArray(summary?.remote_brain_output_intents) ? summary.remote_brain_output_intents : [];
-  const failureMessage = v3EcommerceFailureMessage(job);
+  const failureMessage = v3IsActiveEcommerceTerminalReceipt(job)
+    ? v3EcommerceTerminalReceiptMessage(job)
+    : v3EcommerceFailureMessage(job);
   // This server-owned flag remains a compatibility signal; it never turns a
   // browser result into a production claim.
   const productionGatePassed = summary?.metadata?.production_ready === true;
@@ -9140,7 +9292,9 @@ function renderV3ClosureChecks(checks) {
 
 function renderV3Warnings(warnings) {
   if (!els.v3WarningList) return;
-  const items = Array.isArray(warnings) ? warnings.filter((item) => !v3IsInternalWarning(item)) : [];
+  const items = v3IsActiveEcommerceTerminalReceipt()
+    ? []
+    : (Array.isArray(warnings) ? warnings.filter((item) => !v3IsInternalWarning(item)) : []);
   els.v3WarningList.hidden = items.length === 0;
   els.v3WarningList.innerHTML = "";
   items.slice(0, 4).forEach((item) => {
@@ -9297,7 +9451,7 @@ function renderV3ResultBoard(job) {
           <strong>这次暂时无法生成</strong>
           <span class="mini-pill">需处理</span>
         </div>
-        <p>${escapeHtml(v3ProviderFailureUserMessage(job) || "项目已保存。请检查商品图或补充信息后重新尝试。")}</p>
+        <p>${escapeHtml(v3IsActiveEcommerceTerminalReceipt(job) ? v3EcommerceTerminalReceiptMessage(job) : (v3ProviderFailureUserMessage(job) || "项目已保存。请检查商品图或补充信息后重新尝试。"))}</p>
       `;
       els.v3ResultBoard.appendChild(notice);
       return;
