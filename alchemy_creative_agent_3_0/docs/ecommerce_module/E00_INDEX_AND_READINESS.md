@@ -40,8 +40,12 @@ commerce-specific deliverables.
     Contract, once reviewer-approved for its respective phase.
 16. E30 / Doc269 Physical Renderer Reference Plan Contract, once
     reviewer-approved for its respective phase.
-17. This E-Commerce module family.
-18. Implementation notes and examples.
+17. Doc270 Project Source Library And Reference Matching Contract, once
+    reviewer-approved for its respective phase. It is shared V3 foundation
+    work: E-Commerce consumes its matched product subset only through the
+    existing Doc263 admission and Doc269 final physical-plan boundaries.
+18. This E-Commerce module family.
+19. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -156,6 +160,13 @@ product projection plus locked People face evidence and the actual Web image
 adapter inputs. It does not alter Product Truth admission, People identity
 authority, selected-continuation selection, Generic, or Photography behavior.
 
+Doc270 records the subsequent shared source-library and reference-matching
+design. It does not replace the upload store, Doc93 channel ownership, or
+Doc263/269 E-Commerce source/final-plan authority. Its intended E-Commerce
+integration is to choose a view-appropriate subset from the complete admitted
+product-truth pool, while the full pool remains truth/review evidence and only
+the existing frozen subset can reach a renderer.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -196,3 +207,6 @@ Before implementation starts, the team must have accepted:
 19. E30 / Doc269 physical renderer-reference plan contract, after reviewer
     acceptance, before implementation of a typed final provider-input plan or
     any guarded validation of the affected E-Commerce route.
+20. Doc270 source-library and reference-matching contract, after reviewer
+    acceptance, before E-Commerce adopts view-aware matching of its admitted
+    product pool or changes the project source-library UI.
