@@ -236,7 +236,14 @@ def reference_image_paths(asset_plan: dict[str, Any] | None, *, max_images: int 
         return []
     paths = []
     seen_paths: set[str] = set()
-    candidates = sorted(asset_plan.get("assets", []), key=lambda item: item.get("priority", 0), reverse=True)
+    provider_plan = asset_plan.get("provider_input_plan") if isinstance(asset_plan, dict) else {}
+    if isinstance(provider_plan, dict) and provider_plan.get("physical_renderer_reference_plan") == "doc269_v3_product_api":
+        candidates = sorted(
+            asset_plan.get("assets", []),
+            key=lambda item: int(item.get("provider_reference_order") or 0),
+        )
+    else:
+        candidates = sorted(asset_plan.get("assets", []), key=lambda item: item.get("priority", 0), reverse=True)
     for item in candidates:
         if item.get("provider_input_mode") != "reference_image":
             continue

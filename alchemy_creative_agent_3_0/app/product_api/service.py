@@ -45,6 +45,10 @@ from ..scenario_packs.ecommerce.reference_projection import (
     build_physical_product_projection,
     build_product_truth_admission,
 )
+from ..scenario_packs.ecommerce.physical_renderer_reference_plan import (
+    PhysicalRendererReferencePlan,
+    build_physical_renderer_reference_plan,
+)
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest
 from ..visual_assets import (
@@ -1140,6 +1144,7 @@ class V3ProductApiService:
         *,
         canonical_product_asset_ids: list[str],
         binding_service: ProjectVisualAssetBindingService | None = None,
+        doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
     ) -> ProductJobStatus:
         """Internal Project Mode entry with a canonical product-reference pool."""
 
@@ -1147,6 +1152,7 @@ class V3ProductApiService:
             request,
             project_visual_asset_binding_service=binding_service,
             project_ecommerce_canonical_product_asset_ids=canonical_product_asset_ids,
+            doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
         )
 
     def create_trusted_photography_continuation_job(
@@ -1222,6 +1228,7 @@ class V3ProductApiService:
         mcp_operation_id: str | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
         project_ecommerce_canonical_product_asset_ids: list[str] | None = None,
+        doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         if generation_channel == "mcp" and not (
@@ -1261,6 +1268,15 @@ class V3ProductApiService:
             trusted_professional_character_card=trusted_professional_character_card,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
         )
+        if doc269_selected_continuation_admissions is not None:
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                "doc269_selected_continuation_admissions": [
+                    dict(item)
+                    for item in doc269_selected_continuation_admissions
+                    if isinstance(item, dict)
+                ],
+            }
         self._bind_server_job_instance_id(create_request)
         if project_ecommerce_canonical_product_asset_ids is not None:
             canonical_ids = [
@@ -11348,6 +11364,9 @@ class V3ProductApiService:
             "professional_ecommerce_product_truth_admission",
             "professional_ecommerce_physical_product_projection",
             "professional_ecommerce_physical_product_projections",
+            "physical_renderer_reference_plans",
+            "physical_renderer_reference_plan",
+            "doc269_selected_continuation_admissions",
             "doc263_reference_projection_drift_receipt",
             "doc263_project_reference_authority",
             "doc263_project_canonical_product_asset_ids",
@@ -11370,6 +11389,9 @@ class V3ProductApiService:
             "professional_ecommerce_product_truth_admission",
             "professional_ecommerce_physical_product_projection",
             "professional_ecommerce_physical_product_projections",
+            "physical_renderer_reference_plans",
+            "physical_renderer_reference_plan",
+            "doc269_selected_continuation_admissions",
             "doc263_reference_projection_drift_receipt",
             "doc263_project_reference_authority",
             "doc263_project_canonical_product_asset_ids",
@@ -11732,13 +11754,14 @@ class V3ProductApiService:
             if (
                 not output_id
                 or item.get("role") != "face_reference"
+                or item.get("source_type") != "visual_asset_library"
                 or item.get("use_policy") != "identity"
                 or item_metadata.get("canonical_output_binding") is not True
                 or item_metadata.get("visual_asset_library_evidence") is not True
             ):
                 raise ValueError("ecommerce_locked_identity_references_invalid")
             if output_id in seen_output_ids:
-                continue
+                raise ValueError("ecommerce_locked_identity_references_invalid")
             seen_output_ids.add(output_id)
             references.append(
                 {
@@ -11751,8 +11774,12 @@ class V3ProductApiService:
                     },
                 }
             )
-        if not references:
-            raise ValueError("ecommerce_locked_identity_references_missing")
+        # Doc269's Professional E-Commerce physical contract admits the
+        # three activated Character Card face-evidence outputs, no more and
+        # no fewer. Capacity is only a secondary constraint; it cannot turn
+        # an expanded library list into a valid renderer source set.
+        if len(references) != 3:
+            raise ValueError("ecommerce_locked_identity_reference_count_invalid")
 
         controls = dict(metadata.get("advanced_reference_controls") or {})
         controls["preserve_person_identity"] = True
@@ -12569,6 +12596,14 @@ class V3ProductApiService:
             metadata,
             projections=projections,
         )
+        physical_renderer_reference_plans = self._bind_ecommerce_physical_renderer_reference_plans(
+            request,
+            admission=admission,
+            projections=projections,
+            generation_plans=planning_result.generation_plans,
+            metadata=metadata,
+        )
+        metadata["physical_renderer_reference_plans"] = physical_renderer_reference_plans
         request.metadata = metadata
         planning_result.metadata = {
             **dict(planning_result.metadata or {}),
@@ -12581,6 +12616,10 @@ class V3ProductApiService:
                 "professional_ecommerce_physical_product_projection": metadata[
                     "professional_ecommerce_physical_product_projection"
                 ],
+                "physical_renderer_reference_plans": physical_renderer_reference_plans,
+                "doc269_selected_continuation_admissions": metadata.get(
+                    "doc269_selected_continuation_admissions", []
+                ),
             },
         }
         for generation_plan in planning_result.generation_plans:
@@ -12594,7 +12633,139 @@ class V3ProductApiService:
                 "professional_ecommerce_physical_product_projection": metadata[
                     "professional_ecommerce_physical_product_projection"
                 ],
+                "physical_renderer_reference_plans": physical_renderer_reference_plans,
+                "doc269_selected_continuation_admissions": metadata.get(
+                    "doc269_selected_continuation_admissions", []
+                ),
             }
+
+    def _bind_ecommerce_physical_renderer_reference_plans(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        admission: ProductTruthAdmission,
+        projections: dict[str, dict[str, Any]],
+        generation_plans: list[Any],
+        metadata: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Freeze one exact physical renderer plan for every E-Commerce output."""
+
+        context = metadata.get("ecommerce_creative_context")
+        budget = context.get("provider_reference_budget") if isinstance(context, dict) else {}
+        try:
+            maximum_reference_images = int(
+                budget.get("max_total_reference_images", 5) if isinstance(budget, dict) else 5
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("doc269_reference_capacity_invalid") from exc
+        if maximum_reference_images < 1:
+            raise ValueError("doc269_reference_capacity_invalid")
+        uploaded_assets = [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+            for item in self.asset_store.resolve_uploaded_assets(list(request.uploaded_asset_ids))
+        ]
+        locked_identity_references = metadata.get("ecommerce_locked_identity_reference_assets")
+        if not isinstance(locked_identity_references, list):
+            locked_identity_references = []
+        plans: dict[str, dict[str, Any]] = {}
+        for output_index, raw_projection in projections.items():
+            projection = PhysicalProductReferenceProjection.from_mapping(raw_projection)
+            selected_continuations = self._doc269_selected_continuation_references(metadata)
+            try:
+                plan = build_physical_renderer_reference_plan(
+                    admission=admission,
+                    projection=projection,
+                    uploaded_assets=uploaded_assets,
+                    locked_identity_references=locked_identity_references,
+                    selected_continuation_references=selected_continuations,
+                    maximum_reference_images=maximum_reference_images,
+                )
+            except ValueError as exc:
+                raise ValueError("doc269_physical_renderer_reference_plan_invalid") from exc
+            if output_index != str(plan.output_index):
+                raise ValueError("doc269_reference_plan_output_mismatch")
+            plans[output_index] = plan.model_dump(mode="json")
+        if set(plans) != set(projections):
+            raise ValueError("doc269_reference_plan_output_mismatch")
+        return plans
+
+    def _doc269_selected_continuation_references(
+        self,
+        metadata: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Resolve only Project Mode's already-validated Doc265 selection."""
+
+        raw_admissions = metadata.get("doc269_selected_continuation_admissions", [])
+        if not isinstance(raw_admissions, list) or len(raw_admissions) > 1:
+            raise ValueError("doc269_continuation_admission_invalid")
+        project_id = str(metadata.get("project_id") or "").strip()
+        resolved: list[dict[str, Any]] = []
+        for raw_admission in raw_admissions:
+            if not isinstance(raw_admission, dict):
+                raise ValueError("doc269_continuation_admission_invalid")
+            required = {
+                "selection_authority": "doc265_project_mode",
+                "project_id": project_id,
+                "source_type": "generated_selected",
+                "use_policy": "style",
+                "role": "selected_continuation_reference",
+                "channel": "generated_selected",
+            }
+            if not project_id or any(
+                str(raw_admission.get(key) or "").strip() != expected
+                for key, expected in required.items()
+            ):
+                raise ValueError("doc269_continuation_admission_invalid")
+            output_id = str(raw_admission.get("output_id") or "").strip()
+            source_job_id = str(raw_admission.get("source_job_id") or "").strip()
+            reference_id = str(raw_admission.get("reference_id") or "").strip()
+            expected_digest = str(raw_admission.get("content_sha256") or "").strip().lower()
+            project_job_ids = raw_admission.get("project_job_ids")
+            if (
+                not output_id
+                or not source_job_id
+                or not reference_id
+                or not isinstance(project_job_ids, list)
+                or source_job_id not in project_job_ids
+                or len(project_job_ids) != len(set(project_job_ids))
+                or any(not str(job_id or "").strip() for job_id in project_job_ids)
+                or not re.fullmatch(r"[0-9a-f]{64}", expected_digest)
+            ):
+                raise ValueError("doc269_continuation_admission_invalid")
+            record = self.output_store.get_output(output_id)
+            path = Path(str(getattr(record, "file_path", "") or "")) if record else None
+            if (
+                record is None
+                or str(getattr(record, "output_id", "") or "") != output_id
+                or str(getattr(record, "job_id", "") or "") != source_job_id
+                or path is None
+                or not path.is_file()
+            ):
+                raise ValueError("doc269_continuation_admission_invalid")
+            try:
+                actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise ValueError("doc269_continuation_admission_invalid") from exc
+            if actual_digest != expected_digest:
+                raise ValueError("doc269_continuation_admission_invalid")
+            resolved.append(
+                {
+                    "output_id": output_id,
+                    "source_type": "generated_selected",
+                    "role": "selected_continuation_reference",
+                    "file_path": str(path.resolve()),
+                    "selection_binding": {
+                        "selection_authority": "doc265_project_mode",
+                        "project_id": project_id,
+                        "reference_id": reference_id,
+                        "output_id": output_id,
+                        "source_job_id": source_job_id,
+                        "project_job_ids": [str(job_id).strip() for job_id in project_job_ids],
+                        "content_sha256": actual_digest,
+                    },
+                }
+            )
+        return resolved
 
     @staticmethod
     def _bind_ecommerce_n1_product_primary_presentation(raw_plan: dict[str, Any]) -> None:
@@ -12621,8 +12792,31 @@ class V3ProductApiService:
         """Fail closed before dispatch when a frozen identity/product plan cannot fit."""
 
         references = metadata.get("ecommerce_locked_identity_reference_assets")
-        if not isinstance(references, list):
+        if references is None:
             return
+        if not isinstance(references, list) or len(references) != 3:
+            raise ValueError("ecommerce_locked_identity_reference_count_invalid")
+        identity_ids = [
+            str(item.get("output_id") or item.get("asset_id") or "").strip()
+            for item in references
+            if isinstance(item, dict)
+        ]
+        if (
+            len(identity_ids) != 3
+            or len(identity_ids) != len(set(identity_ids))
+            or any(not source_id for source_id in identity_ids)
+            or any(
+                not isinstance(item, dict)
+                or str(item.get("role") or "").strip() != "face_reference"
+                or str(item.get("source_type") or "").strip() != "visual_asset_library"
+                or str(item.get("use_policy") or "").strip() != "identity"
+                or not bool((item.get("metadata") or {}).get("doc267_locked_people_identity"))
+                or not bool((item.get("metadata") or {}).get("canonical_output_binding"))
+                or not bool((item.get("metadata") or {}).get("visual_asset_library_evidence"))
+                for item in references
+            )
+        ):
+            raise ValueError("ecommerce_locked_identity_reference_invalid")
         identity_count = len(references)
         ecommerce_context = metadata.get("ecommerce_creative_context")
         budget = (

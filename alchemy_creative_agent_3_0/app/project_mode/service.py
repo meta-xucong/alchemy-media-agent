@@ -865,6 +865,9 @@ class V3ProjectModeService:
                     }
                 )
             self._ensure_ecommerce_selected_output_integrity(project)
+            doc269_selected_continuation_admissions = (
+                self._doc269_selected_continuation_admissions(project)
+            )
             # Explicit selectors have now been admitted into Project Mode.
             # Reconcile canonical refs before deriving command identity so a
             # first submission and its immediate replay observe the same
@@ -1003,6 +1006,7 @@ class V3ProjectModeService:
                 create_payload,
                 canonical_product_asset_ids=uploaded_asset_ids,
                 binding_service=self.project_visual_asset_binding_service,
+                doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
             )
             if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
             and not _trusted_capability_continuation
@@ -2835,6 +2839,45 @@ class V3ProjectModeService:
                     now=_utc_now_iso(),
                 )
                 raise ValueError("continuation output reference unavailable") from exc
+
+    def _doc269_selected_continuation_admissions(
+        self,
+        project: ProjectRecord,
+    ) -> list[dict[str, str]]:
+        """Freeze only Doc265-validated selections for Doc269's renderer plan."""
+
+        admissions: list[dict[str, str]] = []
+        for reference in self._active_project_references(project):
+            if reference.source_type != ProjectReferenceSourceType.GENERATED_SELECTED:
+                continue
+            if reference.use_policy != ProjectReferenceUsePolicy.STYLE:
+                # Generated records on other existing Doc265 channels remain
+                # history/review evidence. Only the explicit style selection
+                # may enter Doc269's fifth physical renderer slot.
+                continue
+            record = self._validate_ecommerce_selected_output_reference(project, reference)
+            digest = self._doc265_output_source_integrity_id(record)
+            if not digest.startswith("sha256:"):
+                raise ValueError("continuation output reference unavailable")
+            admissions.append(
+                {
+                    "selection_authority": "doc265_project_mode",
+                    "project_id": project.project_id,
+                    "reference_id": reference.reference_id,
+                    "output_id": str(record.output_id),
+                    "source_job_id": str(record.job_id),
+                    "project_job_ids": list(project.job_ids),
+                    "content_sha256": digest.removeprefix("sha256:"),
+                    "source_type": "generated_selected",
+                    "use_policy": "style",
+                    "role": "selected_continuation_reference",
+                    "channel": "generated_selected",
+                    "file_path": str(Path(str(record.file_path)).resolve()),
+                }
+            )
+        if len(admissions) > 1:
+            raise ValueError("continuation output reference unavailable")
+        return admissions
 
     def _validate_ecommerce_selected_output_reference(
         self,

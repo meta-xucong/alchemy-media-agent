@@ -54,6 +54,9 @@ from ..scenario_packs.ecommerce.reference_projection import (
     PhysicalProductReferenceProjection,
     ProductTruthAdmission,
 )
+from ..scenario_packs.ecommerce.physical_renderer_reference_plan import (
+    PhysicalRendererReferencePlan,
+)
 from app.providers.base import ProviderRuntimeError
 from .mcp_materialization import (
     McpMaterializationError,
@@ -240,6 +243,12 @@ def build_provider_generation_request(
             ),
             "professional_ecommerce_physical_product_projections": metadata.get(
                 "professional_ecommerce_physical_product_projections"
+            ),
+            "physical_renderer_reference_plans": metadata.get(
+                "physical_renderer_reference_plans"
+            ),
+            "doc269_selected_continuation_admissions": metadata.get(
+                "doc269_selected_continuation_admissions", []
             ),
             # Professional serial anchor stages are an explicit opt-in
             # materialization policy.  Preserve the server-owned strategy and
@@ -1757,6 +1766,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "executed_count": 0,
             "max_attempts": 0,
             "fresh_upstream_requests": 0,
+            "outer_request_count": 0,
             "final_status": "failed",
             "final_classification": classification,
             "final_failure_code": failure_code,
@@ -1925,7 +1935,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
         compose a second, locally improvised prompt.
         """
 
-        admitted_reference_assets = self._reference_assets(request)
+        # Doc269 E-Commerce records have an already frozen physical input
+        # plan. Do not let generic source-list admission rebuild, combine, or
+        # derivative-expand its renderer sequence before it is verified.
+        if self._has_doc263_ecommerce_contract(request) and not self._has_doc269_ecommerce_physical_plan(request):
+            raise ReferenceInputAdmissionError(
+                "The server-issued E-Commerce renderer reference plan is missing; no image request was sent.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "reference_input_contract_invalid",
+                    "fallback": "blocked",
+                },
+            )
+        admitted_reference_assets = [] if self._has_doc269_ecommerce_physical_plan(request) else self._reference_assets(request)
         asset_plan = self._asset_plan(request, admitted_reference_assets)
         asset_plan = self._provider_materialization_asset_plan(request, asset_plan)
         self._assert_professional_view_evidence_ready(request, asset_plan)
@@ -3598,7 +3620,212 @@ class ProductionImageGenerationProvider(GenerationProvider):
     ) -> dict[str, Any]:
         """Allow a route to close its physical provider-input projection."""
 
+        if self._has_doc269_ecommerce_physical_plan(request):
+            return self._doc269_ecommerce_materialization_asset_plan(request)
         return asset_plan
+
+    def _has_doc269_ecommerce_physical_plan(self, request: GenerationRequest) -> bool:
+        metadata = self._generation_request_metadata(request)
+        return self._has_doc263_ecommerce_contract(request) and (
+            metadata.get("physical_renderer_reference_plans") is not None
+            # This singular field is never emitted by Product API. Retaining
+            # it here makes internal persisted corruption fail before an
+            # adapter can receive a generic reconstructed list.
+            or metadata.get("physical_renderer_reference_plan") is not None
+        )
+
+    def _doc269_ecommerce_materialization_asset_plan(
+        self,
+        request: GenerationRequest,
+    ) -> dict[str, Any]:
+        """Verify and consume Doc269's final E-Commerce physical plan directly."""
+
+        metadata = self._generation_request_metadata(request)
+        try:
+            _admission, projection = self._doc263_ecommerce_contract(request)
+            output_index = int(getattr(request.asset_spec, "priority", 1) or 1)
+            # The singular value is not a supported transport field. When it
+            # appears beside a normal plan, it represents persisted internal
+            # corruption and must win only to fail closed before dispatch.
+            raw_plan = metadata.get("physical_renderer_reference_plan")
+            if raw_plan is None:
+                raw_plans = metadata.get("physical_renderer_reference_plans")
+                if not isinstance(raw_plans, dict):
+                    raise ValueError("plans_missing")
+                raw_plan = raw_plans.get(str(output_index))
+            plan = PhysicalRendererReferencePlan.model_validate(raw_plan)
+            if (
+                plan.job_id != projection.job_id
+                or plan.output_index != projection.output_index
+                or plan.projection_digest != projection.projection_digest
+                or plan.maximum_reference_images > self.max_provider_reference_images
+            ):
+                raise ValueError("lineage_mismatch")
+            product_entries = [entry for entry in plan.references if entry.channel == "product_truth"]
+            identity_entries = [entry for entry in plan.references if entry.channel == "people_identity"]
+            continuation_entries = [entry for entry in plan.references if entry.channel == "generated_selected"]
+            if (
+                [entry.source_id for entry in product_entries]
+                != list(projection.selected_product_asset_ids)
+                or any(entry.role != "product_reference" for entry in product_entries)
+            ):
+                raise ValueError("product_projection_mismatch")
+            locked_references = metadata.get("professional_anchor_reference_assets")
+            if not isinstance(locked_references, list):
+                if metadata.get("ecommerce_locked_identity_authority") != "v3_product_api":
+                    locked_references = []
+                else:
+                    raise ValueError("identity_sources_missing")
+            if not locked_references and metadata.get("ecommerce_locked_identity_authority") != "v3_product_api":
+                if identity_entries:
+                    raise ValueError("identity_plan_mismatch")
+                self._verify_doc269_selected_continuation_admission(
+                    metadata,
+                    continuation_entries,
+                )
+                locked_references = None
+            if locked_references is None:
+                expected_identity_ids = []
+            else:
+                if (
+                    len(locked_references) != 3
+                    or any(
+                        not isinstance(item, dict)
+                        or str(item.get("role") or "").strip() != "face_reference"
+                        or str(item.get("source_type") or "").strip()
+                        != "visual_asset_library"
+                        or str(item.get("use_policy") or "").strip() != "identity"
+                        or not bool((item.get("metadata") or {}).get("doc267_locked_people_identity"))
+                        or not bool((item.get("metadata") or {}).get("canonical_output_binding"))
+                        or not bool((item.get("metadata") or {}).get("visual_asset_library_evidence"))
+                        for item in locked_references
+                    )
+                ):
+                    raise ValueError("identity_sources_invalid")
+                expected_identity_ids = [
+                    str(item.get("output_id") or item.get("asset_id") or "").strip()
+                    for item in locked_references
+                ]
+            if (
+                (locked_references is not None and len(expected_identity_ids) != 3)
+                or len(expected_identity_ids) != len(set(expected_identity_ids))
+                or any(not source_id for source_id in expected_identity_ids)
+                or (locked_references is not None and len(identity_entries) != 3)
+                or [entry.source_id for entry in identity_entries] != expected_identity_ids
+                or any(
+                    entry.role != "face_reference"
+                    or entry.channel != "people_identity"
+                    or entry.source_type != "visual_asset_library"
+                    for entry in identity_entries
+                )
+            ):
+                raise ValueError("identity_plan_mismatch")
+            self._verify_doc269_selected_continuation_admission(
+                metadata,
+                continuation_entries,
+            )
+            assets: list[dict[str, Any]] = []
+            for entry in plan.references:
+                path = Path(entry.file_path).resolve(strict=True)
+                if not path.is_file() or self._reference_content_fingerprint(path) != entry.content_sha256:
+                    raise ValueError("file_drift")
+                assets.append(
+                    {
+                        "asset_id": entry.reference_id,
+                        "source_asset_id": entry.source_id,
+                        "role": entry.role,
+                        "source_type": entry.source_type,
+                        "provider_input_mode": "reference_image",
+                        "storage_path": str(path),
+                        "filename": path.name,
+                        "provider_reference_order": entry.ordinal,
+                        "doc269_physical_renderer_reference_plan": True,
+                        "reference_truth_layer": entry.channel,
+                        "truth_layers": [entry.channel],
+                        "provider_reference_derivative": False,
+                        "derivative_kind": None,
+                    }
+                )
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
+            raise ReferenceInputAdmissionError(
+                "The server-issued E-Commerce renderer reference plan could not be verified; no image request was sent.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "reference_input_contract_invalid",
+                    "fallback": "blocked",
+                },
+            ) from exc
+        return {
+            "asset_mode": "advanced",
+            "assets": assets,
+            "provider_requirements": {
+                "needs_image_reference": True,
+                "needs_image_edit": False,
+            },
+            "provider_input_plan": {
+                "operation": "image_edit_with_reference_images",
+                "reference_image_asset_ids": list(plan.reference_image_asset_ids),
+                "reference_image_count": plan.reference_image_count,
+                "maximum_reference_images": plan.maximum_reference_images,
+                "physical_renderer_reference_plan_digest": plan.plan_digest,
+                "physical_renderer_reference_plan": "doc269_v3_product_api",
+                "provider_reference_total_bytes": sum(path["storage_path"] and Path(path["storage_path"]).stat().st_size for path in assets),
+                "reference_truth_layers": [
+                    {
+                        "asset_id": item["asset_id"],
+                        "source_asset_id": item["source_asset_id"],
+                        "role": item["role"],
+                        "truth_layer": item["reference_truth_layer"],
+                        "truth_layers": item["truth_layers"],
+                        "derivative_kind": None,
+                        "provider_reference_derivative": False,
+                    }
+                    for item in assets
+                ],
+            },
+        }
+
+    @staticmethod
+    def _verify_doc269_selected_continuation_admission(
+        metadata: dict[str, Any],
+        continuation_entries: list[Any],
+    ) -> None:
+        """Ensure the optional fifth input is exactly Project Mode's Doc265 selection."""
+
+        admissions = metadata.get("doc269_selected_continuation_admissions", [])
+        if not isinstance(admissions, list) or len(admissions) > 1:
+            raise ValueError("continuation_admission_invalid")
+        if not admissions:
+            if continuation_entries:
+                raise ValueError("continuation_admission_missing")
+            return
+        if len(continuation_entries) != 1 or not isinstance(admissions[0], dict):
+            raise ValueError("continuation_admission_mismatch")
+        entry = continuation_entries[0]
+        admission = admissions[0]
+        binding = getattr(entry, "selection_binding", None)
+        expected = {
+            "selection_authority": "doc265_project_mode",
+            "project_id": str(metadata.get("project_id") or "").strip(),
+            "reference_id": getattr(binding, "reference_id", ""),
+            "output_id": entry.source_id,
+            "source_job_id": getattr(binding, "source_job_id", ""),
+            "content_sha256": entry.content_sha256,
+            "source_type": "generated_selected",
+            "use_policy": "style",
+            "role": "selected_continuation_reference",
+            "channel": "generated_selected",
+            "file_path": str(Path(entry.file_path).resolve()),
+        }
+        if (
+            not expected["project_id"]
+            or admission.get("project_job_ids") != list(getattr(binding, "project_job_ids", ()))
+            or any(
+            str(admission.get(key) or "").strip() != value
+            for key, value in expected.items()
+            )
+        ):
+            raise ValueError("continuation_admission_mismatch")
 
     def _reference_truth_package(
         self,

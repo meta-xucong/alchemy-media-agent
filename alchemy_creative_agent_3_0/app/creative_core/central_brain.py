@@ -111,6 +111,16 @@ class CentralCreativeBrain:
                 "job_id": job.job_id,
                 "uploaded_assets": context.metadata.get("uploaded_assets", []),
                 "reference_assets": context.metadata.get("reference_assets", []),
+                # Doc269's Product API-issued E-Commerce renderer plan is a
+                # per-output transport receipt. It is not interpreted by the
+                # shared planner; it must only survive until the specialized
+                # provider materializer verifies it.
+                "physical_renderer_reference_plans": context.metadata.get(
+                    "physical_renderer_reference_plans"
+                ),
+                "doc269_selected_continuation_admissions": context.metadata.get(
+                    "doc269_selected_continuation_admissions"
+                ),
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
                 "llm_brain": self._llm_brain_metadata(context),
@@ -150,6 +160,12 @@ class CentralCreativeBrain:
                 ),
                 "professional_ecommerce_physical_product_projections": context.metadata.get(
                     "professional_ecommerce_physical_product_projections"
+                ),
+                "physical_renderer_reference_plans": context.metadata.get(
+                    "physical_renderer_reference_plans"
+                ),
+                "doc269_selected_continuation_admissions": context.metadata.get(
+                    "doc269_selected_continuation_admissions"
                 ),
                 # Renderer choice is transport provenance, not creative
                 # direction. Preserve it in the frozen plan so the shared
@@ -413,6 +429,12 @@ class CentralCreativeBrain:
                 ),
                 "professional_ecommerce_physical_product_projections": context.metadata.get(
                     "professional_ecommerce_physical_product_projections"
+                ),
+                "physical_renderer_reference_plans": context.metadata.get(
+                    "physical_renderer_reference_plans"
+                ),
+                "doc269_selected_continuation_admissions": context.metadata.get(
+                    "doc269_selected_continuation_admissions"
                 ),
                 # Keep the explicit renderer channel attached to every
                 # materialization plan. The shared Provider/MCP adapter reads

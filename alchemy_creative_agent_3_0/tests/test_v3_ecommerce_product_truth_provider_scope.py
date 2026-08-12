@@ -506,19 +506,32 @@ def test_project_mode_bound_visual_asset_freezes_before_ecommerce_truth_prefligh
             preparation_intent="A neutral reusable people reference.",
         ),
     )
-    rendered_anchor = output_store.save_base64_output(
-        job_id="job_visual_asset_anchor",
-        candidate_id="candidate_visual_asset_anchor",
-        asset_id="asset_visual_asset_anchor",
-        provider="fixture",
-        model="fixture",
-        encoded_image=base64.b64encode(_png_bytes((180, 150, 120))).decode("ascii"),
-    )
+    face_output_ids = [
+        output_store.save_base64_output(
+            job_id=f"job_visual_asset_anchor_{index}",
+            candidate_id=f"candidate_visual_asset_anchor_{index}",
+            asset_id=f"asset_visual_asset_anchor_{index}",
+            provider="fixture",
+            model="fixture",
+            encoded_image=base64.b64encode(_png_bytes((180, 150, 120))).decode("ascii"),
+        ).output_id
+        for index in range(3)
+    ]
     people_asset = catalog.activate_version(
         owner_scope="local_default",
         visual_asset_id=people_asset.visual_asset_id,
         version_id="pack_people_v1",
-        approved_evidence_ids=[rendered_anchor.output_id],
+        approved_evidence_ids=["fixture-three-face-chain"],
+    )
+    catalog.save(
+        people_asset.model_copy(
+            update={
+                "character_card": _active_face_card(
+                    visual_asset_id=people_asset.visual_asset_id,
+                    output_ids=face_output_ids,
+                )
+            }
+        )
     )
     project = handlers.post_projects(
         {"user_goal": "Create an ecommerce image set", "primary_template_id": "ecommerce_template"}
