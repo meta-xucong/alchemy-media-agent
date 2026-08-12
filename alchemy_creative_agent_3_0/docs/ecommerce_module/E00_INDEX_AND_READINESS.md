@@ -36,8 +36,10 @@ commerce-specific deliverables.
     for its respective phase.
 14. E28 / Doc267 Post-Generation Review Closure and Professional E-Commerce
     Delivery Contract, once reviewer-approved for its respective phase.
-15. This E-Commerce module family.
-15. Implementation notes and examples.
+15. E29 / Doc268 Explicit Submission Receipt and Current-Job Reconciliation
+    Contract, once reviewer-approved for its respective phase.
+16. This E-Commerce module family.
+17. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -139,6 +141,13 @@ or inspection fails. It preserves Doc263-265 reference authority, retains the
 output only for manual review/history, and requires one terminal public
 operation rather than a false request-invalid or generating projection.
 
+E29 / Doc268 records the command-receipt and current-job reconciliation
+authority for an explicit Professional E-Commerce submission. It distinguishes
+the exact newly accepted command from historical project jobs and requires a
+terminal receipt to close progress before any project-history projection can
+render. It does not revive the disproven empty-idempotency-key theory, alter
+product or People reference authority, or authorize an automatic resubmission.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -173,3 +182,6 @@ Before implementation starts, the team must have accepted:
     acceptance, before implementation of persisted-pixel finalization closure,
     Professional E-Commerce identity/reference-plan correction, or guarded
     production acceptance.
+18. E29 / Doc268 explicit submission receipt and current-job reconciliation
+    contract, after reviewer acceptance, before implementation of fresh-submit
+    identity, browser receipt retention, or terminal-progress reconciliation.
