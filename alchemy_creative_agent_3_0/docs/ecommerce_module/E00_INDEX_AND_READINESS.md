@@ -44,8 +44,13 @@ commerce-specific deliverables.
     reviewer-approved for its respective phase. It is shared V3 foundation
     work: E-Commerce consumes its matched product subset only through the
     existing Doc263 admission and Doc269 final physical-plan boundaries.
-18. This E-Commerce module family.
-19. Implementation notes and examples.
+18. Doc271 Provider Deliverability Closure Receipt Contract, once
+    reviewer-approved for its respective phase. It is shared V3 foundation
+    work: Professional E-Commerce may consume only its exact same-project,
+    Provider-policy closure projection; it does not alter Doc263/269 source or
+    physical-plan authority.
+19. This E-Commerce module family.
+20. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -167,6 +172,12 @@ integration is to choose a view-appropriate subset from the complete admitted
 product-truth pool, while the full pool remains truth/review evidence and only
 the existing frozen subset can reach a renderer.
 
+Doc271 records the shared Provider deliverability-closure design for a durable,
+explicit upstream policy refusal. Its E-Commerce consumer compares only an
+exact, server-resolved current binding before a new command can create a Job;
+it never changes the child/person, garment, original product, locked People,
+selected continuation, or Doc269 final-plan facts to seek a different result.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -210,3 +221,6 @@ Before implementation starts, the team must have accepted:
 20. Doc270 source-library and reference-matching contract, after reviewer
     acceptance, before E-Commerce adopts view-aware matching of its admitted
     product pool or changes the project source-library UI.
+21. Doc271 provider deliverability-closure receipt contract, after reviewer
+    acceptance, before an explicit Professional E-Commerce continuation may
+    short-circuit an already observed, exact Provider-policy refusal.
