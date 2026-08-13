@@ -444,9 +444,11 @@ same command.
    receipt, never to a browser-authored idempotency key. Repeated click, tap,
    reload, or timeout returns the one exact admitted `job_id` and its current
    receipt; it must not substitute a historical job or create another command.
-5. A reference resolution is frozen into that job/output receipt. Retry,
-   refresh, and final review read that receipt; they do not rerun matching and
-   silently change reference sources.
+5. **Phase 3+ activation only:** after an approved version gate enables
+   matcher consumption for a new command, the reference resolution is frozen
+   into that command's job/output receipt. Retry, refresh, and final review
+   read that receipt; they do not rerun matching and silently change reference
+   sources. This is not a Phase 2 persistence requirement.
 6. A user explicitly changing source preferences or original associations
    creates a new current library snapshot and requires a new explicit,
    server-issued command receipt. It does not mutate the prior command.
@@ -474,14 +476,17 @@ its current SHA/profile/analysis receipt. It is not a
 claim a view, affordance, ranking, or semantic match when analysis evidence is
 unavailable. Surface public-safe availability/uncertainty in project views.
 Run in observe-only mode: no planner selection or provider behavior changes.
-The receipt is frozen into a new job/output. Project Mode may expose only a
-server-owned enable signal to the Product API; after ProductTruthAdmission and
-any Doc264 re-attestation complete, the Product API reads one fresh snapshot
-through the trusted Project Mode callback, persists that exact private snapshot
-with the job, and binds the receipt from it. Browser-supplied or pre-admission
-snapshot payloads are ignored. `get_project` may recompute the current read
-model but must never rewrite historical job bindings. Prove
-legacy project compatibility and General/Professional isolation.
+**Phase 3+ activation only:** after an approved version gate enables matcher
+consumption for a new command, the receipt is frozen into a new job/output.
+Project Mode may expose only a server-owned enable signal to the Product API;
+after ProductTruthAdmission and any Doc264 re-attestation complete, the
+Product API reads one fresh snapshot through the trusted Project Mode callback,
+persists that exact private snapshot with the job, and binds the receipt from
+it. Browser-supplied or pre-admission snapshot payloads are ignored.
+`get_project` may recompute the current read model but must never rewrite
+historical job bindings. Prove legacy project compatibility and
+General/Professional isolation. Phase 2 remains ephemeral and performs none
+of these writes.
 
 The shared catalog lists every current-project active `uploaded` original,
 including entries that cannot currently be used automatically. Each entry
@@ -500,10 +505,125 @@ never semantic evidence.
 
 ### Phase 2: Requirements and matcher in shadow mode
 
-Add `ReferenceRequirement` and `ReferenceResolutionReceipt`. Have Brain and
-templates declare requirements; compare current selection against matcher
-recommendations in deterministic tests and internal audit. Do not override
-current selected IDs or alter production dispatch yet.
+Phase 2 introduces a **server-internal shadow matcher contract only**. It is
+not a selection rollout. Its purpose is to make the later decision boundary
+observable and auditable without changing any current command, selected ID,
+Doc263 admission, Doc269 physical plan, prompt, capacity reservation, provider
+input, retry, or dispatch behavior.
+
+#### Phase 2.1 Trusted inputs only
+
+`ReferenceRequirement` is a typed, immutable request for project-upload
+original evidence. It may be issued only by a versioned server Brain/template
+boundary and is verified through a server-held plan/command lookup, not passed
+as an untrusted dict. Its canonical digest binds the issuer identity and
+version, project, immutable command/plan binding, deliverable/output identity,
+requirement nonce, template/scenario owner, allowlisted requirement kind,
+hard/preferred/optional strength, and bounded candidate count. Browser request
+metadata, filenames, upload order, upload role, timeline labels, review
+metadata, and Visual Asset metadata cannot issue, amend, replay, or select
+against a requirement. A requirement copied to another project, command,
+plan revision, or output is invalid even when its fields and digest are
+self-consistent.
+
+The matcher never accepts a caller-provided source-library snapshot. It asks a
+trusted Project Mode/source service for one fresh server-held snapshot at
+match time and rechecks its association records and source bytes. That snapshot
+whose entries are all:
+
+1. current-project associations;
+2. active, `uploaded` originals;
+3. readable at match time; and
+4. bound to the actual current SHA-256.
+
+It records both the rederived snapshot evidence and the source-resolver
+authority/version in the receipt. A stale, omitted, added, cross-project, or
+self-consistently rehashed caller snapshot is not a valid input surface.
+An unavailable trusted project/plan/source read returns a deterministic private
+`invalid` state with a safe rationale code; it does not raise raw lookup
+details into a public surface.
+
+It has no candidate adapter for Visual Assets/People evidence, generated or
+review outputs, historical records, implicit continuation, cross-project
+uploads, or browser-supplied IDs. Doc93 continues to own People identity and
+channel inheritance; Doc261/265 continue to own the only explicit generated
+continuation channel. The matcher may describe an uploaded original as useful
+scene or object evidence, but it cannot turn that observation into an identity
+authority or continuation selection.
+
+#### Phase 2.2 Evidence and uncertainty
+
+Semantic matching requires a versioned, server-held image-evidence interface.
+Every evidence record binds its analyzer authority/version, project,
+association/reference ID, asset ID, actual current SHA, profile digest, and
+schema version. Evidence with a self-consistent digest but any wrong project,
+reference, asset, SHA, analyzer identity, or profile digest is `invalid`, not
+an ignorable fallback. It must distinguish `observed`, `not_observed`,
+`uncertain`, `invalid`, and `not_applicable`. Production default for an entry
+without qualifying image evidence is `not_observed`/`insufficient_evidence`;
+it must never infer front, rear, detail, subject kind, or environment
+semantics from filename, upload order, role, channel, or Brain prose.
+
+Deterministic tests may inject a controlled evidence double at that private
+server interface. That double is test evidence, not browser input and not a
+production fallback analyzer. A profile with unknown/not-observed evidence can
+never yield `resolved`.
+
+#### Phase 2.3 Immutable shadow receipt
+
+For every inspected output the server may create one private,
+immutable `ReferenceResolutionReceipt` with:
+
+- receipt and schema version;
+- exact project and output binding;
+- source-library snapshot evidence/digest and source-resolver authority/version;
+- verified command/plan binding, output identity, requirement nonce, and
+  requirement digest;
+- ordered matched association and asset bindings with actual SHA-256;
+- evidence-profile digest(s), resolution status, and safe internal rationale
+  code(s); and
+- a canonical receipt digest over all preceding facts.
+
+The only Phase 2 states are `resolved`, `insufficient_evidence`, `ambiguous`,
+`invalid`, and `not_applicable`. A receipt is an ephemeral, internal
+deterministic comparison/audit return value for the current server operation.
+Phase 2 does not persist it in a project, Job, historical Job, output, or
+public response. Repeated calls must not mutate project/job/selection/current
+operation state or write private audit metadata. It is not a public selection
+API and it must not be returned as a browser-authoritative result. `resolved`
+has no operational effect until a separately approved activation phase.
+
+Requirement kinds are typed and allowlisted by the server template issuer; an
+arbitrary string is invalid even when it is marked server-owned. The schema
+also requires `maximum_sources` to be a positive, server-policy-bounded value.
+Resolution may return no more than that many unique references. Candidate
+ranking uses qualifying image evidence plus an explicitly recorded deterministic
+tie break only after semantic equivalence; filename and upload order are never
+ranking inputs, and an oversized candidate response cannot force all originals.
+
+The shadow matcher must prove ordinary multi-domain behavior through typed
+requirements and evidence fixtures for: object multi-view/detail evidence,
+person plus environment evidence, and scene/brand material evidence. These
+are contract fixtures, not apparel, swimwear, child, or single-category
+branches.
+
+#### Phase 2.4 Non-interference and isolation
+
+Phase 2 may run only as a private comparison for a newly admitted command or
+an isolated deterministic test. It must not alter existing selected source
+IDs, Doc263 product-truth admission, Doc269 physical renderer plans, cap
+reservation, prompt text, provider dispatch, review, retries, job status, or
+current operation. It cannot create `needs_input`, busy/preparing UI, a timer,
+an automatic retry, or an automatic resubmit. An E-Commerce command keeps
+Doc263/269 as its active authority; General prompt-only commands with no
+original requirement yield `not_applicable` and continue unchanged;
+Photography does not consume E-Commerce rules or receipts.
+
+Historical projects/jobs remain read-only and are never rematched, rewritten,
+or made current. Phase 2 creates no frozen or persisted receipt anywhere. A
+future activation phase may define separately audited append-only receipt
+ownership; it cannot retroactively add Phase 2 shadow results to historical
+records.
 
 ### Phase 3: General V3 activation
 
