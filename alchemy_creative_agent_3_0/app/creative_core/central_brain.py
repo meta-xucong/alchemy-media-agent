@@ -1054,6 +1054,7 @@ class CentralCreativeBrain:
         record = {
             "role_key": str(role_recipe.get("role_key") or getattr(asset, "asset_id", "")),
             "asset_id": getattr(asset, "asset_id", None),
+            "output_index": getattr(asset, "priority", None),
             "status": status,
             "candidate_id": candidate_id,
             "error_type": error_type,
@@ -1128,6 +1129,12 @@ class CentralCreativeBrain:
             outer_request_count = 0
         outcome = str(reference.get("operation_outcome") or "").strip().lower()
         state = "blocked" if outcome in {"failed", "empty_provider_output"} else "unknown"
+        attempts = [item for item in summary.get("attempts", []) if isinstance(item, dict)]
+        terminal_attempt = attempts[-1] if attempts else {}
+        try:
+            output_index = int(terminal_attempt.get("output_index"))
+        except (TypeError, ValueError):
+            output_index = None
         projection = {
             "state": state,
             "classification": classification,
@@ -1135,8 +1142,34 @@ class CentralCreativeBrain:
             "operation": operation,
             "reference_count": reference_count,
             "outer_request_count": outer_request_count,
+            "output_index": output_index,
+            "upstream_code": str(terminal_attempt.get("upstream_code") or "").strip().lower() or None,
         }
-        runtime_budget = safe_runtime_execution_budget(summary.get("execution_audit"))
+        execution_audit = summary.get("execution_audit")
+        if isinstance(execution_audit, dict):
+            projection["execution_audit"] = dict(execution_audit)
+        safe_attempts: list[dict[str, Any]] = []
+        for attempt in attempts:
+            try:
+                output_index = int(attempt.get("output_index"))
+                role_output_index = int(attempt.get("role_output_index"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            safe_attempts.append(
+                {
+                    "attempt": attempt.get("attempt"),
+                    "output_index": output_index,
+                    "role_output_index": role_output_index,
+                    "status": str(attempt.get("status") or "").strip().lower(),
+                    "classification": str(attempt.get("classification") or "").strip().lower(),
+                    "failure_code": str(attempt.get("failure_code") or "").strip().lower(),
+                    "upstream_code": str(attempt.get("upstream_code") or "").strip().lower(),
+                    "execution_audit": dict(execution_audit) if isinstance(execution_audit, dict) else {},
+                }
+            )
+        if safe_attempts:
+            projection["attempts"] = safe_attempts
+        runtime_budget = safe_runtime_execution_budget(execution_audit)
         if runtime_budget:
             projection["runtime_budget"] = runtime_budget
         return projection

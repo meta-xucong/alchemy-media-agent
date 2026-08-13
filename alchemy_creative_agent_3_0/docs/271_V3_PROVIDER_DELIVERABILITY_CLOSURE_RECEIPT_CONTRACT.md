@@ -78,7 +78,8 @@ A receipt may be created exactly when all of the following are true:
    `content_policy_violation`-type evidence. A generic
    `image_edit_invalid_request_unattributed`, an ambiguous 400, a timeout,
    a local admission failure, or a browser warning is insufficient.
-3. The Job's canonical user-goal/prompt binding, source/reference binding,
+3. The Job's canonical current-project-goal plus explicit-command-direction
+   binding, source/reference binding,
    locked Visual Asset binding, Provider capability/model/operation/route
    identity, exact Doc269 per-output plan, and a canonical terminal-Job
    receipt/audit digest can be read and verified. The terminal receipt digest
@@ -101,12 +102,43 @@ The receipt is append-only and canonical. It must bind at least:
 ```text
 schema_version, authority, receipt_id
 project_id, terminal_job_id, terminal_job_receipt_digest
-canonical_goal_prompt_digest
-reference_binding_digest
-  - ordered source/reference IDs, actual content SHA-256, role, channel
+canonical_goal_prompt_digest (current project goal plus explicit command direction),
+canonical_project_goal_digest, canonical_command_direction_digest. The goal
+component comes from a versioned, append-only Project Mode goal snapshot
+issued before the Job exists; the Job's binding carries only that snapshot ID,
+a unique server-issued command-attempt ID, and the exact request direction.
+Product API re-reads and verifies the snapshot, then Project Mode's immutable
+attempt-to-real-Job association and `request.user_input`. A failed pre-link
+attempt remains append-only audit history but has no Job association and cannot
+block a later command. The binding cannot self-author a goal by being
+internally self-consistent.
+current_project_source_binding_digest (complete active project pool: deterministic asset ID, actual SHA-256, source type, use policy, persisted upload role, and truth/reference or selected-continuation channel/role); the physical per-output plan remains separate terminal corroboration
+  - ordered source/reference IDs, actual content SHA-256, role, channel;
+    a generated-selected source is re-resolved through the existing Doc265
+    same-project selected-output admission and its durable output/job/candidate
+    binding plus file before
+    it can participate in a receipt
   - locked Visual Asset/version/evidence binding digest
 provider_capability_id, provider_name, model, operation, route_identity
-physical_plan_digest(s), output-index binding(s), created_at
+ordered `per_output_reference_bindings` and their aggregate digest: exact
+contiguous output indexes, each Doc263 projection digest, each Doc269 plan
+digest, and each ordered typed reference ID/role/channel/source type/actual
+content SHA. Every plan reference file is re-hashed during verification. The
+closure also binds the ordered per-output physical-plan digests and the
+server-frozen specialized execution-plan digest derived from those exact plan
+indexes. Raw `provider_failure_retry.attempts` may retain retry history for an
+output, but every attempt must remain index-valid and canonical. A set closes
+only when the canonical normalized evidence has exactly one final terminal
+entry for every planned output index, each explicitly
+`provider_policy_blocked` with attributable `content_policy_violation` and a
+non-retryable terminal classification. Missing, duplicate, extra, cross-index,
+mixed, unindexed, or normalized-evidence drift fails open; one output's policy
+refusal never stands in for its siblings.
+`created_at` is the immutable terminal-fact timestamp persisted once with the
+attributable provider failure and authenticated by the canonical terminal Job
+receipt; it is never regenerated during reads. A legacy record is eligible
+only when it already carries a verifiable immutable terminal timestamp and the
+complete ordered output set.
 policy_evidence_class = explicit_content_policy_violation
 ```
 
@@ -144,14 +176,15 @@ physical-plan materialization, Provider dispatch, retry ownership, or Job
 creation. The terminal receipt's actual Doc269 plan remains audit corroboration
 for the original no-pixel attempt; it is not recomputed by starting a new Job.
 
-Only equality of every bound field may close the command. A changed canonical
-goal/prompt, source SHA/role/channel/order, locked visual asset version or
-evidence, selected continuation, provider capability/model/operation/route,
-project, or malformed receipt makes it non-matching. It may not silently reuse
-the old closure. A non-matching command follows its normal server-issued
-creation path, subject to all existing admissions.
+Only equality of every bound field may close the command. This includes the
+complete ordered per-output binding set, not merely output one. A changed
+canonical goal/prompt, source SHA/role/channel/order, locked visual asset
+version or evidence, selected continuation, provider capability/model/operation/route,
+project, output plan/projection, or malformed receipt makes it non-matching.
+It may not silently reuse the old closure. A non-matching command follows its
+normal server-issued creation path, subject to all existing admissions.
 
-An exact match returns a receipt-scoped terminal `needs_input` or
+An exact match returns only a receipt-scoped terminal
 `delivery_route_unavailable` **project-command closure**, not a
 `ProductJobStatus` and not the historical terminal Job as a successful create
 response. Its public shape must identify the closure safely and contain no new

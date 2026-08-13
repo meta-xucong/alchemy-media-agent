@@ -3732,6 +3732,18 @@ function handleMobileV3Click(event) {
     document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     return;
   }
+  if (projectActionButton?.dataset.mobileV3ProjectAction === "review_delivery_options") {
+    const project = mobileV3State.currentProject;
+    if (!project?.project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    mobileV3SettleEcommerceDeliveryRouteUnavailable(project);
+    renderMobileV3ReferenceBoard(project);
+    document.body.dataset.mobileV3DeliveryOptionsSurface = "open";
+    openMobileSurface("v3-project-detail", projectActionButton);
+    document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    return;
+  }
   if (projectActionButton?.dataset.mobileV3ProjectAction === "review_continuation_references") {
     const project = mobileV3State.currentProject;
     if (!project?.project_id) return;
@@ -4334,6 +4346,18 @@ function mobileV3SettleEcommerceTerminalReceipt(job) {
   setMobileV3Busy(false);
   setMobileV3Progress("failed", message);
   updateMobileV3Status(message);
+  return true;
+}
+
+function mobileV3SettleEcommerceDeliveryRouteUnavailable(project = mobileV3State.currentProject) {
+  if (!mobileV3EcommerceDeliveryRouteUnavailableOperation(project)) return false;
+  mobileV3State.ecommerceRecoveryEpoch += 1;
+  mobileV3State.ecommerceSubmissionReceipt = null;
+  mobileV3State.currentJob = null;
+  mobileV3State.selectedResult = null;
+  setMobileV3Busy(false);
+  setMobileV3Progress("failed", "当前交付路线不可用。项目和原始参考已保留，请查看交付选项。");
+  updateMobileV3Status("当前交付路线不可用。项目和原始参考已保留，请查看交付选项。");
   return true;
 }
 
@@ -5092,6 +5116,14 @@ function mobileV3EcommerceReviewWithheldFinalizationOperation(project = mobileV3
     && operation?.pending === false;
 }
 
+function mobileV3EcommerceDeliveryRouteUnavailableOperation(project = mobileV3State.currentProject) {
+  const operation = mobileV3ProjectCurrentOperation(project);
+  return mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce"
+    && operation?.state === "delivery_route_unavailable"
+    && operation?.terminal === true
+    && operation?.pending === false;
+}
+
 function mobileV3EcommerceNeedsInputMessage() {
   return "商品原图需要重新确认：当前项目里的商品参考图缺少可验证的文件、角色或授权记录，尚未发送生图请求。请检查原始参考图，删除失效或重复的商品图，重新上传正确商品图后再生成。";
 }
@@ -5115,6 +5147,7 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
   const operation = mobileV3ProjectCurrentOperation(project);
   const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project);
+  const deliveryRouteUnavailable = mobileV3EcommerceDeliveryRouteUnavailableOperation(project);
   const needsInput = isEcommerce && operation?.state === "needs_input";
   const continuationReferenceUnavailable = isEcommerce && operation?.state === "continuation_reference_unavailable";
   const failedNoDelivery = isEcommerce && operation?.state === "failed_no_delivery";
@@ -5144,6 +5177,19 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
         <span>项目和原始参考已保留。确认需求后可再次点击生成，系统不会自动重新提交。</span>
       </div>
       <button class="button primary compact" type="button" data-mobile-v3-project-action="continue_recovery">继续</button>
+    `;
+    return;
+  }
+  if (deliveryRouteUnavailable) {
+    mobileV3SettleEcommerceDeliveryRouteUnavailable(project);
+    openMobileSurface("v3-project-detail");
+    node.hidden = false;
+    node.innerHTML = `
+      <div>
+        <strong>当前交付路线不可用</strong>
+        <span>项目和原始参考已保留。请查看交付选项后再决定下一步，系统不会自动重新提交。</span>
+      </div>
+      <button class="button primary compact" type="button" data-mobile-v3-project-action="review_delivery_options">查看交付选项</button>
     `;
     return;
   }

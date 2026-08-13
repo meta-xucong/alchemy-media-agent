@@ -104,6 +104,41 @@ def safe_runtime_execution_budget(execution_audit: Any) -> dict[str, Any]:
     return projected
 
 
+def configured_provider_execution_identity(
+    *,
+    provider_name: str,
+    model: str,
+    operation: str,
+    transport_profile: str,
+) -> dict[str, str]:
+    """Canonical server-owned identity for the selected image execution route."""
+
+    values = {
+        "provider_name": str(provider_name or "").strip(),
+        "model": str(model or "").strip(),
+        "operation": str(operation or "").strip(),
+        "transport_profile": str(transport_profile or "").strip(),
+    }
+    if not all(values.values()):
+        raise ValueError("provider_execution_identity_incomplete")
+    capability_suffix = (
+        "hard_input_image_edit_v1"
+        if values["operation"] == "image_edit"
+        else "text_image_generate_v1"
+        if values["operation"] == "image_generate"
+        else f"{values['operation']}_v1"
+    )
+    return {
+        "schema_version": "v3_provider_execution_audit_v1",
+        "authority": "v3_generation_router",
+        "provider_capability_id": f"{values['provider_name']}:{capability_suffix}",
+        "provider_name": values["provider_name"],
+        "model": values["model"],
+        "operation": values["operation"],
+        "route_identity": "configured:{provider_name}:{model}:{transport_profile}".format(**values),
+    }
+
+
 class ReferenceInputAdmissionError(ProviderRuntimeError, ValueError):
     """Backward-compatible local admission failure for a required reference.
 
@@ -967,6 +1002,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             app_request,
             reference_assets,
             reference_input_execution=reference_input_execution,
+            output_index=self._frozen_output_index(request),
         )
         provider_failure_retry = dict(self._last_provider_failure_retry_summary or {})
         candidates: list[CandidateResult] = []
@@ -1326,10 +1362,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         reference_assets: list[dict[str, Any]],
         *,
         reference_input_execution: dict[str, Any],
+        output_index: int,
     ):
         timeout_seconds = self._app_provider_timeout_seconds(reference_assets, app_request=app_request)
         max_attempts = self._app_provider_max_attempts()
         execution_audit = self._provider_execution_audit(
+            provider_name=provider_name,
             reference_assets=reference_assets,
             outer_timeout_seconds=timeout_seconds,
             max_attempts=max_attempts,
@@ -1388,9 +1426,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 attempts.append(
                     {
                         "attempt": attempt,
+                        "output_index": output_index,
+                        # The shared executor has no specialized role key, but
+                        # this is still the frozen output it attempted. Product
+                        # API independently compares this to a specialized role
+                        # record before Doc271 can consume it.
+                        "role_output_index": output_index,
                         "status": "failed",
                         "classification": classification,
                         "failure_code": failure_code,
+                        "upstream_code": self._provider_upstream_code(exc),
+                        "execution_audit": dict(execution_audit),
                         "error_type": exc.__class__.__name__,
                         "message": self._provider_failure_message(exc),
                         "retryable": retryable,
@@ -1428,9 +1474,37 @@ class ProductionImageGenerationProvider(GenerationProvider):
             raise last_error
         raise TimeoutError("V3 production provider timed out.")
 
+    @staticmethod
+    def _frozen_output_index(request: GenerationRequest) -> int:
+        """Return the server-frozen asset priority, never browser metadata."""
+
+        try:
+            value = int(getattr(getattr(request, "asset_spec", None), "priority", 0))
+        except (TypeError, ValueError):
+            value = 0
+        if value < 1:
+            raise ProviderRuntimeError("Generation output index is unavailable.")
+        return value
+
+    @staticmethod
+    def _provider_upstream_code(exc: BaseException) -> str:
+        """Keep only explicit structured upstream attribution for durable evidence."""
+
+        detail = getattr(exc, "detail", None)
+        detail = detail if isinstance(detail, dict) else {}
+        value = str(
+            detail.get("upstream_code")
+            or detail.get("code")
+            or detail.get("error_code")
+            or getattr(exc, "code", "")
+            or ""
+        ).strip().lower()
+        return value if value.replace("_", "").isalnum() else ""
+
     def _provider_execution_audit(
         self,
         *,
+        provider_name: str,
         reference_assets: list[dict[str, Any]],
         outer_timeout_seconds: float,
         max_attempts: int,
@@ -1445,13 +1519,36 @@ class ProductionImageGenerationProvider(GenerationProvider):
         except Exception:
             managed = False
             managed_timeout = None
+        identity = self.execution_identity(
+            operation="image_edit" if reference_assets else "image_generate",
+            provider_name=provider_name,
+        )
         return {
+            **identity,
             "gateway_managed_failover": managed,
             "gateway_managed_failover_timeout_seconds": managed_timeout,
             "outer_timeout_seconds": float(outer_timeout_seconds),
             "outer_max_attempts": int(max_attempts),
-            "operation": "image_edit" if reference_assets else "image_generate",
         }
+
+    def execution_identity(
+        self,
+        *,
+        operation: str,
+        provider_name: str = "openai_gpt_image",
+    ) -> dict[str, str]:
+        """Read the same configured route identity used by V3 real rendering."""
+
+        from app.config import settings
+
+        provider = self._app_provider(provider_name)
+        model = str(getattr(provider, "model", "") or "gpt-image-2").strip()
+        return configured_provider_execution_identity(
+            provider_name=provider_name,
+            model=model,
+            operation=operation,
+            transport_profile=str(getattr(settings, "openai_image_transport_profile", "") or ""),
+        )
 
     @staticmethod
     def _provider_error_transport_audit(exc: BaseException) -> dict[str, Any]:

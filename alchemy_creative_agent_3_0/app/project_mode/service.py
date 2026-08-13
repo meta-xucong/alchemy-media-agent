@@ -32,7 +32,11 @@ from ..scenario_packs.ecommerce.reference_projection import (
     PhysicalProductReferenceProjection,
     ProductTruthAdmission,
 )
-from ..schemas import BrandProfile, ReferenceAsset
+from ..scenario_packs.ecommerce.provider_deliverability_closure import (
+    safe_closure_operation,
+    verified_provider_deliverability_closure_receipt,
+)
+from ..schemas import BrandProfile, ProviderStrategy, ReferenceAsset
 from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityPlanAmendment
 from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
 from ..visual_assets import ProjectVisualAssetBindingService
@@ -105,6 +109,13 @@ _ECOMMERCE_IGNORED_CLIENT_METADATA = frozenset(
         "historical_reference_projection",
         "legacy_reference_projection",
         "legacy_upload_authorization_facts",
+        "provider_deliverability_closure_receipt",
+        "doc271_terminal_job_receipt",
+        "doc271_current_source_binding",
+        "doc271_command_binding",
+        "doc271_project_goal_snapshot",
+        "provider_policy_blocked",
+        "provider_failure_retry",
     }
 )
 
@@ -144,6 +155,13 @@ class V3ProjectModeService:
         self.template_registry = template_registry or ProjectTemplateRegistry(scenario_registry=scenario_registry)
         self.reference_channel_policy_module = reference_channel_policy_module or ReferenceChannelPolicyModule()
         self.project_visual_asset_binding_service = project_visual_asset_binding_service
+        # Product API uses this narrow readback only while authenticating a
+        # terminal Doc271 record. It reads an append-only Project Mode snapshot
+        # instead of trusting a copy in Job metadata.
+        self.product_service.doc271_project_goal_snapshot_lookup = self._doc271_project_goal_snapshot
+        self.product_service.doc271_command_attempt_association_lookup = (
+            self._doc271_command_attempt_association
+        )
 
     def list_projects(self, limit: int = 20, owner_user_id: int | None = None) -> ProjectListResponse:
         projects = [
@@ -875,6 +893,36 @@ class V3ProjectModeService:
             self._ensure_project_product_reference_integrity(project)
             uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(project, [])
             current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
+            doc271_command_direction = str(job_request.user_input or project.user_goal or "").strip()
+            try:
+                doc271_current_source_binding = self._doc271_current_source_binding(
+                    project,
+                    selected_continuation_admissions=doc269_selected_continuation_admissions,
+                )
+            except (OSError, ValueError, KeyError):
+                # A legacy or unselected generated-history reference remains
+                # owned by the existing Doc265 path. It is simply ineligible
+                # for Doc271 closure matching, never a new create-time block.
+                doc271_current_source_binding = None
+            closure = self._doc271_matching_provider_deliverability_closure(
+                project,
+                user_input=str(project.user_goal or "").strip(),
+                command_direction=doc271_command_direction,
+                requested_output_count=_bounded_requested_image_count(
+                    job_request.metadata.get("requested_image_count")
+                )
+                or 1,
+                selected_continuation_admissions=doc269_selected_continuation_admissions,
+                current_source_binding=doc271_current_source_binding,
+            )
+            if closure is not None:
+                return ProductJobStatus(
+                    job_id="",
+                    status=ProductJobStatusValue.BLOCKED,
+                    api_namespace=API_NAMESPACE,
+                    ui_entry_route=f"{API_NAMESPACE}/projects/{project.project_id}",
+                    metadata={"current_operation": safe_closure_operation(closure)},
+                )
             idempotency_key = str(job_request.metadata.get("idempotency_key") or "").strip()
             existing = self._existing_ecommerce_command(
                 project,
@@ -884,6 +932,30 @@ class V3ProjectModeService:
             if existing is not None:
                 return existing
             supersedes_job_id = self._ecommerce_superseded_job_id(project)
+            doc271_goal_snapshot = self._issue_doc271_project_goal_snapshot(
+                project,
+                template_id=template_manifest.template_id,
+            )
+            doc271_command_binding = {
+                "schema_version": "doc271_command_binding_v1",
+                "authority": "v3_project_mode",
+                "project_id": project.project_id,
+                "template_id": template_manifest.template_id,
+                "command_attempt_id": doc271_goal_snapshot["command_attempt_id"],
+                "goal_snapshot_id": doc271_goal_snapshot["snapshot_id"],
+                "goal_snapshot_digest": doc271_goal_snapshot["snapshot_digest"],
+                "command_direction": doc271_command_direction,
+            }
+            doc271_command_binding["command_binding_digest"] = self._doc271_digest(
+                {
+                    "template_id": template_manifest.template_id,
+                    "project_id": project.project_id,
+                    "command_attempt_id": doc271_goal_snapshot["command_attempt_id"],
+                    "goal_snapshot_id": doc271_goal_snapshot["snapshot_id"],
+                    "goal_snapshot_digest": doc271_goal_snapshot["snapshot_digest"],
+                    "command_direction": doc271_command_direction,
+                }
+            )
             job_request = job_request.model_copy(
                 update={
                     "metadata": {
@@ -891,6 +963,12 @@ class V3ProjectModeService:
                         # This value is always rebuilt from active canonical
                         # project references, never trusted from the browser.
                         "current_reference_binding_digest": current_reference_binding_digest,
+                        **(
+                            {"doc271_current_source_binding": doc271_current_source_binding}
+                            if isinstance(doc271_current_source_binding, dict)
+                            else {}
+                        ),
+                        "doc271_command_binding": doc271_command_binding,
                     }
                 }
             )
@@ -1066,7 +1144,12 @@ class V3ProjectModeService:
                 ),
             }
         )
-        self._link_job(project, status.job_id, context)
+        self._link_job(
+            project,
+            status.job_id,
+            context,
+            doc271_command_binding=doc271_command_binding if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID else None,
+        )
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
             self._persist_ecommerce_slot_anchor(project, status)
         elif template_manifest.template_id == "photographer_template":
@@ -2866,6 +2949,7 @@ class V3ProjectModeService:
                     "reference_id": reference.reference_id,
                     "output_id": str(record.output_id),
                     "source_job_id": str(record.job_id),
+                    "candidate_id": str(record.candidate_id),
                     "project_job_ids": list(project.job_ids),
                     "content_sha256": digest.removeprefix("sha256:"),
                     "source_type": "generated_selected",
@@ -3065,6 +3149,103 @@ class V3ProjectModeService:
             json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
 
+    def _doc271_current_source_binding(
+        self,
+        project: ProjectRecord,
+        *,
+        selected_continuation_admissions: list[dict[str, str]],
+    ) -> dict[str, Any] | None:
+        """Freeze every active source's actual authority facts for Doc271.
+
+        This intentionally supplements, rather than changes, Doc263's compact
+        product-reference digest.  It tracks the complete active pool and the
+        persisted upload role that Doc263 normalizes into product truth.
+        """
+
+        selected_by_output = {
+            str(item.get("output_id") or "").strip(): item
+            for item in selected_continuation_admissions
+            if isinstance(item, dict) and str(item.get("output_id") or "").strip()
+        }
+        sources: list[dict[str, Any]] = []
+        ordered_references = sorted(
+            self._active_project_references(project),
+            key=lambda item: (
+                item.source_type.value,
+                str(item.asset_ref_id or ""),
+                str(item.reference_id or ""),
+            ),
+        )
+        for reference in ordered_references:
+            asset_id = str(reference.asset_ref_id or "").strip()
+            if not asset_id:
+                raise ValueError("current project reference binding unavailable")
+            if reference.source_type == ProjectReferenceSourceType.UPLOADED:
+                upload = self.product_service.get_uploaded_asset(asset_id)
+                path = Path(str(getattr(upload, "file_path", "") or "")) if upload else None
+                actual_sha = self._file_content_fingerprint(path) if path is not None else ""
+                if (
+                    upload is None
+                    or not actual_sha
+                    or self._uploaded_asset_content_sha256(upload) != actual_sha
+                ):
+                    raise ValueError("current project reference binding unavailable")
+                persisted_role = str(getattr(upload, "role", "") or "").strip()
+                if not persisted_role:
+                    raise ValueError("current project reference binding unavailable")
+                reference_channel = (
+                    "product_truth"
+                    if reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
+                    else "uploaded_reference"
+                )
+                continuation_role = "not_applicable"
+                continuation_channel = "not_applicable"
+            elif reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
+                admission = selected_by_output.get(asset_id)
+                if not isinstance(admission, dict):
+                    raise ValueError("current project reference binding unavailable")
+                path = Path(str(admission.get("file_path") or ""))
+                actual_sha = self._file_content_fingerprint(path)
+                if not actual_sha or actual_sha != str(admission.get("content_sha256") or "").lower():
+                    raise ValueError("current project reference binding unavailable")
+                persisted_role = "generated_output"
+                reference_channel = str(admission.get("channel") or "").strip()
+                continuation_role = str(admission.get("role") or "").strip()
+                continuation_channel = str(admission.get("channel") or "").strip()
+                if reference_channel != "generated_selected" or continuation_role != "selected_continuation_reference":
+                    raise ValueError("current project reference binding unavailable")
+            else:
+                raise ValueError("current project reference binding unavailable")
+            sources.append(
+                {
+                    "ordinal": len(sources) + 1,
+                    "asset_id": asset_id,
+                    "content_sha256": actual_sha,
+                    "source_type": reference.source_type.value,
+                    "use_policy": reference.use_policy.value,
+                    "persisted_role": persisted_role,
+                    "reference_channel": reference_channel,
+                    "continuation_role": continuation_role,
+                    "continuation_channel": continuation_channel,
+                }
+            )
+        # Existing no-product/text-only and history-only E-Commerce flows do
+        # not form a Doc271 closure. They retain their established paths.
+        if not sources:
+            return None
+        payload = {
+            "schema_version": "doc271_current_project_source_binding_v1",
+            "project_id": project.project_id,
+            "sources": sources,
+        }
+        return {
+            "schema_version": payload["schema_version"],
+            "authority": "v3_project_mode",
+            "project_id": project.project_id,
+            "sources": sources,
+            "source_binding_digest": self._doc271_digest(payload),
+        }
+
     @staticmethod
     def _active_project_references(project: ProjectRecord) -> list[ProjectReferenceAsset]:
         return [
@@ -3094,6 +3275,315 @@ class V3ProjectModeService:
             ):
                 return self.product_service.get_job(job_id)
         return None
+
+    @staticmethod
+    def _doc271_digest(value: Any) -> str:
+        return hashlib.sha256(
+            json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    def _issue_doc271_project_goal_snapshot(
+        self,
+        project: ProjectRecord,
+        *,
+        template_id: str,
+    ) -> dict[str, Any]:
+        """Persist one append-only Project Mode goal fact before Job creation."""
+
+        project_goal = str(project.user_goal or "").strip()
+        if not project_goal:
+            raise ValueError("doc271_project_goal_snapshot_invalid")
+        command_attempt_id = f"attempt_{uuid4().hex}"
+        snapshot_id = stable_id(
+            "doc271_project_goal_snapshot",
+            project.project_id,
+            template_id,
+            command_attempt_id,
+        )
+        payload = {
+            "schema_version": "doc271_project_goal_snapshot_v1",
+            "authority": "v3_project_mode",
+            "snapshot_id": snapshot_id,
+            "project_id": project.project_id,
+            "template_id": template_id,
+            "command_attempt_id": command_attempt_id,
+            "project_goal": project_goal,
+        }
+        snapshot = {**payload, "snapshot_digest": self._doc271_digest(payload)}
+        metadata = dict(project.metadata or {})
+        snapshots = dict(metadata.get("doc271_project_goal_snapshots") or {})
+        snapshots[snapshot_id] = snapshot
+        project.metadata = {**metadata, "doc271_project_goal_snapshots": snapshots}
+        project.updated_at = _utc_now_iso()
+        self.project_store.save_project(project)
+        return dict(snapshot)
+
+    def _doc271_project_goal_snapshot(
+        self,
+        project_id: str,
+        snapshot_id: str,
+    ) -> dict[str, Any] | None:
+        """Read a complete immutable snapshot without deriving current state."""
+
+        project = self.project_store.get_project(str(project_id or "").strip())
+        if project is None:
+            return None
+        snapshots = dict(project.metadata or {}).get("doc271_project_goal_snapshots")
+        snapshot = snapshots.get(str(snapshot_id or "").strip()) if isinstance(snapshots, dict) else None
+        if not isinstance(snapshot, dict):
+            return None
+        expected_keys = {
+            "schema_version",
+            "authority",
+            "snapshot_id",
+            "project_id",
+            "template_id",
+            "command_attempt_id",
+            "project_goal",
+            "snapshot_digest",
+        }
+        if set(snapshot) != expected_keys:
+            return None
+        payload = {key: snapshot[key] for key in expected_keys - {"snapshot_digest"}}
+        if (
+            snapshot.get("schema_version") != "doc271_project_goal_snapshot_v1"
+            or snapshot.get("authority") != "v3_project_mode"
+            or snapshot.get("project_id") != project.project_id
+            or snapshot.get("snapshot_id") != snapshot_id
+            or not str(snapshot.get("command_attempt_id") or "").strip()
+            or not str(snapshot.get("project_goal") or "").strip()
+            or snapshot.get("snapshot_digest") != self._doc271_digest(payload)
+        ):
+            return None
+        return dict(snapshot)
+
+    def _doc271_command_attempt_association(
+        self,
+        project_id: str,
+        command_attempt_id: str,
+    ) -> dict[str, Any] | None:
+        project = self.project_store.get_project(str(project_id or "").strip())
+        if project is None:
+            return None
+        raw = dict(project.metadata or {}).get("doc271_command_attempt_job_associations")
+        association = raw.get(str(command_attempt_id or "").strip()) if isinstance(raw, dict) else None
+        expected = {"authority", "project_id", "template_id", "command_attempt_id", "snapshot_id", "job_id"}
+        if not isinstance(association, dict) or set(association) != expected:
+            return None
+        if (
+            association.get("authority") != "v3_project_mode"
+            or association.get("project_id") != project.project_id
+            or association.get("command_attempt_id") != command_attempt_id
+            or not str(association.get("job_id") or "").strip()
+            or association["job_id"] not in project.job_ids
+        ):
+            return None
+        return dict(association)
+
+    def _doc271_matching_provider_deliverability_closure(
+        self,
+        project: ProjectRecord,
+        *,
+        user_input: str,
+        command_direction: str,
+        requested_output_count: int,
+        selected_continuation_admissions: list[dict[str, str]],
+        current_source_binding: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Read only complete same-project policy evidence before a new command."""
+
+        if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
+            return None
+        if not isinstance(current_source_binding, dict):
+            return None
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            try:
+                status = self.product_service.get_job(job_id)
+            except Exception:
+                continue
+            value = getattr(status, "status", None)
+            normalized = str(getattr(value, "value", value) or "").strip().lower()
+            if not normalized or normalized == ProductJobStatusValue.NOT_FOUND.value:
+                continue
+            # The newest readable Job is the only command authority. A newer
+            # planned, generating, or settled Job prevents an old terminal
+            # receipt from being reused as this command's result.
+            receipt = verified_provider_deliverability_closure_receipt(
+                record,
+                uploaded_asset_lookup=self.product_service.get_uploaded_asset,
+                generated_output_lookup=self.product_service.output_store.get_output,
+                source_job_lookup=self.product_service.get_job_record,
+                project_goal_snapshot_lookup=self._doc271_project_goal_snapshot,
+                command_attempt_association_lookup=self._doc271_command_attempt_association,
+            )
+            if (
+                receipt is not None
+                and receipt.get("project_id") == project.project_id
+                and self._doc271_current_binding_matches(
+                project,
+                receipt=receipt,
+                user_input=user_input,
+                command_direction=command_direction,
+                requested_output_count=requested_output_count,
+                selected_continuation_admissions=selected_continuation_admissions,
+                current_source_binding=current_source_binding,
+                )
+            ):
+                return receipt
+            return None
+        return None
+
+    def _doc271_current_binding_matches(
+        self,
+        project: ProjectRecord,
+        *,
+        receipt: dict[str, Any],
+        user_input: str,
+        command_direction: str | None = None,
+        requested_output_count: int | None = None,
+        selected_continuation_admissions: list[dict[str, str]],
+        current_source_binding: dict[str, Any] | None,
+    ) -> bool:
+        """Compare only current server-owned E-Commerce authority to a receipt."""
+
+        current_goal = str(user_input or "").strip()
+        if not current_goal or self._doc271_digest(
+            {"template_id": ECOMMERCE_TEMPLATE_ID, "project_goal": current_goal}
+        ) != receipt.get("canonical_project_goal_digest"):
+            return False
+        if command_direction is not None and self._doc271_digest(
+            {
+                "template_id": ECOMMERCE_TEMPLATE_ID,
+                "project_goal": current_goal,
+                "command_direction": str(command_direction or "").strip(),
+            }
+        ) != receipt.get("canonical_goal_prompt_digest"):
+            return False
+        if (
+            not isinstance(current_source_binding, dict)
+            or receipt.get("current_project_source_binding_digest")
+            != current_source_binding.get("source_binding_digest")
+        ):
+            return False
+        bindings = receipt.get("per_output_reference_bindings")
+        if not isinstance(bindings, list) or not bindings:
+            return False
+        try:
+            output_indexes = [int(item.get("output_index")) for item in bindings if isinstance(item, dict)]
+        except (TypeError, ValueError):
+            return False
+        if output_indexes != list(range(1, len(bindings) + 1)):
+            return False
+        if requested_output_count is not None and len(bindings) != requested_output_count:
+            return False
+        if receipt.get("per_output_reference_bindings_digest") != self._doc271_digest(bindings):
+            return False
+        if receipt.get("physical_plan_digests") != [
+            item.get("plan_digest") for item in bindings if isinstance(item, dict)
+        ]:
+            return False
+        active_product_ids = {
+            str(reference.asset_ref_id or "").strip()
+            for reference in self._active_project_references(project)
+            if reference.source_type == ProjectReferenceSourceType.UPLOADED
+            and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
+        }
+        reference_sets: list[tuple[list[Any], list[Any]]] = []
+        for item in bindings:
+            binding = item.get("reference_binding") if isinstance(item, dict) else None
+            if not isinstance(binding, dict) or item.get("reference_binding_digest") != self._doc271_digest(binding):
+                return False
+            ids = binding.get("ordered_reference_ids")
+            digests = binding.get("ordered_reference_sha256")
+            channels = binding.get("ordered_reference_channels")
+            roles = binding.get("ordered_reference_roles")
+            source_types = binding.get("ordered_reference_source_types")
+            if not isinstance(ids, list) or not isinstance(digests, list) or not isinstance(channels, list) or not isinstance(roles, list) or not isinstance(source_types, list) or len(ids) != len(digests) or len(ids) != len(roles) or len(ids) != len(source_types) or len(ids) not in {4, 5}:
+                return False
+            if channels != ["product_truth", "people_identity", "people_identity", "people_identity"] + (["generated_selected"] if len(ids) == 5 else []):
+                return False
+            if roles != ["product_reference", "face_reference", "face_reference", "face_reference"] + (["selected_continuation_reference"] if len(ids) == 5 else []):
+                return False
+            if source_types != ["uploaded", "visual_asset_library", "visual_asset_library", "visual_asset_library"] + (["generated_selected"] if len(ids) == 5 else []):
+                return False
+            product = self.product_service.get_uploaded_asset(str(ids[0]))
+            product_path = Path(str(getattr(product, "file_path", "") or "")) if product else None
+            if (
+                str(ids[0]) not in active_product_ids
+                or product_path is None
+                or not product_path.is_file()
+                or self._uploaded_asset_content_sha256(product) != str(digests[0]).lower()
+            ):
+                return False
+            reference_sets.append((ids, digests))
+        if self.project_visual_asset_binding_service is None:
+            return False
+        current_binding = self.project_visual_asset_binding_service.current(project_id=project.project_id)
+        if current_binding.state != "valid" or self._doc271_digest({"bindings": current_binding.model_dump(mode="json").get("bindings", [])}) != receipt.get("locked_visual_asset_binding_digest"):
+            return False
+        try:
+            current_faces = self.product_service._library_visual_asset_reference_assets(  # noqa: SLF001
+                current_binding,
+                binding_service=self.project_visual_asset_binding_service,
+            )
+        except (OSError, ValueError, KeyError):
+            return False
+        face_by_id = {
+            str(item.get("output_id") or item.get("asset_id") or "").strip(): item
+            for item in current_faces
+            if isinstance(item, dict)
+        }
+        if len(face_by_id) != 3:
+            return False
+        for ids, digests in reference_sets:
+            for source_id, digest in zip(ids[1:4], digests[1:4], strict=True):
+                face = face_by_id.get(str(source_id))
+                path = Path(str(face.get("file_path") or "")) if isinstance(face, dict) else None
+                if path is None or not path.is_file():
+                    return False
+                try:
+                    if hashlib.sha256(path.read_bytes()).hexdigest() != str(digest).lower():
+                        return False
+                except OSError:
+                    return False
+        continuation = selected_continuation_admissions[0] if selected_continuation_admissions else None
+        continuation_ids = {str(ids[4]) for ids, _digests in reference_sets if len(ids) == 5}
+        continuation_digests = {str(digests[4]).lower() for ids, digests in reference_sets if len(ids) == 5}
+        if continuation_ids:
+            path = Path(str(continuation.get("file_path") or "")) if isinstance(continuation, dict) else None
+            if len(continuation_ids) != 1 or len(continuation_digests) != 1 or not isinstance(continuation, dict) or str(continuation.get("output_id") or "") not in continuation_ids or str(continuation.get("content_sha256") or "").lower() not in continuation_digests or path is None or not path.is_file():
+                return False
+            try:
+                if hashlib.sha256(path.read_bytes()).hexdigest() not in continuation_digests:
+                    return False
+            except OSError:
+                return False
+        elif continuation is not None:
+            return False
+        router = getattr(getattr(self.product_service, "scenario_runtime", None), "generation_router", None)
+        selected_provider = getattr(router, "provider", None)
+        if selected_provider is None and router is not None:
+            selected_provider = getattr(router, "providers", {}).get(
+                ProviderStrategy.DEFAULT_IMAGE_PROVIDER
+            )
+        identity_builder = getattr(selected_provider, "execution_identity", None)
+        if not callable(identity_builder):
+            return False
+        try:
+            identity = identity_builder(operation="image_edit")
+        except (TypeError, ValueError):
+            return False
+        route = {
+            "provider_capability_id": identity.get("provider_capability_id"),
+            "provider_name": identity.get("provider_name"),
+            "provider_model": identity.get("model"),
+            "provider_operation": identity.get("operation"),
+            "provider_route_identity": identity.get("route_identity"),
+        }
+        return all(receipt.get(key) == value for key, value in route.items())
 
     def _reference_projection_drift_superseded_job_id(self, project: ProjectRecord) -> str | None:
         for job_id in reversed(project.job_ids):
@@ -3926,9 +4416,36 @@ class V3ProjectModeService:
         if job_id not in project.job_ids:
             raise KeyError("这个生成任务不属于当前项目")
 
-    def _link_job(self, project: ProjectRecord, job_id: str, context: ProjectContextPackage) -> None:
+    def _link_job(
+        self,
+        project: ProjectRecord,
+        job_id: str,
+        context: ProjectContextPackage,
+        *,
+        doc271_command_binding: dict[str, Any] | None = None,
+    ) -> None:
         if job_id not in project.job_ids:
             project.job_ids.append(job_id)
+        if isinstance(doc271_command_binding, dict):
+            attempt_id = str(doc271_command_binding.get("command_attempt_id") or "").strip()
+            snapshot_id = str(doc271_command_binding.get("goal_snapshot_id") or "").strip()
+            if not attempt_id or not snapshot_id:
+                raise ValueError("doc271_command_attempt_binding_invalid")
+            metadata = dict(project.metadata or {})
+            associations = dict(metadata.get("doc271_command_attempt_job_associations") or {})
+            association = {
+                "authority": "v3_project_mode",
+                "project_id": project.project_id,
+                "template_id": ECOMMERCE_TEMPLATE_ID,
+                "command_attempt_id": attempt_id,
+                "snapshot_id": snapshot_id,
+                "job_id": job_id,
+            }
+            existing = associations.get(attempt_id)
+            if existing is not None and existing != association:
+                raise ValueError("doc271_command_attempt_binding_immutable")
+            associations[attempt_id] = association
+            project.metadata = {**metadata, "doc271_command_attempt_job_associations": associations}
         project.latest_context = context
         project.last_context_built_at = context.created_at
         project.schema_version = "project_mode_v3_ecommerce_profile" if project.commerce_profile else "project_mode_v2_context_assets_feedback"
@@ -6041,6 +6558,53 @@ class V3ProjectModeService:
             }
         for job_id in reversed(project.job_ids):
             record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            try:
+                status = self.product_service.get_job(job_id)
+            except Exception:
+                continue
+            value = getattr(status, "status", None)
+            normalized = str(getattr(value, "value", value) or "").strip().lower()
+            if not normalized or normalized == ProductJobStatusValue.NOT_FOUND.value:
+                continue
+            closure = verified_provider_deliverability_closure_receipt(
+                record,
+                uploaded_asset_lookup=self.product_service.get_uploaded_asset,
+                generated_output_lookup=self.product_service.output_store.get_output,
+                source_job_lookup=self.product_service.get_job_record,
+                project_goal_snapshot_lookup=self._doc271_project_goal_snapshot,
+                command_attempt_association_lookup=self._doc271_command_attempt_association,
+            )
+            if closure is not None and closure.get("project_id") == project.project_id:
+                try:
+                    current_admissions = self._doc269_selected_continuation_admissions(project)
+                    current_source_binding = self._doc271_current_source_binding(
+                        project,
+                        selected_continuation_admissions=current_admissions,
+                    )
+                except (OSError, ValueError, KeyError):
+                    current_source_binding = None
+                    current_admissions = []
+                # Project view has no new command receipt. Its exact current
+                # direction is the durable project goal, never a historical
+                # Job prompt. A later readable Job returns below before older
+                # history is considered.
+                if (
+                    normalized in {
+                        ProductJobStatusValue.BLOCKED.value,
+                        ProductJobStatusValue.FAILED.value,
+                    }
+                    and isinstance(current_source_binding, dict)
+                    and self._doc271_current_binding_matches(
+                        project,
+                        receipt=closure,
+                        user_input=str(project.user_goal or "").strip(),
+                        selected_continuation_admissions=current_admissions,
+                        current_source_binding=current_source_binding,
+                    )
+                ):
+                    return safe_closure_operation(closure)
             if record is not None and self._doc267_review_withheld_closure_is_valid(
                 dict(record.request.metadata or {}),
                 job_id=record.job_id,
@@ -6063,14 +6627,6 @@ class V3ProjectModeService:
                     "pending": False,
                     "next_actions": [{"id": "review_product_inputs"}],
                 }
-            try:
-                status = self.product_service.get_job(job_id)
-            except Exception:
-                continue
-            value = getattr(status, "status", None)
-            normalized = str(getattr(value, "value", value) or "").strip().lower()
-            if not normalized or normalized == ProductJobStatusValue.NOT_FOUND.value:
-                continue
             if normalized in {
                 ProductJobStatusValue.BLOCKED.value,
                 ProductJobStatusValue.FAILED.value,

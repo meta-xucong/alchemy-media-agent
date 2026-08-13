@@ -736,6 +736,7 @@ def test_production_provider_gateway_managed_failover_does_not_replay_terminal_f
     assert summary["max_attempts"] == 1
     assert summary["fresh_upstream_requests"] == 1
     assert summary["execution_audit"] == {
+        **provider.execution_identity(operation="image_generate"),
         "gateway_managed_failover": True,
         "gateway_managed_failover_timeout_seconds": 420.0,
         "outer_timeout_seconds": 665.0,

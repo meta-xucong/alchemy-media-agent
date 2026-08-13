@@ -3747,6 +3747,14 @@ function v3EcommerceReviewWithheldFinalizationOperation(project = v3State.curren
     && operation?.pending === false;
 }
 
+function v3EcommerceDeliveryRouteUnavailableOperation(project = v3State.currentProject) {
+  const operation = v3ProjectCurrentOperation(project);
+  return v3ScenarioForTemplate(v3ProjectTemplateId(project)) === "ecommerce"
+    && operation?.state === "delivery_route_unavailable"
+    && operation?.terminal === true
+    && operation?.pending === false;
+}
+
 function v3LegacyContinuationReference(ref) {
   return {
     reference_id: ref.output_ref_id,
@@ -5415,6 +5423,28 @@ function renderV3ProjectNextActions() {
   const ecommerceActive = projectScenario === "ecommerce";
   const operation = v3ProjectCurrentOperation(project);
   const jobOperation = job?.metadata?.current_operation;
+  if (v3EcommerceDeliveryRouteUnavailableOperation(project)) {
+    els.v3ProjectNextActions.innerHTML = `
+      <div class="v3-continuation-panel">
+        <div class="v3-continuation-main">
+          <span>当前交付路线不可用</span>
+          <strong>项目和原始参考已保留</strong>
+          <p>请查看当前项目的交付选项后，再决定是否调整需求或参考。系统不会自动重新提交。</p>
+          <div class="v3-continuation-buttons">
+            <button class="button primary compact" type="button" data-v3-project-action="review_delivery_options">查看交付选项</button>
+          </div>
+        </div>
+      </div>
+    `;
+    els.v3ProjectNextActions.hidden = false;
+    const action = els.v3ProjectNextActions.querySelector("[data-v3-project-action='review_delivery_options']");
+    action?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openV3DeliveryOptions();
+    });
+    return;
+  }
   if (projectScenario === "ecommerce" && v3EcommerceSubmissionErrorForProject(project)) {
     els.v3ProjectNextActions.innerHTML = `
       <div class="v3-continuation-panel">
@@ -5723,6 +5753,10 @@ function handleV3ProjectActionClick(event) {
     updateV3Notice("图片已保留在项目复核记录中，未进入正式交付。", "info");
     return;
   }
+  if (action === "review_delivery_options") {
+    openV3DeliveryOptions();
+    return;
+  }
   if (action === "show_project_results") {
     const target = els.v3ProjectOutputBoard || els.v3ResultBoard;
     target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -6004,6 +6038,31 @@ function v3SettleEcommerceTerminalReceipt(job) {
   v3State.progressDetail = "";
   setV3Busy(false);
   setV3Progress("failed", v3EcommerceTerminalReceiptMessage(job), "warning", { forceNotice: true });
+  return true;
+}
+
+function openV3DeliveryOptions() {
+  closeV3ProjectSubpage({ silent: true });
+  renderV3UsefulReferences();
+  document.body.dataset.v3DeliveryOptionsSurface = "open";
+  const target = els.v3UsefulReferenceBoard || els.v3ProjectOutputBoard;
+  target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  target?.querySelector?.("summary, button, a")?.focus?.({ preventScroll: true });
+  updateV3Notice("请查看项目参考和历史记录后，再决定下一步。系统不会自动重新提交。", "info");
+}
+
+function v3SettleEcommerceDeliveryRouteUnavailable() {
+  if (!v3EcommerceDeliveryRouteUnavailableOperation()) return false;
+  clearV3RecoverPolling();
+  clearV3ProgressTimer();
+  v3State.progressStartedAt = null;
+  v3State.progressDetail = "";
+  v3State.ecommerceSubmissionReceipt = null;
+  v3State.currentJob = null;
+  v3State.selectedResult = null;
+  setV3Busy(false);
+  setV3Progress("failed", "当前交付路线不可用。项目和原始参考已保留，请查看交付选项。", "warning", { forceNotice: true });
+  if (els.v3ProjectSubpage?.hidden) openV3ProjectSubpage("review");
   return true;
 }
 
@@ -9024,6 +9083,8 @@ function maybeUpdateV3LongRunningProgress() {
 
 function renderV3Job(job) {
   v3SettleEcommerceTerminalReceipt(job);
+  const deliveryRouteUnavailable = v3SettleEcommerceDeliveryRouteUnavailable();
+  if (deliveryRouteUnavailable) job = null;
   const reviewWithheldFinalization = v3EcommerceReviewWithheldFinalizationOperation();
   if (reviewWithheldFinalization) {
     clearV3ProgressTimer();
@@ -9032,8 +9093,8 @@ function renderV3Job(job) {
     v3State.progressStartedAt = null;
     v3State.progressDetail = "";
   }
-  if (els.v3JobStatus) els.v3JobStatus.textContent = reviewWithheldFinalization ? "人工复核" : (job ? v3StatusLabel(job.status) : "待创建");
-  if (els.v3JobId) els.v3JobId.textContent = reviewWithheldFinalization || v3IsActiveEcommerceTerminalReceipt(job) ? "-" : (job?.job_id ? shortOutputId(job.job_id) : "-");
+  if (els.v3JobStatus) els.v3JobStatus.textContent = reviewWithheldFinalization ? "人工复核" : (deliveryRouteUnavailable ? "交付选项" : (job ? v3StatusLabel(job.status) : "待创建"));
+  if (els.v3JobId) els.v3JobId.textContent = reviewWithheldFinalization || deliveryRouteUnavailable || v3IsActiveEcommerceTerminalReceipt(job) ? "-" : (job?.job_id ? shortOutputId(job.job_id) : "-");
   renderV3ResultBoard(job);
   renderV3PhotographyRoleBoard(job);
   renderV3ProjectOutputBoard();
@@ -9050,6 +9111,9 @@ function renderV3Job(job) {
     renderV3GeneralSummary(job?.general_creative || null);
   }
   renderV3ScenarioState();
+  // Scenario-state layout can hide project actions while switching surfaces.
+  // Reapply the terminal project operation as the final desktop projection.
+  renderV3ProjectNextActions();
 }
 
 function renderV3GeneralSummary(summary) {

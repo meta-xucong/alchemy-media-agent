@@ -49,6 +49,10 @@ from ..scenario_packs.ecommerce.physical_renderer_reference_plan import (
     PhysicalRendererReferencePlan,
     build_physical_renderer_reference_plan,
 )
+from ..scenario_packs.ecommerce.provider_deliverability_closure import (
+    _terminal_job_receipt,
+    build_provider_deliverability_closure_receipt,
+)
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest
 from ..visual_assets import (
@@ -1026,6 +1030,8 @@ class V3ProductApiService:
         )
         self.photographer_profile_region_resolver = photographer_profile_region_resolver or (lambda: None)
         self.visual_asset_catalog = visual_asset_catalog or InMemoryVisualAssetCatalog()
+        self.doc271_project_goal_snapshot_lookup: Callable[[str, str], dict[str, Any] | None] | None = None
+        self.doc271_command_attempt_association_lookup: Callable[[str, str], dict[str, Any] | None] | None = None
 
     def resolve_body_refresh_source_admission(
         self,
@@ -3000,6 +3006,7 @@ class V3ProductApiService:
                     fallback_code=getattr(exc, "code", exc.__class__.__name__),
                 )
             )
+            self._persist_doc271_provider_deliverability_closure(record)
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
             return self._status_from_record(record)
@@ -3092,6 +3099,7 @@ class V3ProductApiService:
                 + (f" ({failure_code})." if failure_code else ".")
             )
             record.balance_estimate = self._estimate_for_result(generation_result)
+            self._persist_doc271_provider_deliverability_closure(record)
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
             return self._status_from_record(record)
@@ -4656,21 +4664,46 @@ class V3ProductApiService:
         operation = operations.pop() if len(operations) == 1 else "multiple"
         reference_count = reference_counts.pop() if len(reference_counts) == 1 else 0
         attempts = []
-        for index, (role, failure) in enumerate(role_failures, start=1):
+        for role, failure in role_failures:
             role_classification = str(failure.get("classification") or classification).strip().lower()
             role_failure_code = str(failure.get("failure_code") or failure_code).strip().lower()
-            attempts.append(
-                {
-                    "attempt": index,
-                    "status": "failed",
-                    "classification": role_classification,
-                    "failure_code": role_failure_code,
-                    "retryable": role_classification
-                    in {"retryable_provider_failure", "unknown_retryable_failure", "empty_provider_output"},
-                    "role_key": str(role.get("role_key") or "").strip() or None,
-                }
-            )
-        execution_audit = safe_failures[0].get("runtime_budget") if len(safe_failures) == 1 else None
+            try:
+                role_output_index = int(role.get("output_index"))
+            except (TypeError, ValueError):
+                role_output_index = 0
+            execution_audit = failure.get("execution_audit")
+            raw_attempts = failure.get("attempts")
+            if not isinstance(raw_attempts, list) or not raw_attempts:
+                raw_attempts = [failure]
+            for raw_attempt in raw_attempts:
+                item = dict(raw_attempt) if isinstance(raw_attempt, dict) else {}
+                try:
+                    failure_output_index = int(item.get("output_index", failure.get("output_index")))
+                except (TypeError, ValueError):
+                    failure_output_index = 0
+                attempts.append(
+                    {
+                        "attempt": len(attempts) + 1,
+                        "output_index": failure_output_index,
+                        "status": str(item.get("status") or "failed").strip().lower(),
+                        "classification": str(item.get("classification") or role_classification).strip().lower(),
+                        "failure_code": str(item.get("failure_code") or role_failure_code).strip().lower(),
+                        "upstream_code": str(item.get("upstream_code") or "").strip().lower(),
+                        "execution_audit": dict(execution_audit) if isinstance(execution_audit, dict) else {},
+                        "retryable": str(item.get("classification") or role_classification).strip().lower()
+                        in {"retryable_provider_failure", "unknown_retryable_failure", "empty_provider_output"},
+                        "role_key": str(role.get("role_key") or "").strip() or None,
+                        "role_output_index": role_output_index,
+                    }
+                )
+        execution_audits = [item.get("execution_audit") for item in safe_failures]
+        execution_audit = (
+            dict(execution_audits[0])
+            if execution_audits
+            and isinstance(execution_audits[0], dict)
+            and all(item == execution_audits[0] for item in execution_audits)
+            else None
+        )
         summary = {
             "executed_count": 0,
             "max_attempts": len(attempts),
@@ -4689,8 +4722,91 @@ class V3ProductApiService:
             },
         }
         if isinstance(execution_audit, dict):
-            summary["execution_audit"] = dict(execution_audit)
+            summary["execution_audit"] = execution_audit
+        expected_indexes: list[int] = []
+        for asset in generation_result.asset_pack.assets:
+            try:
+                output_index = int(getattr(asset, "priority", 0))
+            except (TypeError, ValueError):
+                output_index = 0
+            expected_indexes.append(output_index)
+        normalized_evidence = self._doc271_normalize_per_output_policy_evidence(
+            attempts,
+            expected_output_indexes=expected_indexes,
+            execution_audit=execution_audit,
+        )
+        if normalized_evidence is not None:
+            summary["doc271_per_output_policy_evidence"] = normalized_evidence
+            # Only complete server-owned all-role terminal evidence may name
+            # this source. A partial/non-policy summary remains fail-open.
+            summary["terminal_receipt_source"] = "specialized_role_execution.provider_failure"
         return {"failure_code": failure_code, "provider_failure_retry": summary}
+
+    @staticmethod
+    def _doc271_normalize_per_output_policy_evidence(
+        attempts: list[Any],
+        *,
+        expected_output_indexes: list[int],
+        execution_audit: dict[str, Any] | None,
+    ) -> list[dict[str, Any]] | None:
+        """Freeze one terminal policy fact per planned output for Doc271.
+
+        Retry history remains durable in ``attempts``.  This narrower record
+        is admissible only when the final attempt for every frozen output is a
+        non-retryable, explicitly attributed policy refusal and its frozen
+        provider output index agrees with the specialized role output index.
+        """
+
+        if (
+            not isinstance(execution_audit, dict)
+            or not expected_output_indexes
+            or any(index < 1 for index in expected_output_indexes)
+            or len(expected_output_indexes) != len(set(expected_output_indexes))
+        ):
+            return None
+        grouped: dict[int, list[dict[str, Any]]] = {index: [] for index in expected_output_indexes}
+        for item in attempts:
+            if not isinstance(item, dict):
+                return None
+            try:
+                output_index = int(item.get("output_index"))
+                role_output_index = int(item.get("role_output_index"))
+            except (TypeError, ValueError):
+                return None
+            if (
+                output_index not in expected_output_indexes
+                or role_output_index != output_index
+                or item.get("execution_audit") != execution_audit
+            ):
+                return None
+            grouped[output_index].append(item)
+        if any(not output_attempts for output_attempts in grouped.values()):
+            return None
+        evidence: list[dict[str, Any]] = []
+        for output_index in sorted(grouped):
+            terminal = grouped[output_index][-1]
+            if (
+                str(terminal.get("status") or "").strip().lower() != "failed"
+                or str(terminal.get("classification") or "").strip().lower()
+                != "non_retryable_provider_failure"
+                or str(terminal.get("failure_code") or "").strip().lower()
+                != "provider_policy_blocked"
+                or str(terminal.get("upstream_code") or "").strip().lower()
+                != "content_policy_violation"
+            ):
+                return None
+            evidence.append(
+                {
+                    "output_index": output_index,
+                    "role_output_index": output_index,
+                    "status": "failed",
+                    "classification": "non_retryable_provider_failure",
+                    "failure_code": "provider_policy_blocked",
+                    "upstream_code": "content_policy_violation",
+                    "execution_audit": dict(execution_audit),
+                }
+            )
+        return evidence
 
     def _materialize_mock_output_records(
         self,
@@ -5081,6 +5197,98 @@ class V3ProductApiService:
         if isinstance(detail, dict) and isinstance(detail.get("provider_failure_retry"), dict):
             return dict(detail["provider_failure_retry"])
         return None
+
+    def _persist_doc271_provider_deliverability_closure(self, record: ProductJobRecord) -> None:
+        """Persist only complete, explicit no-pixel E-Commerce policy evidence."""
+
+        if not self._is_ecommerce_request(record.request):
+            return
+        metadata = dict(record.request.metadata or {})
+        # A stored receipt is append-only evidence. Corruption fails open at
+        # readers; later terminal handling must never repair or replace it.
+        if "provider_deliverability_closure_receipt" in metadata:
+            return
+        failure = metadata.get("provider_failure_retry")
+        attempts = failure.get("attempts") if isinstance(failure, dict) else None
+        plan_indexes = self._doc271_frozen_output_indexes(metadata)
+        execution_audit = failure.get("execution_audit") if isinstance(failure, dict) else None
+        normalized_evidence = self._doc271_normalize_per_output_policy_evidence(
+            attempts if isinstance(attempts, list) else [],
+            expected_output_indexes=plan_indexes,
+            execution_audit=execution_audit if isinstance(execution_audit, dict) else None,
+        )
+        if (
+            not isinstance(failure, dict)
+            or str(failure.get("final_failure_code") or "").strip() != "provider_policy_blocked"
+            or normalized_evidence is None
+        ):
+            return
+        metadata["provider_failure_retry"] = {
+            **failure,
+            "doc271_per_output_policy_evidence": normalized_evidence,
+            # This is a server-owned attribution for the specialized executor,
+            # written only after every frozen output has one normalized final
+            # policy fact. It is never accepted from request metadata.
+            "terminal_receipt_source": "specialized_role_execution.provider_failure",
+        }
+        record.request.metadata = metadata
+        if self._doc271_record_has_delivered_pixels(record):
+            return
+        if isinstance(failure, dict) and not str(failure.get("terminal_created_at") or "").strip():
+            # This terminal timestamp is written with the first terminal
+            # evidence and is subsequently authenticated by the receipt.
+            metadata["provider_failure_retry"] = {
+                **dict(metadata["provider_failure_retry"]),
+                "terminal_created_at": _utc_now_iso(),
+            }
+            record.request.metadata = metadata
+        terminal_receipt = _terminal_job_receipt(record)
+        if terminal_receipt is not None:
+            record.request.metadata = {
+                **dict(record.request.metadata or {}),
+                "doc271_terminal_job_receipt": terminal_receipt,
+            }
+        closure = build_provider_deliverability_closure_receipt(
+            record,
+            uploaded_asset_lookup=self.get_uploaded_asset,
+            generated_output_lookup=self.output_store.get_output,
+            source_job_lookup=self.get_job_record,
+            project_goal_snapshot_lookup=self.doc271_project_goal_snapshot_lookup,
+            command_attempt_association_lookup=self.doc271_command_attempt_association_lookup,
+        )
+        if terminal_receipt is None or closure is None:
+            return
+        record.request.metadata = {
+            **dict(record.request.metadata or {}),
+            "doc271_terminal_job_receipt": terminal_receipt,
+            "provider_deliverability_closure_receipt": closure,
+        }
+
+    @staticmethod
+    def _doc271_frozen_output_indexes(metadata: dict[str, Any]) -> list[int]:
+        plans = metadata.get("physical_renderer_reference_plans")
+        if not isinstance(plans, dict) or not plans:
+            return []
+        try:
+            indexes = sorted(int(str(key)) for key in plans)
+        except (TypeError, ValueError):
+            return []
+        return indexes if indexes == list(range(1, len(indexes) + 1)) else []
+
+    def _doc271_record_has_delivered_pixels(self, record: ProductJobRecord) -> bool:
+        """A policy error is not a closure after any pixel has persisted."""
+
+        try:
+            if self.output_store.list_by_job(record.job_id):
+                return True
+        except Exception:
+            # Unknown output storage is not evidence of an observed no-pixel
+            # terminal state, so fail closed for receipt creation.
+            return True
+        # A PlanningResult asset pack is a frozen delivery intention, not
+        # proof that provider pixels were materialized.  Output-store records
+        # above are the durable delivery authority.
+        return False
 
     @staticmethod
     def _without_transient_generation_failure_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
@@ -8515,6 +8723,8 @@ class V3ProductApiService:
         )
 
     def _status_from_record(self, record: ProductJobRecord) -> ProductJobStatus:
+        if isinstance(dict(record.request.metadata or {}).get("provider_deliverability_closure_receipt"), dict):
+            return self._doc271_closure_status(record)
         result = record.generation_result or record.planning_result
         if result is None:
             return self._empty_status_from_record(record)
@@ -8618,6 +8828,28 @@ class V3ProductApiService:
                 **self._project_mode_status_metadata(record),
                 **self._ecommerce_runtime_provenance_status_metadata(record),
                 **self._doc263_terminal_status_metadata(record),
+            },
+        )
+
+    def _doc271_closure_status(self, record: ProductJobRecord) -> ProductJobStatus:
+        """Keep terminal history readable without re-projecting closure evidence."""
+
+        metadata = dict(record.request.metadata or {})
+        return ProductJobStatus(
+            job_id=record.job_id,
+            status=record.status,
+            api_namespace=API_NAMESPACE,
+            ui_entry_route=get_navigation_entry()["route"],
+            routes=get_route_contracts(),
+            metadata={
+                "source": "V3ProductApiService",
+                "rules_version": RULE_VERSION,
+                "v3_independent_product_api": True,
+                **{
+                    key: metadata[key]
+                    for key in ("project_id", "template_id", "template_manifest_id", "project_mode")
+                    if key in metadata
+                },
             },
         )
 
@@ -8939,6 +9171,8 @@ class V3ProductApiService:
             "post_generation_review_package",
             "observed_review_evidence",
             "visual_auto_retry",
+            "doc271_terminal_job_receipt",
+            "provider_deliverability_closure_receipt",
         }
         if isinstance(value, dict):
             projected: dict[str, Any] = {}
@@ -9047,6 +9281,15 @@ class V3ProductApiService:
 
     def _project_mode_status_metadata(self, record: ProductJobRecord) -> dict[str, Any]:
         request_metadata = dict(record.request.metadata or {})
+        if isinstance(request_metadata.get("provider_deliverability_closure_receipt"), dict):
+            # A closure is consumed through Project Mode's deliberately small
+            # current-operation projection. Do not turn a terminal Job status
+            # into another route for its prompt or private binding evidence.
+            return {
+                key: request_metadata[key]
+                for key in ("project_id", "template_id", "template_manifest_id", "project_mode")
+                if key in request_metadata
+            }
         allowed_keys = {
             "project_id",
             "template_id",
@@ -11370,6 +11613,8 @@ class V3ProductApiService:
             "doc263_reference_projection_drift_receipt",
             "doc263_project_reference_authority",
             "doc263_project_canonical_product_asset_ids",
+            "doc271_terminal_job_receipt",
+            "provider_deliverability_closure_receipt",
         }
     )
 
@@ -12604,6 +12849,10 @@ class V3ProductApiService:
             metadata=metadata,
         )
         metadata["physical_renderer_reference_plans"] = physical_renderer_reference_plans
+        metadata["specialized_role_execution_plan"] = self._ecommerce_terminal_role_execution_plan(
+            job_id=job_id,
+            physical_renderer_reference_plans=physical_renderer_reference_plans,
+        )
         request.metadata = metadata
         planning_result.metadata = {
             **dict(planning_result.metadata or {}),
@@ -12617,6 +12866,7 @@ class V3ProductApiService:
                     "professional_ecommerce_physical_product_projection"
                 ],
                 "physical_renderer_reference_plans": physical_renderer_reference_plans,
+                "specialized_role_execution_plan": metadata["specialized_role_execution_plan"],
                 "doc269_selected_continuation_admissions": metadata.get(
                     "doc269_selected_continuation_admissions", []
                 ),
@@ -12634,10 +12884,58 @@ class V3ProductApiService:
                     "professional_ecommerce_physical_product_projection"
                 ],
                 "physical_renderer_reference_plans": physical_renderer_reference_plans,
+                "specialized_role_execution_plan": metadata["specialized_role_execution_plan"],
                 "doc269_selected_continuation_admissions": metadata.get(
                     "doc269_selected_continuation_admissions", []
                 ),
             }
+
+    @staticmethod
+    def _ecommerce_terminal_role_execution_plan(
+        *,
+        job_id: str,
+        physical_renderer_reference_plans: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Freeze one terminal attempt for every already-admitted E-Commerce output.
+
+        This is not a second E-Commerce deliverable planner.  Its only purpose
+        is to let shared execution record every frozen role's first terminal
+        result when a Professional E-Commerce set has no pixels at all.
+        """
+
+        try:
+            indexes = sorted(int(str(key)) for key in physical_renderer_reference_plans)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ecommerce_terminal_role_execution_invalid") from exc
+        if indexes != list(range(1, len(indexes) + 1)):
+            raise ValueError("ecommerce_terminal_role_execution_invalid")
+        role_recipes = [
+            {
+                "role_key": f"ecommerce_output_{output_index}",
+                "output_index": output_index,
+                "label": f"E-Commerce output {output_index}",
+                "purpose": "frozen_terminal_evidence_only",
+            }
+            for output_index in indexes
+        ]
+        return {
+            "schema_version": "doc271_ecommerce_terminal_role_execution_v1",
+            "authority": "v3_product_api",
+            "job_id": job_id,
+            "requested_image_count": len(indexes),
+            "role_recipes": role_recipes,
+            "policy": {
+                "mode": "professional_ecommerce_terminal_evidence",
+                "generated_output_reference_chain": "explicit_references_only",
+            },
+            "metadata": {
+                "scenario_id": "ecommerce",
+                "professional_ecommerce": True,
+                "require_independent_role_terminal_states": True,
+                "terminal_attempt_limit_per_output": 1,
+                "terminal_evidence_only": True,
+            },
+        }
 
     def _bind_ecommerce_physical_renderer_reference_plans(
         self,
