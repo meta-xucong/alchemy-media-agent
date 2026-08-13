@@ -78,11 +78,15 @@ unverifiable hard receipt returns the single terminal public operation:
 ```
 
 It creates no job, selected projection, Doc269 plan, Brain request, Provider
-request, automatic retry, or automatic replan. The public operation contains
-no source IDs, SHA values, file paths, evidence, registry fields, or raw
-failure detail. Desktop and H5 retire busy/progress/recovery state and show
-only this action; clicking it navigates locally to product inputs and sends no
-job POST.
+request, automatic retry, or automatic replan. A no-job closure may return a
+synthetic terminal response for the explicit command, but it has no Job
+identity and is not appended to `project.job_ids`. Any project readback
+operation is server-owned, stable, sanitized, and does not imply a persisted
+Job or a completed plan/dispatch; it must not preserve a stale operation from
+an older Job. The public operation contains no source IDs, SHA values, file
+paths, evidence, registry fields, or raw failure detail. Desktop and H5 retire
+busy/progress/recovery state and show only this action; clicking it navigates
+locally to product inputs and sends no job POST.
 
 This conservative closure is distinct from E-Commerce text-to-image
 compatibility. A new command with no active product originals remains on its
@@ -102,8 +106,11 @@ profiles.
 
 ## 6. Required Regression Matrix
 
-1. A front/rear/detail product pool freezes front for a front output and rear
-   for a rear output, while the complete three-item admission remains intact.
+1. A front/rear/detail product pool freezes front for a front output, rear
+   for a rear output, and detail for a detail output, while the complete
+   admission remains intact. The receipt set covers exactly every planned
+   output index: missing, extra, duplicate, or cross-output entries close
+   before Job creation, planning, or dispatch.
    The receipt binds typed evidence such as `subject_kind=object_or_product`,
    `view_kind=rear`, and an allowlisted affordance; filename, upload order,
    and Brain text cannot substitute for that evidence.
