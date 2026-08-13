@@ -2682,6 +2682,7 @@ const mobileV3State = {
   ecommerceRecoveryEpoch: 0,
   ecommerceSubmissionDiagnostic: "",
   ecommerceSubmissionErrorProjectId: "",
+  projectDetailEpoch: 0,
   currentTimeline: [],
   activeGalleryProjectId: "",
   outputsLoaded: false,
@@ -3785,7 +3786,7 @@ function handleMobileV3Click(event) {
     if (!project?.project_id) return;
     event.preventDefault();
     event.stopPropagation();
-    const operation = mobileV3ProjectCurrentOperation(project);
+    const operation = mobileV3EcommerceCurrentOperation(project, mobileV3State.currentJob);
     const needsInput = operation?.state === "needs_input";
     setMobileV3Busy(false);
     setMobileV3Progress("failed", needsInput ? mobileV3EcommerceNeedsInputMessage() : "已打开编辑区。确认后点击生成才会创建新的续作。");
@@ -4803,8 +4804,11 @@ function clearMobileV3Progress() {
 
 function openMobileV3ProjectGallery(project) {
   if (mobileV3State.currentProject?.project_id !== project?.project_id) {
+    mobileV3InvalidateProjectDetail();
     mobileV3State.ecommerceSubmissionReceipt = null;
     mobileV3State.ecommerceSubmissionErrorProjectId = "";
+    mobileV3State.currentJob = null;
+    mobileV3State.selectedResult = null;
   }
   mobileV3State.currentProject = project;
   mobileV3State.activeGalleryProjectId = project?.project_id || "";
@@ -4855,9 +4859,13 @@ function renderMobileV3ProjectGallery(project) {
 }
 
 function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
+  const projectId = String(project?.project_id || "").trim();
+  const detailEpoch = mobileV3InvalidateProjectDetail();
   if (mobileV3State.currentProject?.project_id !== project?.project_id) {
     mobileV3State.ecommerceSubmissionReceipt = null;
     mobileV3State.ecommerceSubmissionErrorProjectId = "";
+    mobileV3State.currentJob = null;
+    mobileV3State.selectedResult = null;
   }
   mobileV3State.currentProject = project;
   clearMobileV3PendingUploads({ render: true });
@@ -4898,19 +4906,50 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
   openMobileSurface("v3-project-detail", document.querySelector("#mobileV3ProjectGrid"));
   syncMobileV3PromptFromProject(project, { force: true });
   setMobileV3LoadingLayer(true, "正在进入项目", "正在读取项目图片、记录和完整提示词。");
-  refreshMobileV3ProjectDetail(project.project_id)
-    .catch((error) => updateMobileV3Status(`项目详情加载失败：${friendlyError(error)}`))
-    .finally(() => setMobileV3LoadingLayer(false));
-  if (openComposer) window.setTimeout(() => openMobileSurface("v3-compose", document.querySelector("#mobileV3ProjectDetail")), 160);
+  refreshMobileV3ProjectDetail(projectId, { detailEpoch })
+    .catch((error) => {
+      if (mobileV3ProjectDetailIsCurrent(projectId, detailEpoch)) {
+        updateMobileV3Status(`项目详情加载失败：${friendlyError(error)}`);
+      }
+    })
+    .finally(() => {
+      if (mobileV3ProjectDetailIsCurrent(projectId, detailEpoch)) {
+        setMobileV3LoadingLayer(false);
+      }
+    });
+  if (openComposer) {
+    window.setTimeout(() => {
+      if (mobileV3ProjectDetailIsCurrent(projectId, detailEpoch)) {
+        openMobileSurface("v3-compose", document.querySelector("#mobileV3ProjectDetail"));
+      }
+    }, 160);
+  }
 }
 
-async function refreshMobileV3ProjectDetail(projectId) {
+function mobileV3InvalidateProjectDetail() {
+  mobileV3State.projectDetailEpoch = Number(mobileV3State.projectDetailEpoch || 0) + 1;
+  return mobileV3State.projectDetailEpoch;
+}
+
+function mobileV3ProjectDetailIsCurrent(projectId, detailEpoch) {
+  return (
+    String(mobileV3State.currentProject?.project_id || "") === String(projectId || "")
+    && mobileV3State.projectDetailEpoch === detailEpoch
+  );
+}
+
+async function refreshMobileV3ProjectDetail(projectId, { detailEpoch = null } = {}) {
+  const requestedProjectId = String(projectId || "").trim();
+  const requestEpoch = Number.isInteger(detailEpoch) ? detailEpoch : mobileV3InvalidateProjectDetail();
+  if (!requestedProjectId || !mobileV3ProjectDetailIsCurrent(requestedProjectId, requestEpoch)) return false;
   const [projectPayload, timelinePayload, outputsPayload] = await Promise.all([
-    mobileV3Request(`/projects/${encodeURIComponent(projectId)}`),
-    mobileV3Request(`/projects/${encodeURIComponent(projectId)}/timeline`),
-    mobileV3Request(`/project-outputs?limit=80&compact=true&project_id=${encodeURIComponent(projectId)}`),
+    mobileV3Request(`/projects/${encodeURIComponent(requestedProjectId)}`),
+    mobileV3Request(`/projects/${encodeURIComponent(requestedProjectId)}/timeline`),
+    mobileV3Request(`/project-outputs?limit=80&compact=true&project_id=${encodeURIComponent(requestedProjectId)}`),
   ]);
+  if (!mobileV3ProjectDetailIsCurrent(requestedProjectId, requestEpoch)) return false;
   const project = mobileV3ProjectWithResponseMetadata(projectPayload.project || projectPayload, projectPayload);
+  if (String(project?.project_id || "") !== requestedProjectId) return false;
   mobileV3State.currentProject = project;
   const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
   if (!templateId) throw new Error("项目类型还没有确认，无法安全继续生成");
@@ -4935,22 +4974,26 @@ async function refreshMobileV3ProjectDetail(projectId) {
   if (receipt) {
     try {
       const receiptJob = await mobileV3Request(`/jobs/${encodeURIComponent(receipt.jobId)}`);
+      if (!mobileV3ProjectDetailIsCurrent(requestedProjectId, requestEpoch)) return false;
       const recovered = mobileV3IsTerminalJob(receiptJob)
         ? mobileV3RecoveredJobFromProjectOutputs(project.project_id, receipt.jobId, receiptJob, { allowPartial: true })
         : null;
       mobileV3State.currentJob = recovered || receiptJob;
       mobileV3SettleEcommerceTerminalReceipt(mobileV3State.currentJob);
     } catch (_error) {
+      if (!mobileV3ProjectDetailIsCurrent(requestedProjectId, requestEpoch)) return false;
       if (mobileV3State.currentJob?.job_id !== receipt.jobId) mobileV3State.currentJob = null;
     }
   } else if (latestJobId) {
     try {
       const latestJob = await mobileV3Request(`/jobs/${encodeURIComponent(latestJobId)}`);
+      if (!mobileV3ProjectDetailIsCurrent(requestedProjectId, requestEpoch)) return false;
       const recovered = ["blocked", "failed", "not_found"].includes(String(latestJob?.status || "").trim().toLowerCase())
         ? mobileV3RecoveredJobFromProjectOutputs(project.project_id, latestJobId, latestJob, { allowPartial: true })
         : null;
       mobileV3State.currentJob = recovered || latestJob;
     } catch (_error) {
+      if (!mobileV3ProjectDetailIsCurrent(requestedProjectId, requestEpoch)) return false;
       mobileV3State.currentJob = null;
     }
   } else {
@@ -4964,6 +5007,7 @@ async function refreshMobileV3ProjectDetail(projectId) {
   updateMobileV3ReferencePriorityStatus();
   updateMobileV3ControlState();
   syncMobileV3PromptFromProject(project);
+  return true;
 }
 
 function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
@@ -5139,16 +5183,30 @@ function mobileV3ProjectCurrentOperation(project = mobileV3State.currentProject)
   return operation && typeof operation === "object" ? operation : null;
 }
 
-function mobileV3EcommerceReviewWithheldFinalizationOperation(project = mobileV3State.currentProject) {
-  const operation = mobileV3ProjectCurrentOperation(project);
+function mobileV3EcommerceCurrentOperation(project = mobileV3State.currentProject, job = mobileV3State.currentJob) {
+  const projectOperation = mobileV3ProjectCurrentOperation(project);
+  const jobOperation = job?.metadata?.current_operation;
+  const isTerminal = (operation) => (
+    operation
+      && typeof operation === "object"
+      && operation.terminal === true
+      && operation.pending === false
+  );
+  if (isTerminal(projectOperation)) return projectOperation;
+  if (isTerminal(jobOperation)) return jobOperation;
+  return projectOperation || (jobOperation && typeof jobOperation === "object" ? jobOperation : null);
+}
+
+function mobileV3EcommerceReviewWithheldFinalizationOperation(project = mobileV3State.currentProject, job = mobileV3State.currentJob) {
+  const operation = mobileV3EcommerceCurrentOperation(project, job);
   return mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce"
     && operation?.state === "review_withheld_finalization_failed"
     && operation?.terminal === true
     && operation?.pending === false;
 }
 
-function mobileV3EcommerceDeliveryRouteUnavailableOperation(project = mobileV3State.currentProject) {
-  const operation = mobileV3ProjectCurrentOperation(project);
+function mobileV3EcommerceDeliveryRouteUnavailableOperation(project = mobileV3State.currentProject, job = mobileV3State.currentJob) {
+  const operation = mobileV3EcommerceCurrentOperation(project, job);
   return mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce"
     && operation?.state === "delivery_route_unavailable"
     && operation?.terminal === true
@@ -5176,15 +5234,20 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   const node = document.querySelector("#mobileV3ProjectCurrentOperation");
   if (!node) return;
   const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
-  const operation = mobileV3ProjectCurrentOperation(project);
-  const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project);
-  const deliveryRouteUnavailable = mobileV3EcommerceDeliveryRouteUnavailableOperation(project);
+  const operation = mobileV3EcommerceCurrentOperation(project);
+  const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project, mobileV3State.currentJob);
+  const deliveryRouteUnavailable = mobileV3EcommerceDeliveryRouteUnavailableOperation(project, mobileV3State.currentJob);
   const needsInput = isEcommerce && operation?.state === "needs_input";
   const phase4NoJobNeedsInput = needsInput && !String(mobileV3State.currentJob?.job_id || "").trim();
   const continuationReferenceUnavailable = isEcommerce && operation?.state === "continuation_reference_unavailable";
   const sourceAnalysisUnavailable = isEcommerce && operation?.state === "source_analysis_unavailable";
-  const failedNoDelivery = isEcommerce && operation?.state === "failed_no_delivery";
-  if (mobileV3EcommerceSubmissionErrorForProject(project)) {
+  const terminalJob = isEcommerce && mobileV3IsTerminalJob(mobileV3State.currentJob) && !mobileV3JobDeliveryWithheld(mobileV3State.currentJob);
+  const failedNoDelivery = isEcommerce && (operation?.state === "failed_no_delivery" || terminalJob);
+  if (
+    mobileV3EcommerceSubmissionErrorForProject(project)
+    && !mobileV3EcommerceCurrentOperation(project, mobileV3State.currentJob)
+    && !String(mobileV3State.currentJob?.job_id || "").trim()
+  ) {
     node.hidden = false;
     node.innerHTML = `
       <div>
@@ -5194,7 +5257,12 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
     `;
     return;
   }
-  if (isEcommerce && mobileV3EcommerceReceiptForProject(project)) {
+  const hasServerTerminalOperation = Boolean(
+    operation
+      && operation.terminal === true
+      && operation.pending === false
+  );
+  if (isEcommerce && mobileV3EcommerceReceiptForProject(project) && !hasServerTerminalOperation) {
     if (!mobileV3IsActiveEcommerceTerminalReceipt(mobileV3State.currentJob, project)) {
       node.hidden = true;
       node.innerHTML = "";

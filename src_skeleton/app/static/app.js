@@ -3791,16 +3791,30 @@ function v3ProjectCurrentOperation(project = v3State.currentProject) {
   return operation && typeof operation === "object" ? operation : null;
 }
 
-function v3EcommerceReviewWithheldFinalizationOperation(project = v3State.currentProject) {
-  const operation = v3ProjectCurrentOperation(project);
+function v3EcommerceCurrentOperation(project = v3State.currentProject, job = v3State.currentJob) {
+  const projectOperation = v3ProjectCurrentOperation(project);
+  const jobOperation = job?.metadata?.current_operation;
+  const isTerminal = (operation) => (
+    operation
+      && typeof operation === "object"
+      && operation.terminal === true
+      && operation.pending === false
+  );
+  if (isTerminal(projectOperation)) return projectOperation;
+  if (isTerminal(jobOperation)) return jobOperation;
+  return projectOperation || (jobOperation && typeof jobOperation === "object" ? jobOperation : null);
+}
+
+function v3EcommerceReviewWithheldFinalizationOperation(project = v3State.currentProject, job = v3State.currentJob) {
+  const operation = v3EcommerceCurrentOperation(project, job);
   return v3ScenarioForTemplate(v3ProjectTemplateId(project)) === "ecommerce"
     && operation?.state === "review_withheld_finalization_failed"
     && operation?.terminal === true
     && operation?.pending === false;
 }
 
-function v3EcommerceDeliveryRouteUnavailableOperation(project = v3State.currentProject) {
-  const operation = v3ProjectCurrentOperation(project);
+function v3EcommerceDeliveryRouteUnavailableOperation(project = v3State.currentProject, job = v3State.currentJob) {
+  const operation = v3EcommerceCurrentOperation(project, job);
   return v3ScenarioForTemplate(v3ProjectTemplateId(project)) === "ecommerce"
     && operation?.state === "delivery_route_unavailable"
     && operation?.terminal === true
@@ -5486,9 +5500,9 @@ function renderV3ProjectNextActions() {
   const hasSelectedRefs = v3UsefulReferenceItems(project).length > 0;
   const hasSelectableJob = Boolean(v3State.currentJob?.job_id && Array.isArray(v3State.currentJob.candidates) && v3State.currentJob.candidates.length);
   const ecommerceActive = projectScenario === "ecommerce";
-  const operation = v3ProjectCurrentOperation(project);
+  const operation = v3EcommerceCurrentOperation(project, job);
   const jobOperation = job?.metadata?.current_operation;
-  if (v3EcommerceDeliveryRouteUnavailableOperation(project)) {
+  if (v3EcommerceDeliveryRouteUnavailableOperation(project, job)) {
     els.v3ProjectNextActions.innerHTML = `
       <div class="v3-continuation-panel">
         <div class="v3-continuation-main">
@@ -5510,20 +5524,28 @@ function renderV3ProjectNextActions() {
     });
     return;
   }
-  if (projectScenario === "ecommerce" && v3EcommerceSubmissionErrorForProject(project)) {
+  if (
+    projectScenario === "ecommerce"
+    && v3EcommerceSubmissionErrorForProject(project)
+    && !v3EcommerceCurrentOperation(project, job)
+    && !String(job?.job_id || "").trim()
+  ) {
     els.v3ProjectNextActions.innerHTML = `
       <div class="v3-continuation-panel">
         <div class="v3-continuation-main">
           <span>本次提交未完成</span>
           <strong>项目和历史图片已保留</strong>
           <p>请确认需求后再次尝试。系统不会自动重新提交。</p>
+          <div class="v3-continuation-buttons">
+            <button class="button primary compact" type="button" data-v3-project-action="continue_same_style">打开编辑区</button>
+          </div>
         </div>
       </div>
     `;
     els.v3ProjectNextActions.hidden = false;
     return;
   }
-  if (v3EcommerceReviewWithheldFinalizationOperation(project)) {
+  if (v3EcommerceReviewWithheldFinalizationOperation(project, job)) {
     els.v3ProjectNextActions.innerHTML = `
       <div class="v3-continuation-panel">
         <div class="v3-continuation-main">
@@ -6161,7 +6183,7 @@ function openV3DeliveryOptions() {
 }
 
 function v3SettleEcommerceDeliveryRouteUnavailable() {
-  if (!v3EcommerceDeliveryRouteUnavailableOperation()) return false;
+  if (!v3EcommerceDeliveryRouteUnavailableOperation(v3State.currentProject, v3State.currentJob)) return false;
   clearV3RecoverPolling();
   clearV3ProgressTimer();
   v3State.progressStartedAt = null;

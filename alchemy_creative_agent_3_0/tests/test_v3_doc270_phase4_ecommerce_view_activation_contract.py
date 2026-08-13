@@ -1678,3 +1678,245 @@ def test_doc270_phase4_source_analysis_unavailable_action_is_local_and_clears_pr
                 assert page.evaluate("v3State.loading === false && v3State.progressTimer === null")
         finally:
             browser.close()
+
+
+@pytest.mark.parametrize(
+    ("html_path", "script_path", "setup", "operation_selector", "action_selector", "post_count"),
+    [
+        (
+            DESKTOP_HTML,
+            DESKTOP_JS,
+            """
+              ({ project, created }) => {
+                window.__doc263ServerProject = project;
+                window.__doc263CreateJobResponse = created;
+                v3State.currentProject = project;
+                v3State.currentJob = created;
+                v3State.ecommerceSubmissionErrorProjectId = project.project_id;
+                v3State.selectedScenario = "ecommerce";
+                v3State.templateCatalogStatus = "ready";
+                v3State.templates = [{ template_id: "ecommerce_template", project_can_create_jobs: true }];
+                document.querySelector("#v3ProjectNextActions").addEventListener("click", handleV3ProjectActionClick);
+                renderV3ProjectDetail();
+                document.querySelectorAll('[hidden]').forEach((node) => { node.hidden = false; });
+              }
+            """,
+            "#v3ProjectNextActions",
+            "[data-v3-project-action='retry_source_analysis']",
+            "window.__doc263Requests.filter((item) => item.method === 'POST').length",
+        ),
+        (
+            MOBILE_HTML,
+            MOBILE_JS,
+            """
+              ({ project, created }) => {
+                ensureMobileLayers();
+                setupMobileV3Adapter();
+                window.__doc263ServerProject = project;
+                window.__doc263CreateJobResponse = created;
+                mobileV3State.currentProject = project;
+                mobileV3State.currentJob = created;
+                mobileV3State.ecommerceSubmissionErrorProjectId = project.project_id;
+                mobileV3State.projects = [project];
+                mobileV3State.selectedTemplate = "ecommerce_template";
+                mobileV3State.outputs = [];
+                mobileV3State.reviewOutputs = [];
+                mobileV3State.outputsLoaded = true;
+                renderMobileV3ProjectCurrentOperation(project);
+                openMobileSurface("v3-project-detail");
+              }
+            """,
+            "#mobileV3ProjectCurrentOperation",
+            "[data-mobile-v3-project-action='retry_source_analysis']",
+            "window.__doc263Requests.filter((item) => item.method === 'POST').length",
+        ),
+    ],
+)
+def test_doc272_server_terminal_operation_wins_over_local_submission_error(
+    html_path,
+    script_path,
+    setup,
+    operation_selector,
+    action_selector,
+    post_count,
+) -> None:
+    project = _needs_input_project()
+    project["metadata"].pop("current_operation", None)
+    created = _needs_input_job()
+    created["job_id"] = "job-server-terminal"
+    created["metadata"]["current_operation"] = {
+        "state": "source_analysis_unavailable",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "retry_source_analysis"}],
+    }
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=html_path, script_path=script_path)
+            page.evaluate(setup, {"project": project, "created": created})
+            assert page.locator(action_selector).count() == 1
+            text_content = page.locator(operation_selector).inner_text()
+            assert "本次提交未完成" not in text_content
+            assert "原图分析暂时不可用" in text_content
+            page.locator(action_selector).click()
+            assert page.evaluate(post_count) == 0
+        finally:
+            browser.close()
+
+
+def test_doc272_mobile_project_switch_clears_previous_job_before_refresh() -> None:
+    first_project = _needs_input_project()
+    second_project = deepcopy(first_project)
+    second_project["project_id"] = "project-second"
+    created = _needs_input_job()
+    created["job_id"] = "job-first-project"
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            page.evaluate(
+                """
+                ({ firstProject, secondProject, created }) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  refreshMobileV3ProjectDetail = async () => {};
+                  mobileV3State.currentProject = firstProject;
+                  mobileV3State.currentJob = created;
+                  mobileV3State.selectedResult = { output_id: "old-output" };
+                  mobileV3State.ecommerceSubmissionReceipt = {
+                    projectId: firstProject.project_id,
+                    jobId: created.job_id,
+                  };
+                  mobileV3State.ecommerceSubmissionErrorProjectId = firstProject.project_id;
+                  openMobileV3ProjectDetail(secondProject);
+                }
+                """,
+                {
+                    "firstProject": first_project,
+                    "secondProject": second_project,
+                    "created": created,
+                },
+            )
+            assert page.evaluate(
+                """
+                () => ({
+                  projectId: mobileV3State.currentProject?.project_id || "",
+                  currentJob: mobileV3State.currentJob,
+                  selectedResult: mobileV3State.selectedResult,
+                  receipt: mobileV3State.ecommerceSubmissionReceipt,
+                  submissionErrorProjectId: mobileV3State.ecommerceSubmissionErrorProjectId,
+                })
+                """
+            ) == {
+                "projectId": "project-second",
+                "currentJob": None,
+                "selectedResult": None,
+                "receipt": None,
+                "submissionErrorProjectId": "",
+            }
+        finally:
+            browser.close()
+
+
+def test_doc272_mobile_ignores_stale_project_detail_response() -> None:
+    first_project = _needs_input_project()
+    first_project["job_ids"] = []
+    first_project["user_goal"] = "First project"
+    second_project = deepcopy(first_project)
+    second_project["project_id"] = "project-second"
+    second_project["user_goal"] = "Second project"
+    first_output = {
+        "output_id": "first-output",
+        "project_id": first_project["project_id"],
+        "delivery_state": "final_delivery",
+        "preview_url": "https://example.invalid/first.png",
+    }
+    second_output = {
+        "output_id": "second-output",
+        "project_id": second_project["project_id"],
+        "delivery_state": "final_delivery",
+        "preview_url": "https://example.invalid/second.png",
+    }
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            result = page.evaluate(
+                """
+                async ({ firstProject, secondProject, firstOutput, secondOutput }) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  const pending = [];
+                  mobileV3Request = (path) => new Promise((resolve) => pending.push({ path, resolve }));
+                  mobileV3State.currentProject = firstProject;
+                  const firstRefresh = refreshMobileV3ProjectDetail(firstProject.project_id);
+                  mobileV3State.currentProject = secondProject;
+                  const secondRefresh = refreshMobileV3ProjectDetail(secondProject.project_id);
+                  const respond = (projectId, project, output) => {
+                    pending
+                      .filter((entry) => entry.path.includes(`/projects/${projectId}`) || entry.path.includes(`project_id=${projectId}`))
+                      .forEach((entry) => {
+                        if (entry.path.endsWith(`/projects/${projectId}`)) entry.resolve({ project });
+                        else if (entry.path.includes("/timeline")) entry.resolve({ items: [{ project_id: projectId }] });
+                        else entry.resolve({ items: [output], review_items: [] });
+                      });
+                  };
+                  respond(secondProject.project_id, secondProject, secondOutput);
+                  await secondRefresh;
+                  respond(firstProject.project_id, firstProject, firstOutput);
+                  await firstRefresh;
+                  return {
+                    projectId: mobileV3State.currentProject?.project_id || "",
+                    goal: mobileV3State.currentProject?.user_goal || "",
+                    timelineProjectId: mobileV3State.currentTimeline?.[0]?.project_id || "",
+                    outputIds: mobileV3State.outputs.map((item) => item.output_id),
+                  };
+                }
+                """,
+                {
+                    "firstProject": first_project,
+                    "secondProject": second_project,
+                    "firstOutput": first_output,
+                    "secondOutput": second_output,
+                },
+            )
+            assert result == {
+                "projectId": "project-second",
+                "goal": "Second project",
+                "timelineProjectId": "project-second",
+                "outputIds": ["second-output"],
+            }
+        finally:
+            browser.close()
+
+
+def test_doc272_mobile_stale_project_open_cannot_open_new_project_composer() -> None:
+    first_project = _needs_input_project()
+    second_project = deepcopy(first_project)
+    second_project["project_id"] = "project-second"
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            surfaces = page.evaluate(
+                """
+                async ({ firstProject, secondProject }) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  refreshMobileV3ProjectDetail = async () => {};
+                  const surfaces = [];
+                  openMobileSurface = (id) => surfaces.push(id);
+                  mobileV3State.currentProject = firstProject;
+                  openMobileV3ProjectDetail(firstProject, { openComposer: true });
+                  mobileV3State.currentProject = secondProject;
+                  mobileV3InvalidateProjectDetail();
+                  await new Promise((resolve) => window.setTimeout(resolve, 220));
+                  return surfaces;
+                }
+                """,
+                {"firstProject": first_project, "secondProject": second_project},
+            )
+            assert surfaces == ["v3-project-detail"]
+        finally:
+            browser.close()
