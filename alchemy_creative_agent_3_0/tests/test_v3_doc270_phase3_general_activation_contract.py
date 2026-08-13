@@ -65,9 +65,9 @@ def _association_id(handlers: Any, project_id: str, asset_id: str) -> str:
 _TEST_RECEIPT_AUTHORITY = {
     "issuer": "v3_doc270_phase2_receipt_registry",
     "schema_version": "doc270_phase2_registry_entry_v1",
-    "version": "doc270_phase3_contract_test_registry_v1",
+    "version": "doc270_phase3_receipt_registry_v1",
     "capability_id": "doc270_shadow_resolution_registry",
-    "capability_version": "doc270_phase3_contract_capability_v1",
+    "capability_version": "doc270_phase3_general_activation_capability_v1",
 }
 
 
@@ -75,7 +75,16 @@ _TEST_COMMAND_IDENTITY_AUTHORITY = {
     "schema_version": "doc270_general_command_identity_v1",
     "issuer": "v3_project_mode_general_command_registry",
     "capability_id": "doc270_general_source_activation",
-    "capability_version": "doc270_phase3_contract_capability_v1",
+    "capability_version": "doc270_phase3_general_activation_capability_v1",
+}
+
+_TEST_ACTIVATION_CAPABILITY = {
+    "schema_version": "doc270_general_activation_capability_v1",
+    "issuer": "v3_doc270_general_activation_registry",
+    "capability_id": "doc270_general_source_activation",
+    "capability_version": "doc270_phase3_general_activation_capability_v1",
+    "template_id": "general_template",
+    "enabled": True,
 }
 
 
@@ -158,6 +167,7 @@ def _registered_resolved_receipt(
         "command_identity": {
             **deepcopy(command_identity),
         },
+        "output_identity": receipt["output_identity"],
         "receipt": receipt,
         "receipt_digest": receipt["receipt_digest"],
     }
@@ -171,13 +181,14 @@ def _install_private_phase3_server_seams(
     registry_entry: dict[str, Any] | None,
     *,
     command_identity: dict[str, str] | None = None,
+    capability: dict[str, Any] | None = None,
 ) -> None:
     """Future private server seams. Current runtime intentionally does not consume them."""
 
     monkeypatch.setattr(
         handlers.project_service,
         "_doc270_general_activation_capability_lookup",
-        lambda: {"enabled": True, "version": "doc270_general_activation_v1"},
+        lambda: deepcopy(capability if capability is not None else _TEST_ACTIVATION_CAPABILITY),
         raising=False,
     )
     monkeypatch.setattr(
@@ -310,7 +321,7 @@ def test_doc270_phase3_self_digested_browser_resolved_receipt_is_not_registry_au
 
 @pytest.mark.parametrize(
     "mutation",
-    ["raw_receipt", "issuer", "schema", "capability", "entry_digest", "receipt_digest", "command_binding"],
+    ["raw_receipt", "issuer", "schema", "capability", "capability_version", "entry_digest", "receipt_digest", "command_binding"],
 )
 def test_doc270_phase3_registry_entry_provenance_mismatch_is_receipt_invalid(tmp_path, monkeypatch, mutation: str) -> None:
     handlers, project, asset_ids, snapshot = _general_project(tmp_path)
@@ -332,6 +343,9 @@ def test_doc270_phase3_registry_entry_provenance_mismatch_is_receipt_invalid(tmp
         elif mutation == "capability":
             lookup_value["capability_id"] = "browser-capability"
             _rehash_registry_entry(lookup_value)
+        elif mutation == "capability_version":
+            lookup_value["capability_version"] = "wrong-server-version"
+            _rehash_registry_entry(lookup_value)
         elif mutation == "entry_digest":
             lookup_value["registry_entry_digest"] = "0" * 64
         elif mutation == "receipt_digest":
@@ -350,7 +364,7 @@ def test_doc270_phase3_registry_entry_provenance_mismatch_is_receipt_invalid(tmp
     _assert_private_receipt_invalid(record)
     public_job = handlers.get_job(created["job_id"])
     assert public_job["metadata"].get("doc270_general_source_activation") == {"state": "receipt_invalid"}
-    public_text = str(public_job["metadata"])
+    public_text = str(public_job)
     for private in [association_id, asset_ids[0], snapshot["snapshot_digest"], "registry", "wrong-server-plan"]:
         assert private not in public_text
     assert handlers.get_project(project["project_id"])["metadata"]["project_source_library"] == before_library
@@ -415,6 +429,39 @@ def test_doc270_phase3_missing_server_command_identity_preserves_existing_genera
     )
     _install_private_phase3_server_seams(monkeypatch, handlers, entry, command_identity=None)
     monkeypatch.setattr(handlers.project_service, "_doc270_general_command_identity_lookup", lambda **_kwargs: None, raising=False)
+
+    created = handlers.post_project_job(project["project_id"], _general_payload())
+    record = handlers.service.get_job_record(created["job_id"])
+    assert record is not None
+    assert created["status"] == "planned"
+    assert "doc270_general_source_activation_receipts" not in record.request.metadata
+    assert "doc270_general_original_source_projection" not in record.request.metadata
+    assert "doc270_general_source_activation" not in handlers.get_job(created["job_id"])["metadata"]
+
+
+@pytest.mark.parametrize("mutation", ["schema", "issuer", "capability", "version", "template", "enabled", "extra"])
+def test_doc270_phase3_malformed_activation_capability_preserves_no_gate_path(tmp_path, monkeypatch, mutation: str) -> None:
+    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
+    association_id = _association_id(handlers, project["project_id"], asset_ids[0])
+    entry = _registered_resolved_receipt(
+        project_id=project["project_id"], snapshot=snapshot, association_id=association_id, asset_id=asset_ids[0]
+    )
+    capability = deepcopy(_TEST_ACTIVATION_CAPABILITY)
+    if mutation == "schema":
+        capability["schema_version"] = "browser-capability-v1"
+    elif mutation == "issuer":
+        capability["issuer"] = "browser-capability"
+    elif mutation == "capability":
+        capability["capability_id"] = "wrong-capability"
+    elif mutation == "version":
+        capability["capability_version"] = "wrong-version"
+    elif mutation == "template":
+        capability["template_id"] = "ecommerce_template"
+    elif mutation == "enabled":
+        capability["enabled"] = False
+    else:
+        capability["browser_extra"] = True
+    _install_private_phase3_server_seams(monkeypatch, handlers, entry, capability=capability)
 
     created = handlers.post_project_job(project["project_id"], _general_payload())
     record = handlers.service.get_job_record(created["job_id"])
@@ -517,7 +564,7 @@ def test_doc270_phase3_activation_is_new_command_only_and_public_projection_is_s
     reloaded = handlers.get_job(created["job_id"])
     assert reloaded["job_id"] == created["job_id"]
     assert reloaded["metadata"].get("doc270_general_source_activation") == {"state": "activated_resolved"}
-    public_text = str(reloaded["metadata"])
+    public_text = str(reloaded)
     for private in [association_id, asset_ids[0], snapshot["snapshot_digest"], _receipt_payload(resolved)["receipt_digest"], "server-phase3-profile"]:
         assert private not in public_text
     assert activation["source_receipt_digest"] == _receipt_payload(resolved)["receipt_digest"]

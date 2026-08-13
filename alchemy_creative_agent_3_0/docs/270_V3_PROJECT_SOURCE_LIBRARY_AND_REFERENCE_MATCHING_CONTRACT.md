@@ -656,8 +656,11 @@ current General creation; it is not a public error and it cannot be supplied
 through browser metadata.
 
 The receipt lookup is a server-owned Phase 2 receipt-registry/authority seam.
-It returns one immutable registry entry containing the registered issuer,
-schema/version, server capability ID/version, server command identity and plan
+Phase 3 uses the registered protocol `doc270_phase3_general_activation_v1`,
+capability version `doc270_phase3_general_activation_capability_v1`, and
+registry version `doc270_phase3_receipt_registry_v1`. It returns one immutable
+registry entry containing the registered issuer, schema/version, server
+capability ID/version, server command identity and plan
 binding digest, canonical receipt digest, and canonical registry-entry digest.
 The entry's complete receipt must exactly bind that command/plan identity. A
 registry callback alone is not proof of authority: a raw receipt, wrong

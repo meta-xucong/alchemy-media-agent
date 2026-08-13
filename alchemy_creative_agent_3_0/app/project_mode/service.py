@@ -133,6 +133,55 @@ _DOC270_IGNORED_CLIENT_METADATA = frozenset(
     }
 )
 
+_DOC270_PHASE3_IGNORED_CLIENT_METADATA = frozenset(
+    {
+        "doc270_general_activation",
+        "doc270_general_source_activation_receipts",
+        "doc270_general_original_source_projection",
+        "doc270_general_command_identity",
+        "server_command_identity",
+        "doc270_reference_resolution_receipts",
+        "selected_original_asset_ids",
+    }
+)
+_DOC270_PHASE3_COMMAND_IDENTITY_KEYS = frozenset(
+    {
+        "schema_version",
+        "issuer",
+        "capability_id",
+        "capability_version",
+        "project_id",
+        "template_id",
+        "command_id",
+        "command_plan_binding_digest",
+        "coalescing_nonce",
+        "identity_digest",
+    }
+)
+_DOC270_PHASE3_PUBLIC_STATES = frozenset({"prompt_only", "receipt_invalid", "activated_resolved"})
+_DOC270_PHASE3_PROTOCOL_VERSION = "doc270_phase3_general_activation_v1"
+_DOC270_PHASE3_CAPABILITY_VERSION = "doc270_phase3_general_activation_capability_v1"
+_DOC270_PHASE3_REGISTRY_VERSION = "doc270_phase3_receipt_registry_v1"
+_DOC270_PHASE3_COMMAND_IDENTITY_POLICY = {
+    "schema_version": "doc270_general_command_identity_v1",
+    "issuer": "v3_project_mode_general_command_registry",
+    "capability_id": "doc270_general_source_activation",
+    "capability_version": _DOC270_PHASE3_CAPABILITY_VERSION,
+}
+_DOC270_PHASE3_REGISTRY_POLICY = {
+    "issuer": "v3_doc270_phase2_receipt_registry",
+    "schema_version": "doc270_phase2_registry_entry_v1",
+    "version": _DOC270_PHASE3_REGISTRY_VERSION,
+    "capability_id": "doc270_shadow_resolution_registry",
+    "capability_version": _DOC270_PHASE3_CAPABILITY_VERSION,
+}
+_DOC270_PHASE3_ACTIVATION_CAPABILITY_POLICY = {
+    "schema_version": "doc270_general_activation_capability_v1",
+    "issuer": "v3_doc270_general_activation_registry",
+    "capability_id": "doc270_general_source_activation",
+    "capability_version": _DOC270_PHASE3_CAPABILITY_VERSION,
+}
+
 
 class EcommerceSlotContinuationError(ValueError):
     """Structured public failure for the namespaced slot-continuation route."""
@@ -179,6 +228,227 @@ class V3ProjectModeService:
         self.product_service.doc270_source_library_snapshot_lookup = (
             self._doc270_project_source_library_by_id
         )
+
+    def _doc270_general_activation_capability_lookup(self) -> dict[str, Any] | None:
+        """Return a server-owned activation capability when one is registered."""
+
+        return None
+
+    def _doc270_general_command_identity_lookup(self, **_kwargs: Any) -> dict[str, Any] | None:
+        """Issue/read a private General command identity. Disabled by default."""
+
+        return None
+
+    def _doc270_general_phase2_receipt_registry_lookup(self, **_kwargs: Any) -> dict[str, Any] | None:
+        """Read a server-owned Phase 2 receipt entry. Disabled by default."""
+
+        return None
+
+    @staticmethod
+    def _doc270_digest(value: Any) -> str:
+        return hashlib.sha256(
+            json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    @classmethod
+    def _doc270_same_digest_record(cls, value: dict[str, Any], field: str) -> bool:
+        digest = str(value.get(field) or "").strip().lower()
+        return len(digest) == 64 and digest == cls._doc270_digest(
+            {key: item for key, item in value.items() if key != field}
+        )
+
+    def _doc270_general_command_identity_valid(
+        self,
+        identity: Any,
+        *,
+        project_id: str,
+        template_id: str,
+    ) -> bool:
+        if not isinstance(identity, dict) or set(identity) != _DOC270_PHASE3_COMMAND_IDENTITY_KEYS:
+            return False
+        if (
+            identity.get("schema_version") != _DOC270_PHASE3_COMMAND_IDENTITY_POLICY["schema_version"]
+            or identity.get("issuer") != _DOC270_PHASE3_COMMAND_IDENTITY_POLICY["issuer"]
+            or identity.get("capability_id") != _DOC270_PHASE3_COMMAND_IDENTITY_POLICY["capability_id"]
+            or identity.get("project_id") != project_id
+            or identity.get("template_id") != template_id
+        ):
+            return False
+        if not all(
+            isinstance(identity.get(key), str) and str(identity[key]).strip()
+            for key in ("capability_version", "command_id", "command_plan_binding_digest", "coalescing_nonce")
+        ):
+            return False
+        return self._doc270_same_digest_record(identity, "identity_digest")
+
+    @staticmethod
+    def _doc270_general_activation_capability_valid(
+        capability: Any,
+        *,
+        template_id: str,
+    ) -> bool:
+        expected = _DOC270_PHASE3_ACTIVATION_CAPABILITY_POLICY
+        return (
+            isinstance(capability, dict)
+            and set(capability) == {
+                "schema_version", "issuer", "capability_id", "capability_version", "template_id", "enabled"
+            }
+            and capability.get("schema_version") == expected["schema_version"]
+            and capability.get("issuer") == expected["issuer"]
+            and capability.get("capability_id") == expected["capability_id"]
+            and capability.get("capability_version") == expected["capability_version"]
+            and capability.get("template_id") == template_id
+            and capability.get("enabled") is True
+        )
+
+    def _doc270_general_existing_command(
+        self,
+        project: ProjectRecord,
+        identity: dict[str, Any],
+    ) -> ProductJobStatus | None:
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            metadata = dict(record.request.metadata or {})
+            if metadata.get("doc270_general_command_identity") == identity:
+                return self.product_service.get_job(job_id)
+        return None
+
+    def _doc270_general_activation_decision(
+        self,
+        project: ProjectRecord,
+        *,
+        template_id: str,
+        identity: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Verify a private registered Phase 2 receipt for one new General command."""
+
+        try:
+            entry = self._doc270_general_phase2_receipt_registry_lookup(
+                project_id=project.project_id,
+                command_identity=dict(identity),
+            )
+        except Exception:
+            entry = None
+        if not isinstance(entry, dict):
+            return {"state": "receipt_invalid"}
+        entry_keys = {
+            "issuer", "schema_version", "version", "capability_id", "capability_version",
+            "command_identity", "output_identity", "receipt", "receipt_digest", "registry_entry_digest",
+        }
+        if (
+            identity.get("capability_version") != _DOC270_PHASE3_CAPABILITY_VERSION
+            or
+            set(entry) != entry_keys
+            or entry.get("issuer") != _DOC270_PHASE3_REGISTRY_POLICY["issuer"]
+            or entry.get("schema_version") != _DOC270_PHASE3_REGISTRY_POLICY["schema_version"]
+            or entry.get("capability_id") != _DOC270_PHASE3_REGISTRY_POLICY["capability_id"]
+            or entry.get("version") != _DOC270_PHASE3_REGISTRY_POLICY["version"]
+            or entry.get("capability_version") != _DOC270_PHASE3_REGISTRY_POLICY["capability_version"]
+            or entry.get("capability_version") != identity.get("capability_version")
+            or not isinstance(entry.get("version"), str)
+            or not str(entry.get("version") or "").strip()
+            or not isinstance(entry.get("capability_version"), str)
+            or not str(entry.get("capability_version") or "").strip()
+            or entry.get("command_identity") != identity
+            or not self._doc270_same_digest_record(entry, "registry_entry_digest")
+        ):
+            return {"state": "receipt_invalid"}
+        receipt = entry.get("receipt")
+        if not isinstance(receipt, dict) or entry.get("receipt_digest") != receipt.get("receipt_digest"):
+            return {"state": "receipt_invalid"}
+        if not entry.get("output_identity") or entry.get("output_identity") != receipt.get("output_identity"):
+            return {"state": "receipt_invalid"}
+        if not self._doc270_same_digest_record(receipt, "receipt_digest"):
+            return {"state": "receipt_invalid"}
+        state = str(receipt.get("state") or "").strip()
+        if state in {"no_reference", "optional_uncertain", "insufficient_evidence", "invalid", "not_applicable"}:
+            return {"state": "prompt_only"}
+        if state != "resolved":
+            return {"state": "receipt_invalid"}
+        receipt_keys = {
+            "schema_version", "project_id", "command_plan_binding_digest", "command_identity",
+            "output_index", "output_identity", "requirement_nonce", "requirement_digest",
+            "source_library_snapshot_digest", "source_resolver", "state", "matched_references",
+            "evidence_profile_digests", "shadow_only", "receipt_digest",
+        }
+        if (
+            set(receipt) != receipt_keys
+            or receipt.get("schema_version") != "doc270_reference_resolution_receipt_v1"
+            or receipt.get("project_id") != project.project_id
+            or receipt.get("command_identity") != identity
+            or receipt.get("command_plan_binding_digest") != identity.get("command_plan_binding_digest")
+            or receipt.get("shadow_only") is not True
+            or not isinstance(receipt.get("output_index"), int)
+            or int(receipt["output_index"]) < 1
+            or not all(isinstance(receipt.get(key), str) and str(receipt[key]).strip() for key in (
+                "output_identity", "requirement_nonce", "requirement_digest", "source_library_snapshot_digest"
+            ))
+            or receipt.get("source_resolver") != {"authority": "v3_doc270_shadow_matcher", "version": "doc270_shadow_matcher_v1"}
+        ):
+            return {"state": "receipt_invalid"}
+        try:
+            snapshot = self._doc270_project_source_library(project)
+        except Exception:
+            return {"state": "receipt_invalid"}
+        if receipt.get("source_library_snapshot_digest") != snapshot.get("snapshot_digest"):
+            return {"state": "receipt_invalid"}
+        references = receipt.get("matched_references")
+        profiles = receipt.get("evidence_profile_digests")
+        if not isinstance(references, list) or not references or not isinstance(profiles, list) or len(references) != len(profiles):
+            return {"state": "receipt_invalid"}
+        entries = {
+            str(item.get("reference_id") or ""): item
+            for item in snapshot.get("entries", [])
+            if isinstance(item, dict)
+        }
+        selected: list[dict[str, str]] = []
+        seen_references: set[str] = set()
+        seen_assets: set[str] = set()
+        for item, profile_digest in zip(references, profiles, strict=True):
+            if not isinstance(item, dict) or set(item) != {"reference_id", "asset_id", "content_sha256", "profile_digest"}:
+                return {"state": "receipt_invalid"}
+            reference_id = str(item.get("reference_id") or "")
+            asset_id = str(item.get("asset_id") or "")
+            content_sha256 = str(item.get("content_sha256") or "").lower()
+            item_profile = str(item.get("profile_digest") or "")
+            entry_item = entries.get(reference_id)
+            if (
+                not reference_id or not asset_id or len(content_sha256) != 64 or not item_profile
+                or item_profile != profile_digest or reference_id in seen_references or asset_id in seen_assets
+                or not isinstance(entry_item, dict)
+                or entry_item.get("asset_id") != asset_id
+                or entry_item.get("content_sha256") != content_sha256
+                or entry_item.get("availability_state") != "ready_verified"
+                or entry_item.get("automatic_use_eligible") is not True
+            ):
+                return {"state": "receipt_invalid"}
+            seen_references.add(reference_id)
+            seen_assets.add(asset_id)
+            selected.append(
+                {
+                    "reference_id": reference_id,
+                    "asset_id": asset_id,
+                    "content_sha256": content_sha256,
+                    "source_receipt_digest": str(receipt["receipt_digest"]),
+                }
+            )
+        return {
+            "state": "activated_resolved",
+            "source_receipt_digest": str(receipt["receipt_digest"]),
+            "source_library_snapshot_digest": str(snapshot["snapshot_digest"]),
+            "selected_original_reference_ids": [item["reference_id"] for item in selected],
+            "selected_original_asset_ids": [item["asset_id"] for item in selected],
+            "maximum_sources": len(selected),
+            "projection": {
+                "schema_version": "doc270_general_original_source_projection_v1",
+                "state": "activated_resolved",
+                "source_receipt_digest": str(receipt["receipt_digest"]),
+                "source_library_snapshot_digest": str(snapshot["snapshot_digest"]),
+                "sources": selected,
+            },
+        }
 
     def list_projects(self, limit: int = 20, owner_user_id: int | None = None) -> ProjectListResponse:
         projects = [
@@ -846,6 +1116,47 @@ class V3ProjectModeService:
             }
         )
         template_manifest = self._ensure_active_template(job_request.template_id)
+        doc270_general_identity: dict[str, Any] | None = None
+        doc270_general_activation: dict[str, Any] | None = None
+        if template_manifest.template_id == GENERAL_TEMPLATE_ID:
+            job_request = job_request.model_copy(
+                update={
+                    "metadata": {
+                        key: value
+                        for key, value in dict(job_request.metadata or {}).items()
+                        if key not in _DOC270_PHASE3_IGNORED_CLIENT_METADATA
+                    }
+                }
+            )
+            capability = self._doc270_general_activation_capability_lookup()
+            if self._doc270_general_activation_capability_valid(
+                capability,
+                template_id=template_manifest.template_id,
+            ):
+                try:
+                    identity = self._doc270_general_command_identity_lookup(
+                        project_id=project.project_id,
+                        template_id=template_manifest.template_id,
+                    )
+                except Exception:
+                    identity = None
+                if identity is not None:
+                    if self._doc270_general_command_identity_valid(
+                        identity,
+                        project_id=project.project_id,
+                        template_id=template_manifest.template_id,
+                    ) and identity.get("capability_version") == capability.get("capability_version"):
+                        existing_general = self._doc270_general_existing_command(project, identity)
+                        if existing_general is not None:
+                            return existing_general
+                        doc270_general_identity = dict(identity)
+                        doc270_general_activation = self._doc270_general_activation_decision(
+                            project,
+                            template_id=template_manifest.template_id,
+                            identity=doc270_general_identity,
+                        )
+                    else:
+                        doc270_general_activation = {"state": "receipt_invalid"}
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID and (
             job_request.suite_slot_request
             or (
@@ -1008,6 +1319,33 @@ class V3ProjectModeService:
             uploaded_asset_ids = list(
                 dict.fromkeys([*self._project_asset_ids(project), *job_request.uploaded_asset_ids])
             )
+            if doc270_general_activation is not None:
+                if doc270_general_activation["state"] == "activated_resolved":
+                    uploaded_asset_ids = list(doc270_general_activation["selected_original_asset_ids"])
+                else:
+                    uploaded_asset_ids = []
+                job_request = job_request.model_copy(
+                    update={
+                        "metadata": {
+                            **dict(job_request.metadata or {}),
+                            "doc270_general_command_identity": doc270_general_identity,
+                            "doc270_general_source_activation_receipts": [
+                                {
+                                    key: value
+                                    for key, value in doc270_general_activation.items()
+                                    if key != "projection"
+                                }
+                            ],
+                            **(
+                                {
+                                    "doc270_general_original_source_projection": doc270_general_activation["projection"]
+                                }
+                                if doc270_general_activation["state"] == "activated_resolved"
+                                else {}
+                            ),
+                        }
+                    }
+                )
             current_reference_binding_digest = ""
             idempotency_key = ""
             supersedes_job_id = None

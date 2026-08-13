@@ -8729,6 +8729,9 @@ class V3ProductApiService:
     def _status_from_record(self, record: ProductJobRecord) -> ProductJobStatus:
         if isinstance(dict(record.request.metadata or {}).get("provider_deliverability_closure_receipt"), dict):
             return self._doc271_closure_status(record)
+        phase3_status = self._doc270_general_phase3_safe_status(record)
+        if phase3_status is not None:
+            return phase3_status
         result = record.generation_result or record.planning_result
         if result is None:
             return self._empty_status_from_record(record)
@@ -8816,8 +8819,9 @@ class V3ProductApiService:
                     if result.metadata.get("professional_mode") is True
                     else {}
                 ),
-                "shared_capabilities": self._public_metadata_projection(
-                    result.metadata.get("shared_capabilities") or self._capability_run_summary(record.capability_run)
+                "shared_capabilities": self._doc270_general_public_capability_summary(
+                    record,
+                    result.metadata.get("shared_capabilities") or self._capability_run_summary(record.capability_run),
                 ),
                 "visual_auto_retry": public_visual_retry,
                 "post_generation_review": public_review,
@@ -8832,6 +8836,36 @@ class V3ProductApiService:
                 **self._project_mode_status_metadata(record),
                 **self._ecommerce_runtime_provenance_status_metadata(record),
                 **self._doc263_terminal_status_metadata(record),
+            },
+        )
+
+    def _doc270_general_phase3_safe_status(self, record: ProductJobRecord) -> ProductJobStatus | None:
+        """Return the source-safe public boundary for a Phase 3 General job."""
+
+        activation = self._doc270_general_activation_public_state(record)
+        if activation is None:
+            return None
+        nav = get_navigation_entry()
+        scenario = self._scenario_summary(record)
+        return ProductJobStatus(
+            job_id=record.job_id,
+            status=record.status,
+            api_namespace=API_NAMESPACE,
+            ui_entry_route=nav["route"],
+            scenario=scenario,
+            general_creative=self._general_creative_summary(record),
+            balance_estimate=dict(record.balance_estimate),
+            routes=get_route_contracts(),
+            # Existing warnings may retain a source label from planning. The
+            # activation marker is the complete public source status.
+            warnings=[],
+            metadata={
+                "source": "V3ProductApiService",
+                "rules_version": RULE_VERSION,
+                "v3_independent_product_api": True,
+                "exposes_product_concepts_only": True,
+                "lifecycle": self._lifecycle_summary(record),
+                "doc270_general_source_activation": activation,
             },
         )
 
@@ -9179,6 +9213,9 @@ class V3ProductApiService:
             "provider_deliverability_closure_receipt",
             "doc270_project_source_library",
             "doc270_source_library_binding_receipts",
+            "doc270_general_source_activation_receipts",
+            "doc270_general_original_source_projection",
+            "doc270_general_command_identity",
         }
         if isinstance(value, dict):
             projected: dict[str, Any] = {}
@@ -9228,7 +9265,10 @@ class V3ProductApiService:
                 "balance_adapter": self.balance_adapter.adapter_name,
                 "exposes_product_concepts_only": True,
                 "blocked_before_planning": record.status == ProductJobStatusValue.BLOCKED,
-                "shared_capabilities": self._capability_run_summary(record.capability_run),
+                "shared_capabilities": self._doc270_general_public_capability_summary(
+                    record,
+                    self._capability_run_summary(record.capability_run),
+                ),
                 "lifecycle": self._lifecycle_summary(record),
                 **self._project_mode_status_metadata(record),
                 **self._ecommerce_runtime_provenance_status_metadata(record),
@@ -9342,6 +9382,12 @@ class V3ProductApiService:
             "review_certification",
         }
         status_metadata = {key: request_metadata[key] for key in allowed_keys if key in request_metadata}
+        general_activation = self._doc270_general_activation_public_state(record)
+        if general_activation is not None:
+            status_metadata["doc270_general_source_activation"] = general_activation
+            # Phase 3 public status must not carry the private source receipt
+            # through the existing project context snapshot.
+            status_metadata.pop("project_context_snapshot", None)
         raw_checkpoints = status_metadata.get("professional_character_card_candidate_lifecycle_checkpoints")
         if raw_checkpoints is not None:
             projected_checkpoints = self._public_character_card_candidate_lifecycle_checkpoints(
@@ -9392,6 +9438,83 @@ class V3ProductApiService:
                         friendly.append(message)
                 status_metadata["capability_summary"] = friendly
         return status_metadata
+
+    @staticmethod
+    def _doc270_general_activation_public_state(record: ProductJobRecord) -> dict[str, str] | None:
+        """Project a verified Doc270 General activation state without its source bindings."""
+
+        metadata = dict(record.request.metadata or {})
+        receipts = metadata.get("doc270_general_source_activation_receipts")
+        if not isinstance(receipts, list) or len(receipts) != 1 or not isinstance(receipts[0], dict):
+            return None
+        receipt = receipts[0]
+        state = str(receipt.get("state") or "")
+        if state not in {"prompt_only", "receipt_invalid", "activated_resolved"}:
+            return {"state": "receipt_invalid"}
+        if state != "activated_resolved":
+            return {"state": state} if set(receipt) == {"state"} else {"state": "receipt_invalid"}
+        projection = metadata.get("doc270_general_original_source_projection")
+        asset_ids = list(record.request.uploaded_asset_ids or [])
+        if not isinstance(projection, dict) or set(projection) != {
+            "schema_version", "state", "source_receipt_digest", "source_library_snapshot_digest", "sources"
+        }:
+            return {"state": "receipt_invalid"}
+        sources = projection.get("sources")
+        if (
+            projection.get("schema_version") != "doc270_general_original_source_projection_v1"
+            or projection.get("state") != "activated_resolved"
+            or not isinstance(sources, list)
+            or not sources
+            or not isinstance(projection.get("source_receipt_digest"), str)
+            or not isinstance(projection.get("source_library_snapshot_digest"), str)
+            or not isinstance(receipt.get("source_receipt_digest"), str)
+            or projection.get("source_receipt_digest") != receipt.get("source_receipt_digest")
+        ):
+            return {"state": "receipt_invalid"}
+        source_asset_ids: list[str] = []
+        reference_ids: set[str] = set()
+        for source in sources:
+            if not isinstance(source, dict) or set(source) != {
+                "reference_id", "asset_id", "content_sha256", "source_receipt_digest"
+            }:
+                return {"state": "receipt_invalid"}
+            reference_id = str(source.get("reference_id") or "")
+            asset_id = str(source.get("asset_id") or "")
+            digest = str(source.get("content_sha256") or "").lower()
+            if (
+                not reference_id or not asset_id or len(digest) != 64
+                or source.get("source_receipt_digest") != projection.get("source_receipt_digest")
+                or reference_id in reference_ids or asset_id in source_asset_ids
+            ):
+                return {"state": "receipt_invalid"}
+            reference_ids.add(reference_id)
+            source_asset_ids.append(asset_id)
+        if asset_ids != source_asset_ids:
+            return {"state": "receipt_invalid"}
+        return {"state": "activated_resolved"}
+
+    def _doc270_general_public_capability_summary(
+        self,
+        record: ProductJobRecord,
+        value: Any,
+    ) -> dict[str, Any]:
+        """Keep Phase 3 source bindings out of generic capability status."""
+
+        if self._doc270_general_activation_public_state(record) is None:
+            projected = self._public_metadata_projection(value)
+            return projected if isinstance(projected, dict) else {}
+        source = value if isinstance(value, dict) else {}
+        return {
+            "enabled": bool(source.get("enabled")),
+            "status": str(source.get("status") or "not_available"),
+            "module_ids": [str(item) for item in source.get("module_ids", []) if str(item).strip()],
+            "result_statuses": {
+                str(key): str(item)
+                for key, item in dict(source.get("result_statuses") or {}).items()
+                if str(key).strip() and str(item).strip()
+            },
+            "warning_count": int(source.get("warning_count") or 0),
+        }
 
     @classmethod
     def _generation_lifecycle_failure_from_runtime_result(cls, runtime_result: Any) -> dict[str, Any] | None:
@@ -11020,6 +11143,24 @@ class V3ProductApiService:
         capability_run = record.capability_run
         results = {result.module_id: result for result in capability_run.results} if capability_run else {}
         result = result or record.generation_result or record.planning_result
+        activation = self._doc270_general_activation_public_state(record)
+        if activation is not None:
+            # A Phase 3 receipt owns the original-source projection. General
+            # planning and capability prose can otherwise repeat source IDs,
+            # so expose only the ordinary safe lifecycle summary here.
+            return GeneralCreativeCapabilitySummary(
+                enabled=bool(results),
+                scenario_id="general_creative",
+                selected_mode_id=record.scenario_resolution.selected_mode_id if record.scenario_resolution else None,
+                selected_preset_id=record.scenario_resolution.selected_preset_id if record.scenario_resolution else None,
+                user_controls=list(GENERAL_CREATIVE_PUBLIC_CONTROLS),
+                review_hints=["The planned General image is ready for its normal workflow."],
+                metadata={
+                    "prompt_language": "neutral_subject",
+                    "policy_boundary": "general_creative_neutral",
+                    "specialized_pack_logic": False,
+                },
+            )
         review_package = result.metadata.get("post_generation_review_package") if result is not None else None
         real_review_ran = isinstance(review_package, dict) and any(
             isinstance(item, dict) and self._is_verified_real_pixel_inspection(item)
