@@ -31,6 +31,30 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc265_reference_channel_recovery 
 )
 
 
+_TEST_REQUIREMENT_ISSUER = {
+    "authority": "v3_server_template_requirement_issuer",
+    "schema_version": "doc270_requirement_issuer_v1",
+    "version": "doc270_phase2_contract_test_issuer_v1",
+}
+_TEST_ANALYZER = {
+    "authority": "v3_server_image_evidence",
+    "schema_version": "doc270_image_evidence_analyzer_v1",
+    "version": "doc270_phase2_contract_test_analyzer_v1",
+}
+
+
+def _command_binding(project_id: str) -> dict[str, Any]:
+    binding = {
+        "schema_version": "doc270_shadow_command_handle_v1",
+        "authority": "v3_server_shadow_command_handle",
+        "command_id": f"server-command-{project_id}",
+        "plan_id": f"server-plan-{project_id}",
+        "plan_version": 1,
+    }
+    binding["command_binding_digest"] = source_library.canonical_digest(binding)
+    return binding
+
+
 def _project_library(tmp_path, *, template_id: str = "general_template") -> tuple[Any, dict[str, Any], dict[str, Any], list[str]]:
     handlers, _catalog = _handlers(tmp_path)
     if template_id == "ecommerce_template":
@@ -82,17 +106,9 @@ def _requirement(
 ) -> dict[str, Any]:
     requirement = {
         "schema_version": "doc270_reference_requirement_v1",
-        "issuer": {
-            "authority": "v3_server_template_requirement_issuer",
-            "schema_version": "doc270_requirement_issuer_v1",
-            "version": "doc270_phase2_contract_fixture_v1",
-        },
+        "issuer": deepcopy(_TEST_REQUIREMENT_ISSUER),
         "project_id": project_id,
-        "command_plan_binding": {
-            "command_id": f"server-command-{project_id}",
-            "plan_id": f"server-plan-{project_id}",
-            "plan_version": 1,
-        },
+        "command_plan_binding": _command_binding(project_id),
         "output_index": output_index,
         "output_identity": f"server-output-{output_index}",
         "requirement_nonce": f"server-nonce-{project_id}-{output_index}-{kind}",
@@ -112,11 +128,7 @@ def _evidence(
 ) -> dict[str, Any]:
     profile = {
         "schema_version": "doc270_source_evidence_profile_v2",
-        "analyzer": {
-            "authority": "v3_server_image_evidence",
-            "schema_version": "doc270_image_evidence_analyzer_v1",
-            "version": "controlled-test-evidence-v1",
-        },
+        "analyzer": deepcopy(_TEST_ANALYZER),
         "project_id": project_id,
         "reference_id": entry["reference_id"],
         "asset_id": entry["asset_id"],
@@ -154,6 +166,15 @@ def _server_context(
         "requirement_lookup": lambda binding: deepcopy(requirement),
         "plan_binding_lookup": lambda binding: deepcopy(plan_binding),
         "evidence_lookup": lambda entry: deepcopy(evidence_by_reference.get(entry["reference_id"])),
+        "capability_lookup": lambda name: deepcopy(
+            {
+                "requirement_issuer": _TEST_REQUIREMENT_ISSUER,
+                "image_evidence_analyzer": _TEST_ANALYZER,
+                "template:general_template": {"shadow_enabled": True},
+                "template:ecommerce_template": {"shadow_enabled": True},
+                "template:photographer_template": {"shadow_enabled": False},
+            }.get(name)
+        ),
     }
 
 
@@ -168,6 +189,7 @@ def _resolve(*, server_context: dict[str, Any]) -> dict[str, Any]:
         trusted_requirement_lookup=server_context["requirement_lookup"],
         trusted_plan_binding_lookup=server_context["plan_binding_lookup"],
         evidence_lookup=server_context["evidence_lookup"],
+        trusted_capability_lookup=server_context["capability_lookup"],
     )
 
 
@@ -183,6 +205,10 @@ def _assert_receipt_binding(
         "version": "doc270_shadow_matcher_v1",
     }
     assert receipt["requirement_digest"] == requirement["requirement_digest"]
+    assert receipt["command_plan_binding_digest"] == requirement["command_plan_binding"]["command_binding_digest"]
+    assert receipt["output_identity"] == requirement["output_identity"]
+    assert receipt["requirement_nonce"] == requirement["requirement_nonce"]
+    assert receipt["evidence_profile_digests"] == [item["profile_digest"] for item in receipt["matched_references"]]
     assert receipt["receipt_digest"] == source_library.canonical_digest(
         {key: value for key, value in receipt.items() if key != "receipt_digest"}
     )
@@ -439,15 +465,13 @@ def test_doc270_phase2_resolver_has_no_persistence_boundary_and_returns_ephemera
     context = _server_context(
         handlers=handlers,
         project=project,
-        snapshot=snapshot,
-        asset_ids=asset_ids,
         requirement=_requirement(
             project_id=project["project_id"],
             output_index=1,
             kind="object_rear_structure",
             source_snapshot_digest=snapshot["snapshot_digest"],
         ),
-        evidence={
+        evidence_by_reference={
             candidate["reference_id"]: _evidence(
                 candidate,
                 project_id=project["project_id"],
@@ -456,7 +480,6 @@ def test_doc270_phase2_resolver_has_no_persistence_boundary_and_returns_ephemera
                 subject_kind="object_or_product",
             )
         },
-        candidates={candidate["reference_id"]: candidate},
     )
     resolver = source_library.resolve_doc270_shadow_reference_requirements  # type: ignore[attr-defined]
     parameters = inspect.signature(resolver).parameters
@@ -479,17 +502,109 @@ def test_doc270_phase2_resolver_has_no_persistence_boundary_and_returns_ephemera
     )
     receipt = _resolve(server_context=context)
     assert set(receipt) <= {
-        "receipt_version",
+        "schema_version",
         "state",
         "project_id",
         "output_index",
         "source_library_snapshot_digest",
+        "source_resolver",
         "requirement_digest",
+        "command_plan_binding_digest",
+        "output_identity",
+        "requirement_nonce",
         "matched_references",
+        "evidence_profile_digests",
         "rationale_codes",
+        "ranking_tie_break",
+        "shadow_only",
         "receipt_digest",
     }
     assert receipt["state"] in {"resolved", "insufficient_evidence", "ambiguous", "invalid", "not_applicable"}
+
+
+@pytest.mark.parametrize("mutation", ["extra", "missing", "wrong_type", "cross_project"])
+def test_doc270_phase2_command_handle_is_strict_and_not_forgable(tmp_path, mutation: str) -> None:
+    handlers, project, snapshot, asset_ids = _project_library(tmp_path)
+    candidate = _entry(snapshot, asset_ids[0])
+    requirement = _requirement(
+        project_id=project["project_id"], output_index=1, kind="object_detail", source_snapshot_digest=snapshot["snapshot_digest"]
+    )
+    context = _server_context(
+        handlers=handlers,
+        project=project,
+        requirement=requirement,
+        evidence_by_reference={candidate["reference_id"]: _evidence(
+            candidate, project_id=project["project_id"], affordance="object_detail", view_kind="detail_or_macro", subject_kind="object_or_product"
+        )},
+    )
+    binding = context["command_binding"]
+    if mutation == "extra":
+        binding["browser_hint"] = "forged"
+    elif mutation == "missing":
+        binding.pop("plan_id")
+    elif mutation == "wrong_type":
+        binding["plan_version"] = "1"
+    else:
+        binding["command_id"] = "server-command-project-other"
+        binding["command_binding_digest"] = source_library.canonical_digest(
+            {key: value for key, value in binding.items() if key != "command_binding_digest"}
+        )
+    receipt = _resolve(server_context=context)
+    assert receipt["state"] == "invalid"
+    assert receipt["matched_references"] == []
+
+
+def test_doc270_phase2_upload_lookup_errors_are_private_invalid_results(tmp_path) -> None:
+    handlers, project, snapshot, asset_ids = _project_library(tmp_path)
+    candidate = _entry(snapshot, asset_ids[0])
+    requirement = _requirement(
+        project_id=project["project_id"], output_index=1, kind="object_detail", source_snapshot_digest=snapshot["snapshot_digest"]
+    )
+    context = _server_context(
+        handlers=handlers,
+        project=project,
+        requirement=requirement,
+        evidence_by_reference={candidate["reference_id"]: _evidence(
+            candidate, project_id=project["project_id"], affordance="object_detail", view_kind="detail_or_macro", subject_kind="object_or_product"
+        )},
+    )
+    context["upload_lookup"] = lambda _asset_id: (_ for _ in ()).throw(RuntimeError("private upload failure"))
+    receipt = _resolve(server_context=context)
+    assert receipt["state"] == "invalid"
+    assert receipt["rationale_codes"] == ["trusted_source_library_unavailable"]
+    assert "private upload failure" not in str(receipt)
+
+
+@pytest.mark.parametrize("mutation", ["subject_scalar", "view_unknown", "affordance_scalar", "affordance_duplicate", "affordance_unknown"])
+def test_doc270_phase2_evidence_structure_is_strict_before_matching(tmp_path, mutation: str) -> None:
+    handlers, project, snapshot, asset_ids = _project_library(tmp_path)
+    candidate = _entry(snapshot, asset_ids[0])
+    evidence = _evidence(
+        candidate, project_id=project["project_id"], affordance="object_detail", view_kind="detail_or_macro", subject_kind="object_or_product"
+    )
+    if mutation == "subject_scalar":
+        evidence["subject_kind"] = ["object_or_product"]
+    elif mutation == "view_unknown":
+        evidence["view_kind"] = "filename_derived"
+    elif mutation == "affordance_scalar":
+        evidence["affordances"] = "object_detail"
+    elif mutation == "affordance_duplicate":
+        evidence["affordances"] = ["object_detail", "object_detail"]
+    else:
+        evidence["affordances"] = ["object_detail", "unsupported_claim"]
+    evidence["profile_digest"] = source_library.canonical_digest(
+        {key: value for key, value in evidence.items() if key != "profile_digest"}
+    )
+    receipt = _resolve(server_context=_server_context(
+        handlers=handlers,
+        project=project,
+        requirement=_requirement(
+            project_id=project["project_id"], output_index=1, kind="object_detail", source_snapshot_digest=snapshot["snapshot_digest"]
+        ),
+        evidence_by_reference={candidate["reference_id"]: evidence},
+    ))
+    assert receipt["state"] == "invalid"
+    assert receipt["matched_references"] == []
 
 
 def test_doc270_phase2_unknown_requirement_kind_is_invalid_even_with_server_marker(tmp_path) -> None:
@@ -644,6 +759,57 @@ def test_doc270_phase2_general_prompt_only_is_not_applicable_and_does_not_create
     view = handlers.get_project(project["project_id"])
     assert "doc270_source_library_binding_receipts" not in view["metadata"]
     assert "current_operation" not in view["metadata"]
+
+
+@pytest.mark.parametrize("maximum_sources", [0, -1, 99])
+def test_doc270_phase2_no_reference_still_requires_bounded_positive_cap(tmp_path, maximum_sources: int) -> None:
+    handlers, project, snapshot, _asset_ids = _project_library(tmp_path)
+    requirement = _requirement(
+        project_id=project["project_id"],
+        output_index=1,
+        kind="no_reference",
+        source_snapshot_digest=snapshot["snapshot_digest"],
+        strength="optional",
+        maximum_sources=maximum_sources,
+    )
+    receipt = _resolve(server_context=_server_context(
+        handlers=handlers,
+        project=project,
+        requirement=requirement,
+        evidence_by_reference={},
+    ))
+    assert receipt["state"] == "invalid"
+    assert receipt["matched_references"] == []
+    assert receipt["rationale_codes"] == ["trusted_requirement_invalid"]
+
+
+def test_doc270_phase2_unknown_template_capability_is_not_applicable(tmp_path) -> None:
+    handlers, project, snapshot, asset_ids = _project_library(tmp_path)
+    candidate = _entry(snapshot, asset_ids[0])
+    requirement = _requirement(
+        project_id=project["project_id"],
+        output_index=1,
+        kind="object_detail",
+        source_snapshot_digest=snapshot["snapshot_digest"],
+    )
+    requirement["template_id"] = "unregistered_template"
+    requirement["requirement_digest"] = source_library.canonical_digest(
+        {key: value for key, value in requirement.items() if key != "requirement_digest"}
+    )
+    receipt = _resolve(server_context=_server_context(
+        handlers=handlers,
+        project=project,
+        requirement=requirement,
+        evidence_by_reference={candidate["reference_id"]: _evidence(
+            candidate,
+            project_id=project["project_id"],
+            affordance="object_detail",
+            view_kind="detail_or_macro",
+            subject_kind="object_or_product",
+        )},
+    ))
+    assert receipt["state"] == "not_applicable"
+    assert receipt["matched_references"] == []
 
 
 def test_doc270_phase2_ecommerce_shadow_result_preserves_doc263_doc269_active_authority(tmp_path) -> None:
