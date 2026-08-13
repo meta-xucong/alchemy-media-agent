@@ -232,11 +232,16 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
         base_url: str | None,
         model: str | None,
         timeout_seconds: float = 30.0,
+        preferred_protocol: str = "responses",
     ) -> None:
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "").strip()
         self.model = str(model or "").strip()
         self.timeout_seconds = max(0.5, min(float(timeout_seconds), 90.0))
+        normalized_protocol = str(preferred_protocol or "").strip().lower()
+        if normalized_protocol not in {"responses", "chat"}:
+            raise ValueError("ecommerce_source_analysis_protocol_invalid")
+        self.preferred_protocol = normalized_protocol
 
     def available(self) -> bool:
         return bool(self.api_key and self.base_url and self.model)
@@ -257,19 +262,26 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
 
             client = OpenAI(api_key=self.api_key, base_url=self.base_url, max_retries=0)
             data_url = f"data:{mime_type};base64,{base64.b64encode(content).decode('ascii')}"
+            parsed = self._analyze_with_protocol_compatibility(client, data_url)
+        except Exception:
+            return None
+        return [parsed] if isinstance(parsed, dict) else None
+
+    def _analyze_with_protocol_compatibility(self, client: Any, data_url: str) -> dict[str, Any]:
+        instruction = (
+            "Classify only this image into the supplied JSON schema. "
+            "Do not infer identity, filename, product name, user intent, or prompt."
+        )
+        if self.preferred_protocol == "chat":
+            return self._analyze_with_chat(client, instruction, data_url)
+        try:
             response = client.responses.create(
                 model=self.model,
                 input=[
                     {
                         "role": "user",
                         "content": [
-                            {
-                                "type": "input_text",
-                                "text": (
-                                    "Classify only this image into the supplied JSON schema. "
-                                    "Do not infer identity, filename, product name, user intent, or prompt."
-                                ),
-                            },
+                            {"type": "input_text", "text": instruction},
                             {"type": "input_image", "image_url": data_url},
                         ],
                     }
@@ -285,10 +297,40 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
                 timeout=self.timeout_seconds,
                 max_output_tokens=180,
             )
-            parsed = json.loads(str(getattr(response, "output_text", "") or ""))
-        except Exception:
-            return None
-        return [parsed] if isinstance(parsed, dict) else None
+        except Exception as exc:
+            # Use the same gateway compatibility rule as V3's existing Vision
+            # route. A timed-out request may have reached the upstream model,
+            # so it is never resent through a second protocol.
+            if _is_timeout_error(exc) or not _is_protocol_compatibility_error(exc):
+                raise
+        else:
+            raw = str(getattr(response, "output_text", "") or "")
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise ValueError("ecommerce_source_evidence_response_invalid")
+            return parsed
+        return self._analyze_with_chat(client, instruction, data_url)
+
+    def _analyze_with_chat(self, client: Any, instruction: str, data_url: str) -> dict[str, Any]:
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": instruction},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }
+            ],
+            response_format={"type": "json_object"},
+            timeout=self.timeout_seconds,
+            max_tokens=180,
+        )
+        parsed = json.loads(str(response.choices[0].message.content or ""))
+        if not isinstance(parsed, dict):
+            raise ValueError("ecommerce_source_evidence_response_invalid")
+        return parsed
 
 
 def issuer_from_environment() -> EcommerceViewActivationIssuer:
@@ -367,13 +409,66 @@ def _configured_production_analyzer() -> EcommerceSourceEvidenceAnalyzer | None:
         timeout_seconds = float(os.getenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_TIMEOUT_SECONDS", "30"))
     except ValueError:
         return None
+    api_key = os.getenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_API_KEY")
+    base_url = os.getenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_BASE_URL")
+    model = os.getenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_MODEL")
+    preferred_protocol = "responses"
+    if not all(isinstance(value, str) and value.strip() for value in (api_key, base_url, model)):
+        api_key, base_url, model = _existing_v3_lab_vision_route()
+        # The existing LAB route is a V3-controlled Doubao/BytePlus visual
+        # route. Its Chat image JSON contract is certified independently;
+        # call it directly so a Responses attempt cannot consume the same
+        # source-analysis operation before the known-compatible protocol.
+        preferred_protocol = "chat"
     analyzer = OpenAICompatibleEcommerceSourceEvidenceAnalyzer(
-        api_key=os.getenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_API_KEY"),
-        base_url=os.getenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_BASE_URL"),
-        model=os.getenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_MODEL"),
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
         timeout_seconds=timeout_seconds,
+        preferred_protocol=preferred_protocol,
     )
     return analyzer if analyzer.available() else None
+
+
+def _existing_v3_lab_vision_route() -> tuple[str | None, str | None, str | None]:
+    """Read only the existing configured V3 vision route, never the Brain.
+
+    This mirrors the server-owned Body source-analysis wiring. It deliberately
+    avoids generic OpenAI/LLM/image-generation settings so source analysis is
+    enabled only when the deployment has already designated a visual model.
+    """
+
+    try:
+        from ..shared_capabilities.visual_cluster.vision_provider import (
+            _lab_vision_enabled,
+            _lab_vision_setting,
+        )
+    except Exception:
+        return None, None, None
+    if not _lab_vision_enabled():
+        return None, None, None
+    values = tuple(_lab_vision_setting(field) for field in ("api_key", "base_url", "model"))
+    if not all(isinstance(value, str) and value.strip() for value in values):
+        return None, None, None
+    return values[0].strip(), values[1].strip(), values[2].strip()
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    text = str(exc).strip().lower()
+    return "timeout" in name or "timed out" in text or "time-out" in text
+
+
+def _is_protocol_compatibility_error(exc: Exception) -> bool:
+    """Allow one Chat fallback only for an explicit Responses incompatibility."""
+
+    name = type(exc).__name__.lower()
+    text = str(exc).strip().lower()
+    protocol_terms = ("responses endpoint", "responses api", "responses protocol", "unsupported endpoint")
+    return (
+        ("badrequest" in name or "notfound" in name)
+        and any(term in text for term in protocol_terms)
+    )
 
 
 def _bound_observed_profile(

@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "policy_authority": "v3_ecommerce_deliverable_policy",
+  "policy_version": "doc270_ecommerce_view_policy_v1",
+  "requirements_by_output_count": {
+    "1": [
+      {"output_index": 1, "kind": "object_front_presentation"}
+    ],
+    "2": [
+      {"output_index": 1, "kind": "object_front_presentation"},
+      {"output_index": 2, "kind": "object_rear_structure"}
+    ],
+    "3": [
+      {"output_index": 1, "kind": "object_front_presentation"},
+      {"output_index": 2, "kind": "object_rear_structure"},
+      {"output_index": 3, "kind": "object_detail"}
+    ]
+  }
+}

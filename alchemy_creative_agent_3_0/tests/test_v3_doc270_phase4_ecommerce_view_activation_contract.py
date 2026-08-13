@@ -9,6 +9,8 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,6 +25,7 @@ from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatu
 from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
     ConfiguredEcommerceViewActivationIssuer,
     DisabledEcommerceViewActivationIssuer,
+    OpenAICompatibleEcommerceSourceEvidenceAnalyzer,
     ecommerce_view_activation_health,
     issuer_from_environment,
 )
@@ -625,6 +628,15 @@ def test_doc270_phase4_partial_unavailable_original_does_not_block_satisfiable_m
 
 
 def test_doc270_phase4_environment_policy_rejects_static_profiles_and_missing_dynamic_analyzer(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    original = {
+        "lab_vision_enabled": settings.lab_vision_enabled,
+        "lab_vision_provider": settings.lab_vision_provider,
+        "lab_doubao_vision_api_key": settings.lab_doubao_vision_api_key,
+        "lab_doubao_vision_base_url": settings.lab_doubao_vision_base_url,
+        "lab_doubao_vision_model": settings.lab_doubao_vision_model,
+    }
     policy_path = tmp_path / "ecommerce-policy.json"
     policy_path.write_text(
         json.dumps(
@@ -651,19 +663,217 @@ def test_doc270_phase4_environment_policy_rejects_static_profiles_and_missing_dy
         ),
         encoding="utf-8",
     )
-    monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_API_KEY")
-    assert isinstance(issuer_from_environment(), DisabledEcommerceViewActivationIssuer)
+    try:
+        monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_API_KEY")
+        monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_BASE_URL")
+        monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_MODEL")
+        settings.lab_vision_enabled = False
+        assert isinstance(issuer_from_environment(), DisabledEcommerceViewActivationIssuer)
 
-    monkeypatch.setenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_API_KEY", "test-key")
-    configured = issuer_from_environment()
+        settings.lab_vision_enabled = True
+        settings.lab_vision_provider = "doubao"
+        settings.lab_doubao_vision_api_key = "test-lab-key"
+        settings.lab_doubao_vision_base_url = "https://vision.example.test/v1"
+        settings.lab_doubao_vision_model = "vision-test-model"
+        configured = issuer_from_environment()
+        health = ecommerce_view_activation_health()
+    finally:
+        for key, value in original.items():
+            setattr(settings, key, value)
     assert isinstance(configured, ConfiguredEcommerceViewActivationIssuer)
     assert configured.capability(project_id="project_configured") == _CAPABILITY
-    assert ecommerce_view_activation_health() == {
+    assert configured.analyzer.preferred_protocol == "chat"
+    assert health == {
         "component": "doc270_ecommerce_source_analysis",
         "configured": True,
         "enabled": True,
         "network_checked": False,
     }
+
+
+def test_doc270_phase4_bundled_policy_activates_only_supported_output_counts(monkeypatch) -> None:
+    from app.config import settings
+
+    original = {
+        "lab_vision_enabled": settings.lab_vision_enabled,
+        "lab_vision_provider": settings.lab_vision_provider,
+        "lab_doubao_vision_api_key": settings.lab_doubao_vision_api_key,
+        "lab_doubao_vision_base_url": settings.lab_doubao_vision_base_url,
+        "lab_doubao_vision_model": settings.lab_doubao_vision_model,
+    }
+    policy_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "project_mode"
+        / "policies"
+        / "doc270_ecommerce_view_policy_v1.json"
+    )
+    try:
+        monkeypatch.setenv("ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH", str(policy_path))
+        monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_API_KEY", raising=False)
+        monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_BASE_URL", raising=False)
+        monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_MODEL", raising=False)
+        settings.lab_vision_enabled = True
+        settings.lab_vision_provider = "doubao"
+        settings.lab_doubao_vision_api_key = "test-lab-key"
+        settings.lab_doubao_vision_base_url = "https://vision.example.test/v1"
+        settings.lab_doubao_vision_model = "vision-test-model"
+        configured = issuer_from_environment()
+    finally:
+        for key, value in original.items():
+            setattr(settings, key, value)
+    assert isinstance(configured, ConfiguredEcommerceViewActivationIssuer)
+    assert [configured.supports_output_count(expected_output_count=count) for count in range(1, 5)] == [
+        True,
+        True,
+        True,
+        False,
+    ]
+
+
+def test_doc270_phase4_analyzer_uses_chat_only_for_non_timeout_responses_rejection(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class BadRequestError(RuntimeError):
+        pass
+
+    class _Responses:
+        def create(self, **_kwargs):  # noqa: ANN003
+            calls.append("responses")
+            raise BadRequestError("responses endpoint unsupported")
+
+    class _ChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("chat")
+            assert kwargs["response_format"] == {"type": "json_object"}
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "evidence_state": "observed",
+                    "subject_kind": "object_or_product",
+                    "view_kind": "front",
+                    "affordances": ["object_front_presentation"],
+                })))]
+            )
+
+    class _Client:
+        responses = _Responses()
+        chat = SimpleNamespace(completions=_ChatCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: _Client()))
+    analyzer = OpenAICompatibleEcommerceSourceEvidenceAnalyzer(
+        api_key="test-key", base_url="https://vision.example.test/v1", model="vision-test"
+    )
+    result = analyzer.analyze(
+        project_id="project_doc270",
+        entries=[{"analysis_bytes": b"source", "mime_type": "image/png"}],
+    )
+    assert calls == ["responses", "chat"]
+    assert result == [{
+        "evidence_state": "observed",
+        "subject_kind": "object_or_product",
+        "view_kind": "front",
+        "affordances": ["object_front_presentation"],
+    }]
+
+
+def test_doc270_phase4_analyzer_does_not_resubmit_timeout_through_chat(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _Responses:
+        def create(self, **_kwargs):  # noqa: ANN003
+            calls.append("responses")
+            raise TimeoutError("request timed out")
+
+    class _ChatCompletions:
+        def create(self, **_kwargs):  # noqa: ANN003
+            calls.append("chat")
+            raise AssertionError("timeout must not be submitted through Chat")
+
+    class _Client:
+        responses = _Responses()
+        chat = SimpleNamespace(completions=_ChatCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: _Client()))
+    analyzer = OpenAICompatibleEcommerceSourceEvidenceAnalyzer(
+        api_key="test-key", base_url="https://vision.example.test/v1", model="vision-test"
+    )
+    assert analyzer.analyze(
+        project_id="project_doc270",
+        entries=[{"analysis_bytes": b"source", "mime_type": "image/png"}],
+    ) is None
+    assert calls == ["responses"]
+
+
+def test_doc270_phase4_analyzer_does_not_resubmit_ordinary_responses_failure(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _Responses:
+        def create(self, **_kwargs):  # noqa: ANN003
+            calls.append("responses")
+            raise RuntimeError("upstream rejected this request")
+
+    class _ChatCompletions:
+        def create(self, **_kwargs):  # noqa: ANN003
+            calls.append("chat")
+            raise AssertionError("ordinary failure must not be submitted through Chat")
+
+    class _Client:
+        responses = _Responses()
+        chat = SimpleNamespace(completions=_ChatCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: _Client()))
+    analyzer = OpenAICompatibleEcommerceSourceEvidenceAnalyzer(
+        api_key="test-key", base_url="https://vision.example.test/v1", model="vision-test"
+    )
+    assert analyzer.analyze(
+        project_id="project_doc270",
+        entries=[{"analysis_bytes": b"source", "mime_type": "image/png"}],
+    ) is None
+    assert calls == ["responses"]
+
+
+def test_doc270_phase4_lab_analyzer_uses_certified_chat_without_responses_attempt(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _Responses:
+        def create(self, **_kwargs):  # noqa: ANN003
+            calls.append("responses")
+            raise AssertionError("LAB route must use its certified Chat protocol directly")
+
+    class _ChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("chat")
+            assert kwargs["response_format"] == {"type": "json_object"}
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                    "evidence_state": "observed",
+                    "subject_kind": "object_or_product",
+                    "view_kind": "front",
+                    "affordances": ["object_front_presentation"],
+                })))]
+            )
+
+    class _Client:
+        responses = _Responses()
+        chat = SimpleNamespace(completions=_ChatCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: _Client()))
+    analyzer = OpenAICompatibleEcommerceSourceEvidenceAnalyzer(
+        api_key="test-key",
+        base_url="https://vision.example.test/v1",
+        model="vision-test",
+        preferred_protocol="chat",
+    )
+    assert analyzer.analyze(
+        project_id="project_doc270",
+        entries=[{"analysis_bytes": b"source", "mime_type": "image/png"}],
+    ) == [{
+        "evidence_state": "observed",
+        "subject_kind": "object_or_product",
+        "view_kind": "front",
+        "affordances": ["object_front_presentation"],
+    }]
+    assert calls == ["chat"]
 
 
 def test_doc270_phase4_private_store_freezes_nested_records_and_persists_outside_project_json(tmp_path) -> None:

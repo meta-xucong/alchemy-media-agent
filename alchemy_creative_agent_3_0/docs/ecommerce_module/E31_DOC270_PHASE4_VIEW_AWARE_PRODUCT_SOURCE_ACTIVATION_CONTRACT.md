@@ -1,6 +1,6 @@
 # E31 - Doc270 Phase 4 View-Aware Product Source Activation Contract
 
-Status: Phase 4A contract and deterministic red-test authority
+Status: Phase 4 runtime contract and deterministic activation authority
 
 ## 1. Scope
 
@@ -133,6 +133,22 @@ profiles.
 
 ## 7. Delivery Boundary
 
-Phase 4A consists only of this contract and red tests. No runtime, Provider,
-MCP, ImageGen, VPS, live project, job, or output action is authorized. Runtime
-may begin only after this contract is independently accepted.
+The server gate is enabled only when both of the following are present:
+
+1. `ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH` resolves to a server-owned,
+   versioned JSON policy. The release provides the current policy file under
+   `app/project_mode/policies`; browser input and uploaded files can never
+   provide it.
+2. A source analyzer is available. A dedicated E31 credential/base/model may
+   be configured, otherwise E31 may read only the already-enabled V3
+   `LAB_*` vision route. It never falls back to a general Brain, a text-only
+   LLM, or an image-generation route.
+
+The dedicated E31 route first uses structured Responses. A gateway protocol
+rejection may use one Chat JSON compatibility request. The already-certified
+V3 `LAB_*` visual route uses its certified Chat image-JSON protocol directly;
+it is never preceded by a duplicate Responses request. A timeout is never
+submitted through a second protocol because it may already have reached the
+model. Any absent, invalid, or unavailable analysis produces the terminal
+source-analysis state; it does not create a generation job or automatically
+retry.
