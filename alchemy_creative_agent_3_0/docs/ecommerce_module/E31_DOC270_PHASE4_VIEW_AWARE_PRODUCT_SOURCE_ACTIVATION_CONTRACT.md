@@ -152,3 +152,10 @@ submitted through a second protocol because it may already have reached the
 model. Any absent, invalid, or unavailable analysis produces the terminal
 source-analysis state; it does not create a generation job or automatically
 retry.
+
+E31 reserves one server-owned output budget of 640 tokens for both compatible
+source-analysis transports. This E31-only upstream runtime budget leaves room
+for a vision model's hidden reasoning and the required structured content; it
+does not alter timeout or retry semantics, relax parsing, or change any
+Provider-generation budget. The server still accepts only the closed four-field
+JSON contract and rejects malformed or incomplete output as unavailable.

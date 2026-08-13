@@ -25,6 +25,7 @@ from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatu
 from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
     ConfiguredEcommerceViewActivationIssuer,
     DisabledEcommerceViewActivationIssuer,
+    E31_SOURCE_ANALYSIS_OUTPUT_TOKEN_BUDGET,
     OpenAICompatibleEcommerceSourceEvidenceAnalyzer,
     ecommerce_view_activation_health,
     issuer_from_environment,
@@ -738,14 +739,18 @@ def test_doc270_phase4_analyzer_uses_chat_only_for_non_timeout_responses_rejecti
         pass
 
     class _Responses:
-        def create(self, **_kwargs):  # noqa: ANN003
+        def create(self, **kwargs):  # noqa: ANN003
             calls.append("responses")
+            assert kwargs["max_output_tokens"] == E31_SOURCE_ANALYSIS_OUTPUT_TOKEN_BUDGET
+            assert kwargs["max_output_tokens"] != 180
             raise BadRequestError("responses endpoint unsupported")
 
     class _ChatCompletions:
         def create(self, **kwargs):  # noqa: ANN003
             calls.append("chat")
             assert kwargs["response_format"] == {"type": "json_object"}
+            assert kwargs["max_tokens"] == E31_SOURCE_ANALYSIS_OUTPUT_TOKEN_BUDGET
+            assert kwargs["max_tokens"] != 180
             message = kwargs["messages"][0]["content"][0]["text"]
             assert "exactly these four fields" in message
             for field in ("evidence_state", "subject_kind", "view_kind", "affordances"):
@@ -865,6 +870,8 @@ def test_doc270_phase4_lab_analyzer_uses_certified_chat_without_responses_attemp
         def create(self, **kwargs):  # noqa: ANN003
             calls.append("chat")
             assert kwargs["response_format"] == {"type": "json_object"}
+            assert kwargs["max_tokens"] == E31_SOURCE_ANALYSIS_OUTPUT_TOKEN_BUDGET
+            assert kwargs["max_tokens"] != 180
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "evidence_state": "observed",

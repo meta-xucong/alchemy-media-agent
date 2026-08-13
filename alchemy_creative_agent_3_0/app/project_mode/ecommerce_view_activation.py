@@ -50,6 +50,10 @@ _SEMANTIC_AFFORDANCES = (
     "environment",
     "logo_or_mark",
 )
+# This route's vision model may spend hidden reasoning tokens before emitting
+# the strict JSON response. Keep both compatible protocols on one E31-only
+# budget so either transport retains room for the four-field contract.
+E31_SOURCE_ANALYSIS_OUTPUT_TOKEN_BUDGET = 640
 _ANALYZER_IDENTITY = {
     "authority": "v3_server_image_evidence",
     "schema_version": "doc270_image_evidence_analyzer_v1",
@@ -311,7 +315,7 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
                     }
                 },
                 timeout=self.timeout_seconds,
-                max_output_tokens=180,
+                max_output_tokens=E31_SOURCE_ANALYSIS_OUTPUT_TOKEN_BUDGET,
             )
         except Exception as exc:
             # Use the same gateway compatibility rule as V3's existing Vision
@@ -338,7 +342,7 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
             ],
             response_format={"type": "json_object"},
             timeout=self.timeout_seconds,
-            max_tokens=180,
+            max_tokens=E31_SOURCE_ANALYSIS_OUTPUT_TOKEN_BUDGET,
         )
         return _validated_semantic_response(
             json.loads(str(response.choices[0].message.content or ""))
