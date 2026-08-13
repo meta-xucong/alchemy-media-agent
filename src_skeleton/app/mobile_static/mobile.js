@@ -5234,6 +5234,7 @@ function renderMobileV3EcommerceProjectViewReferences(project, ecommerceView) {
   const lockedIdentity = mobileV3EcommerceProjectViewItems(ecommerceView, "locked_person_identity");
   const selectedDirections = mobileV3EcommerceProjectViewItems(ecommerceView, "selected_continuation_directions");
   const history = mobileV3EcommerceProjectViewHistory(ecommerceView);
+  const sourceLibrary = mobileV3ProjectSourceLibraryEntries(project);
   const historyCount = history.delivered_outputs.length + history.review_withheld_outputs.length + history.failed_attempts.length;
   const totalCount = originalInputs.length + lockedIdentity.length + selectedDirections.length + historyCount;
   setText("#mobileV3ReferenceCount", `原图 ${originalInputs.length} · 人物 ${lockedIdentity.length} · 成片 ${selectedDirections.length}`);
@@ -5275,13 +5276,20 @@ function renderMobileV3EcommerceProjectViewReferences(project, ecommerceView) {
             use_policy: "product",
           };
       const isGeneratedReference = sourceKind === "selected_continuation_directions";
+      const sourceEntry = !isGeneratedReference
+        ? sourceLibrary.find((entry) => entry.association_reference_id === String(item.reference_id || "").trim())
+        : null;
+      const sourceState = sourceEntry?.availability_state || "";
+      const sourceUnavailable = Boolean(sourceEntry && sourceState !== "ready_verified");
       const thumb = mobileV3ReferenceThumb(ref);
       const referenceId = String(ref?.reference_id || "").trim();
       const outputId = mobileV3ReferenceContinuationIdentity(ref);
       const removalLabel = isGeneratedReference ? "取消沿用" : "不再作为商品依据";
       const note = isGeneratedReference
         ? "项目成片只作为延续方向；项目成片不会进入原始商品图。"
-        : "用户上传的原始商品图，作为当前商品事实依据。";
+        : sourceUnavailable
+          ? "这张项目原图需要处理后才能作为商品事实依据。"
+          : "用户上传的原始商品图，作为当前商品事实依据。";
       const tile = document.createElement("article");
       tile.className = "v3-mobile-reference-tile";
       tile.innerHTML = `
@@ -5289,7 +5297,7 @@ function renderMobileV3EcommerceProjectViewReferences(project, ecommerceView) {
         <div class="v3-mobile-reference-copy">
           <span class="v3-mobile-reference-origin">${isGeneratedReference ? "已选成片方向" : "原始商品图"}</span>
           <strong>${escapeHtml(item.label || (isGeneratedReference ? "已选延续方向" : "上传商品图"))}</strong>
-          <small>${escapeHtml(note)}</small>
+          <small>${escapeHtml(sourceUnavailable ? "需处理" : sourceEntry ? "已验证" : note)}</small>
           <div class="v3-mobile-reference-actions">
             <button type="button" data-mobile-v3-reference-action="remove" data-mobile-v3-reference-id="${escapeHtml(referenceId)}" data-mobile-v3-output-id="${escapeHtml(outputId)}" data-mobile-v3-reference-source="${escapeHtml(ref.source_type)}">${removalLabel}</button>
           </div>
@@ -5385,7 +5393,8 @@ function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
     return;
   }
   const groups = mobileV3ProjectReferenceGroups(project);
-  const referenceCount = groups.original_inputs.length + groups.continuation_outputs.length;
+  const sourceLibrary = mobileV3ProjectSourceLibraryEntries(project);
+  const referenceCount = (sourceLibrary.length || groups.original_inputs.length) + groups.continuation_outputs.length;
   setText("#mobileV3ReferenceCount", `原图 ${groups.original_inputs.length} · 成片 ${groups.continuation_outputs.length}`);
   board.innerHTML = "";
   board.classList.toggle("empty-v2-list", referenceCount === 0);
@@ -5393,6 +5402,8 @@ function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
     board.textContent = "还没有原始参考图或已选延续方向。满意成片可以单独作为下一步方向。";
     return;
   }
+
+  renderMobileV3ProjectSourceLibraryGroup(board, sourceLibrary);
   const usePolicyLabels = {
     product: "商品外观",
     product_identity: "商品外观",
@@ -5447,7 +5458,9 @@ function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
     board.appendChild(group);
   };
 
-  renderGroup("原始参考图", "来自你的上传，是本次生成依据。", groups.original_inputs, "original_inputs");
+  if (!sourceLibrary.length) {
+    renderGroup("原始参考图", "来自你的上传，是本次生成依据。", groups.original_inputs, "original_inputs");
+  }
   renderGroup("已选延续方向", "来自项目成片，只沿用允许继承的方向。", groups.continuation_outputs, "continuation_outputs");
 }
 
@@ -5971,6 +5984,56 @@ function mobileV3EcommerceProjectReferenceGroups(project = mobileV3State.current
     use_policy: "style",
   }));
   return { original_inputs, continuation_outputs };
+}
+
+function mobileV3ProjectSourceLibraryEntries(project = mobileV3State.currentProject) {
+  const library = project?.metadata?.project_source_library;
+  if (!library || typeof library !== "object" || library.schema_version !== "doc270_project_source_library_public_v1") return [];
+  return Array.isArray(library.entries)
+    ? library.entries.filter((entry) => entry && typeof entry === "object" && entry.association_reference_id)
+    : [];
+}
+
+function renderMobileV3ProjectSourceLibraryGroup(board, entries) {
+  if (!entries.length) return;
+  const states = {
+    ready_verified: "已验证",
+    upload_not_ready: "需处理",
+    upload_missing: "需处理",
+    file_missing: "需处理",
+    file_unreadable: "需处理",
+    content_drift: "需处理",
+    role_or_channel_invalid: "需处理",
+  };
+  const group = document.createElement("section");
+  group.className = "v3-mobile-reference-group project_source_library";
+  group.innerHTML = `
+    <div class="v3-mobile-reference-group-head">
+      <div>
+        <strong>项目原始素材</strong>
+        <small>当前项目上传的原图目录；人物资产、延续方向和历史记录保持分开。</small>
+      </div>
+      <span>${entries.length} 张</span>
+    </div>
+    <div class="v3-mobile-reference-group-grid"></div>
+  `;
+  const grid = group.querySelector(".v3-mobile-reference-group-grid");
+  entries.forEach((entry, index) => {
+    const available = entry.availability_state === "ready_verified";
+    const tile = document.createElement("article");
+    tile.className = "v3-mobile-reference-tile v3-mobile-source-library-tile";
+    tile.dataset.mobileV3SourceLibraryAssociation = String(entry.association_reference_id);
+    tile.innerHTML = `
+      <div class="v3-mobile-reference-thumb"><span>原图</span></div>
+      <div class="v3-mobile-reference-copy">
+        <span class="v3-mobile-reference-origin">${available ? "已验证原始素材" : "原始素材需处理"}</span>
+        <strong>${escapeHtml(entry.label || `项目原始素材 ${index + 1}`)}</strong>
+        <small>${escapeHtml(states[entry.availability_state] || "需处理")}</small>
+      </div>
+    `;
+    grid?.appendChild(tile);
+  });
+  board.appendChild(group);
 }
 
 function mobileV3LegacyContinuationReference(ref) {

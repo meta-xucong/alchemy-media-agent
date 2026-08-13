@@ -96,6 +96,7 @@ from .contracts import (
     TimelineItemType,
 )
 from .store import InMemoryProjectStore
+from .source_library import build_project_source_library, public_project_source_library
 from .templates import ProjectTemplateManifest, ProjectTemplateRegistry
 
 
@@ -116,6 +117,19 @@ _ECOMMERCE_IGNORED_CLIENT_METADATA = frozenset(
         "doc271_project_goal_snapshot",
         "provider_policy_blocked",
         "provider_failure_retry",
+        "doc270_project_source_library",
+        "doc270_reference_resolution_receipts",
+        "doc270_source_library_binding_receipts",
+        "source_evidence_profile",
+    }
+)
+
+_DOC270_IGNORED_CLIENT_METADATA = frozenset(
+    {
+        "doc270_project_source_library",
+        "doc270_reference_resolution_receipts",
+        "doc270_source_library_binding_receipts",
+        "source_evidence_profile",
     }
 )
 
@@ -161,6 +175,9 @@ class V3ProjectModeService:
         self.product_service.doc271_project_goal_snapshot_lookup = self._doc271_project_goal_snapshot
         self.product_service.doc271_command_attempt_association_lookup = (
             self._doc271_command_attempt_association
+        )
+        self.product_service.doc270_source_library_snapshot_lookup = (
+            self._doc270_project_source_library_by_id
         )
 
     def list_projects(self, limit: int = 20, owner_user_id: int | None = None) -> ProjectListResponse:
@@ -815,6 +832,19 @@ class V3ProjectModeService:
     ) -> ProductJobStatus:
         project = self._require_project(project_id)
         job_request = self._coerce_create_project_job_request(request)
+        # Doc270 Phase 1 fields are server-owned compatibility evidence.  A
+        # browser may not author them for any template, including General or
+        # Photography; trusted E-Commerce code adds its own internal snapshot
+        # and receipt after canonical admission.
+        job_request = job_request.model_copy(
+            update={
+                "metadata": {
+                    key: value
+                    for key, value in dict(job_request.metadata or {}).items()
+                    if key not in _DOC270_IGNORED_CLIENT_METADATA
+                }
+            }
+        )
         template_manifest = self._ensure_active_template(job_request.template_id)
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID and (
             job_request.suite_slot_request
@@ -892,6 +922,7 @@ class V3ProjectModeService:
             # server-owned product pool.
             self._ensure_project_product_reference_integrity(project)
             uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(project, [])
+            doc270_project_source_library = self._doc270_project_source_library(project)
             current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
             doc271_command_direction = str(job_request.user_input or project.user_goal or "").strip()
             try:
@@ -1085,6 +1116,7 @@ class V3ProjectModeService:
                 canonical_product_asset_ids=uploaded_asset_ids,
                 binding_service=self.project_visual_asset_binding_service,
                 doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
+                doc270_project_source_library=doc270_project_source_library,
             )
             if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
             and not _trusted_capability_continuation
@@ -7484,6 +7516,9 @@ class V3ProjectModeService:
             **self._metadata(),
             "project_outputs": self._project_output_items(project, limit=60),
         }
+        metadata["project_source_library"] = public_project_source_library(
+            self._doc270_project_source_library(project)
+        )
         if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
             metadata["ecommerce_project_view"] = self._ecommerce_project_view(project)
             operation = self._ecommerce_current_operation(project)
@@ -7537,6 +7572,18 @@ class V3ProjectModeService:
             "imports_lab_runtime": False,
             "ecommerce_template_locked": ecommerce_locked,
         }
+
+    def _doc270_project_source_library(self, project: ProjectRecord) -> dict[str, Any]:
+        """Build the current read-only original-source snapshot for Doc270."""
+
+        return build_project_source_library(
+            project_id=project.project_id,
+            references=list(project.reference_assets),
+            upload_lookup=self.product_service.get_uploaded_asset,
+        )
+
+    def _doc270_project_source_library_by_id(self, project_id: str) -> dict[str, Any]:
+        return self._doc270_project_source_library(self._require_project(project_id))
 
     def _title_from_goal(self, goal: str) -> str:
         clean = goal.strip().replace("\n", " ")

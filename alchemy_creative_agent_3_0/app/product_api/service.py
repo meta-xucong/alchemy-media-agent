@@ -1151,6 +1151,7 @@ class V3ProductApiService:
         canonical_product_asset_ids: list[str],
         binding_service: ProjectVisualAssetBindingService | None = None,
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
+        doc270_project_source_library: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         """Internal Project Mode entry with a canonical product-reference pool."""
 
@@ -1159,6 +1160,7 @@ class V3ProductApiService:
             project_visual_asset_binding_service=binding_service,
             project_ecommerce_canonical_product_asset_ids=canonical_product_asset_ids,
             doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
+            doc270_project_source_library=doc270_project_source_library,
         )
 
     def create_trusted_photography_continuation_job(
@@ -1235,6 +1237,7 @@ class V3ProductApiService:
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
         project_ecommerce_canonical_product_asset_ids: list[str] | None = None,
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
+        doc270_project_source_library: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         if generation_channel == "mcp" and not (
@@ -1282,6 +1285,11 @@ class V3ProductApiService:
                     for item in doc269_selected_continuation_admissions
                     if isinstance(item, dict)
                 ],
+            }
+        if doc270_project_source_library is not None:
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                "doc270_project_source_library": dict(doc270_project_source_library),
             }
         self._bind_server_job_instance_id(create_request)
         if project_ecommerce_canonical_product_asset_ids is not None:
@@ -1598,6 +1606,7 @@ class V3ProductApiService:
                 planning_result=planning_result,
                 runtime_metadata=runtime_result.metadata,
                 job_id=job_id,
+                doc270_project_source_library=doc270_project_source_library,
             )
         if planning_result is None:
             generation_lifecycle_failure = self._generation_lifecycle_failure_from_runtime_result(runtime_result)
@@ -9173,6 +9182,8 @@ class V3ProductApiService:
             "visual_auto_retry",
             "doc271_terminal_job_receipt",
             "provider_deliverability_closure_receipt",
+            "doc270_project_source_library",
+            "doc270_source_library_binding_receipts",
         }
         if isinstance(value, dict):
             projected: dict[str, Any] = {}
@@ -11615,6 +11626,8 @@ class V3ProductApiService:
             "doc263_project_canonical_product_asset_ids",
             "doc271_terminal_job_receipt",
             "provider_deliverability_closure_receipt",
+            "doc270_project_source_library",
+            "doc270_source_library_binding_receipts",
         }
     )
 
@@ -12746,6 +12759,7 @@ class V3ProductApiService:
         planning_result: PlanningResult,
         runtime_metadata: dict[str, Any],
         job_id: str,
+        doc270_project_source_library: dict[str, Any] | None = None,
     ) -> None:
         metadata = dict(request.metadata or {})
         raw_admission = metadata.get("professional_ecommerce_product_truth_admission")
@@ -12837,6 +12851,14 @@ class V3ProductApiService:
         metadata["professional_ecommerce_physical_product_projection"] = (
             projections.get("1") or next(iter(projections.values()))
         )
+        if doc270_project_source_library is not None:
+            metadata["doc270_source_library_binding_receipts"] = (
+                self._bind_doc270_source_library_binding_receipts(
+                    metadata=metadata,
+                    admission=admission,
+                    projections=projections,
+                )
+            )
         self._assert_ecommerce_locked_identity_capacity(
             metadata,
             projections=projections,
@@ -12852,6 +12874,15 @@ class V3ProductApiService:
         metadata["specialized_role_execution_plan"] = self._ecommerce_terminal_role_execution_plan(
             job_id=job_id,
             physical_renderer_reference_plans=physical_renderer_reference_plans,
+        )
+        doc270_receipt_metadata = (
+            {
+                "doc270_source_library_binding_receipts": metadata[
+                    "doc270_source_library_binding_receipts"
+                ]
+            }
+            if "doc270_source_library_binding_receipts" in metadata
+            else {}
         )
         request.metadata = metadata
         planning_result.metadata = {
@@ -12870,6 +12901,7 @@ class V3ProductApiService:
                 "doc269_selected_continuation_admissions": metadata.get(
                     "doc269_selected_continuation_admissions", []
                 ),
+                **doc270_receipt_metadata,
             },
         }
         for generation_plan in planning_result.generation_plans:
@@ -12888,7 +12920,162 @@ class V3ProductApiService:
                 "doc269_selected_continuation_admissions": metadata.get(
                     "doc269_selected_continuation_admissions", []
                 ),
+                **doc270_receipt_metadata,
             }
+
+    def _bind_doc270_source_library_binding_receipts(
+        self,
+        *,
+        metadata: dict[str, Any],
+        admission: ProductTruthAdmission,
+        projections: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Freeze a verified compatibility binding before Doc269.
+
+        Project Mode supplies this snapshot through an internal method after
+        its canonical-association integrity check.  The Product API verifies
+        it against the live Project Mode read model and Doc263's full admission
+        rather than trusting a metadata copy, browser, or Brain selection.
+        This is deliberately not a Phase 2 match resolution receipt.
+        """
+
+        library = metadata.get("doc270_project_source_library")
+        if not isinstance(library, dict):
+            raise ValueError("doc270_source_library_missing")
+        project_library_lookup = getattr(self, "doc270_source_library_snapshot_lookup", None)
+        current_library = project_library_lookup(admission.project_id) if callable(project_library_lookup) else None
+        if current_library != library or (
+            library.get("schema_version") != "doc270_project_source_library_v1"
+            or str(library.get("project_id") or "").strip() != admission.project_id
+            or not isinstance(library.get("entries"), list)
+        ):
+            raise ValueError("doc270_source_library_invalid")
+        claimed_digest = str(library.get("snapshot_digest") or "").strip().lower()
+        digest_payload = {
+            "schema_version": library.get("schema_version"),
+            "project_id": library.get("project_id"),
+            "entries": library.get("entries"),
+        }
+        if not claimed_digest or claimed_digest != _doc270_canonical_digest(digest_payload):
+            raise ValueError("doc270_source_library_invalid")
+        entries_by_id: dict[str, dict[str, Any]] = {}
+        eligible_product_entries: dict[str, dict[str, Any]] = {}
+        seen_reference_ids: set[str] = set()
+        for item in library["entries"]:
+            if not isinstance(item, dict):
+                raise ValueError("doc270_source_library_invalid")
+            asset_id = str(item.get("asset_id") or "").strip()
+            reference_id = str(item.get("reference_id") or "").strip()
+            profile = item.get("profile")
+            analysis = item.get("analysis_receipt")
+            if (
+                not asset_id
+                or not reference_id
+                or asset_id in entries_by_id
+                or reference_id in seen_reference_ids
+                or item.get("source_type") != "uploaded"
+            ):
+                raise ValueError("doc270_source_library_invalid")
+            if profile is None or analysis is None:
+                if profile is not None or analysis is not None:
+                    raise ValueError("doc270_source_library_invalid")
+                entries_by_id[asset_id] = item
+                seen_reference_ids.add(reference_id)
+                continue
+            if not isinstance(profile, dict) or not isinstance(analysis, dict):
+                raise ValueError("doc270_source_library_invalid")
+            profile_digest = str(profile.get("profile_digest") or "").strip().lower()
+            canonical_profile = {key: value for key, value in profile.items() if key != "profile_digest"}
+            canonical_analysis = {key: value for key, value in analysis.items() if key != "receipt_digest"}
+            if (
+                profile.get("schema_version") != "doc270_source_evidence_profile_v1"
+                or profile.get("source_asset_id") != asset_id
+                or profile.get("content_sha256") != item.get("content_sha256")
+                or profile_digest != _doc270_canonical_digest(canonical_profile)
+                or analysis.get("schema_version") != "doc270_source_analysis_receipt_v1"
+                or analysis.get("authority") != "v3_project_source_library"
+                or analysis.get("project_id") != admission.project_id
+                or analysis.get("reference_id") != reference_id
+                or analysis.get("asset_id") != asset_id
+                or analysis.get("source_type") != item.get("source_type")
+                or analysis.get("use_policy") != item.get("use_policy")
+                or analysis.get("role") != item.get("role")
+                or analysis.get("reference_channel") != item.get("reference_channel")
+                or analysis.get("content_sha256") != item.get("content_sha256")
+                or analysis.get("profile_digest") != profile_digest
+                or str(analysis.get("receipt_digest") or "").strip().lower()
+                != _doc270_canonical_digest(canonical_analysis)
+            ):
+                raise ValueError("doc270_source_library_invalid")
+            entries_by_id[asset_id] = item
+            seen_reference_ids.add(reference_id)
+            if bool(item.get("ecommerce_product_eligible")):
+                if (
+                    not bool(item.get("automatic_use_eligible"))
+                    or item.get("availability_state") != "ready_verified"
+                    or item.get("use_policy") != "product"
+                    or item.get("role") != "product_reference"
+                    or item.get("reference_channel") != "product_truth"
+                ):
+                    raise ValueError("doc270_source_library_invalid")
+                eligible_product_entries[asset_id] = item
+        admission_ids = [source.asset_id for source in admission.sources]
+        if set(eligible_product_entries) != set(admission_ids):
+            raise ValueError("doc270_source_library_admission_mismatch")
+        for source in admission.sources:
+            entry = eligible_product_entries[source.asset_id]
+            upload = self.asset_store.get_upload(source.asset_id)
+            if upload is None:
+                raise ValueError("doc270_source_library_admission_mismatch")
+            path = Path(str(upload.file_path or ""))
+            try:
+                actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise ValueError("doc270_source_library_admission_mismatch") from exc
+            if (
+                str(entry.get("content_sha256") or "").strip().lower() != source.content_sha256
+                or actual_digest != source.content_sha256
+            ):
+                raise ValueError("doc270_source_library_admission_mismatch")
+        receipts: list[dict[str, Any]] = []
+        for output_index in sorted(int(key) for key in projections):
+            projection = PhysicalProductReferenceProjection.from_mapping(projections[str(output_index)])
+            projection.validate_against(admission)
+            selected = list(projection.selected_product_asset_ids)
+            if not selected or any(asset_id not in eligible_product_entries for asset_id in selected):
+                raise ValueError("doc270_reference_resolution_invalid")
+            sources = [eligible_product_entries[asset_id] for asset_id in selected]
+            receipt = {
+                "schema_version": "doc270_source_library_binding_receipt_v1",
+                "authority": "v3_project_source_library",
+                "project_id": admission.project_id,
+                "job_id": admission.job_id,
+                "output_index": output_index,
+                "state": "bound_observe_only",
+                "source_library_snapshot_digest": claimed_digest,
+                "binding_kind": "doc263_selected_product_projection",
+                "selected_source_asset_ids": selected,
+                "selected_source_bindings": [
+                    {
+                        "reference_id": str(item["reference_id"]),
+                        "asset_id": str(item["asset_id"]),
+                        "source_type": str(item["source_type"]),
+                        "use_policy": str(item["use_policy"]),
+                        "role": str(item["role"]),
+                        "content_sha256": str(item["content_sha256"]),
+                        "profile_digest": str(item["profile"]["profile_digest"]),
+                        "analysis_receipt_digest": str(item["analysis_receipt"]["receipt_digest"]),
+                    }
+                    for item in sources
+                ],
+                "selection_source": projection.selection_source,
+                "projection_digest": projection.projection_digest,
+            }
+            receipt["receipt_digest"] = _doc270_canonical_digest(receipt)
+            receipts.append(receipt)
+        if [item["output_index"] for item in receipts] != list(range(1, len(receipts) + 1)):
+            raise ValueError("doc270_reference_resolution_invalid")
+        return receipts
 
     @staticmethod
     def _ecommerce_terminal_role_execution_plan(
@@ -13393,6 +13580,11 @@ class V3ProductApiService:
 
 
 V3ProductApi = V3ProductApiService
+
+
+def _doc270_canonical_digest(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def create_default_product_api() -> V3ProductApiService:

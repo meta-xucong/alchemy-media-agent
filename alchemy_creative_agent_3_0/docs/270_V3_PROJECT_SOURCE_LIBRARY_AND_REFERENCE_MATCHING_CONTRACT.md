@@ -463,10 +463,35 @@ the correct original.
 ### Phase 1: Read-only library and analysis receipts
 
 Add typed Source Library/Profile storage over existing uploads and server-side
-image-backed analysis. Surface public-safe labels and uncertainty in project
-views. Run in observe-only mode: no planner selection or provider behavior
-changes. Prove legacy project compatibility and General/Professional
-isolation.
+file-binding analysis. The Profile must explicitly mark semantic fields as
+`not_observed`/`unknown` until a versioned image-semantic analyzer has issued
+evidence; use policy, filenames, upload order, or Brain output must not fill
+view or affordance claims. Phase 1 may issue only a
+`SourceLibraryBindingReceipt`: it proves that an already-authoritative Doc263
+selected original remains bound to one active project-upload association and
+its current SHA/profile/analysis receipt. It is not a
+`ReferenceResolutionReceipt`, must state `bound_observe_only`, and must not
+claim a view, affordance, ranking, or semantic match when analysis evidence is
+unavailable. Surface public-safe availability/uncertainty in project views.
+Run in observe-only mode: no planner selection or provider behavior changes.
+The receipt is frozen into a new job/output; `get_project` may recompute the
+current read model but must never rewrite historical job bindings. Prove
+legacy project compatibility and General/Professional isolation.
+
+The shared catalog lists every current-project active `uploaded` original,
+including entries that cannot currently be used automatically. Each entry
+therefore exposes only public-safe binding facts plus an availability state
+(`ready_verified`, `upload_not_ready`, `file_missing`, `file_unreadable`, or
+`content_drift`) and eligibility flags. Visual Assets, generated/review
+history, and implicit continuations never enter the catalog. Only the
+E-Commerce consumer further requires a `ready_verified` entry with project
+use policy `product`, upload role `product_reference`, and the authoritative
+`product_truth` channel before it may compare the subset to Doc263 admission.
+An invalid product association remains visible as non-eligible; it must not
+make an E-Commerce command silently become prompt-only. Existing Doc263
+admission owns the command-time `needs_input`/invalid closure. Upload role,
+channel, and project use policy are binding facts in the analysis receipt,
+never semantic evidence.
 
 ### Phase 2: Requirements and matcher in shadow mode
 
