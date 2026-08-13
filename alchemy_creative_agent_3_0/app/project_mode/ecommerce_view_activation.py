@@ -31,6 +31,25 @@ REQUIREMENT_KINDS = frozenset(
 _SEMANTIC_PROFILE_KEYS = frozenset(
     {"evidence_state", "subject_kind", "view_kind", "affordances"}
 )
+_SEMANTIC_SUBJECT_KINDS = (
+    "object_or_product",
+    "person",
+    "brand_or_graphic",
+)
+_SEMANTIC_VIEW_KINDS = (
+    "front",
+    "rear",
+    "detail_or_macro",
+    "environment_wide",
+    "packaging",
+)
+_SEMANTIC_AFFORDANCES = (
+    "object_front_presentation",
+    "object_back_or_structure",
+    "object_detail",
+    "environment",
+    "logo_or_mark",
+)
 _ANALYZER_IDENTITY = {
     "authority": "v3_server_image_evidence",
     "schema_version": "doc270_image_evidence_analyzer_v1",
@@ -268,10 +287,7 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
         return [parsed] if isinstance(parsed, dict) else None
 
     def _analyze_with_protocol_compatibility(self, client: Any, data_url: str) -> dict[str, Any]:
-        instruction = (
-            "Classify only this image into the supplied JSON schema. "
-            "Do not infer identity, filename, product name, user intent, or prompt."
-        )
+        instruction = _semantic_analysis_instruction()
         if self.preferred_protocol == "chat":
             return self._analyze_with_chat(client, instruction, data_url)
         try:
@@ -305,10 +321,7 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
                 raise
         else:
             raw = str(getattr(response, "output_text", "") or "")
-            parsed = json.loads(raw)
-            if not isinstance(parsed, dict):
-                raise ValueError("ecommerce_source_evidence_response_invalid")
-            return parsed
+            return _validated_semantic_response(json.loads(raw))
         return self._analyze_with_chat(client, instruction, data_url)
 
     def _analyze_with_chat(self, client: Any, instruction: str, data_url: str) -> dict[str, Any]:
@@ -327,10 +340,9 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
             timeout=self.timeout_seconds,
             max_tokens=180,
         )
-        parsed = json.loads(str(response.choices[0].message.content or ""))
-        if not isinstance(parsed, dict):
-            raise ValueError("ecommerce_source_evidence_response_invalid")
-        return parsed
+        return _validated_semantic_response(
+            json.loads(str(response.choices[0].message.content or ""))
+        )
 
 
 def issuer_from_environment() -> EcommerceViewActivationIssuer:
@@ -477,21 +489,7 @@ def _bound_observed_profile(
     entry: dict[str, Any],
     semantic: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if set(semantic) != _SEMANTIC_PROFILE_KEYS:
-        return None
-    if semantic.get("evidence_state") != "observed":
-        return None
-    subject_kind = semantic.get("subject_kind")
-    view_kind = semantic.get("view_kind")
-    affordances = semantic.get("affordances")
-    if (
-        not isinstance(subject_kind, str)
-        or not isinstance(view_kind, str)
-        or not isinstance(affordances, list)
-        or not affordances
-        or any(not isinstance(item, str) for item in affordances)
-        or len(affordances) != len(set(affordances))
-    ):
+    if not _semantic_response_is_valid(semantic):
         return None
     reference_id = str(entry.get("reference_id") or "").strip()
     asset_id = str(entry.get("asset_id") or "").strip()
@@ -518,15 +516,55 @@ def _semantic_response_schema() -> dict[str, Any]:
         "required": ["evidence_state", "subject_kind", "view_kind", "affordances"],
         "properties": {
             "evidence_state": {"type": "string", "enum": ["observed"]},
-            "subject_kind": {"type": "string", "enum": ["object_or_product", "person", "brand_or_graphic"]},
-            "view_kind": {"type": "string", "enum": ["front", "rear", "detail_or_macro", "environment_wide", "packaging"]},
+            "subject_kind": {"type": "string", "enum": list(_SEMANTIC_SUBJECT_KINDS)},
+            "view_kind": {"type": "string", "enum": list(_SEMANTIC_VIEW_KINDS)},
             "affordances": {
                 "type": "array",
                 "minItems": 1,
                 "uniqueItems": True,
-                "items": {"type": "string", "enum": [
-                    "object_front_presentation", "object_back_or_structure", "object_detail", "environment", "logo_or_mark"
-                ]},
+                "items": {"type": "string", "enum": list(_SEMANTIC_AFFORDANCES)},
             },
         },
     }
+
+
+def _semantic_analysis_instruction() -> str:
+    """Return the fixed, source-safe Chat contract for one image observation."""
+
+    return (
+        "Inspect only the supplied image. Return exactly one JSON object and nothing else: "
+        "no Markdown, explanation, code fence, or extra keys. "
+        "The object must contain exactly these four fields: "
+        "evidence_state, subject_kind, view_kind, affordances. "
+        "evidence_state must be exactly 'observed'. "
+        "subject_kind must be one of: " + ", ".join(_SEMANTIC_SUBJECT_KINDS) + ". "
+        "view_kind must be one of: " + ", ".join(_SEMANTIC_VIEW_KINDS) + ". "
+        "affordances must be a non-empty JSON array of unique strings, each one of: "
+        + ", ".join(_SEMANTIC_AFFORDANCES) + ". "
+        "Do not infer identity, filename, product name, project, user intent, or prompt."
+    )
+
+
+def _semantic_response_is_valid(payload: Any) -> bool:
+    if not isinstance(payload, dict) or set(payload) != _SEMANTIC_PROFILE_KEYS:
+        return False
+    affordances = payload.get("affordances")
+    if (
+        not isinstance(affordances, list)
+        or not affordances
+        or any(not isinstance(item, str) for item in affordances)
+    ):
+        return False
+    return (
+        payload.get("evidence_state") == "observed"
+        and payload.get("subject_kind") in _SEMANTIC_SUBJECT_KINDS
+        and payload.get("view_kind") in _SEMANTIC_VIEW_KINDS
+        and len(affordances) == len(set(affordances))
+        and all(item in _SEMANTIC_AFFORDANCES for item in affordances)
+    )
+
+
+def _validated_semantic_response(payload: Any) -> dict[str, Any]:
+    if not _semantic_response_is_valid(payload):
+        raise ValueError("ecommerce_source_evidence_response_invalid")
+    return dict(payload)

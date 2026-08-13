@@ -746,6 +746,27 @@ def test_doc270_phase4_analyzer_uses_chat_only_for_non_timeout_responses_rejecti
         def create(self, **kwargs):  # noqa: ANN003
             calls.append("chat")
             assert kwargs["response_format"] == {"type": "json_object"}
+            message = kwargs["messages"][0]["content"][0]["text"]
+            assert "exactly these four fields" in message
+            for field in ("evidence_state", "subject_kind", "view_kind", "affordances"):
+                assert field in message
+            for value in (
+                "object_or_product",
+                "person",
+                "brand_or_graphic",
+                "front",
+                "rear",
+                "detail_or_macro",
+                "environment_wide",
+                "packaging",
+                "object_front_presentation",
+                "object_back_or_structure",
+                "object_detail",
+                "environment",
+                "logo_or_mark",
+            ):
+                assert value in message
+            assert "project_doc270" not in message
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
                     "evidence_state": "observed",
@@ -874,6 +895,58 @@ def test_doc270_phase4_lab_analyzer_uses_certified_chat_without_responses_attemp
         "affordances": ["object_front_presentation"],
     }]
     assert calls == ["chat"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"evidence_state": "observed", "subject_kind": "object_or_product", "view_kind": "front"},
+        {
+            "evidence_state": "observed",
+            "subject_kind": "object_or_product",
+            "view_kind": "unsupported_view",
+            "affordances": ["object_front_presentation"],
+        },
+        {
+            "evidence_state": "observed",
+            "subject_kind": "object_or_product",
+            "view_kind": "front",
+            "affordances": ["object_front_presentation"],
+            "extra": "forged",
+        },
+        {
+            "evidence_state": "observed",
+            "subject_kind": "object_or_product",
+            "view_kind": "front",
+            "affordances": [{"unhashable": "forged"}],
+        },
+    ],
+)
+def test_doc270_phase4_lab_chat_analyzer_rejects_noncompliant_json_without_retry(monkeypatch, payload) -> None:  # noqa: ANN001
+    calls: list[dict[str, Any]] = []
+
+    class _ChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))]
+            )
+
+    class _Client:
+        chat = SimpleNamespace(completions=_ChatCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: _Client()))
+    analyzer = OpenAICompatibleEcommerceSourceEvidenceAnalyzer(
+        api_key="test-key",
+        base_url="https://vision.example.test/v1",
+        model="vision-test",
+        preferred_protocol="chat",
+    )
+    assert analyzer.analyze(
+        project_id="project_doc270",
+        entries=[{"analysis_bytes": b"synthetic-64x64-png", "mime_type": "image/png"}],
+    ) is None
+    assert len(calls) == 1
 
 
 def test_doc270_phase4_private_store_freezes_nested_records_and_persists_outside_project_json(tmp_path) -> None:
