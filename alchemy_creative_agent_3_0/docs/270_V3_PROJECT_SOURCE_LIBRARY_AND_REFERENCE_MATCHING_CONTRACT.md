@@ -627,11 +627,112 @@ records.
 
 ### Phase 3: General V3 activation
 
-Activate matcher-issued original-source projections for new, version-gated
-General V3 commands with eligible uploaded originals. Preserve prompt-only
-fallback only for no-source, optional, and uncertain requirements that the
-Brain/template has already declared non-hard. Verify standard, mobile, reload,
-the exact returned job receipt, and explicit-continuation behavior.
+Activate only a server-owned, version-gated General V3 consumer for a **new
+explicit General command**. Phase 3 consumes an already server-issued Phase 2
+`resolved` receipt; it does not rerun the matcher, reinterpret evidence, or
+make a Brain-selected ID authoritative. The activation gate is private server
+policy. A browser cannot opt in through metadata, selected IDs, receipt
+content/digest, template text, reload, retry, refresh, or an old Job.
+
+The gate may admit a receipt only when all of these exact facts agree with the
+new command's frozen General plan:
+
+1. project, server command handle, plan version, output index/identity, and
+   requirement nonce/digest;
+2. fresh active-project source-library snapshot digest and each selected
+   association, asset, actual SHA-256, and bounded cap;
+3. resolver authority/version, evidence profile digest list, and canonical
+   receipt digest; and
+4. a server capability permitting General activation for that template/version.
+
+The server command handle is one immutable identity envelope with an exact
+allowlisted schema/version, registered issuer and capability/version, project
+ID, `general_template` ID, command ID, plan-binding digest, coalescing nonce,
+and canonical identity digest. The entry identity, receipt command binding, and
+new General command context must be equal. Missing, extra, browser-shaped,
+self-digested, cross-project/template, or otherwise mismatched identities do
+not activate the gate. An unavailable server identity preserves ordinary
+current General creation; it is not a public error and it cannot be supplied
+through browser metadata.
+
+The receipt lookup is a server-owned Phase 2 receipt-registry/authority seam.
+It returns one immutable registry entry containing the registered issuer,
+schema/version, server capability ID/version, server command identity and plan
+binding digest, canonical receipt digest, and canonical registry-entry digest.
+The entry's complete receipt must exactly bind that command/plan identity. A
+registry callback alone is not proof of authority: a raw receipt, wrong
+issuer/version/capability, mismatched receipt/entry digest, or command-binding
+mismatch is `receipt_invalid`. The lookup never accepts a receipt, digest,
+profile, selected ID, or activation request from browser metadata. A
+self-digested browser-shaped `resolved` object is not a registry receipt and
+is ignored. The General command identity used for coalescing is likewise
+server-issued before Job creation: a repeated click/transport replay of that
+same identity returns the one exact Job and frozen activation receipt, without
+rerunning Phase 2. Browser payload variations do not change that identity. A
+different new explicit command receives a fresh identity and one fresh registry
+lookup.
+
+The resulting internal `doc270_general_original_source_projection` is frozen
+with that new Job/output receipt. It preserves only the exact ordered selected
+association, asset, and actual SHA-256 bindings; its asset list is the exact
+General command/materializer original-source projection. It is the only
+original-source subset selector for the activated output and permits no
+every-upload fallback or later Phase 2 rematch. It never substitutes for Doc93 identity ownership, Doc261
+and Doc265 explicit continuation admission, or existing selected continuation
+authority. Phase 1's active uploaded-original library remains its only source
+candidate surface: Visual Assets/People evidence, generated/review history,
+implicit continuation, cross-project entries, browser fields, and filename or
+upload order cannot enter it. The projection never forwards every upload or
+exceeds the receipt cap.
+Its `sources` are unique and ordered exactly like the frozen command
+`uploaded_asset_ids`; every source contains only association ID, asset ID,
+actual SHA-256, and source-receipt digest. The projection contains no raw
+Phase 2 profile, evidence, rationale, registry, path, or Provider field. A
+stored projection that is missing, duplicate, mixed, reordered, or otherwise
+inconsistent fails closed as private `receipt_invalid` prompt-only behavior and
+is never projected publicly.
+
+#### Phase 3 conservative requirement policy
+
+Hard semantic General requirements are **deferred** in this first activation.
+Phase 3 activates only trusted `resolved` receipts. A registered `no_reference`,
+optional, ambiguous, insufficient, or invalid outcome creates the exact private
+and public-safe state `{state: "prompt_only"}` and preserves valid prompt-only
+General creation. A missing, forged, stale, cross-boundary, malformed, or
+unavailable authority/receipt creates private `receipt_invalid`; both outcomes
+have no source projection or selected originals. Neither creates
+`needs_input`, no busy/preparing/recovery state, no Provider call, and no
+automatic rematch. A later separately audited phase may enable hard General
+closure before Provider dispatch; it must use one safe terminal operation and
+must not silently weaken the requirement.
+
+Existing General Jobs, retries, refreshes, reloads, history/review navigation,
+and idempotency reconciliation retain their current behavior. Reload reads the
+exact returned Job receipt only; it never produces a new selection or rematch.
+Retry-shaped generation, refresh, and history paths cannot call the receipt
+registry to replace an existing original projection. A valid Doc261/265 selected continuation
+remains in its own channel: General activation may add only its frozen original
+channel subset and may not replace, clear, infer, claim, or include that
+continuation output in its original-source projection.
+E-Commerce stays exclusively under Doc263/269 and does not consume this gate.
+Photography and Brand remain not applicable.
+
+#### Phase 3 public projection
+
+Public project and Job projections expose only safe activation state and the
+ordinary exact Job receipt. They never expose source/reference/asset/output
+IDs, SHA/digests, evidence profile, matcher rationale, path, prompt, or raw
+Provider detail. Desktop and H5 render terminal/progress state only from that
+server receipt, retain the existing original/People/continuation/history group
+separation, add no fifth group, and never promote history automatically.
+For a missing, forged, stale, cross-project, generated/review, unreadable, or
+SHA-drifted registered receipt, the private frozen activation record is exactly
+`receipt_invalid`, contains no selected IDs, and falls back to prompt-only
+creation. Its public projection is only `{state: "receipt_invalid"}`. It
+creates no `needs_input`, current operation, busy/preparing/recovery state, or
+Provider dispatch. The only public states are `prompt_only`, `receipt_invalid`,
+and `activated_resolved`. Absent gate behavior remains byte-for-byte compatible
+with current General creation.
 
 ### Phase 4: Professional template activation
 
