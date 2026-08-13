@@ -153,6 +153,22 @@ def test_doc270_ecommerce_command_freezes_one_server_binding_receipt_per_output(
     assert record.request.metadata["doc270_project_source_library"]["snapshot_digest"]
 
 
+def test_doc270_binding_uses_fresh_trusted_snapshot_after_admission_not_browser_snapshot(tmp_path) -> None:
+    handlers, project, product_ids, _face_output_ids, _history_output_id = _fixture(tmp_path)
+    payload = _job_payload(uploaded_asset_ids=product_ids, key="doc270-fresh-bind")
+    stale = deepcopy(handlers.project_service._doc270_project_source_library_by_id(project["project_id"]))  # noqa: SLF001
+    stale["snapshot_digest"] = "browser-stale-digest"
+    payload["metadata"]["doc270_project_source_library"] = stale
+
+    created = handlers.post_project_job(project["project_id"], payload)
+    record = handlers.service.get_job_record(created["job_id"])
+    assert record is not None
+    persisted = record.request.metadata["doc270_project_source_library"]
+    fresh = handlers.project_service._doc270_project_source_library_by_id(project["project_id"])  # noqa: SLF001
+    assert persisted == fresh
+    assert persisted["snapshot_digest"] != "browser-stale-digest"
+
+
 def test_doc270_direct_ecommerce_product_api_path_keeps_legacy_contract_without_snapshot(
     tmp_path,
     monkeypatch,

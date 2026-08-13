@@ -1151,7 +1151,7 @@ class V3ProductApiService:
         canonical_product_asset_ids: list[str],
         binding_service: ProjectVisualAssetBindingService | None = None,
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
-        doc270_project_source_library: dict[str, Any] | None = None,
+        doc270_source_library_enabled: bool = False,
     ) -> ProductJobStatus:
         """Internal Project Mode entry with a canonical product-reference pool."""
 
@@ -1160,7 +1160,7 @@ class V3ProductApiService:
             project_visual_asset_binding_service=binding_service,
             project_ecommerce_canonical_product_asset_ids=canonical_product_asset_ids,
             doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
-            doc270_project_source_library=doc270_project_source_library,
+            doc270_source_library_enabled=doc270_source_library_enabled,
         )
 
     def create_trusted_photography_continuation_job(
@@ -1237,7 +1237,7 @@ class V3ProductApiService:
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
         project_ecommerce_canonical_product_asset_ids: list[str] | None = None,
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
-        doc270_project_source_library: dict[str, Any] | None = None,
+        doc270_source_library_enabled: bool = False,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         if generation_channel == "mcp" and not (
@@ -1285,11 +1285,6 @@ class V3ProductApiService:
                     for item in doc269_selected_continuation_admissions
                     if isinstance(item, dict)
                 ],
-            }
-        if doc270_project_source_library is not None:
-            create_request.metadata = {
-                **dict(create_request.metadata or {}),
-                "doc270_project_source_library": dict(doc270_project_source_library),
             }
         self._bind_server_job_instance_id(create_request)
         if project_ecommerce_canonical_product_asset_ids is not None:
@@ -1606,7 +1601,7 @@ class V3ProductApiService:
                 planning_result=planning_result,
                 runtime_metadata=runtime_result.metadata,
                 job_id=job_id,
-                doc270_project_source_library=doc270_project_source_library,
+                doc270_source_library_enabled=doc270_source_library_enabled,
             )
         if planning_result is None:
             generation_lifecycle_failure = self._generation_lifecycle_failure_from_runtime_result(runtime_result)
@@ -12759,7 +12754,7 @@ class V3ProductApiService:
         planning_result: PlanningResult,
         runtime_metadata: dict[str, Any],
         job_id: str,
-        doc270_project_source_library: dict[str, Any] | None = None,
+        doc270_source_library_enabled: bool = False,
     ) -> None:
         metadata = dict(request.metadata or {})
         raw_admission = metadata.get("professional_ecommerce_product_truth_admission")
@@ -12851,7 +12846,12 @@ class V3ProductApiService:
         metadata["professional_ecommerce_physical_product_projection"] = (
             projections.get("1") or next(iter(projections.values()))
         )
-        if doc270_project_source_library is not None:
+        if doc270_source_library_enabled:
+            snapshot_lookup = getattr(self, "doc270_source_library_snapshot_lookup", None)
+            fresh_snapshot = snapshot_lookup(admission.project_id) if callable(snapshot_lookup) else None
+            if not isinstance(fresh_snapshot, dict):
+                raise ValueError("doc270_source_library_missing")
+            metadata["doc270_project_source_library"] = fresh_snapshot
             metadata["doc270_source_library_binding_receipts"] = (
                 self._bind_doc270_source_library_binding_receipts(
                     metadata=metadata,

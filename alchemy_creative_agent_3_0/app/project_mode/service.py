@@ -922,7 +922,6 @@ class V3ProjectModeService:
             # server-owned product pool.
             self._ensure_project_product_reference_integrity(project)
             uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(project, [])
-            doc270_project_source_library = self._doc270_project_source_library(project)
             current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
             doc271_command_direction = str(job_request.user_input or project.user_goal or "").strip()
             try:
@@ -1116,7 +1115,7 @@ class V3ProjectModeService:
                 canonical_product_asset_ids=uploaded_asset_ids,
                 binding_service=self.project_visual_asset_binding_service,
                 doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
-                doc270_project_source_library=doc270_project_source_library,
+                doc270_source_library_enabled=True,
             )
             if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
             and not _trusted_capability_continuation

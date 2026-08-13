@@ -474,8 +474,13 @@ its current SHA/profile/analysis receipt. It is not a
 claim a view, affordance, ranking, or semantic match when analysis evidence is
 unavailable. Surface public-safe availability/uncertainty in project views.
 Run in observe-only mode: no planner selection or provider behavior changes.
-The receipt is frozen into a new job/output; `get_project` may recompute the
-current read model but must never rewrite historical job bindings. Prove
+The receipt is frozen into a new job/output. Project Mode may expose only a
+server-owned enable signal to the Product API; after ProductTruthAdmission and
+any Doc264 re-attestation complete, the Product API reads one fresh snapshot
+through the trusted Project Mode callback, persists that exact private snapshot
+with the job, and binds the receipt from it. Browser-supplied or pre-admission
+snapshot payloads are ignored. `get_project` may recompute the current read
+model but must never rewrite historical job bindings. Prove
 legacy project compatibility and General/Professional isolation.
 
 The shared catalog lists every current-project active `uploaded` original,
