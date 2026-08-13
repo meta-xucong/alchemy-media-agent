@@ -3486,7 +3486,6 @@ function renderV3ProjectDetail() {
   renderV3ProjectSnapshot();
   renderV3ProjectWorkflow();
   renderV3StepCards();
-  renderV3ProjectNextActions();
   renderV3BrandMemoryPanel();
   renderV3ProjectVisualAssetPanel();
   renderV3ProjectTimeline();
@@ -3496,6 +3495,9 @@ function renderV3ProjectDetail() {
   } else if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     renderV3ProjectSubpageScene(v3State.activeProjectStep || "compose");
   }
+  // Workspace mode can hide generic actions. Render the terminal action last
+  // so a server-owned E-Commerce operation remains reachable.
+  renderV3ProjectNextActions();
 }
 
 function v3PhotographyRoleLabel(roleKey) {
@@ -5545,12 +5547,23 @@ function renderV3ProjectNextActions() {
       && String(jobOperation.state || "").trim().toLowerCase() === "needs_input"
     )
   );
+  const phase4NoJobNeedsInput = needsProductInput
+    && !String(job?.job_id || "").trim()
+    && String(operation?.state || "").trim().toLowerCase() === "needs_input";
   const continuationReferenceUnavailable = ecommerceActive && (
     String(operation?.state || "").trim().toLowerCase() === "continuation_reference_unavailable"
     || (
       jobOperation
       && typeof jobOperation === "object"
       && String(jobOperation.state || "").trim().toLowerCase() === "continuation_reference_unavailable"
+    )
+  );
+  const sourceAnalysisUnavailable = ecommerceActive && (
+    String(operation?.state || "").trim().toLowerCase() === "source_analysis_unavailable"
+    || (
+      jobOperation
+      && typeof jobOperation === "object"
+      && String(jobOperation.state || "").trim().toLowerCase() === "source_analysis_unavailable"
     )
   );
   const status = String(job?.status || project?.latest_job_status || "").toLowerCase();
@@ -5564,7 +5577,14 @@ function renderV3ProjectNextActions() {
   let title = "继续完善这个项目";
   let detail = "可以补充商品信息、上传参考图，或继续生成。";
 
-  if (continuationReferenceUnavailable) {
+  if (sourceAnalysisUnavailable) {
+    title = "原图分析暂时不可用";
+    detail = "系统没有发送生图请求，也不会自动重复提交。请稍后回到编辑区，确认需求后手动再次生成。";
+    actionRows.push(
+      '<button class="button primary compact" type="button" data-v3-project-action="retry_source_analysis">稍后重试</button>',
+      '<button class="button ghost compact" type="button" data-v3-project-action="return_to_project">返回项目</button>',
+    );
+  } else if (continuationReferenceUnavailable) {
     title = "已选延续方向需要确认";
     detail = "某张已选生成图不能作为这次续作方向。请回到项目参考区重新选择可用成片；原始商品图不会被要求重新上传。";
     actionRows.push(
@@ -5574,11 +5594,17 @@ function renderV3ProjectNextActions() {
   } else if (needsProductInput) {
     title = "商品原图需要重新确认";
     detail = v3EcommerceFailureMessage(job) || "当前商品参考图需要先处理；系统没有发送生图请求，也不会自动重复提交。";
-    actionRows.push(
-      '<button class="button primary compact" type="button" data-v3-project-action="edit_ecommerce_details">补充商品信息</button>',
-      '<button class="button secondary compact" type="button" data-v3-project-action="upload_reference_continue">更换商品图</button>',
-      '<button class="button ghost compact" type="button" data-v3-project-action="return_to_project">返回项目</button>',
-    );
+    if (phase4NoJobNeedsInput) {
+      actionRows.push(
+        '<button class="button primary compact" type="button" data-v3-project-action="review_product_inputs">检查原图</button>',
+      );
+    } else {
+      actionRows.push(
+        '<button class="button primary compact" type="button" data-v3-project-action="edit_ecommerce_details">补充商品信息</button>',
+        '<button class="button secondary compact" type="button" data-v3-project-action="upload_reference_continue">更换商品图</button>',
+        '<button class="button ghost compact" type="button" data-v3-project-action="return_to_project">返回项目</button>',
+      );
+    }
   } else if (["blocked", "failed", "not_found"].includes(status) || operation?.state === "failed_no_delivery") {
     title = "这次暂时无法生成";
     detail = failure || "项目已保存。请检查商品图、补充信息，或重新尝试一次。";
@@ -5834,6 +5860,26 @@ function handleV3ProjectActionClick(event) {
     updateV3Notice("请在已选延续方向或生成与复核历史中重新确认可用成片。系统不会自动重新提交生成。", "info");
     return;
   }
+  if (action === "review_product_inputs") {
+    setV3Busy(false);
+    clearV3Progress();
+    closeV3ProjectSubpage({ silent: true });
+    renderV3UsefulReferences();
+    const target = els.v3UsefulReferenceBoard || els.v3EcommerceAdvanced;
+    target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    target?.querySelector?.("button, summary, input")?.focus?.({ preventScroll: true });
+    updateV3Notice("请检查当前项目原图后，再决定是否修改需求或重新提交。", "info");
+    return;
+  }
+  if (action === "retry_source_analysis") {
+    setV3Busy(false);
+    clearV3Progress();
+    closeV3ProjectSubpage({ silent: true });
+    openV3ProjectSubpage("compose");
+    els.v3PromptInput?.focus?.({ preventScroll: true });
+    updateV3Notice("原图分析暂时不可用。本次没有发送生图请求；请确认需求后手动再次点击生成。", "info");
+    return;
+  }
   if (action === "edit_ecommerce_details") {
     if (els.v3EcommerceAdvanced) els.v3EcommerceAdvanced.open = true;
     els.v3EcommerceAdvanced?.scrollIntoView?.({ behavior: "smooth", block: "start" });
@@ -5878,9 +5924,9 @@ function handleV3ProjectActionClick(event) {
       els.v3PromptInput.focus();
     }
     openV3ProjectSubpage("compose");
-    const ecommerceRecovery = projectScenario === "ecommerce" && ["failed_no_delivery", "needs_input", "continuation_reference_unavailable"].includes(String(currentOperation?.state || ""));
+    const ecommerceRecovery = projectScenario === "ecommerce" && ["failed_no_delivery", "needs_input", "continuation_reference_unavailable", "source_analysis_unavailable"].includes(String(currentOperation?.state || ""));
     if (ecommerceRecovery) {
-      updateV3Notice(currentOperation?.state === "needs_input" ? "已打开编辑区。请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : currentOperation?.state === "continuation_reference_unavailable" ? "已打开编辑区。请先检查已选延续方向，重新确认可用成片后再生成。" : "已打开恢复编辑区。请先确认原始商品图和需求，再明确点击生成。", "info");
+      updateV3Notice(currentOperation?.state === "needs_input" ? "已打开编辑区。请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : currentOperation?.state === "continuation_reference_unavailable" ? "已打开编辑区。请先检查已选延续方向，重新确认可用成片后再生成。" : currentOperation?.state === "source_analysis_unavailable" ? "已打开编辑区。原图分析暂时不可用；本次没有发送生图请求，确认后可手动再次生成。" : "已打开恢复编辑区。请先确认原始商品图和需求，再明确点击生成。", "info");
       return;
     }
     updateV3Notice(v3State.selectedScenario === "ecommerce" ? "已打开生成区，正在开始生成新电商图。" : "已打开生成区，正在开始生成第一组图片。", "info");
@@ -9092,6 +9138,18 @@ function clearV3ProgressTimer() {
   if (!v3State.progressTimer) return;
   window.clearInterval(v3State.progressTimer);
   v3State.progressTimer = null;
+}
+
+function clearV3Progress() {
+  clearV3ProgressTimer();
+  clearV3RecoverPolling();
+  v3State.progressStartedAt = null;
+  v3State.progressStageKey = "queued";
+  v3State.progressDetail = "";
+  v3State.progressType = "info";
+  v3State.progressNoticeKey = "";
+  v3State.longRunNoticeKey = "";
+  renderV3ProjectWorkflow();
 }
 
 function clearV3RecoverPolling() {

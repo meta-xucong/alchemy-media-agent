@@ -1152,6 +1152,7 @@ class V3ProductApiService:
         binding_service: ProjectVisualAssetBindingService | None = None,
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
         doc270_source_library_enabled: bool = False,
+        trusted_doc270_ecommerce_view_activation: bool = False,
     ) -> ProductJobStatus:
         """Internal Project Mode entry with a canonical product-reference pool."""
 
@@ -1161,6 +1162,7 @@ class V3ProductApiService:
             project_ecommerce_canonical_product_asset_ids=canonical_product_asset_ids,
             doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
             doc270_source_library_enabled=doc270_source_library_enabled,
+            trusted_doc270_ecommerce_view_activation=trusted_doc270_ecommerce_view_activation,
         )
 
     def create_trusted_photography_continuation_job(
@@ -1238,6 +1240,7 @@ class V3ProductApiService:
         project_ecommerce_canonical_product_asset_ids: list[str] | None = None,
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
         doc270_source_library_enabled: bool = False,
+        trusted_doc270_ecommerce_view_activation: bool = False,
     ) -> ProductJobStatus:
         create_request = self._coerce_create_job_request(request)
         if generation_channel == "mcp" and not (
@@ -1276,6 +1279,7 @@ class V3ProductApiService:
             trusted_capability_plan_reuse=trusted_capability_plan_reuse,
             trusted_professional_character_card=trusted_professional_character_card,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
+            trusted_doc270_ecommerce_view_activation=trusted_doc270_ecommerce_view_activation,
         )
         if doc269_selected_continuation_admissions is not None:
             create_request.metadata = {
@@ -1314,7 +1318,36 @@ class V3ProductApiService:
             # that path can reach any Brain planning seam.
             self._prepare_ecommerce_creative_context(create_request)
         except EcommerceProductInputNeedsAttention:
+            if trusted_doc270_ecommerce_view_activation:
+                return self._doc270_ecommerce_needs_input_status(create_request)
             return self._ecommerce_needs_input_status(create_request)
+        if trusted_doc270_ecommerce_view_activation:
+            identity = self._issue_doc270_ecommerce_view_activation_identity(create_request)
+            if not isinstance(identity, dict):
+                return self._doc270_ecommerce_needs_input_status(create_request)
+            existing = self._existing_doc270_ecommerce_view_activation_command(
+                create_request,
+                identity=identity,
+            )
+            if existing is not None:
+                return existing
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                "doc270_ecommerce_command_identity": identity,
+            }
+            decision = self._resolve_doc270_ecommerce_view_activation(
+                create_request,
+                canonical_product_asset_ids=list(project_ecommerce_canonical_product_asset_ids or []),
+            )
+            if decision.get("state") == "source_analysis_unavailable":
+                return self._doc270_ecommerce_source_analysis_unavailable_status(create_request)
+            if decision.get("state") != "activated_resolved":
+                return self._doc270_ecommerce_needs_input_status(create_request)
+            create_request.metadata = {
+                **dict(create_request.metadata or {}),
+                "doc270_ecommerce_view_activation_receipts": decision["receipts"],
+                "doc270_ecommerce_view_activation_selection": decision["selection"],
+            }
         if project_visual_asset_binding_service is not None:
             self._bind_project_visual_asset_library_snapshot(
                 create_request,
@@ -1656,6 +1689,131 @@ class V3ProductApiService:
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)
         return self._status_from_record(record)
+
+    @staticmethod
+    def _doc270_ecommerce_needs_input_status(request: CreateCreativeJobRequest) -> ProductJobStatus:
+        """Return E31's no-job terminal projection without persisting a record."""
+
+        project_id = str(dict(request.metadata or {}).get("project_id") or "").strip()
+        status = ProductJobStatus(
+            job_id="",
+            status=ProductJobStatusValue.BLOCKED,
+            api_namespace=API_NAMESPACE,
+            ui_entry_route=f"{API_NAMESPACE}/projects/{project_id}" if project_id else API_NAMESPACE,
+            metadata={
+                "current_operation": {
+                    "state": "needs_input",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [{"id": "review_product_inputs"}],
+                }
+            },
+        )
+        return status
+
+    @staticmethod
+    def _doc270_ecommerce_source_analysis_unavailable_status(
+        request: CreateCreativeJobRequest,
+    ) -> ProductJobStatus:
+        """Return a retryable no-job E31 analysis outage projection.
+
+        It deliberately does not use the product-input remediation state: an
+        operator or upstream analysis recovery, rather than a changed product
+        original, is the relevant next step. No automatic retry is scheduled.
+        """
+
+        project_id = str(dict(request.metadata or {}).get("project_id") or "").strip()
+        return ProductJobStatus(
+            job_id="",
+            status=ProductJobStatusValue.BLOCKED,
+            api_namespace=API_NAMESPACE,
+            ui_entry_route=f"{API_NAMESPACE}/projects/{project_id}" if project_id else API_NAMESPACE,
+            metadata={
+                "current_operation": {
+                    "state": "source_analysis_unavailable",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [{"id": "retry_source_analysis"}],
+                }
+            },
+        )
+
+    def _issue_doc270_ecommerce_view_activation_identity(
+        self,
+        request: CreateCreativeJobRequest,
+    ) -> dict[str, Any] | None:
+        """Issue the E31 identity only after Doc263/Doc264 admission."""
+
+        metadata = dict(request.metadata or {})
+        project_id = str(metadata.get("project_id") or "").strip()
+        facts = metadata.get("doc270_ecommerce_command_facts")
+        issuer = getattr(self, "doc270_ecommerce_view_activation_identity_issuer", None)
+        if not project_id or not isinstance(facts, dict) or not callable(issuer):
+            return None
+        try:
+            identity = issuer(
+                project_id=project_id,
+                template_id="ecommerce_template",
+                command_facts=dict(facts),
+            )
+        except Exception:
+            return None
+        return dict(identity) if isinstance(identity, dict) else None
+
+    def _existing_doc270_ecommerce_view_activation_command(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        identity: dict[str, Any],
+    ) -> ProductJobStatus | None:
+        project_id = str(dict(request.metadata or {}).get("project_id") or "").strip()
+        lookup = getattr(self, "doc270_ecommerce_view_activation_existing_lookup", None)
+        if not project_id or not callable(lookup):
+            return None
+        try:
+            status = lookup(project_id=project_id, identity=dict(identity))
+        except Exception:
+            return None
+        return status if isinstance(status, ProductJobStatus) else None
+
+    def _resolve_doc270_ecommerce_view_activation(
+        self,
+        request: CreateCreativeJobRequest,
+        *,
+        canonical_product_asset_ids: list[str],
+    ) -> dict[str, Any]:
+        """Read one fresh Project Mode receipt set after Doc263 admission closes."""
+
+        metadata = dict(request.metadata or {})
+        project_id = str(metadata.get("project_id") or "").strip()
+        identity = metadata.get("doc270_ecommerce_command_identity")
+        resolver = getattr(self, "doc270_ecommerce_view_activation_resolver", None)
+        if not project_id or not isinstance(identity, dict) or not callable(resolver):
+            return {"state": "needs_input"}
+        try:
+            expected_output_count = max(1, int(metadata.get("requested_image_count") or 1))
+        except (TypeError, ValueError):
+            return {"state": "needs_input"}
+        try:
+            decision = resolver(
+                project_id=project_id,
+                identity=dict(identity),
+                expected_output_count=expected_output_count,
+                canonical_product_asset_ids=list(canonical_product_asset_ids),
+            )
+        except Exception:
+            return {"state": "needs_input"}
+        if not isinstance(decision, dict):
+            return {"state": "needs_input"}
+        if decision.get("state") == "source_analysis_unavailable":
+            return {"state": "source_analysis_unavailable"}
+        if decision.get("state") != "activated_resolved":
+            return {"state": "needs_input"}
+        receipts = decision.get("receipts")
+        selection = decision.get("selection")
+        if not isinstance(receipts, list) or not isinstance(selection, list):
+            return {"state": "needs_input"}
+        return {"state": "activated_resolved", "receipts": receipts, "selection": selection}
 
     def create_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
         return self.create_creative_job(request)
@@ -8767,7 +8925,7 @@ class V3ProductApiService:
             )
         visible_output_ids = eligible_output_ids if final_delivery["delivery_gate_applies"] else None
         automatic_delivery_available = bool(final_delivery["automatic_delivery_available"])
-        return ProductJobStatus(
+        status = ProductJobStatus(
             job_id=record.job_id,
             status=record.status,
             api_namespace=API_NAMESPACE,
@@ -8838,6 +8996,101 @@ class V3ProductApiService:
                 **self._doc263_terminal_status_metadata(record),
             },
         )
+        return self._doc270_ecommerce_phase4_safe_status(record, status)
+
+    def _doc270_ecommerce_phase4_safe_status(
+        self,
+        record: ProductJobRecord,
+        status: ProductJobStatus,
+    ) -> ProductJobStatus:
+        """Keep E31 source bindings out of every public job projection."""
+
+        metadata = dict(record.request.metadata or {})
+        if metadata.get("doc270_ecommerce_view_activation_enabled") is not True:
+            return status
+        receipts = metadata.get("doc270_ecommerce_view_activation_receipts")
+        selection = metadata.get("doc270_ecommerce_view_activation_selection")
+        state = "activated_resolved" if isinstance(receipts, list) and isinstance(selection, list) else "receipt_invalid"
+        private_tokens = self._doc270_ecommerce_private_tokens(
+            receipts,
+            selection,
+            metadata.get("doc270_ecommerce_command_identity"),
+            metadata.get("doc270_ecommerce_command_facts"),
+        )
+        # The status job id is the ordinary durable command receipt. It is not
+        # an E31 source binding and Project Mode must retain it when linking a
+        # newly planned command.
+        private_tokens.discard(record.job_id)
+        public = self._doc270_ecommerce_redact_value(status.model_dump(mode="json"), private_tokens)
+        if not isinstance(public, dict):
+            return status
+        public_metadata = public.get("metadata")
+        if not isinstance(public_metadata, dict):
+            public_metadata = {}
+            public["metadata"] = public_metadata
+        public_metadata["doc270_ecommerce_view_activation"] = {"state": state}
+        try:
+            return ProductJobStatus.model_validate(public)
+        except ValueError:
+            # Keep the normal public lifecycle available if a future schema adds
+            # a constrained field that cannot carry a safe replacement value.
+            # The E31 marker is then omitted rather than emitting invalid data.
+            return status
+
+    @staticmethod
+    def _doc270_ecommerce_private_tokens(*values: Any) -> set[str]:
+        tokens: set[str] = set()
+
+        def collect(value: Any) -> None:
+            if isinstance(value, dict):
+                for nested in value.values():
+                    collect(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect(nested)
+            elif isinstance(value, str) and len(value.strip()) >= 8:
+                tokens.add(value.strip())
+
+        for value in values:
+            collect(value)
+        return tokens
+
+    @classmethod
+    def _doc270_ecommerce_redact_value(cls, value: Any, private_tokens: set[str]) -> Any:
+        hidden_keys = {
+            "doc270_ecommerce_command_identity",
+            "doc270_ecommerce_command_facts",
+            "doc270_ecommerce_view_activation_enabled",
+            "doc270_ecommerce_view_activation_receipts",
+            "doc270_ecommerce_view_activation_selection",
+            "registry_entry_digest",
+            "source_library_snapshot_digest",
+            "source_receipt_digest",
+            "requirement_digest",
+            "requirement_nonce",
+            "profile_digest",
+            "content_sha256",
+            "file_path",
+        }
+        if isinstance(value, dict):
+            return {
+                str(key): cls._doc270_ecommerce_redact_value(nested, private_tokens)
+                for key, nested in value.items()
+                if str(key) not in hidden_keys
+            }
+        if isinstance(value, list):
+            return [cls._doc270_ecommerce_redact_value(item, private_tokens) for item in value]
+        if isinstance(value, str):
+            if value in private_tokens:
+                return "protected_source"
+            redacted = value
+            # Product lifecycle warnings and planning summaries can interpolate
+            # a source identifier into otherwise safe copy. Preserve their
+            # user-facing meaning while removing every E31-bound token.
+            for token in sorted(private_tokens, key=len, reverse=True):
+                redacted = redacted.replace(token, "protected_source")
+            return redacted
+        return value
 
     def _doc270_general_phase3_safe_status(self, record: ProductJobRecord) -> ProductJobStatus | None:
         """Return the source-safe public boundary for a Phase 3 General job."""
@@ -11764,6 +12017,11 @@ class V3ProductApiService:
             "provider_deliverability_closure_receipt",
             "doc270_project_source_library",
             "doc270_source_library_binding_receipts",
+            "doc270_ecommerce_command_identity",
+            "doc270_ecommerce_command_facts",
+            "doc270_ecommerce_view_activation_enabled",
+            "doc270_ecommerce_view_activation_receipts",
+            "doc270_ecommerce_view_activation_selection",
         }
     )
 
@@ -12425,6 +12683,7 @@ class V3ProductApiService:
         trusted_capability_plan_reuse: bool,
         trusted_professional_character_card: bool = False,
         trusted_professional_anchor_preparation: bool = False,
+        trusted_doc270_ecommerce_view_activation: bool = False,
     ) -> None:
         """Keep browser/API metadata from impersonating a frozen runtime job."""
 
@@ -12433,6 +12692,7 @@ class V3ProductApiService:
             trusted_capability_plan_reuse
             or trusted_professional_character_card
             or trusted_professional_anchor_preparation
+            or trusted_doc270_ecommerce_view_activation
         ):
             raise ValueError(
                 "runtime_metadata_server_owned: " + ", ".join(sorted(supplied))
@@ -12922,6 +13182,11 @@ class V3ProductApiService:
             or not raw_plan["deliverables"]
         ):
             raise ValueError("ecommerce_product_truth_selection_missing")
+        self._apply_doc270_ecommerce_view_activation_selection(
+            raw_plan,
+            metadata=metadata,
+            admission=admission,
+        )
         self._bind_ecommerce_n1_product_primary_presentation(raw_plan)
         for plan_metadata in [
             dict(planning_result.metadata or {}),
@@ -12929,6 +13194,11 @@ class V3ProductApiService:
         ]:
             copied_plan = plan_metadata.get("template_deliverable_plan")
             if isinstance(copied_plan, dict):
+                self._apply_doc270_ecommerce_view_activation_selection(
+                    copied_plan,
+                    metadata=metadata,
+                    admission=admission,
+                )
                 self._bind_ecommerce_n1_product_primary_presentation(copied_plan)
         projections: dict[str, dict[str, Any]] = {}
         for deliverable in raw_plan["deliverables"]:
@@ -13063,6 +13333,65 @@ class V3ProductApiService:
                 ),
                 **doc270_receipt_metadata,
             }
+
+    @staticmethod
+    def _apply_doc270_ecommerce_view_activation_selection(
+        raw_plan: dict[str, Any],
+        *,
+        metadata: dict[str, Any],
+        admission: ProductTruthAdmission,
+    ) -> None:
+        """Apply one server-verified E31 product original to each frozen output."""
+
+        selection = metadata.get("doc270_ecommerce_view_activation_selection")
+        if selection is None:
+            return
+        if not isinstance(selection, list):
+            raise ValueError("doc270_ecommerce_view_activation_invalid")
+        by_index: dict[int, dict[str, Any]] = {}
+        for item in selection:
+            if not isinstance(item, dict) or set(item) != {
+                "output_index", "selected_product_asset_id", "source_receipt_digest",
+                "source_library_snapshot_digest",
+            }:
+                raise ValueError("doc270_ecommerce_view_activation_invalid")
+            index = item.get("output_index")
+            asset_id = str(item.get("selected_product_asset_id") or "").strip()
+            if (
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or index < 1
+                or index in by_index
+                or asset_id not in admission.canonical_asset_ids
+                or not all(
+                    isinstance(item.get(key), str) and len(str(item[key]).strip()) == 64
+                    for key in ("source_receipt_digest", "source_library_snapshot_digest")
+                )
+            ):
+                raise ValueError("doc270_ecommerce_view_activation_invalid")
+            by_index[index] = item
+        deliverables = raw_plan.get("deliverables")
+        if not isinstance(deliverables, list) or set(by_index) != {
+            item.get("output_index") for item in deliverables if isinstance(item, dict)
+        }:
+            raise ValueError("doc270_ecommerce_view_activation_invalid")
+        for deliverable in deliverables:
+            if not isinstance(deliverable, dict):
+                raise ValueError("doc270_ecommerce_view_activation_invalid")
+            output_index = deliverable.get("output_index")
+            details = by_index.get(output_index)
+            details_metadata = deliverable.get("metadata")
+            if not isinstance(details_metadata, dict) or details is None:
+                raise ValueError("doc270_ecommerce_view_activation_invalid")
+            details_metadata.update(
+                {
+                    "selected_product_truth_asset_ids": [details["selected_product_asset_id"]],
+                    "admitted_product_truth_asset_ids": [details["selected_product_asset_id"]],
+                    "max_product_truth_source_refs_per_output": 1,
+                    "product_truth_selection_source": "doc270_ecommerce_view_activation_registry",
+                    "product_truth_selection_role": "doc270_view_aware_product_original",
+                }
+            )
 
     def _bind_doc270_source_library_binding_receipts(
         self,

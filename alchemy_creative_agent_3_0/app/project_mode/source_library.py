@@ -23,6 +23,7 @@ DOC270_SHADOW_RESOLVER = {
 # proves the contract across unrelated source domains without importing an
 # E-Commerce product taxonomy into General or Photography.
 _DOC270_SHADOW_REQUIREMENTS: dict[str, tuple[str, str, str]] = {
+    "object_front_presentation": ("object_front_presentation", "front", "object_or_product"),
     "object_rear_structure": ("object_back_or_structure", "rear", "object_or_product"),
     "object_detail": ("object_detail", "detail_or_macro", "object_or_product"),
     "person_environment_context": ("environment", "environment_wide", "person"),
@@ -44,8 +45,10 @@ _DOC270_PRODUCTION_CAPABILITIES = {
 }
 _DOC270_SHADOW_MAXIMUM_SOURCES = 4
 _DOC270_SUBJECT_KINDS = {"object_or_product", "person", "brand_or_graphic"}
-_DOC270_VIEW_KINDS = {"rear", "detail_or_macro", "environment_wide", "packaging"}
-_DOC270_AFFORDANCES = {"object_back_or_structure", "object_detail", "environment", "logo_or_mark"}
+_DOC270_VIEW_KINDS = {"front", "rear", "detail_or_macro", "environment_wide", "packaging"}
+_DOC270_AFFORDANCES = {
+    "object_front_presentation", "object_back_or_structure", "object_detail", "environment", "logo_or_mark"
+}
 
 
 def canonical_digest(value: Any) -> str:

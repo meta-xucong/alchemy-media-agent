@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from ..app_shell import get_scenario_hub_contract
 from ..project_mode import InMemoryProjectStore, ProjectTemplateRegistry, V3ProjectModeService
+from ..project_mode.ecommerce_view_activation import EcommerceViewActivationIssuer
 from ..visual_assets import (
     AnchorPackPreparationHost,
     LibraryVisualAssetCreateRequest,
@@ -40,6 +41,7 @@ class V3ProductRouteHandlers:
         character_card_stage_host: CharacterCardStageHost | None = None,
         visual_asset_library_catalog: VisualAssetLibraryCatalog | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
+        ecommerce_view_activation_issuer: EcommerceViewActivationIssuer | None = None,
         visual_asset_owner_scope: str = "local_default",
     ) -> None:
         self.service = service or V3ProductApiService()
@@ -54,6 +56,7 @@ class V3ProductRouteHandlers:
             project_store=project_store,
             template_registry=template_registry,
             project_visual_asset_binding_service=self.project_visual_asset_binding_service,
+            ecommerce_view_activation_issuer=ecommerce_view_activation_issuer,
         )
         self.people_asset_service = PeopleAssetLifecycleService(
             self.service.visual_asset_catalog,

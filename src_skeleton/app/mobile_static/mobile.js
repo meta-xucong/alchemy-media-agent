@@ -3757,6 +3757,29 @@ function handleMobileV3Click(event) {
     document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     return;
   }
+  if (projectActionButton?.dataset.mobileV3ProjectAction === "review_product_inputs") {
+    const project = mobileV3State.currentProject;
+    if (!project?.project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMobileV3Busy(false);
+    clearMobileV3Progress();
+    renderMobileV3ReferenceBoard(project);
+    openMobileSurface("v3-project-detail", projectActionButton);
+    document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    return;
+  }
+  if (projectActionButton?.dataset.mobileV3ProjectAction === "retry_source_analysis") {
+    const project = mobileV3State.currentProject;
+    if (!project?.project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMobileV3Busy(false);
+    clearMobileV3Progress();
+    updateMobileV3Status("原图分析暂时不可用。本次没有发送生图请求；确认需求后可手动再次生成。");
+    openMobileSurface("v3-compose", projectActionButton);
+    return;
+  }
   if (projectActionButton?.dataset.mobileV3ProjectAction === "continue_recovery") {
     const project = mobileV3State.currentProject;
     if (!project?.project_id) return;
@@ -4721,6 +4744,7 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
 
 function setMobileV3Busy(isBusy) {
   mobileV3State.busy = Boolean(isBusy);
+  if (!mobileV3State.busy) mobileV3State.loading = false;
   const generateBtn = document.querySelector("#mobileV3GenerateBtn");
   if (generateBtn) {
     generateBtn.disabled = mobileV3State.busy;
@@ -4759,6 +4783,13 @@ function setMobileV3Progress(stageKey, detail = "") {
 }
 
 function clearMobileV3Progress() {
+  if (mobileV3State.progressTimer !== null && mobileV3State.progressTimer !== undefined) {
+    window.clearInterval(mobileV3State.progressTimer);
+    mobileV3State.progressTimer = null;
+  }
+  mobileV3State.progressStartedAt = null;
+  mobileV3State.progressStage = "queued";
+  mobileV3State.progressStageKey = "queued";
   const panel = document.querySelector("#mobileV3ProgressPanel");
   if (panel) panel.hidden = true;
   setText("#mobileV3ProgressTitle", "");
@@ -5149,7 +5180,9 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project);
   const deliveryRouteUnavailable = mobileV3EcommerceDeliveryRouteUnavailableOperation(project);
   const needsInput = isEcommerce && operation?.state === "needs_input";
+  const phase4NoJobNeedsInput = needsInput && !String(mobileV3State.currentJob?.job_id || "").trim();
   const continuationReferenceUnavailable = isEcommerce && operation?.state === "continuation_reference_unavailable";
+  const sourceAnalysisUnavailable = isEcommerce && operation?.state === "source_analysis_unavailable";
   const failedNoDelivery = isEcommerce && operation?.state === "failed_no_delivery";
   if (mobileV3EcommerceSubmissionErrorForProject(project)) {
     node.hidden = false;
@@ -5193,9 +5226,9 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
     `;
     return;
   }
-  node.hidden = !(reviewWithheldFinalization || needsInput || continuationReferenceUnavailable || failedNoDelivery);
+  node.hidden = !(reviewWithheldFinalization || needsInput || continuationReferenceUnavailable || sourceAnalysisUnavailable || failedNoDelivery);
   node.innerHTML = "";
-  if (!reviewWithheldFinalization && !needsInput && !continuationReferenceUnavailable && !failedNoDelivery) return;
+  if (!reviewWithheldFinalization && !needsInput && !continuationReferenceUnavailable && !sourceAnalysisUnavailable && !failedNoDelivery) return;
   if (reviewWithheldFinalization) {
     setMobileV3Busy(false);
     clearMobileV3Progress();
@@ -5215,15 +5248,23 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
       ? mobileV3EcommerceNeedsInputMessage()
       : continuationReferenceUnavailable
         ? mobileV3EcommerceContinuationReferenceMessage()
+        : sourceAnalysisUnavailable
+          ? "原图分析暂时不可用。本次没有发送生图请求；请稍后手动再次生成。"
         : "本次没有交付图片。项目原图和记录已保留，确认后可继续。",
   );
-  const action = continuationReferenceUnavailable ? "review_continuation_references" : "continue_recovery";
+  const action = sourceAnalysisUnavailable
+    ? "retry_source_analysis"
+    : continuationReferenceUnavailable
+    ? "review_continuation_references"
+    : phase4NoJobNeedsInput
+      ? "review_product_inputs"
+      : "continue_recovery";
   node.innerHTML = `
     <div>
-      <strong>${needsInput ? "商品原图需要重新确认" : continuationReferenceUnavailable ? "已选延续方向需要确认" : "这次暂时没有交付图片"}</strong>
-      <span>${needsInput ? "请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : continuationReferenceUnavailable ? "请回到项目参考区重新选择可用成片。系统不会自动重新提交生成。" : "请先确认原始商品图和需求。继续只会打开编辑区，不会自动重新提交。"}</span>
+      <strong>${needsInput ? "商品原图需要重新确认" : sourceAnalysisUnavailable ? "原图分析暂时不可用" : continuationReferenceUnavailable ? "已选延续方向需要确认" : "这次暂时没有交付图片"}</strong>
+      <span>${needsInput ? "请先检查原始商品图，删除失效或重复的商品图，重新上传正确商品图后再生成。" : sourceAnalysisUnavailable ? "本次没有发送生图请求。请稍后回到编辑区，确认需求后手动再次生成。" : continuationReferenceUnavailable ? "请回到项目参考区重新选择可用成片。系统不会自动重新提交生成。" : "请先确认原始商品图和需求。继续只会打开编辑区，不会自动重新提交。"}</span>
     </div>
-    <button class="button primary compact" type="button" data-mobile-v3-project-action="${action}">${needsInput ? "检查原图" : continuationReferenceUnavailable ? "检查延续方向" : "继续"}</button>
+    <button class="button primary compact" type="button" data-mobile-v3-project-action="${action}">${needsInput ? "检查原图" : sourceAnalysisUnavailable ? "稍后重试" : continuationReferenceUnavailable ? "检查延续方向" : "继续"}</button>
   `;
 }
 

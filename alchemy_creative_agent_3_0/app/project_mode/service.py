@@ -96,7 +96,17 @@ from .contracts import (
     TimelineItemType,
 )
 from .store import InMemoryProjectStore
-from .source_library import build_project_source_library, public_project_source_library
+from .source_library import (
+    build_project_source_library,
+    canonical_digest as doc270_canonical_digest,
+    public_project_source_library,
+    resolve_doc270_shadow_reference_requirements,
+)
+from .ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+    EcommerceViewActivationIssuer,
+    issuer_from_environment,
+)
 from .templates import ProjectTemplateManifest, ProjectTemplateRegistry
 
 
@@ -121,6 +131,11 @@ _ECOMMERCE_IGNORED_CLIENT_METADATA = frozenset(
         "doc270_reference_resolution_receipts",
         "doc270_source_library_binding_receipts",
         "source_evidence_profile",
+        "doc270_ecommerce_view_activation",
+        "doc270_ecommerce_view_activation_receipts",
+        "doc270_ecommerce_command_identity",
+        "doc270_ecommerce_command_facts",
+        "selected_product_asset_ids",
     }
 )
 
@@ -182,6 +197,80 @@ _DOC270_PHASE3_ACTIVATION_CAPABILITY_POLICY = {
     "capability_version": _DOC270_PHASE3_CAPABILITY_VERSION,
 }
 
+_DOC270_PHASE4_CAPABILITY_VERSION = "doc270_phase4_ecommerce_view_activation_v1"
+_DOC270_PHASE4_COMMAND_IDENTITY_POLICY = {
+    "schema_version": "doc270_ecommerce_command_identity_v1",
+    "issuer": "v3_project_mode_ecommerce_command_registry",
+    "capability_id": "doc270_ecommerce_view_activation",
+    "capability_version": _DOC270_PHASE4_CAPABILITY_VERSION,
+}
+_DOC270_PHASE4_REGISTRY_POLICY = {
+    "schema_version": "doc270_ecommerce_phase4_registry_entry_v1",
+    "issuer": "v3_doc270_ecommerce_view_registry",
+    "capability_id": "doc270_ecommerce_view_activation",
+    "capability_version": _DOC270_PHASE4_CAPABILITY_VERSION,
+}
+_DOC270_PHASE4_CAPABILITY_POLICY = {
+    "schema_version": "doc270_ecommerce_view_activation_capability_v1",
+    "issuer": "v3_doc270_ecommerce_activation_registry",
+    "capability_id": "doc270_ecommerce_view_activation",
+    "capability_version": _DOC270_PHASE4_CAPABILITY_VERSION,
+}
+_DOC270_PHASE4_COMMAND_IDENTITY_KEYS = frozenset(
+    {
+        "schema_version",
+        "issuer",
+        "capability_id",
+        "capability_version",
+        "project_id",
+        "template_id",
+        "command_id",
+        "command_plan_binding_digest",
+        "coalescing_nonce",
+        "identity_digest",
+    }
+)
+_DOC270_PHASE4_RECEIPT_KEYS = frozenset(
+    {
+        "schema_version",
+        "issuer",
+        "project_id",
+        "command_identity",
+        "command_plan_binding_digest",
+        "output_index",
+        "output_identity",
+        "requirement_nonce",
+        "requirement_digest",
+        "source_library_snapshot_digest",
+        "state",
+        "maximum_sources",
+        "matched_references",
+        "evidence_profile_digests",
+        "requirement_kind",
+        "evidence_profile",
+        "shadow_only",
+        "receipt_digest",
+    }
+)
+_DOC270_PHASE4_CURRENT_OPERATION_KEY = "doc270_ecommerce_view_activation_current_operation"
+_DOC270_PHASE4_PRIVATE_POLICY_NAMESPACE = "doc270_phase4_activation_policy"
+_DOC270_PHASE4_PRIVATE_COMMAND_NAMESPACE = "doc270_phase4_commands"
+_DOC270_PHASE4_PRIVATE_ENTRY_NAMESPACE = "doc270_phase4_registry_entries"
+_DOC270_PHASE4_PRIVATE_DECISION_NAMESPACE = "doc270_phase4_resolution_decisions"
+_DOC270_PHASE4_REQUIREMENT_ISSUER = {
+    "authority": "v3_server_template_requirement_issuer",
+    "schema_version": "doc270_requirement_issuer_v1",
+    "version": "doc270_server_requirement_issuer_v1",
+}
+_DOC270_PHASE4_ANALYZER = {
+    "authority": "v3_server_image_evidence",
+    "schema_version": "doc270_image_evidence_analyzer_v1",
+    "version": "doc270_server_image_evidence_v1",
+}
+_DOC270_PHASE4_REQUIREMENT_KINDS = frozenset(
+    {"object_front_presentation", "object_rear_structure", "object_detail"}
+)
+
 
 class EcommerceSlotContinuationError(ValueError):
     """Structured public failure for the namespaced slot-continuation route."""
@@ -211,6 +300,7 @@ class V3ProjectModeService:
         template_registry: ProjectTemplateRegistry | None = None,
         reference_channel_policy_module: ReferenceChannelPolicyModule | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
+        ecommerce_view_activation_issuer: EcommerceViewActivationIssuer | None = None,
     ) -> None:
         self.product_service = product_service or V3ProductApiService()
         self.project_store = project_store or InMemoryProjectStore()
@@ -218,6 +308,9 @@ class V3ProjectModeService:
         self.template_registry = template_registry or ProjectTemplateRegistry(scenario_registry=scenario_registry)
         self.reference_channel_policy_module = reference_channel_policy_module or ReferenceChannelPolicyModule()
         self.project_visual_asset_binding_service = project_visual_asset_binding_service
+        self.ecommerce_view_activation_issuer = (
+            ecommerce_view_activation_issuer or issuer_from_environment()
+        )
         # Product API uses this narrow readback only while authenticating a
         # terminal Doc271 record. It reads an append-only Project Mode snapshot
         # instead of trusting a copy in Job metadata.
@@ -227,6 +320,17 @@ class V3ProjectModeService:
         )
         self.product_service.doc270_source_library_snapshot_lookup = (
             self._doc270_project_source_library_by_id
+        )
+        # Resolve these at call time so a restarted/extended Project Mode
+        # service remains the sole owner of E31 private authority.
+        self.product_service.doc270_ecommerce_view_activation_resolver = (
+            lambda **kwargs: self._doc270_ecommerce_view_activation_decision(**kwargs)
+        )
+        self.product_service.doc270_ecommerce_view_activation_identity_issuer = (
+            lambda **kwargs: self._doc270_ecommerce_command_identity_lookup(**kwargs)
+        )
+        self.product_service.doc270_ecommerce_view_activation_existing_lookup = (
+            lambda **kwargs: self._doc270_ecommerce_existing_command_by_identity(**kwargs)
         )
 
     def _doc270_general_activation_capability_lookup(self) -> dict[str, Any] | None:
@@ -243,6 +347,598 @@ class V3ProjectModeService:
         """Read a server-owned Phase 2 receipt entry. Disabled by default."""
 
         return None
+
+    def _doc270_ecommerce_view_activation_capability_lookup(
+        self,
+        *,
+        project_id: str | None = None,
+        expected_output_count: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the private E31 capability when its server registry enables it."""
+
+        if not project_id:
+            return None
+        try:
+            capability = self.ecommerce_view_activation_issuer.capability(project_id=project_id)
+        except Exception:
+            return None
+        if (
+            expected_output_count is not None
+            and (
+                not isinstance(expected_output_count, int)
+                or isinstance(expected_output_count, bool)
+                or not self.ecommerce_view_activation_issuer.supports_output_count(
+                    expected_output_count=expected_output_count
+                )
+            )
+        ):
+            return None
+        return dict(capability) if isinstance(capability, dict) else None
+
+    def _doc270_ecommerce_command_identity_lookup(self, **_kwargs: Any) -> dict[str, Any] | None:
+        """Issue/read one E31 identity from private server command facts."""
+
+        project_id = str(_kwargs.get("project_id") or "").strip()
+        template_id = str(_kwargs.get("template_id") or "").strip()
+        facts = _kwargs.get("command_facts")
+        if not project_id or template_id != ECOMMERCE_TEMPLATE_ID or not isinstance(facts, dict):
+            return None
+        try:
+            project = self._require_project(project_id)
+            snapshot = self._doc270_project_source_library(project)
+        except Exception:
+            return None
+        normalized = {
+            "project_id": project_id,
+            "template_id": template_id,
+            "command_direction": str(facts.get("command_direction") or "").strip(),
+            "requested_output_count": int(facts.get("requested_output_count") or 0),
+            "current_reference_binding_digest": self._ecommerce_current_reference_binding_digest(project),
+            "source_library_snapshot_digest": str(snapshot.get("snapshot_digest") or "").strip(),
+        }
+        if not normalized["command_direction"] or normalized["requested_output_count"] < 1:
+            return None
+        command_facts_digest = self._doc270_digest(normalized)
+        for record in self.project_store.list_private_records(
+            project_id, _DOC270_PHASE4_PRIVATE_COMMAND_NAMESPACE
+        ):
+            if record.get("command_facts_digest") == command_facts_digest:
+                identity = record.get("identity")
+                return dict(identity) if isinstance(identity, dict) else None
+        command_id = stable_id(
+            "doc270_ecommerce_phase4_command", project_id, command_facts_digest
+        )
+        identity = {
+            **_DOC270_PHASE4_COMMAND_IDENTITY_POLICY,
+            "project_id": project_id,
+            "template_id": template_id,
+            "command_id": command_id,
+            "command_plan_binding_digest": self._doc270_digest(
+                {
+                    "command_id": command_id,
+                    "command_facts_digest": command_facts_digest,
+                    "source_library_snapshot_digest": normalized["source_library_snapshot_digest"],
+                }
+            ),
+            "coalescing_nonce": command_facts_digest,
+        }
+        identity["identity_digest"] = self._doc270_digest(identity)
+        self.project_store.append_private_record(
+            project_id,
+            _DOC270_PHASE4_PRIVATE_COMMAND_NAMESPACE,
+            {
+                "schema_version": "doc270_ecommerce_phase4_command_facts_v1",
+                "identity_digest": identity["identity_digest"],
+                "command_facts_digest": command_facts_digest,
+                "command_facts": normalized,
+                "identity": identity,
+            },
+        )
+        return dict(identity)
+
+    def _doc270_ecommerce_analysis_entries(
+        self,
+        *,
+        project_id: str,
+        entries: list[dict[str, Any]],
+    ) -> list[dict[str, Any]] | None:
+        """Re-read bytes immediately before the private analyzer port.
+
+        `analysis_bytes` exists only on the ephemeral adapter input. It is
+        removed before policy persistence, Job metadata, and every public
+        projection.
+        """
+
+        result: list[dict[str, Any]] = []
+        for entry in entries:
+            asset_id = str(entry.get("asset_id") or "").strip()
+            expected_sha = str(entry.get("content_sha256") or "").strip().lower()
+            record = self.product_service.get_uploaded_asset(asset_id)
+            record_status = str(getattr(getattr(record, "status", None), "value", getattr(record, "status", ""))).strip()
+            role = str(getattr(record, "role", "") or "").strip()
+            mime_type = str(getattr(record, "mime_type", "") or "").strip().lower()
+            if (
+                not asset_id
+                or len(expected_sha) != 64
+                or record is None
+                or record_status != "ready"
+                or role != "product_reference"
+                or mime_type not in {"image/png", "image/jpeg", "image/webp"}
+                or entry.get("source_type") != "uploaded"
+                or entry.get("use_policy") != "product"
+                or entry.get("reference_channel") != "product_truth"
+            ):
+                return None
+            path = Path(str(getattr(record, "file_path", "") or "")) if record is not None else None
+            if path is None or not path.is_file():
+                return None
+            try:
+                content = path.read_bytes()
+            except OSError:
+                return None
+            actual_sha = hashlib.sha256(content).hexdigest()
+            if actual_sha != expected_sha:
+                return None
+            result.append({
+                **dict(entry),
+                "mime_type": mime_type,
+                "analysis_bytes": content,
+            })
+        return result or None
+
+    def _doc270_ecommerce_existing_command_by_identity(
+        self,
+        *,
+        project_id: str,
+        identity: dict[str, Any],
+    ) -> ProductJobStatus | None:
+        try:
+            project = self._require_project(project_id)
+        except Exception:
+            return None
+        return self._doc270_ecommerce_existing_command(project, identity)
+
+    def _doc270_ecommerce_phase2_receipt_registry_lookup(self, **_kwargs: Any) -> dict[str, Any] | None:
+        """Read or issue private E31 receipts for one new E-Commerce command."""
+
+        project_id = str(_kwargs.get("project_id") or "").strip()
+        identity = _kwargs.get("command_identity")
+        if not project_id or not isinstance(identity, dict):
+            return None
+        existing = self._doc270_ecommerce_private_entry(project_id, identity)
+        if existing is not None:
+            return existing
+        if self._doc270_ecommerce_private_decision_exists(project_id, identity):
+            return None
+        command = self._doc270_ecommerce_private_command(project_id, identity)
+        if command is None:
+            return None
+        policy = self._doc270_ecommerce_private_policy(project_id, identity)
+        policy_was_persisted = policy is not None
+        issue_outcome = "ready"
+        if policy is None:
+            policy, issue_outcome = self._doc270_ecommerce_issue_policy_for_command(
+                project_id=project_id,
+                identity=identity,
+                command=command,
+            )
+        if policy is None:
+            if issue_outcome == "source_analysis_unavailable":
+                # Operational analysis availability is not a durable product
+                # evidence verdict. A later explicit submit may analyze again.
+                return {"state": "source_analysis_unavailable"}
+            self.project_store.append_private_record(
+                project_id,
+                _DOC270_PHASE4_PRIVATE_DECISION_NAMESPACE,
+                {
+                    "schema_version": "doc270_ecommerce_phase4_resolution_decision_v1",
+                    "identity_digest": str(identity.get("identity_digest") or ""),
+                    "state": "needs_input",
+                },
+            )
+            return None
+        try:
+            entry = self._issue_doc270_ecommerce_phase4_registry_entry(
+                project_id=project_id,
+                identity=identity,
+                command=command,
+                policy=policy,
+            )
+        except Exception:
+            entry = None
+        if entry is None:
+            if issue_outcome == "source_analysis_incomplete":
+                # At least one canonical original could not be observed. It
+                # may satisfy the unmatched hard requirement once analysis
+                # recovers, so do not persist a negative product verdict.
+                return {"state": "source_analysis_unavailable"}
+            self.project_store.append_private_record(
+                project_id,
+                _DOC270_PHASE4_PRIVATE_DECISION_NAMESPACE,
+                {
+                    "schema_version": "doc270_ecommerce_phase4_resolution_decision_v1",
+                    "identity_digest": str(identity.get("identity_digest") or ""),
+                    "state": "needs_input",
+                },
+            )
+            return None
+        if not policy_was_persisted:
+            try:
+                self._register_doc270_ecommerce_view_activation_policy(
+                    project_id=project_id,
+                    identity=identity,
+                    requirements=list(policy.get("requirements") or []),
+                    evidence_profiles=list(policy.get("evidence_profiles") or []),
+                    provenance=policy.get("provenance"),
+                )
+            except (TypeError, ValueError):
+                return {"state": "source_analysis_unavailable"}
+        self.project_store.append_private_record(
+            project_id,
+            _DOC270_PHASE4_PRIVATE_ENTRY_NAMESPACE,
+            {
+                "schema_version": "doc270_ecommerce_phase4_registry_record_v1",
+                "identity_digest": str(identity["identity_digest"]),
+                "entry": entry,
+            },
+        )
+        return entry
+
+    def _register_doc270_ecommerce_view_activation_policy(
+        self,
+        *,
+        project_id: str,
+        identity: dict[str, Any],
+        requirements: list[dict[str, Any]],
+        evidence_profiles: list[dict[str, Any]],
+        provenance: Any = None,
+        enabled: bool = True,
+    ) -> None:
+        """Append one private E31 policy issued by a trusted server operator.
+
+        This has no public route.  Its strict input validation makes the
+        durable record suitable for production configuration and deterministic
+        local tests without ever treating browser metadata as policy.
+        """
+
+        if not self._doc270_ecommerce_command_identity_valid(identity, project_id=project_id):
+            raise ValueError("doc270_ecommerce_activation_policy_invalid")
+        if self._doc270_ecommerce_private_command(project_id, identity) is None:
+            raise ValueError("doc270_ecommerce_activation_policy_invalid")
+        self._require_project(project_id)
+        project = self._require_project(project_id)
+        snapshot = self._doc270_project_source_library(project)
+        entries = {
+            str(item.get("reference_id") or ""): item
+            for item in snapshot.get("entries", [])
+            if isinstance(item, dict) and item.get("ecommerce_product_eligible") is True
+        }
+        expected_profile_keys = {
+            "schema_version", "analyzer", "project_id", "reference_id", "asset_id",
+            "content_sha256", "evidence_state", "subject_kind", "view_kind", "affordances", "profile_digest",
+        }
+        expected_affordances = {
+            "front": "object_front_presentation",
+            "rear": "object_back_or_structure",
+            "detail_or_macro": "object_detail",
+        }
+        for profile in evidence_profiles:
+            reference_id = str(profile.get("reference_id") or "") if isinstance(profile, dict) else ""
+            entry = entries.get(reference_id)
+            if (
+                not isinstance(profile, dict)
+                or set(profile) != expected_profile_keys
+                or profile.get("schema_version") != "doc270_source_evidence_profile_v2"
+                or profile.get("analyzer") != _DOC270_PHASE4_ANALYZER
+                or profile.get("project_id") != project_id
+                or not isinstance(entry, dict)
+                or profile.get("asset_id") != entry.get("asset_id")
+                or profile.get("content_sha256") != entry.get("content_sha256")
+                or profile.get("evidence_state") != "observed"
+                or profile.get("subject_kind") != "object_or_product"
+                or profile.get("view_kind") not in expected_affordances
+                or profile.get("affordances") != [expected_affordances.get(profile.get("view_kind"))]
+                or not self._doc270_same_digest_record(profile, "profile_digest")
+            ):
+                raise ValueError("doc270_ecommerce_activation_policy_invalid")
+        expected_requirement_keys = {"output_index", "kind"}
+        indexes = [item.get("output_index") for item in requirements if isinstance(item, dict)]
+        if (
+            len(indexes) != len(requirements)
+            or any(set(item) != expected_requirement_keys for item in requirements if isinstance(item, dict))
+            or any(not isinstance(index, int) or isinstance(index, bool) or index < 1 for index in indexes)
+            or len(indexes) != len(set(indexes))
+            or any(str(item.get("kind") or "") not in _DOC270_PHASE4_REQUIREMENT_KINDS for item in requirements)
+        ):
+            raise ValueError("doc270_ecommerce_activation_policy_invalid")
+        payload = {
+            "schema_version": "doc270_ecommerce_phase4_activation_policy_v1",
+            "identity_digest": identity["identity_digest"],
+            "capability": {
+                **_DOC270_PHASE4_CAPABILITY_POLICY,
+                "template_id": ECOMMERCE_TEMPLATE_ID,
+                "enabled": bool(enabled),
+            },
+            "requirements": [dict(item) for item in requirements if isinstance(item, dict)],
+            "evidence_profiles": [dict(item) for item in evidence_profiles if isinstance(item, dict)],
+            "provenance": dict(provenance) if isinstance(provenance, dict) else {},
+        }
+        if (
+            len(payload["requirements"]) != len(requirements)
+            or len(payload["evidence_profiles"]) != len(evidence_profiles)
+            or set(payload["provenance"]) != {"authority", "version"}
+            or not all(isinstance(payload["provenance"].get(key), str) and payload["provenance"][key].strip() for key in ("authority", "version"))
+        ):
+            raise ValueError("doc270_ecommerce_activation_policy_invalid")
+        payload["policy_digest"] = self._doc270_digest(payload)
+        existing = self._doc270_ecommerce_private_policy(project_id, identity)
+        if existing is not None:
+            if existing == payload:
+                return
+            raise ValueError("doc270_ecommerce_activation_policy_conflict")
+        self.project_store.append_private_record(
+            project_id,
+            _DOC270_PHASE4_PRIVATE_POLICY_NAMESPACE,
+            payload,
+        )
+
+    def _doc270_ecommerce_private_policy(
+        self,
+        project_id: str,
+        identity: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, str]:
+        records = self.project_store.list_private_records(
+            project_id, _DOC270_PHASE4_PRIVATE_POLICY_NAMESPACE
+        )
+        identity_digest = str(identity.get("identity_digest") or "")
+        matches = [record for record in records if record.get("identity_digest") == identity_digest]
+        if len(matches) != 1:
+            return None
+        policy = matches[0]
+        if (
+            set(policy) != {"schema_version", "identity_digest", "capability", "requirements", "evidence_profiles", "provenance", "policy_digest"}
+            or policy.get("schema_version") != "doc270_ecommerce_phase4_activation_policy_v1"
+            or policy.get("identity_digest") != identity_digest
+            or not self._doc270_same_digest_record(policy, "policy_digest")
+            or not self._doc270_ecommerce_view_activation_capability_valid(policy.get("capability"))
+            or not isinstance(policy.get("requirements"), list)
+            or not isinstance(policy.get("evidence_profiles"), list)
+            or not isinstance(policy.get("provenance"), dict)
+            or set(policy["provenance"]) != {"authority", "version"}
+        ):
+            return None
+        return dict(policy)
+
+    def _doc270_ecommerce_issue_policy_for_command(
+        self,
+        *,
+        project_id: str,
+        identity: dict[str, Any],
+        command: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Analyze current admitted originals once for this new command identity."""
+
+        try:
+            project = self._require_project(project_id)
+            snapshot = self._doc270_project_source_library(project)
+            facts = dict(command["command_facts"])
+            entries = [
+                dict(entry)
+                for entry in snapshot.get("entries", [])
+                if isinstance(entry, dict) and entry.get("ecommerce_product_eligible") is True
+            ]
+            analysis_entries = self._doc270_ecommerce_analysis_entries(
+                project_id=project_id,
+                entries=entries,
+            )
+            if analysis_entries is None:
+                # The admitted original no longer matches its durable file,
+                # role, channel, or SHA facts. That is a material input issue,
+                # not an analyzer outage.
+                return None, "source_input_invalid"
+            issued = self.ecommerce_view_activation_issuer.issue(
+                project_id=project_id,
+                expected_output_count=int(facts.get("requested_output_count") or 0),
+                entries=analysis_entries,
+            )
+            if not isinstance(issued, dict):
+                return None, "source_analysis_unavailable"
+            outcome = str(issued.get("outcome") or "")
+            if outcome == "source_analysis_unavailable":
+                return None, outcome
+            if outcome != "ready":
+                return None, "source_analysis_invalid"
+            candidate = {
+                "requirements": list(issued.get("requirements") or []),
+                "evidence_profiles": list(issued.get("evidence_profiles") or []),
+                "provenance": issued.get("provenance"),
+            }
+            return (
+                candidate,
+                "ready" if issued.get("analysis_complete") is True else "source_analysis_incomplete",
+            )
+        except (KeyError, OSError, TypeError, ValueError):
+            return None, "source_analysis_unavailable"
+
+    def _doc270_ecommerce_private_command(
+        self,
+        project_id: str,
+        identity: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        identity_digest = str(identity.get("identity_digest") or "")
+        records = self.project_store.list_private_records(
+            project_id, _DOC270_PHASE4_PRIVATE_COMMAND_NAMESPACE
+        )
+        matches = [record for record in records if record.get("identity_digest") == identity_digest]
+        if len(matches) != 1:
+            return None
+        command = matches[0]
+        if (
+            set(command) != {"schema_version", "identity_digest", "command_facts_digest", "command_facts", "identity"}
+            or command.get("schema_version") != "doc270_ecommerce_phase4_command_facts_v1"
+            or command.get("identity") != identity
+            or not isinstance(command.get("command_facts"), dict)
+        ):
+            return None
+        facts = dict(command["command_facts"])
+        if command.get("command_facts_digest") != self._doc270_digest(facts):
+            return None
+        return dict(command)
+
+    def _doc270_ecommerce_private_entry(
+        self,
+        project_id: str,
+        identity: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        records = self.project_store.list_private_records(
+            project_id, _DOC270_PHASE4_PRIVATE_ENTRY_NAMESPACE
+        )
+        identity_digest = str(identity.get("identity_digest") or "")
+        matches = [record for record in records if record.get("identity_digest") == identity_digest]
+        if len(matches) != 1:
+            return None
+        entry = matches[0].get("entry")
+        return dict(entry) if isinstance(entry, dict) else None
+
+    def _doc270_ecommerce_private_decision_exists(
+        self,
+        project_id: str,
+        identity: dict[str, Any],
+    ) -> bool:
+        identity_digest = str(identity.get("identity_digest") or "")
+        return any(
+            record.get("identity_digest") == identity_digest
+            for record in self.project_store.list_private_records(
+                project_id, _DOC270_PHASE4_PRIVATE_DECISION_NAMESPACE
+            )
+        )
+
+    def _issue_doc270_ecommerce_phase4_registry_entry(
+        self,
+        *,
+        project_id: str,
+        identity: dict[str, Any],
+        command: dict[str, Any],
+        policy: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resolve registered hard requirements against fresh verified bytes."""
+
+        project = self._require_project(project_id)
+        snapshot = self._doc270_project_source_library(project)
+        facts = dict(command["command_facts"])
+        expected_count = int(facts.get("requested_output_count") or 0)
+        if expected_count < 1:
+            return None
+        requirements = list(policy["requirements"])
+        if len(requirements) != expected_count:
+            return None
+        indexes = [item.get("output_index") for item in requirements if isinstance(item, dict)]
+        if set(indexes) != set(range(1, expected_count + 1)) or len(indexes) != expected_count:
+            return None
+        command_handle = {
+            "schema_version": "doc270_shadow_command_handle_v1",
+            "authority": "v3_server_shadow_command_handle",
+            "command_id": f"server-command-{project_id}",
+            "plan_id": f"server-plan-{project_id}",
+            "plan_version": 1,
+        }
+        command_handle["command_binding_digest"] = doc270_canonical_digest(command_handle)
+        evidence_by_reference = {
+            str(item.get("reference_id") or ""): dict(item)
+            for item in policy["evidence_profiles"]
+            if isinstance(item, dict) and str(item.get("reference_id") or "").strip()
+        }
+        resolved: list[dict[str, Any]] = []
+        for requirement_spec in sorted(requirements, key=lambda item: int(item["output_index"])):
+            if not isinstance(requirement_spec, dict):
+                return None
+            kind = str(requirement_spec.get("kind") or "")
+            if kind not in _DOC270_PHASE4_REQUIREMENT_KINDS:
+                return None
+            requirement = {
+                "schema_version": "doc270_reference_requirement_v1",
+                "issuer": dict(_DOC270_PHASE4_REQUIREMENT_ISSUER),
+                "project_id": project_id,
+                "command_plan_binding": command_handle,
+                "output_index": int(requirement_spec["output_index"]),
+                "output_identity": f"ecommerce-output-{int(requirement_spec['output_index'])}",
+                "requirement_nonce": stable_id(
+                    "doc270_ecommerce_requirement", identity["identity_digest"], requirement_spec["output_index"], kind
+                ),
+                "source_library_snapshot_digest": snapshot["snapshot_digest"],
+                "template_id": ECOMMERCE_TEMPLATE_ID,
+                "original_source_channel": "project_uploaded_original",
+                "kind": kind,
+                "strength": "hard",
+                "maximum_sources": 1,
+            }
+            requirement["requirement_digest"] = doc270_canonical_digest(requirement)
+            plan_binding = {
+                "project_id": project_id,
+                "command_plan_binding": command_handle,
+                "output_index": requirement["output_index"],
+                "output_identity": requirement["output_identity"],
+                "requirement_nonce": requirement["requirement_nonce"],
+                "requirement_digest": requirement["requirement_digest"],
+                "source_library_snapshot_digest": snapshot["snapshot_digest"],
+                "issuer": dict(_DOC270_PHASE4_REQUIREMENT_ISSUER),
+            }
+            shadow = resolve_doc270_shadow_reference_requirements(
+                project_id=project_id,
+                command_plan_binding=command_handle,
+                trusted_project_lookup=lambda identifier: self._require_project(identifier),
+                upload_lookup=self.product_service.get_uploaded_asset,
+                trusted_requirement_lookup=lambda _handle, value=requirement: dict(value),
+                trusted_plan_binding_lookup=lambda _handle, value=plan_binding: dict(value),
+                evidence_lookup=lambda entry: dict(evidence_by_reference[entry["reference_id"]])
+                if entry.get("reference_id") in evidence_by_reference
+                else None,
+                trusted_capability_lookup=lambda name: {
+                    "requirement_issuer": dict(_DOC270_PHASE4_REQUIREMENT_ISSUER),
+                    "image_evidence_analyzer": dict(_DOC270_PHASE4_ANALYZER),
+                    f"template:{ECOMMERCE_TEMPLATE_ID}": {"shadow_enabled": True},
+                }.get(name),
+            )
+            if shadow.get("state") != "resolved" or len(shadow.get("matched_references") or []) != 1:
+                return None
+            match = dict(shadow["matched_references"][0])
+            profile = evidence_by_reference.get(str(match.get("reference_id") or ""))
+            if not isinstance(profile, dict) or profile.get("profile_digest") != match.get("profile_digest"):
+                return None
+            receipt = {
+                "schema_version": "doc270_reference_resolution_receipt_v1",
+                "issuer": "v3_doc270_shadow_matcher",
+                "project_id": project_id,
+                "command_identity": dict(identity),
+                "command_plan_binding_digest": identity["command_plan_binding_digest"],
+                "output_index": requirement["output_index"],
+                "output_identity": requirement["output_identity"],
+                "requirement_nonce": requirement["requirement_nonce"],
+                "requirement_digest": requirement["requirement_digest"],
+                "source_library_snapshot_digest": snapshot["snapshot_digest"],
+                "state": "resolved",
+                "maximum_sources": 1,
+                "matched_references": [match],
+                "evidence_profile_digests": [match["profile_digest"]],
+                "requirement_kind": kind,
+                "evidence_profile": {
+                    key: profile[key]
+                    for key in ("subject_kind", "view_kind", "affordances")
+                },
+                "shadow_only": True,
+            }
+            receipt["receipt_digest"] = self._doc270_digest(receipt)
+            resolved.append(receipt)
+        entry = {
+            **_DOC270_PHASE4_REGISTRY_POLICY,
+            "project_id": project_id,
+            "template_id": ECOMMERCE_TEMPLATE_ID,
+            "command_identity": dict(identity),
+            "source_library_snapshot_digest": snapshot["snapshot_digest"],
+            "receipts": resolved,
+        }
+        entry["registry_entry_digest"] = self._doc270_digest(entry)
+        return entry
 
     @staticmethod
     def _doc270_digest(value: Any) -> str:
@@ -449,6 +1145,276 @@ class V3ProjectModeService:
                 "sources": selected,
             },
         }
+
+    @staticmethod
+    def _doc270_ecommerce_view_activation_capability_valid(capability: Any) -> bool:
+        expected = _DOC270_PHASE4_CAPABILITY_POLICY
+        return (
+            isinstance(capability, dict)
+            and set(capability) == {
+                "schema_version", "issuer", "capability_id", "capability_version", "template_id", "enabled"
+            }
+            and all(capability.get(key) == value for key, value in expected.items())
+            and capability.get("template_id") == ECOMMERCE_TEMPLATE_ID
+            and capability.get("enabled") is True
+        )
+
+    def _doc270_ecommerce_command_identity_valid(
+        self,
+        identity: Any,
+        *,
+        project_id: str,
+    ) -> bool:
+        policy = _DOC270_PHASE4_COMMAND_IDENTITY_POLICY
+        return (
+            isinstance(identity, dict)
+            and set(identity) == _DOC270_PHASE4_COMMAND_IDENTITY_KEYS
+            and all(identity.get(key) == value for key, value in policy.items())
+            and identity.get("project_id") == project_id
+            and identity.get("template_id") == ECOMMERCE_TEMPLATE_ID
+            and all(
+                isinstance(identity.get(key), str) and str(identity[key]).strip()
+                for key in ("command_id", "command_plan_binding_digest", "coalescing_nonce")
+            )
+            and self._doc270_same_digest_record(identity, "identity_digest")
+        )
+
+    def _doc270_ecommerce_existing_command(
+        self,
+        project: ProjectRecord,
+        identity: dict[str, Any],
+    ) -> ProductJobStatus | None:
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            metadata = dict(record.request.metadata or {})
+            if metadata.get("doc270_ecommerce_command_identity") == identity:
+                return self.product_service.get_job(job_id)
+        return None
+
+    def _doc270_ecommerce_view_activation_decision(
+        self,
+        *,
+        project_id: str,
+        identity: dict[str, Any],
+        expected_output_count: int,
+        canonical_product_asset_ids: list[str],
+    ) -> dict[str, Any]:
+        """Verify E31's private view receipts before any E-Commerce Job exists."""
+
+        try:
+            project = self._require_project(project_id)
+            entry = self._doc270_ecommerce_phase2_receipt_registry_lookup(
+                project_id=project.project_id,
+                command_identity=dict(identity),
+            )
+            snapshot = self._doc270_project_source_library(project)
+        except Exception:
+            return {"state": "needs_input"}
+        if isinstance(entry, dict) and entry.get("state") == "source_analysis_unavailable":
+            return {"state": "source_analysis_unavailable"}
+        if not isinstance(entry, dict) or not isinstance(snapshot, dict):
+            return {"state": "needs_input"}
+        if (
+            set(entry) != {
+                "schema_version", "issuer", "capability_id", "capability_version", "project_id",
+                "template_id", "command_identity", "source_library_snapshot_digest", "receipts",
+                "registry_entry_digest",
+            }
+            or any(entry.get(key) != value for key, value in _DOC270_PHASE4_REGISTRY_POLICY.items())
+            or entry.get("project_id") != project.project_id
+            or entry.get("template_id") != ECOMMERCE_TEMPLATE_ID
+            or entry.get("command_identity") != identity
+            or entry.get("source_library_snapshot_digest") != snapshot.get("snapshot_digest")
+            or not self._doc270_same_digest_record(entry, "registry_entry_digest")
+        ):
+            return {"state": "needs_input"}
+        receipts = entry.get("receipts")
+        if not isinstance(receipts, list) or len(receipts) != expected_output_count:
+            return {"state": "needs_input"}
+        entries = {
+            str(item.get("reference_id") or ""): item
+            for item in snapshot.get("entries", [])
+            if isinstance(item, dict)
+        }
+        current_admitted_ids = [
+            str(item).strip() for item in canonical_product_asset_ids if str(item).strip()
+        ]
+        current_eligible_ids = [
+            str(item.get("asset_id") or "").strip()
+            for item in snapshot.get("entries", [])
+            if isinstance(item, dict) and item.get("ecommerce_product_eligible") is True
+        ]
+        if (
+            not current_admitted_ids
+            or len(current_admitted_ids) != len(set(current_admitted_ids))
+            or current_eligible_ids != current_admitted_ids
+        ):
+            return {"state": "needs_input"}
+        resolved: list[dict[str, Any]] = []
+        verified_receipts: list[dict[str, Any]] = []
+        indexes: set[int] = set()
+        for receipt in receipts:
+            if not isinstance(receipt, dict) or set(receipt) != _DOC270_PHASE4_RECEIPT_KEYS:
+                return {"state": "needs_input"}
+            if (
+                receipt.get("schema_version") != "doc270_reference_resolution_receipt_v1"
+                or receipt.get("issuer") != "v3_doc270_shadow_matcher"
+                or receipt.get("project_id") != project.project_id
+                or receipt.get("command_identity") != identity
+                or receipt.get("command_plan_binding_digest") != identity.get("command_plan_binding_digest")
+                or receipt.get("source_library_snapshot_digest") != snapshot.get("snapshot_digest")
+                or receipt.get("state") != "resolved"
+                or receipt.get("maximum_sources") != 1
+                or receipt.get("shadow_only") is not True
+                or not self._doc270_same_digest_record(receipt, "receipt_digest")
+            ):
+                return {"state": "needs_input"}
+            output_index = receipt.get("output_index")
+            if (
+                not isinstance(output_index, int)
+                or isinstance(output_index, bool)
+                or output_index < 1
+                or output_index > expected_output_count
+                or output_index in indexes
+                or not all(
+                    isinstance(receipt.get(key), str) and str(receipt[key]).strip()
+                    for key in ("output_identity", "requirement_nonce", "requirement_digest", "requirement_kind")
+                )
+            ):
+                return {"state": "needs_input"}
+            evidence = receipt.get("evidence_profile")
+            profiles = receipt.get("evidence_profile_digests")
+            matches = receipt.get("matched_references")
+            if (
+                not isinstance(evidence, dict)
+                or set(evidence) not in (
+                    {"subject_kind", "view_kind", "affordances"},
+                    {"subject_kind", "view_kind", "affordances", "semantic_domain"},
+                )
+                or evidence.get("subject_kind") != "object_or_product"
+                or not isinstance(evidence.get("view_kind"), str)
+                or not isinstance(evidence.get("affordances"), list)
+                or not evidence["affordances"]
+                or (
+                    "semantic_domain" in evidence
+                    and (not isinstance(evidence.get("semantic_domain"), str) or not evidence["semantic_domain"].strip())
+                )
+                or not isinstance(profiles, list)
+                or len(profiles) != 1
+                or not isinstance(matches, list)
+                or len(matches) != 1
+            ):
+                return {"state": "needs_input"}
+            match = matches[0]
+            if not isinstance(match, dict) or set(match) != {
+                "reference_id", "asset_id", "content_sha256", "profile_digest"
+            }:
+                return {"state": "needs_input"}
+            reference_id = str(match.get("reference_id") or "")
+            asset_id = str(match.get("asset_id") or "")
+            digest = str(match.get("content_sha256") or "").lower()
+            profile_digest = str(match.get("profile_digest") or "")
+            source = entries.get(reference_id)
+            if (
+                not reference_id
+                or not asset_id
+                or len(digest) != 64
+                or profile_digest != profiles[0]
+                or not isinstance(source, dict)
+                or source.get("asset_id") != asset_id
+                or source.get("content_sha256") != digest
+                or source.get("availability_state") != "ready_verified"
+                or source.get("ecommerce_product_eligible") is not True
+                or source.get("source_type") != "uploaded"
+                or source.get("use_policy") != "product"
+                or source.get("role") != "product_reference"
+                or source.get("reference_channel") != "product_truth"
+                or asset_id not in current_admitted_ids
+            ):
+                return {"state": "needs_input"}
+            indexes.add(output_index)
+            verified_receipts.append(dict(receipt))
+            resolved.append(
+                {
+                    "output_index": output_index,
+                    "selected_product_asset_id": asset_id,
+                    "source_receipt_digest": receipt["receipt_digest"],
+                    "source_library_snapshot_digest": snapshot["snapshot_digest"],
+                }
+            )
+        if indexes != set(range(1, expected_output_count + 1)):
+            return {"state": "needs_input"}
+        return {
+            "state": "activated_resolved",
+            "receipts": sorted(verified_receipts, key=lambda item: item["output_index"]),
+            "selection": sorted(resolved, key=lambda item: item["output_index"]),
+        }
+
+    @staticmethod
+    def _doc270_ecommerce_needs_input_status(project_id: str) -> ProductJobStatus:
+        return ProductJobStatus(
+            job_id="",
+            status=ProductJobStatusValue.BLOCKED,
+            api_namespace=API_NAMESPACE,
+            ui_entry_route=f"{API_NAMESPACE}/projects/{project_id}",
+            metadata={
+                "current_operation": {
+                    "state": "needs_input",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [{"id": "review_product_inputs"}],
+                }
+            },
+        )
+
+    @staticmethod
+    def _doc270_ecommerce_needs_input_operation() -> dict[str, Any]:
+        return {
+            "state": "needs_input",
+            "terminal": True,
+            "pending": False,
+            "next_actions": [{"id": "review_product_inputs"}],
+        }
+
+    @staticmethod
+    def _doc270_ecommerce_source_analysis_unavailable_operation() -> dict[str, Any]:
+        return {
+            "state": "source_analysis_unavailable",
+            "terminal": True,
+            "pending": False,
+            "next_actions": [{"id": "retry_source_analysis"}],
+        }
+
+    def _set_doc270_ecommerce_needs_input_operation(self, project: ProjectRecord) -> None:
+        metadata = dict(project.metadata or {})
+        metadata[_DOC270_PHASE4_CURRENT_OPERATION_KEY] = {
+            "operation": self._doc270_ecommerce_needs_input_operation(),
+            "project_job_count": len(project.job_ids),
+        }
+        project.metadata = metadata
+        project.updated_at = _utc_now_iso()
+        self.project_store.save_project(project)
+
+    def _set_doc270_ecommerce_source_analysis_unavailable_operation(self, project: ProjectRecord) -> None:
+        metadata = dict(project.metadata or {})
+        metadata[_DOC270_PHASE4_CURRENT_OPERATION_KEY] = {
+            "operation": self._doc270_ecommerce_source_analysis_unavailable_operation(),
+            "project_job_count": len(project.job_ids),
+        }
+        project.metadata = metadata
+        project.updated_at = _utc_now_iso()
+        self.project_store.save_project(project)
+
+    def _clear_doc270_ecommerce_needs_input_operation(self, project: ProjectRecord) -> None:
+        metadata = dict(project.metadata or {})
+        if _DOC270_PHASE4_CURRENT_OPERATION_KEY not in metadata:
+            return
+        metadata.pop(_DOC270_PHASE4_CURRENT_OPERATION_KEY, None)
+        project.metadata = metadata
+        project.updated_at = _utc_now_iso()
+        self.project_store.save_project(project)
 
     def list_projects(self, limit: int = 20, owner_user_id: int | None = None) -> ProjectListResponse:
         projects = [
@@ -1234,6 +2200,27 @@ class V3ProjectModeService:
             self._ensure_project_product_reference_integrity(project)
             uploaded_asset_ids = self._ecommerce_product_reference_asset_ids(project, [])
             current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
+            doc270_ecommerce_view_activation_enabled = False
+            doc270_requested_output_count = (
+                _bounded_requested_image_count(job_request.metadata.get("requested_image_count"))
+                or 1
+            )
+            try:
+                capability = self._doc270_ecommerce_view_activation_capability_lookup(
+                    project_id=project.project_id,
+                    expected_output_count=doc270_requested_output_count,
+                )
+            except TypeError:
+                # Existing deterministic test doubles predate the project-
+                # scoped capability argument; production never takes this
+                # compatibility branch.
+                capability = self._doc270_ecommerce_view_activation_capability_lookup()
+            if uploaded_asset_ids and self._doc270_ecommerce_view_activation_capability_valid(capability):
+                # E31's identity and frozen source snapshot are issued only
+                # after Product API has completed Doc263/Doc264 admission.
+                # This is a server-only enable signal, never a caller-owned
+                # snapshot, selected-id list, or receipt.
+                doc270_ecommerce_view_activation_enabled = True
             doc271_command_direction = str(job_request.user_input or project.user_goal or "").strip()
             try:
                 doc271_current_source_binding = self._doc271_current_source_binding(
@@ -1310,6 +2297,21 @@ class V3ProjectModeService:
                             else {}
                         ),
                         "doc271_command_binding": doc271_command_binding,
+                        **(
+                            {
+                                "doc270_ecommerce_view_activation_enabled": True,
+                                "doc270_ecommerce_command_facts": {
+                                    "template_id": template_manifest.template_id,
+                                    "command_direction": str(job_request.user_input or project.user_goal or "").strip(),
+                                    "requested_output_count": _bounded_requested_image_count(
+                                        job_request.metadata.get("requested_image_count")
+                                    ) or 1,
+                                    "current_reference_binding_digest": current_reference_binding_digest,
+                                },
+                            }
+                            if doc270_ecommerce_view_activation_enabled
+                            else {}
+                        ),
                     }
                 }
             )
@@ -1454,6 +2456,7 @@ class V3ProjectModeService:
                 binding_service=self.project_visual_asset_binding_service,
                 doc269_selected_continuation_admissions=doc269_selected_continuation_admissions,
                 doc270_source_library_enabled=True,
+                trusted_doc270_ecommerce_view_activation=doc270_ecommerce_view_activation_enabled,
             )
             if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
             and not _trusted_capability_continuation
@@ -1468,6 +2471,24 @@ class V3ProjectModeService:
             if self.project_visual_asset_binding_service is not None
             else self.product_service.create_job(create_payload)
         )
+        if (
+            template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
+            and not str(status.job_id or "").strip()
+            and isinstance(status.metadata.get("current_operation"), dict)
+            and status.metadata["current_operation"].get("state") == "needs_input"
+        ):
+            self._set_doc270_ecommerce_needs_input_operation(project)
+            return status
+        if (
+            template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
+            and not str(status.job_id or "").strip()
+            and isinstance(status.metadata.get("current_operation"), dict)
+            and status.metadata["current_operation"].get("state") == "source_analysis_unavailable"
+        ):
+            self._set_doc270_ecommerce_source_analysis_unavailable_operation(project)
+            return status
+        if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID:
+            self._clear_doc270_ecommerce_needs_input_operation(project)
         if (
             template_manifest.template_id == ECOMMERCE_TEMPLATE_ID
             and isinstance(status.metadata.get("current_operation"), dict)
@@ -6914,6 +7935,19 @@ class V3ProjectModeService:
 
         if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
             return None
+        phase4_operation = dict(project.metadata or {}).get(_DOC270_PHASE4_CURRENT_OPERATION_KEY)
+        if isinstance(phase4_operation, dict):
+            operation = phase4_operation.get("operation")
+            expected_job_count = phase4_operation.get("project_job_count")
+            if (
+                isinstance(operation, dict)
+                and expected_job_count == len(project.job_ids)
+                and json.dumps(operation, sort_keys=True) in {
+                    json.dumps(self._doc270_ecommerce_needs_input_operation(), sort_keys=True),
+                    json.dumps(self._doc270_ecommerce_source_analysis_unavailable_operation(), sort_keys=True),
+                }
+            ):
+                return dict(operation)
         if isinstance(
             dict(project.metadata or {}).get("doc265_reference_channel_needs_attention"),
             dict,
