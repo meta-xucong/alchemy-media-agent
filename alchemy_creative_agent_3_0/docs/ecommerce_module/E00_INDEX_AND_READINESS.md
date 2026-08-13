@@ -49,8 +49,12 @@ commerce-specific deliverables.
     work: Professional E-Commerce may consume only its exact same-project,
     Provider-policy closure projection; it does not alter Doc263/269 source or
     physical-plan authority.
-19. This E-Commerce module family.
-20. Implementation notes and examples.
+19. E31 / Doc270 Phase 4 View-Aware Product Source Activation Contract, once
+    reviewer-approved. It may select one view-appropriate original per output
+    only after complete Doc263 admission and Doc264 re-attestation, then
+    freezes the result through existing Doc263/Doc269 boundaries.
+20. This E-Commerce module family.
+21. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -224,3 +228,7 @@ Before implementation starts, the team must have accepted:
 21. Doc271 provider deliverability-closure receipt contract, after reviewer
     acceptance, before an explicit Professional E-Commerce continuation may
     short-circuit an already observed, exact Provider-policy refusal.
+22. E31 / Doc270 Phase 4 view-aware product source activation contract, after
+    reviewer acceptance, before a Professional E-Commerce command may consume
+    a Doc270 resolved view receipt to choose a Doc263/Doc269 physical product
+    projection.
