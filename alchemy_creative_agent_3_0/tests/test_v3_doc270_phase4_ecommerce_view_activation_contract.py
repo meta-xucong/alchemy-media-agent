@@ -18,6 +18,7 @@ from alchemy_creative_agent_3_0.app.project_mode.contracts import (
     ProjectReferenceSourceType,
 )
 from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_recovery import (
+    V3ProductRouteHandlers,
     _handlers,
     _project,
     _ready_product_upload,
@@ -194,6 +195,24 @@ def _admitted_ids(record: Any) -> list[str]:
     return [item["asset_id"] for item in record.request.metadata["professional_ecommerce_product_truth_admission"]["sources"]]
 
 
+def _count_planning_and_dispatch(monkeypatch, handlers: V3ProductRouteHandlers) -> dict[str, int]:
+    calls = {"plan": 0, "dispatch": 0}
+    original_plan = handlers.service.scenario_runtime.plan_job
+    original_dispatch = handlers.service.scenario_runtime.generate_job
+
+    def counting_plan(*args: Any, **kwargs: Any):
+        calls["plan"] += 1
+        return original_plan(*args, **kwargs)
+
+    def counting_dispatch(*args: Any, **kwargs: Any):
+        calls["dispatch"] += 1
+        return original_dispatch(*args, **kwargs)
+
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", counting_plan)
+    monkeypatch.setattr(handlers.service.scenario_runtime, "generate_job", counting_dispatch)
+    return calls
+
+
 def test_doc270_phase4_absent_gate_preserves_complete_doc263_admission(tmp_path) -> None:
     handlers, _catalog, project, product_ids = _fixture(tmp_path)
 
@@ -220,6 +239,7 @@ def test_doc270_phase4_resolved_views_freeze_one_product_per_output_without_redu
         ],
     )
     _install_future_gate(monkeypatch, handlers, value, identity)
+    calls = _count_planning_and_dispatch(monkeypatch, handlers)
 
     created = handlers.post_project_job(project["project_id"], _payload(product_ids, key="phase4-front-rear-detail", count=3))
     record = handlers.service.get_job_record(created["job_id"])
@@ -262,6 +282,7 @@ def test_doc270_phase4_invalid_hard_receipt_closes_before_job_or_plan(tmp_path, 
     else:
         value["receipts"].append(deepcopy(value["receipts"][0]))
     _install_future_gate(monkeypatch, handlers, value, identity)
+    calls = _count_planning_and_dispatch(monkeypatch, handlers)
 
     before = list(handlers.project_service._require_project(project["project_id"]).job_ids)  # noqa: SLF001
     created = handlers.post_project_job(
@@ -279,12 +300,33 @@ def test_doc270_phase4_invalid_hard_receipt_closes_before_job_or_plan(tmp_path, 
         "next_actions": [{"id": "review_product_inputs"}],
     }
     assert handlers.project_service._require_project(project["project_id"]).job_ids == before  # noqa: SLF001
+    assert calls == {"plan": 0, "dispatch": 0}
+    project_readback = handlers.get_project(project["project_id"])
+    project_operation = project_readback.get("metadata", {}).get("current_operation")
+    assert project_operation in (None, created["metadata"]["current_operation"])
+    assert "job_id" not in str(project_operation)
+    assert all(word not in str(project_operation).lower() for word in ("planning", "generating", "preparing"))
+    assert "phase4" not in str(project_readback)
     public_text = str(created)
     for private in [product_ids[0], "f" * 64, "generated-review-output", "project_other"]:
         assert private not in public_text
 
 
 def test_doc270_phase4_browser_fields_cannot_author_view_activation(tmp_path, monkeypatch) -> None:
+    ungated_handlers, _ungated_catalog = _handlers(tmp_path / "ungated")
+    ungated_project = _project(ungated_handlers)
+    ungated = ungated_handlers.post_project_job(
+        ungated_project["project_id"],
+        _payload([], key="phase4-browser-only", metadata={
+            "doc270_ecommerce_view_activation": True,
+            "doc270_reference_resolution_receipts": {"asset_id": "browser-forged-asset"},
+            "selected_product_asset_ids": ["browser-forged-asset"],
+        }),
+    )
+    ungated_record = ungated_handlers.service.get_job_record(ungated["job_id"])
+    assert ungated_record is not None
+    assert "doc270_ecommerce_view_activation_receipts" not in ungated_record.request.metadata
+
     handlers, _catalog, project, product_ids = _fixture(tmp_path)
     snapshot = _snapshot(handlers, project["project_id"])
     identity = _identity(project["project_id"], command_id="phase4-browser-forgery")
@@ -308,8 +350,77 @@ def test_doc270_phase4_browser_fields_cannot_author_view_activation(tmp_path, mo
         ),
     )
     assert created["status"] == "planned"
+    record = handlers.service.get_job_record(created["job_id"])
+    assert record is not None
+    assert "doc270_ecommerce_view_activation_receipts" in record.request.metadata
     public_text = str(created)
     assert "browser-forged-asset" not in public_text
+
+
+@pytest.mark.parametrize("output_indexes", [[1, 3], [1, 2, 3, 5], [1, 1, 2]])
+def test_doc270_phase4_output_receipts_must_cover_exact_outputs_before_job(tmp_path, monkeypatch, output_indexes: list[int]) -> None:
+    handlers, _catalog, project, product_ids = _fixture(tmp_path, count=4)
+    snapshot = _snapshot(handlers, project["project_id"])
+    identity = _identity(project["project_id"], command_id=f"phase4-output-set-{''.join(map(str, output_indexes))}")
+    selections = [
+        (
+            index,
+            _association_id(handlers, project["project_id"], product_ids[min(index - 1, len(product_ids) - 1)]),
+            product_ids[min(index - 1, len(product_ids) - 1)],
+        )
+        for index in output_indexes
+    ]
+    value = _entry(project_id=project["project_id"], snapshot=snapshot, identity=identity, selections=selections)
+    _install_future_gate(monkeypatch, handlers, value, identity)
+    calls = _count_planning_and_dispatch(monkeypatch, handlers)
+    before = list(handlers.project_service._require_project(project["project_id"]).job_ids)  # noqa: SLF001
+
+    created = handlers.post_project_job(
+        project["project_id"],
+        _payload(product_ids, key=f"phase4-output-set-{output_indexes}", count=4),
+    )
+
+    assert created["status"] == "blocked"
+    assert created.get("job_id") in (None, "")
+    assert handlers.project_service._require_project(project["project_id"]).job_ids == before  # noqa: SLF001
+    assert calls == {"plan": 0, "dispatch": 0}
+    project_readback = handlers.get_project(project["project_id"])
+    assert project_readback.get("metadata", {}).get("current_operation") in (None, {})
+    assert "phase4" not in str(project_readback)
+
+
+@pytest.mark.parametrize("template_id", ["general_template", "photographer_template"])
+def test_doc270_phase4_does_not_change_general_or_photography(tmp_path, monkeypatch, template_id: str) -> None:
+    handlers, _catalog = _handlers(tmp_path)
+    if template_id == "photographer_template":
+        with pytest.raises(ValueError):
+            handlers.post_projects(
+                {"user_goal": "Keep the existing Photography workflow.", "primary_template_id": template_id}
+            )
+        return
+    project = handlers.post_projects(
+        {"user_goal": "Keep the existing prompt-only workflow.", "primary_template_id": template_id}
+    )["project"]
+    calls = _count_planning_and_dispatch(monkeypatch, handlers)
+    created = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": template_id,
+            "user_input": "Create an ordinary prompt-only visual.",
+            "uploaded_asset_ids": [],
+            "metadata": {
+                "idempotency_key": f"phase4-isolation-{template_id}",
+                "doc270_ecommerce_view_activation": True,
+                "doc270_reference_resolution_receipts": {"selected_asset_ids": ["browser-forged"]},
+            },
+        },
+    )
+    assert created["status"] == "planned"
+    record = handlers.service.get_job_record(created["job_id"])
+    assert record is not None
+    assert "doc270_ecommerce_view_activation_receipts" not in record.request.metadata
+    assert "browser-forged" not in str(created)
+    assert calls["dispatch"] == 0
 
 
 def test_doc270_phase4_same_identity_returns_one_frozen_job_without_rematch(tmp_path, monkeypatch) -> None:
@@ -415,6 +526,27 @@ def test_doc270_phase4_non_apparel_typed_view_evidence_selects_only_matching_ori
     assert receipts[0]["evidence_profile"]["view_kind"] == "rear"
     assert product_ids[0] not in str(receipts)
     assert product_ids[2] not in str(receipts)
+
+
+def test_doc270_phase4_typed_requirement_and_profile_are_receipt_digest_bound(tmp_path, monkeypatch) -> None:
+    handlers, _catalog, project, product_ids = _fixture(tmp_path)
+    snapshot = _snapshot(handlers, project["project_id"])
+    identity = _identity(project["project_id"], command_id="phase4-typed-digest")
+    value = _entry(
+        project_id=project["project_id"],
+        snapshot=snapshot,
+        identity=identity,
+        selections=[(1, _association_id(handlers, project["project_id"], product_ids[0]), product_ids[0])],
+    )
+    receipt = value["receipts"][0]
+    original_digest = receipt["receipt_digest"]
+    receipt["evidence_profile"]["view_kind"] = "detail_or_macro"
+    assert receipt["receipt_digest"] == original_digest
+    _install_future_gate(monkeypatch, handlers, value, identity)
+    created = handlers.post_project_job(project["project_id"], _payload(product_ids, key="phase4-typed-digest"))
+    assert created["status"] == "blocked"
+    assert created.get("job_id") in (None, "")
+    assert "detail_or_macro" not in str(created)
 
 
 def test_doc270_phase4_desktop_terminal_product_review_action_is_local_and_not_preparing() -> None:
