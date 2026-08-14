@@ -42,7 +42,7 @@ E-Commerce Job with all of the following durable facts:
   `final_classification=non_retryable_provider_failure`, and
   `final_failure_code=image_edit_invalid_request_unattributed`;
 - a server-owned image-edit execution audit with exact capability, provider,
-  model, operation, and route identity;
+  model, operation, route identity, and `outer_request_count >= 1`;
 - a verifiable terminal Job receipt digest plus current project/job linkage;
 - canonical project goal and explicit command-direction binding;
 - current project source-library binding, complete Doc263 admission binding,
@@ -60,11 +60,19 @@ open and creates no hold.
 
 Before idempotency, Brain planning, Product API Job creation, physical
 materialization, or Provider dispatch, Project Mode compares the new explicit
-E-Commerce command with the newest readable same-project verified receipt. It
-must compare the exact current goal/direction, requested output count, canonical
-source and selected-product bindings, locked People binding, selected
-continuation binding, per-output physical plans, and configured execution
-identity.
+E-Commerce command with the newest readable same-project verified receipt.
+This pre-create comparator may use only deterministic current facts: exact
+template, goal/direction, requested output count, canonical source-library and
+admission binding, current locked People binding, selected-continuation
+admission, and configured Provider route plus source-resolver/capability
+identity when selection can vary.
+
+Doc269 per-output physical plans are created only after Brain planning. The
+historical terminal Job's complete plans must be authenticated as evidence of
+what was actually sent, but they must never be constructed, reused, or compared
+as a new-command plan before the hold decision. If a required deterministic
+create-time identity is unavailable or differs, the hold fails open and a new
+deliberate command may proceed.
 
 An exact match returns no `job_id` and one public terminal operation only:
 
@@ -83,10 +91,11 @@ digest, provider error, or opaque upstream code. It does not mutate
 or automatically retry/reroute.
 
 A new command is eligible only after an explicit server-observable change to
-the goal/direction, active source/reference or selected-product binding, locked
-visual-asset binding, selected continuation admission, or separately configured
-route identity. It never changes a person, product fact, age, garment, or
-reference channel to obtain a result.
+the goal/direction, requested output count, active source/reference or
+selected-product binding, locked visual-asset binding, selected continuation
+admission, or separately configured route/source-resolver identity. It never
+changes a person, product fact, age, garment, or reference channel to obtain a
+result.
 
 ## 5. Historical And UI Projection
 
@@ -107,3 +116,8 @@ Phase 0 is documentation plus deterministic red tests only. Tests use local
 Project Mode/Product API stores, deterministic no-pixel Provider doubles, and
 local browser fixtures. They do not contact Provider, MCP, ImageGen, VPS, or
 live projects/jobs/outputs.
+
+The red suite proves: exact holds stop before Product API create and Brain;
+partial-pixel, missing-audit, forged, cross-project, and noncurrent historical
+facts fail open; each relevant create-time change permits a fresh command; and
+desktop/H5 clear terminal timers before exposing the local review action.
