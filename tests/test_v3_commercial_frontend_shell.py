@@ -321,6 +321,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "mobileV3ProcessOutputsForProject" in mobile_script.text
     assert "function mobileV3CanonicalFinalDelivery" in mobile_script.text
     assert "function mobileV3JobDeliveryWithheld" in mobile_script.text
+    assert "function mobileV3RecoveryAttemptLimitForServerWatchdog" in mobile_script.text
+    assert "recoveryAttemptLimit = Math.max(" in mobile_script.text
+    assert "mobileV3RecoveryAttemptLimitForServerWatchdog(lastJob, attempt)" in mobile_script.text
     assert "review_blocked" in mobile_script.text
     assert "图片已经生成，但自动质量审查未通过" in mobile_script.text
     assert 'sourceType === "selected_output"' in mobile_script.text
@@ -955,6 +958,61 @@ def test_v3_project_generate_rejects_invalid_payload_before_background_claim(tmp
     assert "generation_lifecycle_failure" not in current["metadata"]
 
 
+def test_v3_auto_generate_real_render_intent_reaches_project_planning(tmp_path, monkeypatch) -> None:
+    brain = EcommerceRemoteBrainTestProvider()
+    handlers = _install_isolated_v3_handlers(tmp_path, monkeypatch, brain_provider=brain)
+    client = TestClient(app)
+    project = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create one clean studio product image.", "primary_template_id": "ecommerce_template"},
+    ).json()["project"]
+    starts: list[tuple[str, str, dict]] = []
+
+    def fake_start(project_id: str, job_id: str, payload: dict) -> bool:
+        starts.append((project_id, job_id, payload))
+        return False
+
+    monkeypatch.setattr(app_main, "_start_v3_project_generation_background", fake_start)
+    created = client.post(
+        f"/api/v3/creative-agent/projects/{project['project_id']}/jobs",
+        json={
+            "template_id": "ecommerce_template",
+            "user_input": "Create one clean studio product image.",
+            "metadata": {"ecommerce_text_to_image_fallback": True},
+            "auto_generate": {
+                "quality_mode": "standard",
+                "metadata": {
+                    "require_real_images": True,
+                    "requested_image_count": 1,
+                    "disable_visual_auto_retry": True,
+                },
+            },
+        },
+    )
+
+    assert created.status_code == 200
+    job_id = created.json()["job_id"]
+    record = handlers.service.job_store.get(job_id)
+    assert record is not None
+    assert record.request.metadata["require_real_images"] is True
+    assert brain.requests
+    assert brain.requests[0]["metadata"]["require_real_images"] is True
+    assert starts == [
+        (
+            project["project_id"],
+            job_id,
+            {
+                "quality_mode": "standard",
+                "metadata": {
+                    "require_real_images": True,
+                    "requested_image_count": 1,
+                    "disable_visual_auto_retry": True,
+                },
+            },
+        )
+    ]
+
+
 def test_v3_gateway_background_watchdog_budgets_every_planned_provider_render(monkeypatch) -> None:
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", True)
     monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover_timeout_seconds", 660.0)
@@ -971,6 +1029,88 @@ def test_v3_gateway_background_watchdog_budgets_every_planned_provider_render(mo
     assert app_main._v3_gateway_managed_background_timeout_seconds(
         {"quality_mode": "strict", "metadata": {"requested_image_count": 3}}
     ) == 5955.0
+
+
+def test_v3_direct_provider_background_watchdog_budgets_real_provider_renders(monkeypatch) -> None:
+    monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", False)
+    monkeypatch.setattr(app_main.settings, "default_image_provider", "openai_gpt_image")
+    monkeypatch.setattr(app_main.settings, "openai_image_request_timeout_seconds", 240.0)
+    monkeypatch.setattr(app_main.settings, "openai_image_edit_request_timeout_seconds", 420.0)
+    monkeypatch.setattr(app_main.settings, "openai_image_high_resolution_timeout_seconds", 900.0)
+
+    assert app_main._v3_background_generation_timeout_plan(
+        None,
+        {"quality_mode": "standard", "metadata": {"require_real_images": True, "requested_image_count": 2}},
+    ) == (975.0, "direct_provider")
+    assert app_main._v3_background_generation_timeout_plan(
+        None,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "require_real_images": True,
+                "requested_image_count": 2,
+                "has_product_reference": True,
+                "disable_visual_auto_retry": True,
+            },
+        },
+    ) == (855.0, "direct_provider")
+    assert app_main._v3_background_generation_timeout_plan(
+        None,
+        {
+            "quality_mode": "strict",
+            "metadata": {
+                "require_real_images": True,
+                "requested_image_count": 1,
+                "requested_image_size": "2048x2048",
+            },
+        },
+    ) == (2715.0, "direct_provider")
+    assert app_main._v3_background_generation_timeout_plan(
+        None,
+        {"quality_mode": "standard", "metadata": {"requested_image_count": 1}},
+    ) == (None, None)
+
+
+def test_v3_direct_provider_background_watchdog_is_persisted(tmp_path, monkeypatch) -> None:
+    handlers = _install_isolated_v3_handlers(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_main.settings, "openai_image_gateway_managed_failover", False)
+    monkeypatch.setattr(app_main.settings, "default_image_provider", "openai_gpt_image")
+    monkeypatch.setattr(app_main.settings, "openai_image_request_timeout_seconds", 240.0)
+    monkeypatch.setattr(app_main._v3_generation_executor, "submit", lambda *_args, **_kwargs: None)
+    client = TestClient(app)
+    project_id = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create one clean still-life image."},
+    ).json()["project"]["project_id"]
+    job_id = client.post(
+        f"/api/v3/creative-agent/projects/{project_id}/jobs",
+        json={"template_id": "general_template", "user_input": "Create one clean still-life image."},
+    ).json()["job_id"]
+    key = f"{project_id}:{job_id}"
+    try:
+        assert app_main._start_v3_project_generation_background(
+            project_id,
+            job_id,
+            {
+                "quality_mode": "standard",
+                "metadata": {
+                    "require_real_images": True,
+                    "requested_image_count": 1,
+                    "disable_visual_auto_retry": True,
+                },
+            },
+        ) is True
+        current = client.get(f"/api/v3/creative-agent/jobs/{job_id}").json()
+        watchdog = current["metadata"]["background_generation_watchdog"]
+        assert watchdog["enabled"] is True
+        assert watchdog["timeout_seconds"] == 255
+        assert watchdog["timeout_owner"] == "direct_provider"
+    finally:
+        with app_main._v3_background_generation_jobs_lock:
+            app_main._v3_background_generation_jobs.pop(key, None)
+            watchdog = app_main._v3_background_generation_watchdogs.pop(key, None)
+            if watchdog is not None:
+                watchdog.cancel()
 
 
 def test_v3_background_watchdog_closes_only_the_matching_generation_attempt(tmp_path, monkeypatch) -> None:

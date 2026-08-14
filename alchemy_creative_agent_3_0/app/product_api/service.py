@@ -2602,6 +2602,7 @@ class V3ProductApiService:
         *,
         background_attempt_id: str | None = None,
         background_timeout_seconds: float | None = None,
+        background_timeout_owner: str | None = None,
         background_runtime_id: str | None = None,
     ) -> ProductJobStatus:
         """Persist the public pre-render state before a background worker starts.
@@ -2627,6 +2628,9 @@ class V3ProductApiService:
                     watchdog["runtime_id"] = str(background_runtime_id)
                 if background_timeout_seconds is not None:
                     watchdog["timeout_seconds"] = max(1, int(round(float(background_timeout_seconds))))
+                    timeout_owner = str(background_timeout_owner or "gateway").strip().lower()
+                    if timeout_owner in {"gateway", "direct_provider"}:
+                        watchdog["timeout_owner"] = timeout_owner
                 record.request.metadata = {
                     **dict(record.request.metadata),
                     "background_generation_attempt_id": str(background_attempt_id),
@@ -2670,7 +2674,7 @@ class V3ProductApiService:
         background_attempt_id: str,
         timeout_seconds: float,
     ) -> ProductJobStatus:
-        """Close a background run that outlived the gateway-owned deadline.
+        """Close a background run that outlived its server-owned deadline.
 
         A later return from the non-cancellable worker must not turn this
         terminal timeout into a delivery. The attempt ID also protects a
@@ -2687,19 +2691,33 @@ class V3ProductApiService:
         ):
             return self._status_from_record(record)
         rounded_timeout = max(1, int(round(float(timeout_seconds))))
+        watchdog = dict(record.request.metadata).get("background_generation_watchdog")
+        timeout_owner = (
+            str(watchdog.get("timeout_owner") or "gateway").strip().lower()
+            if isinstance(watchdog, dict)
+            else "gateway"
+        )
+        if timeout_owner not in {"gateway", "direct_provider"}:
+            timeout_owner = "gateway"
+        classification = (
+            "gateway_managed_lifecycle_timeout"
+            if timeout_owner == "gateway"
+            else "direct_provider_lifecycle_timeout"
+        )
+        response_owner = "gateway" if timeout_owner == "gateway" else "provider"
         provider_failure_retry = {
             "executed_count": 0,
             "max_attempts": 1,
             "fresh_upstream_requests": 1,
             "final_status": "failed",
-            "final_classification": "gateway_managed_lifecycle_timeout",
+            "final_classification": classification,
             "attempts": [
                 {
                     "attempt": 1,
                     "status": "failed",
-                    "classification": "gateway_managed_lifecycle_timeout",
+                    "classification": classification,
                     "error_type": "TimeoutError",
-                    "message": f"V3 background generation exceeded {rounded_timeout}s without a terminal gateway response.",
+                    "message": f"V3 background generation exceeded {rounded_timeout}s without a terminal {response_owner} response.",
                     "retryable": False,
                 }
             ],
@@ -2714,11 +2732,12 @@ class V3ProductApiService:
                 "timeout_seconds": rounded_timeout,
                 "status": "terminal_timeout",
                 "owner": "v3_background_generation_watchdog",
+                "budget_owner": timeout_owner,
             },
         }
         record.warnings.append(
-            f"V3 real image generation failed (gateway_managed_lifecycle_timeout): "
-            f"no terminal gateway response after {rounded_timeout}s."
+            f"V3 real image generation failed ({classification}): "
+            f"no terminal {response_owner} response after {rounded_timeout}s."
         )
         record.lifecycle = self._build_lifecycle(record)
         self.job_store.save(record)

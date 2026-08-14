@@ -4708,7 +4708,8 @@ async function generateMobileV3Job() {
 async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1, initialJob = null, recoveryReceipt = null } = {}) {
   if (!jobId) return initialJob || {};
   let lastJob = initialJob || {};
-  for (let attempt = 1; attempt <= 120; attempt += 1) {
+  let recoveryAttemptLimit = 120;
+  for (let attempt = 1; attempt <= recoveryAttemptLimit; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 1200 : 2500));
     if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
     try {
@@ -4722,6 +4723,10 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
       }
       if (["generating", "finalizing", "planned"].includes(lastJob?.status)) {
         if (recoveryReceipt && !mobileV3RecoveryOwns(recoveryReceipt)) return null;
+        recoveryAttemptLimit = Math.max(
+          recoveryAttemptLimit,
+          mobileV3RecoveryAttemptLimitForServerWatchdog(lastJob, attempt),
+        );
         setMobileV3Progress("recovering", `后台正在生成或完成交付收尾，已刷新 ${attempt} 次`);
         continue;
       }
@@ -4741,6 +4746,17 @@ async function recoverMobileV3GeneratedJob(projectId, jobId, { expectedCount = 1
     setMobileV3Progress("recovering", `后台正在生成，已刷新 ${attempt} 次`);
   }
   throw new Error("后台暂时没有返回完整图片，请稍后刷新项目");
+}
+
+function mobileV3RecoveryAttemptLimitForServerWatchdog(job, completedAttempt) {
+  const watchdog = job?.metadata?.background_generation_watchdog;
+  const timeoutSeconds = Number(watchdog?.timeout_seconds);
+  const startedAt = Date.parse(String(watchdog?.started_at || ""));
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || !Number.isFinite(startedAt)) return 0;
+  const remainingMs = Math.max(0, (startedAt + (timeoutSeconds * 1000)) - Date.now());
+  const pollingIntervalMs = 2500;
+  const completionBufferAttempts = 4;
+  return completedAttempt + Math.ceil(remainingMs / pollingIntervalMs) + completionBufferAttempts;
 }
 
 function setMobileV3Busy(isBusy) {

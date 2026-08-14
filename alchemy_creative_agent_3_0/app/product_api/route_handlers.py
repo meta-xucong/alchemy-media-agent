@@ -756,6 +756,7 @@ class V3ProductRouteHandlers:
         *,
         background_attempt_id: str | None = None,
         background_timeout_seconds: float | None = None,
+        background_timeout_owner: str | None = None,
         background_runtime_id: str | None = None,
     ) -> dict[str, Any]:
         return self.project_service.mark_project_job_generating(
@@ -763,6 +764,7 @@ class V3ProductRouteHandlers:
             job_id,
             background_attempt_id=background_attempt_id,
             background_timeout_seconds=background_timeout_seconds,
+            background_timeout_owner=background_timeout_owner,
             background_runtime_id=background_runtime_id,
         ).model_dump(mode="json")
 

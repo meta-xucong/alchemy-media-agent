@@ -413,6 +413,22 @@ def _v3_payload_with_veyra_owner(payload: dict, user_id: int | None) -> dict:
     return updated
 
 
+def _v3_project_job_payload_with_auto_generate_intent(
+    payload: dict,
+    auto_generate_payload: dict | None,
+) -> dict:
+    """Carry an explicit real-render request into the preceding plan phase."""
+
+    planning_payload = dict(payload or {})
+    auto_metadata = dict((auto_generate_payload or {}).get("metadata") or {})
+    if not bool(auto_metadata.get("require_real_images") or auto_metadata.get("real_image_generation")):
+        return planning_payload
+    metadata = dict(planning_payload.get("metadata") or {})
+    metadata["require_real_images"] = True
+    planning_payload["metadata"] = metadata
+    return planning_payload
+
+
 def _run_v3_handler(handler, *args, **kwargs):
     try:
         return handler(*args, **kwargs)
@@ -558,6 +574,95 @@ def _v3_gateway_managed_background_timeout_seconds(payload: dict | None = None) 
     return max(1.0, (provider_timeout * provider_request_budget) + 15.0)
 
 
+def _v3_background_request_is_high_resolution(payload: dict | None = None) -> bool:
+    metadata = dict((payload or {}).get("metadata") or {})
+    values = [
+        metadata.get("requested_image_size"),
+        (payload or {}).get("requested_image_size"),
+    ]
+    for value in values:
+        normalized = str(value or "").strip().lower().replace(" ", "")
+        if normalized in {"2k", "4k"}:
+            return True
+        if "x" not in normalized:
+            continue
+        try:
+            width_text, height_text = normalized.split("x", 1)
+            if max(int(width_text), int(height_text)) >= 2048:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _v3_background_request_has_reference_conditioning(job_id: str | None, payload: dict | None = None) -> bool:
+    metadata = dict((payload or {}).get("metadata") or {})
+    if bool(metadata.get("has_product_reference")) or bool(metadata.get("reference_files")):
+        return True
+    if not job_id:
+        return False
+    try:
+        record = v3_route_handlers.service.job_store.get(job_id)
+    except Exception:
+        logger.exception("V3 background timeout could not inspect provider reference conditioning for job=%s", job_id)
+        return True
+    if record is None:
+        return True
+    if record.request.uploaded_asset_ids:
+        return True
+    record_metadata = dict(record.request.metadata or {})
+    project_context = record_metadata.get("project_context_snapshot")
+    if isinstance(project_context, dict) and any(
+        project_context.get(key)
+        for key in (
+            "selected_output_assets",
+            "selected_reference_assets",
+            "uploaded_reference_assets",
+            "selected_visual_references",
+            "strong_reference_bindings",
+            "strong_reference_continuation_plan",
+        )
+    ):
+        return True
+    frozen_binding_set = record_metadata.get("frozen_visual_asset_binding_set")
+    if isinstance(frozen_binding_set, dict) and bool(frozen_binding_set.get("bindings")):
+        return True
+    return any(
+        record_metadata.get(key)
+        for key in (
+            "visual_asset_library_reference_assets",
+            "visual_asset_library_formal_face_chain_bindings",
+        )
+    )
+
+
+def _v3_background_generation_timeout_plan(
+    job_id: str | None,
+    payload: dict | None = None,
+) -> tuple[float | None, str | None]:
+    """Return the server-owned deadline for one real background generation."""
+
+    if bool(getattr(settings, "openai_image_gateway_managed_failover", False)):
+        return _v3_gateway_managed_background_timeout_seconds(payload), "gateway"
+
+    metadata = dict((payload or {}).get("metadata") or {})
+    if not bool(metadata.get("require_real_images") or metadata.get("real_image_generation")):
+        return None, None
+    if str(getattr(settings, "default_image_provider", "") or "").strip().lower() != "openai_gpt_image":
+        return None, None
+
+    render_count = _v3_bounded_background_output_count(payload)
+    retry_count = _v3_bounded_background_visual_retry_count(payload)
+    if _v3_background_request_is_high_resolution(payload):
+        provider_timeout = float(settings.openai_image_high_resolution_timeout_seconds)
+    elif _v3_background_request_has_reference_conditioning(job_id, payload):
+        provider_timeout = float(settings.openai_image_edit_request_timeout_seconds)
+    else:
+        provider_timeout = float(settings.openai_image_request_timeout_seconds)
+    provider_request_budget = render_count * (1 + retry_count)
+    return max(1.0, (provider_timeout * provider_request_budget) + 15.0), "direct_provider"
+
+
 def _timeout_v3_project_generation_background(
     project_id: str,
     job_id: str,
@@ -588,7 +693,7 @@ def _timeout_v3_project_generation_background(
 def _start_v3_project_generation_background(project_id: str, job_id: str, payload: dict) -> bool:
     key = f"{project_id}:{job_id}"
     background_attempt_id = uuid4().hex
-    timeout_seconds = _v3_gateway_managed_background_timeout_seconds(payload)
+    timeout_seconds, timeout_owner = _v3_background_generation_timeout_plan(job_id, payload)
     with _v3_background_generation_jobs_lock:
         if key in _v3_background_generation_jobs:
             return False
@@ -600,6 +705,7 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             job_id,
             background_attempt_id=background_attempt_id,
             background_timeout_seconds=timeout_seconds,
+            background_timeout_owner=timeout_owner,
             background_runtime_id=_v3_background_generation_runtime_id,
         )
     except Exception:
@@ -1105,10 +1211,14 @@ async def v3_create_project_job_endpoint(project_id: str, request: Request, auth
     payload = await _v3_json_payload(request)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
     auto_generate_payload = payload.pop("auto_generate", None)
+    planning_payload = _v3_project_job_payload_with_auto_generate_intent(
+        payload,
+        auto_generate_payload if isinstance(auto_generate_payload, dict) else None,
+    )
     # Planning can make the bounded remote Central Brain call.  Keep that
     # synchronous V3 domain work off the ASGI event loop so project polling,
     # health checks, and the browser remain responsive while it is in flight.
-    response = await _run_v3_handler_threaded(v3_route_handlers.post_project_job, project_id, payload)
+    response = await _run_v3_handler_threaded(v3_route_handlers.post_project_job, project_id, planning_payload)
     if isinstance(auto_generate_payload, dict) and response.get("job_id") and response.get("status") != "blocked":
         generate_payload = _v3_payload_with_veyra_owner(dict(auto_generate_payload), user_id)
         started = _start_v3_project_generation_background(project_id, response["job_id"], generate_payload)

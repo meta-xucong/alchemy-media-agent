@@ -630,6 +630,40 @@ def test_gateway_managed_background_timeout_is_terminal_and_stale_worker_cannot_
     assert late_worker.status == ProductJobStatusValue.BLOCKED
 
 
+def test_direct_provider_background_timeout_is_terminal_and_stale_worker_cannot_reopen_it() -> None:
+    service, _, _ = _service("direct_provider_background_timeout")
+    created = service.create_job({"user_input": "Create one clean still-life image."})
+
+    pending = service.mark_job_generating(
+        created.job_id,
+        background_attempt_id="direct_attempt_one",
+        background_timeout_seconds=255,
+        background_timeout_owner="direct_provider",
+    )
+    timed_out = service.mark_job_generation_timed_out(
+        created.job_id,
+        background_attempt_id="direct_attempt_one",
+        timeout_seconds=255,
+    )
+    late_worker = service.generate_job(
+        created.job_id,
+        {
+            "metadata": {
+                "_v3_background_worker_claim": True,
+                "_v3_background_generation_attempt_id": "direct_attempt_one",
+            }
+        },
+    )
+
+    assert pending.status == ProductJobStatusValue.GENERATING
+    assert pending.metadata["background_generation_watchdog"]["timeout_owner"] == "direct_provider"
+    assert timed_out.status == ProductJobStatusValue.BLOCKED
+    assert timed_out.metadata["provider_failure_retry"]["final_classification"] == "direct_provider_lifecycle_timeout"
+    assert timed_out.metadata["generation_lifecycle_timeout"]["budget_owner"] == "direct_provider"
+    assert "direct_provider_lifecycle_timeout" in " ".join(timed_out.warnings)
+    assert late_worker.status == ProductJobStatusValue.BLOCKED
+
+
 def test_background_worker_failure_is_terminal_without_claiming_a_provider_timeout() -> None:
     service, _, _ = _service("background_worker_failure")
     created = service.create_job({"user_input": "Create one clean still-life image."})
