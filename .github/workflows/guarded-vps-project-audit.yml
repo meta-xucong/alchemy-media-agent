@@ -127,7 +127,23 @@ jobs:
                   return {"job_id": job_id, "status": "missing"}
               payload = json.loads(path.read_text(encoding="utf-8"))
               metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-              review = metadata.get("post_generation_review_package") or metadata.get("post_generation_review")
+              generation_result = payload.get("generation_result")
+              generation_result = generation_result if isinstance(generation_result, dict) else {}
+              generation_metadata = generation_result.get("metadata")
+              generation_metadata = generation_metadata if isinstance(generation_metadata, dict) else {}
+              asset_pack = generation_result.get("asset_pack")
+              asset_pack = asset_pack if isinstance(asset_pack, dict) else {}
+              asset_pack_metadata = asset_pack.get("metadata")
+              asset_pack_metadata = asset_pack_metadata if isinstance(asset_pack_metadata, dict) else {}
+              visual_cluster = generation_metadata.get("visual_cluster")
+              visual_cluster = visual_cluster if isinstance(visual_cluster, dict) else {}
+              review = (
+                  generation_metadata.get("post_generation_review_package")
+                  or visual_cluster.get("post_generation_review_package")
+                  or asset_pack_metadata.get("post_generation_review_package")
+                  or metadata.get("post_generation_review_package")
+                  or metadata.get("post_generation_review")
+              )
               review = review if isinstance(review, dict) else {}
               inspections = review.get("inspections") if isinstance(review.get("inspections"), list) else []
               inspection_states = Counter(
@@ -135,20 +151,40 @@ jobs:
                   for item in inspections
                   if isinstance(item, dict)
               )
-              final_delivery = metadata.get("final_delivery") if isinstance(metadata.get("final_delivery"), dict) else {}
+              inspection_modes = Counter(
+                  str(item.get("mode") or "unknown")
+                  for item in inspections
+                  if isinstance(item, dict)
+              )
               return {
                   "job_id": str(payload.get("job_id") or job_id),
                   "status": payload.get("status"),
                   "updated_at": payload.get("updated_at"),
                   "warning_count": len(payload.get("warnings") or []),
+                  "has_generation_result": bool(generation_result),
                   "provider_failure_code": (
-                      (metadata.get("provider_failure_retry") or {}).get("final_failure_code")
-                      if isinstance(metadata.get("provider_failure_retry"), dict)
+                      ((metadata.get("provider_failure_retry") or generation_metadata.get("provider_failure_retry") or {}).get("final_failure_code"))
+                      if isinstance(metadata.get("provider_failure_retry") or generation_metadata.get("provider_failure_retry"), dict)
                       else None
                   ),
-                  "final_delivery_status": final_delivery.get("final_delivery_status"),
-                  "automatic_delivery_available": final_delivery.get("automatic_delivery_available"),
+                  "review_package_present": bool(review),
+                  "review_package_status": review.get("status"),
                   "review_states": dict(sorted(inspection_states.items())),
+                  "review_modes": dict(sorted(inspection_modes.items())),
+                  "face_attestation_states": dict(
+                      sorted(
+                          Counter(
+                              str(
+                                  (
+                                      (item.get("evidence") or {}).get("face_integrity_attestation") or {}
+                                  ).get("status")
+                                  or "not_recorded"
+                              )
+                              for item in inspections
+                              if isinstance(item, dict)
+                          ).items()
+                      )
+                  ),
               }
 
           job_ids = [str(item) for item in project.get("job_ids") or [] if str(item).strip()]
@@ -172,9 +208,11 @@ jobs:
                   {
                       "output_id": str(payload.get("output_id") or path.parent.name),
                       "job_id": owner,
-                      "status": payload.get("status"),
-                      "delivery_state": payload.get("delivery_state") or metadata.get("delivery_state"),
-                      "review_status": payload.get("review_status") or metadata.get("review_status"),
+                      "candidate_id": payload.get("candidate_id"),
+                      "asset_id": payload.get("asset_id"),
+                      "provider": payload.get("provider"),
+                      "model": payload.get("model"),
+                      "dimensions": [payload.get("width"), payload.get("height")],
                       "image_file_count": len(image_files),
                   }
               )
