@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import threading
 from typing import Any
 from uuid import uuid4
 
@@ -270,6 +271,9 @@ _DOC270_PHASE4_ANALYZER = {
 _DOC270_PHASE4_REQUIREMENT_KINDS = frozenset(
     {"object_front_presentation", "object_rear_structure", "object_detail"}
 )
+_DOC277_PRIVATE_PLANNING_NAMESPACE = "doc277_project_planning_operations"
+_DOC277_CURRENT_OPERATION_KEY = "doc277_planning_current_operation"
+_DOC277_OPERATION_STATES = frozenset({"planning", "planning_failed"})
 
 
 class EcommerceSlotContinuationError(ValueError):
@@ -311,6 +315,7 @@ class V3ProjectModeService:
         self.ecommerce_view_activation_issuer = (
             ecommerce_view_activation_issuer or issuer_from_environment()
         )
+        self._doc277_planning_lock = threading.RLock()
         # Product API uses this narrow readback only while authenticating a
         # terminal Doc271 record. It reads an append-only Project Mode snapshot
         # instead of trusting a copy in Job metadata.
@@ -1535,7 +1540,11 @@ class V3ProjectModeService:
             created_at=now,
             updated_at=now,
             metadata={
-                **create_request.metadata,
+                **{
+                    key: value
+                    for key, value in dict(create_request.metadata or {}).items()
+                    if not str(key).startswith("doc277_")
+                },
                 "source": PROJECT_API_SOURCE,
                 "project_mode": True,
                 "imports_v1_v2_runtime": False,
@@ -1571,6 +1580,201 @@ class V3ProjectModeService:
         project.memory_summary = self._memory_summary(project)
         self.project_store.save_project(project)
         return self._project_response(project)
+
+    def begin_project_planning_operation(
+        self,
+        project_id: str,
+        request: CreateProjectJobRequest | dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist one pre-Job planning operation before remote Brain work."""
+
+        with self._doc277_planning_lock:
+            project = self._require_project(project_id)
+            existing = self._doc277_current_planning_operation(project)
+            if existing is not None and existing["state"] == "planning":
+                return existing
+
+            job_request = self._coerce_create_project_job_request(request)
+            template_manifest = self._ensure_active_template(job_request.template_id)
+            metadata = {
+                key: value
+                for key, value in dict(job_request.metadata or {}).items()
+                if not str(key).startswith("doc277_")
+            }
+            normalized_request = job_request.model_copy(update={"metadata": metadata})
+            serialized_request = normalized_request.model_dump(mode="json", exclude_none=True)
+            operation_id = stable_id(
+                "doc277_project_planning",
+                project.project_id,
+                uuid4().hex,
+            )
+            request_digest = self._doc277_digest(
+                {
+                    "project_id": project.project_id,
+                    "template_id": template_manifest.template_id,
+                    "request": serialized_request,
+                }
+            )
+            now = _utc_now_iso()
+            public_operation = {
+                "operation_id": operation_id,
+                "state": "planning",
+                "terminal": False,
+                "pending": True,
+                "next_actions": [],
+            }
+            self.project_store.append_private_record(
+                project.project_id,
+                _DOC277_PRIVATE_PLANNING_NAMESPACE,
+                {
+                    "schema_version": "doc277_project_planning_operation_v1",
+                    "record_kind": "opened",
+                    "identity_digest": self._doc277_digest(
+                        {
+                            "project_id": project.project_id,
+                            "operation_id": operation_id,
+                            "record_kind": "opened",
+                        }
+                    ),
+                    "project_id": project.project_id,
+                    "operation_id": operation_id,
+                    "template_id": template_manifest.template_id,
+                    "request_digest": request_digest,
+                    "request": serialized_request,
+                    "created_at": now,
+                },
+            )
+            project.metadata = {
+                **dict(project.metadata or {}),
+                _DOC277_CURRENT_OPERATION_KEY: {
+                    **public_operation,
+                    "created_at": now,
+                },
+            }
+            project.updated_at = now
+            self.project_store.save_project(project)
+            return public_operation
+
+    def complete_project_planning_operation(
+        self,
+        project_id: str,
+        operation_id: str,
+        *,
+        job_id: str,
+    ) -> dict[str, Any]:
+        """Close planning only after one actual Product Job has been persisted."""
+
+        clean_operation_id = str(operation_id or "").strip()
+        clean_job_id = str(job_id or "").strip()
+        if not clean_job_id:
+            raise ValueError("doc277_planning_completion_job_missing")
+        with self._doc277_planning_lock:
+            project = self._require_project(project_id)
+            current = self._doc277_current_planning_operation(project)
+            if current is None or current["state"] != "planning" or current["operation_id"] != clean_operation_id:
+                raise ValueError("doc277_planning_operation_not_pending")
+            now = _utc_now_iso()
+            self.project_store.append_private_record(
+                project.project_id,
+                _DOC277_PRIVATE_PLANNING_NAMESPACE,
+                {
+                    "schema_version": "doc277_project_planning_operation_v1",
+                    "record_kind": "completed",
+                    "identity_digest": self._doc277_digest(
+                        {
+                            "project_id": project.project_id,
+                            "operation_id": clean_operation_id,
+                            "record_kind": "completed",
+                            "job_id": clean_job_id,
+                        }
+                    ),
+                    "project_id": project.project_id,
+                    "operation_id": clean_operation_id,
+                    "job_id": clean_job_id,
+                    "created_at": now,
+                },
+            )
+            metadata = dict(project.metadata or {})
+            metadata.pop(_DOC277_CURRENT_OPERATION_KEY, None)
+            project.metadata = metadata
+            project.updated_at = now
+            self.project_store.save_project(project)
+            return {"operation_id": clean_operation_id, "job_id": clean_job_id}
+
+    def fail_project_planning_operation(
+        self,
+        project_id: str,
+        operation_id: str,
+        *,
+        failure_code: str,
+    ) -> dict[str, Any]:
+        """Persist a terminal planning closure without exposing internals."""
+
+        clean_operation_id = str(operation_id or "").strip()
+        if not clean_operation_id:
+            raise ValueError("doc277_planning_operation_missing")
+        with self._doc277_planning_lock:
+            project = self._require_project(project_id)
+            current = self._doc277_current_planning_operation(project)
+            if current is None or current["state"] != "planning" or current["operation_id"] != clean_operation_id:
+                raise ValueError("doc277_planning_operation_not_pending")
+            public_operation = {
+                "operation_id": clean_operation_id,
+                "state": "planning_failed",
+                "terminal": True,
+                "pending": False,
+                "next_actions": [{"id": "review_project_request"}],
+            }
+            now = _utc_now_iso()
+            self.project_store.append_private_record(
+                project.project_id,
+                _DOC277_PRIVATE_PLANNING_NAMESPACE,
+                {
+                    "schema_version": "doc277_project_planning_operation_v1",
+                    "record_kind": "failed",
+                    "identity_digest": self._doc277_digest(
+                        {
+                            "project_id": project.project_id,
+                            "operation_id": clean_operation_id,
+                            "record_kind": "failed",
+                            "failure_code": str(failure_code or "").strip() or "planning_unavailable",
+                        }
+                    ),
+                    "project_id": project.project_id,
+                    "operation_id": clean_operation_id,
+                    "failure_code": str(failure_code or "").strip() or "planning_unavailable",
+                    "created_at": now,
+                },
+            )
+            project.metadata = {
+                **dict(project.metadata or {}),
+                _DOC277_CURRENT_OPERATION_KEY: {
+                    **public_operation,
+                    "created_at": now,
+                },
+            }
+            project.updated_at = now
+            self.project_store.save_project(project)
+            return public_operation
+
+    def close_interrupted_project_planning_operations(self) -> int:
+        """Fail closed after a process restart; planning is never replayed."""
+
+        closed = 0
+        for project in self.project_store.list_all_projects():
+            operation = self._doc277_current_planning_operation(project)
+            if operation is None or operation["state"] != "planning":
+                continue
+            try:
+                self.fail_project_planning_operation(
+                    project.project_id,
+                    operation["operation_id"],
+                    failure_code="planning_process_restarted",
+                )
+            except (KeyError, ValueError):
+                continue
+            closed += 1
+        return closed
 
     def list_timeline(self, project_id: str) -> ProjectTimelineResponse:
         project = self._require_project(project_id)
@@ -2194,7 +2398,22 @@ class V3ProjectModeService:
                 self._doc269_selected_continuation_admissions(project)
             )
             # Explicit selectors have now been admitted into Project Mode.
-            # Reconcile canonical refs before deriving command identity so a
+            # A project created with ready product uploads starts with an
+            # append-only legacy mirror.  Materialize the current canonical
+            # pool into authoritative project associations before either the
+            # Doc270 source library or command identity reads it.  Otherwise
+            # Product API admission can accept a product whose source-library
+            # snapshot is empty, which is a false cross-authority mismatch.
+            # Empty pools remain the established text-to-image path.
+            initial_canonical_product_ids = self._ecommerce_product_reference_asset_ids(project, [])
+            if initial_canonical_product_ids:
+                self._persist_job_uploaded_references(
+                    project,
+                    initial_canonical_product_ids,
+                    template_id=template_manifest.template_id,
+                    user_input=job_request.user_input or project.user_goal,
+                )
+            # Reconcile canonical refs after association materialization so a
             # first submission and its immediate replay observe the same
             # server-owned product pool.
             self._ensure_project_product_reference_integrity(project)
@@ -8067,6 +8286,59 @@ class V3ProjectModeService:
             return None
         return None
 
+    def _doc276_face_integrity_current_operation(self, project: ProjectRecord) -> dict[str, Any] | None:
+        """Project a shared withheld review state without exposing Job evidence.
+
+        This is intentionally evaluated from the newest readable Job only.
+        Old append-only reviews stay in history and cannot overwrite a newer
+        planned or delivered command.
+        """
+
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            result = record.generation_result or record.planning_result
+            if result is None:
+                return None
+            package = dict(result.metadata or {}).get("post_generation_review_package")
+            inspections = package.get("inspections") if isinstance(package, dict) else []
+            required_output_ids = {
+                str(output_id).strip()
+                for output_id in (
+                    package.get("doc276_face_integrity_required_output_ids", [])
+                    if isinstance(package, dict)
+                    else []
+                )
+                if str(output_id).strip()
+            }
+            if not required_output_ids:
+                return None
+            inspections_by_output = {
+                str(inspection.get("output_id") or "").strip(): inspection
+                for inspection in (inspections if isinstance(inspections, list) else [])
+                if isinstance(inspection, dict) and str(inspection.get("output_id") or "").strip()
+            }
+            face_integrity_withheld = any(
+                not self.product_service._doc276_face_integrity_delivery_certified(  # noqa: SLF001
+                    inspections_by_output.get(output_id, {}),
+                    required=True,
+                )
+                for output_id in required_output_ids
+            )
+            if not face_integrity_withheld:
+                return None
+            final_delivery, _output_ids, _asset_ids = self.product_service._public_final_delivery_projection(result)
+            if final_delivery.get("final_delivery_status") != "withheld_manual_confirmation":
+                return None
+            return {
+                "state": "review_withheld_face_integrity",
+                "terminal": True,
+                "pending": False,
+                "next_actions": [{"id": "review_generation_history"}],
+            }
+        return None
+
     @staticmethod
     def _public_project_output_identity(item: dict[str, Any]) -> str:
         return str(
@@ -8883,6 +9155,62 @@ class V3ProjectModeService:
                     shared.add(asset_id)
         return shared
 
+    def _doc277_current_planning_operation(self, project: ProjectRecord) -> dict[str, Any] | None:
+        """Read only a server-issued pending or terminal planning projection."""
+
+        pointer = dict(project.metadata or {}).get(_DOC277_CURRENT_OPERATION_KEY)
+        if not isinstance(pointer, dict):
+            return None
+        operation_id = str(pointer.get("operation_id") or "").strip()
+        state = str(pointer.get("state") or "").strip()
+        if not operation_id or state not in _DOC277_OPERATION_STATES:
+            return None
+        try:
+            records = self.project_store.list_private_records(
+                project.project_id,
+                _DOC277_PRIVATE_PLANNING_NAMESPACE,
+            )
+        except ValueError:
+            return None
+        opened = any(
+            record.get("record_kind") == "opened"
+            and record.get("project_id") == project.project_id
+            and record.get("operation_id") == operation_id
+            for record in records
+        )
+        if not opened:
+            return None
+        terminal_kinds = {
+            str(record.get("record_kind") or "")
+            for record in records
+            if record.get("project_id") == project.project_id
+            and record.get("operation_id") == operation_id
+        }
+        if state == "planning":
+            if terminal_kinds.intersection({"completed", "failed"}):
+                return None
+            return {
+                "operation_id": operation_id,
+                "state": "planning",
+                "terminal": False,
+                "pending": True,
+                "next_actions": [],
+            }
+        if "failed" not in terminal_kinds:
+            return None
+        return {
+            "operation_id": operation_id,
+            "state": "planning_failed",
+            "terminal": True,
+            "pending": False,
+            "next_actions": [{"id": "review_project_request"}],
+        }
+
+    @staticmethod
+    def _doc277_digest(value: dict[str, Any]) -> str:
+        serialized = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
     def _project_response(self, project: ProjectRecord) -> ProjectResponse:
         public_project = self._public_project_record(project)
         metadata = {
@@ -8892,11 +9220,17 @@ class V3ProjectModeService:
         metadata["project_source_library"] = public_project_source_library(
             self._doc270_project_source_library(project)
         )
+        operation = self._doc277_current_planning_operation(project)
+        if operation is None:
+            operation = self._doc276_face_integrity_current_operation(project)
+        if operation is not None:
+            metadata["current_operation"] = operation
         if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
             metadata["ecommerce_project_view"] = self._ecommerce_project_view(project)
-            operation = self._ecommerce_current_operation(project)
-            if operation is not None:
-                metadata["current_operation"] = operation
+            if operation is None:
+                operation = self._ecommerce_current_operation(project)
+                if operation is not None:
+                    metadata["current_operation"] = operation
         return ProjectResponse(
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}",

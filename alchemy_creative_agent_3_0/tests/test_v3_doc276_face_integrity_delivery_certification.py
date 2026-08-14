@@ -18,6 +18,7 @@ from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     GeneratedOutputResolution,
     VisionOutputInspector,
@@ -30,6 +31,7 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_ev
     review_plan_digest,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import (
+    _inspection_prompt,
     active_review_contract,
 )
 from alchemy_creative_agent_3_0.tests.test_v3_doc143_human_authenticity_review import (
@@ -46,6 +48,7 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_brows
     _browser_page,
 )
 from alchemy_creative_agent_3_0.tests.test_v3_post_generation_vision_review import (
+    _BoundReadyResolver,
     _StaticReadyResolver,
     _create_general_job,
     _internal_generation_metadata,
@@ -176,6 +179,7 @@ def _server_review_evidence_metadata(
         "review_evidence_plan_authority": "exact_review_evidence_resolver",
         "review_reference_evidence_required": identity_required,
         "review_reference_evidence_available": identity_required,
+        "doc276_face_integrity_review_required": True,
     }
 
 
@@ -331,6 +335,63 @@ def test_doc276_explicit_provider_face_and_reference_certifications_can_cover_un
     assert report.evidence["reference_comparison_certification"] == _reference_comparison_certification(binding=binding)
 
 
+def test_doc276_vision_prompt_requires_the_server_injected_opaque_binding(tmp_path: Path) -> None:
+    resolution = _resolution(tmp_path)
+    metadata = _inspection_metadata(tmp_path, resolution, identity_required=True)
+    binding = _server_review_binding(resolution, metadata=metadata)
+    metadata["doc276_expected_face_binding"] = binding
+
+    prompt = _inspection_prompt(metadata)
+
+    assert "face_integrity_attestation" in prompt
+    assert "reference_comparison_certification" in prompt
+    for value in binding.values():
+        assert value in prompt
+
+
+def test_doc276_provider_cannot_self_exempt_an_expected_primary_face(tmp_path: Path) -> None:
+    resolution = _resolution(tmp_path)
+    metadata = _inspection_metadata(tmp_path, resolution, identity_required=True)
+    binding = _server_review_binding(resolution, metadata=metadata)
+    payload = _passing_human_payload()
+    face = _face_integrity_attestation("pass", binding=binding)
+    face["primary_face_scope"] = "no_visible_primary_face"
+    payload["face_integrity_attestation"] = face
+    payload["reference_comparison_certification"] = _reference_comparison_certification(binding=binding)
+
+    report = VisionOutputInspector(
+        vision_provider=_StaticVisionProvider(payload),
+        identity_metric_provider=_UnavailableIdentityMetric(),
+    ).inspect(resolution, metadata=metadata)
+
+    assert report.status == "manual_review"
+    assert report.evidence["face_integrity_attestation"]["status"] == "not_verifiable"
+
+
+def test_doc276_browser_metadata_cannot_enable_the_server_rollout_gate(tmp_path: Path) -> None:
+    provider = _StaticVisionProvider(_passing_human_payload())
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+
+    service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "standard",
+            "metadata": {
+                "vision_inspection_mode": "vision_model",
+                "doc276_face_integrity_review_required": True,
+            },
+        },
+    )
+
+    package = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
+    assert package.get("doc276_face_integrity_review_required") is not True
+
+
 @pytest.mark.parametrize(
     "corruption",
     [
@@ -434,6 +495,260 @@ def test_doc276_nonhuman_and_no_reference_general_flows_remain_open(tmp_path: Pa
     assert not report.detected_issues
 
 
+def test_doc276_default_output_contract_gates_non_enforced_human_reviews(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED", "true")
+    result = SimpleNamespace(
+        series_plan=SimpleNamespace(
+            assets=[
+                SimpleNamespace(
+                    asset_id="asset_visible",
+                    priority=1,
+                    metadata={},
+                )
+            ]
+        )
+    )
+
+    contracts = V3ProductApiService._frozen_output_review_contracts_by_asset_id(  # noqa: SLF001
+        result,
+        {},
+    )
+
+    assert contracts == {
+        "asset_visible": {
+            "source": "product_api_default_output_review_contract",
+            "deliverable_id": "output_1",
+            "primary_face_visibility_expected": True,
+        }
+    }
+    metadata = _non_enforced_server_human_review_metadata()
+    assert active_review_contract(metadata)["enforced"] is False
+    assert active_review_contract(metadata)["human_naturalness_verdict_required"] is True
+    assert V3ProductApiService()._doc276_face_integrity_review_required(  # noqa: SLF001
+        metadata,
+        contracts["asset_visible"],
+    ) is True
+
+
+def test_doc276_server_human_contract_requires_live_pixel_review_without_reference() -> None:
+    """A frozen human contract must not be downgraded by an empty reference set."""
+
+    service = V3ProductApiService()
+    metadata = {
+        **_plan_metadata(),
+        "require_real_images": True,
+        # These are public request-shaped escape hatches for the legacy
+        # reference path. They must not defeat the server-issued contract.
+        "disable_real_vision_inspection": True,
+        "vision_inspection_mode": "metadata_only",
+    }
+
+    assert active_review_contract(metadata)["requires_pixel_review"] is True
+    assert service._reference_conditioned_real_review_required(  # noqa: SLF001
+        metadata,
+        quality_mode="standard",
+    ) is False
+    assert service._server_required_real_pixel_review(  # noqa: SLF001
+        metadata,
+        quality_mode="standard",
+    ) is True
+    assert service._server_required_real_pixel_review(  # noqa: SLF001
+        metadata,
+        quality_mode="explore",
+    ) is False
+
+
+def test_doc276_non_enforced_human_generation_persists_the_required_face_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED", "true")
+    provider = _StaticVisionProvider(_passing_human_payload())
+    service = _service(
+        tmp_path,
+        output_resolver=_Doc276BoundReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+    _install_server_owned_human_review_contract(service, created.job_id)
+
+    service.generate_job(
+        created.job_id,
+        {
+            "quality_mode": "explore",
+            "metadata": {"vision_inspection_mode": "vision_model"},
+        },
+    )
+
+    package = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
+    required_output_ids = package["doc276_face_integrity_required_output_ids"]
+    assert required_output_ids == [package["inspections"][0]["output_id"]]
+    assert package["inspections"][0]["evidence"]["face_integrity_attestation"]["status"] == "not_verifiable"
+    delivery, eligible_outputs, eligible_assets = service._public_final_delivery_projection(  # noqa: SLF001
+        service.get_job_record(created.job_id).generation_result
+    )
+    assert delivery["final_delivery_status"] == "withheld_manual_confirmation"
+    assert eligible_outputs == set()
+    assert eligible_assets == set()
+    assert provider.calls == 1
+
+
+def _install_server_owned_human_review_contract(
+    service: V3ProductApiService,
+    job_id: str,
+) -> None:
+    """Seed only an existing server-planned Human Realism contract for review.
+
+    The fixture uses the same frozen planner metadata exercised by Doc143. It
+    deliberately does not place a review contract in browser request metadata.
+    """
+
+    record = service.get_job_record(job_id)
+    assert record is not None and record.planning_result is not None
+    record.planning_result = record.planning_result.model_copy(
+        update={
+            "metadata": {
+                **dict(record.planning_result.metadata or {}),
+                **_plan_metadata(),
+            }
+        }
+    )
+
+
+def _non_enforced_server_human_review_metadata() -> dict[str, Any]:
+    """Return an existing Human Realism contract without an execution ledger."""
+
+    human_contract = active_review_contract(_plan_metadata())["human_authenticity_contract"]
+    return {
+        "visual_cluster": {
+            "composed_visual_contribution": {
+                "active_capability_ids": ["human_realism"],
+                "review_contracts": [
+                    {
+                        "capability_id": "human_realism",
+                        "human_naturalness_verdict_required": True,
+                        "human_authenticity_contract": human_contract,
+                    }
+                ],
+            }
+        }
+    }
+
+
+class _Doc276BoundReadyResolver(_BoundReadyResolver):
+    """Bind the local review pixel to the generated asset and a durable test ID."""
+
+    def resolve_result(self, result, project_id: str | None = None):  # noqa: ANN001
+        resolution = super().resolve_result(result, project_id=project_id)[0]
+        output_id = str(resolution.output_id or resolution.asset_id or "").strip()
+        assert output_id
+        return [resolution.model_copy(update={"output_id": output_id})]
+
+
+def test_doc276_explicit_frozen_no_face_output_does_not_need_face_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED", "true")
+    result = SimpleNamespace(
+        series_plan=SimpleNamespace(
+            assets=[
+                SimpleNamespace(asset_id="asset_visible", priority=1, metadata={}),
+                SimpleNamespace(asset_id="asset_rear", priority=2, metadata={}),
+            ]
+        )
+    )
+    review_metadata = {
+        "capability_execution_envelope": {
+            "resolved_constraint_ledger": {
+                "provider_projection": {
+                    "deliverables": [
+                        {"output_index": 1, "deliverable_id": "front", "metadata": {}},
+                        {
+                            "output_index": 2,
+                            "deliverable_id": "rear",
+                            "metadata": {"primary_face_visibility_expected": False},
+                        },
+                    ]
+                }
+            }
+        }
+    }
+    contracts = V3ProductApiService._frozen_output_review_contracts_by_asset_id(  # noqa: SLF001
+        result,
+        review_metadata,
+    )
+    assert contracts["asset_visible"]["primary_face_visibility_expected"] is True
+    assert contracts["asset_rear"]["primary_face_visibility_expected"] is False
+    metadata = _non_enforced_server_human_review_metadata()
+    service = V3ProductApiService()
+    assert service._doc276_face_integrity_review_required(metadata, contracts["asset_visible"]) is True  # noqa: SLF001
+    assert service._doc276_face_integrity_review_required(metadata, contracts["asset_rear"]) is False  # noqa: SLF001
+
+    delivery, eligible_outputs, eligible_assets = V3ProductApiService()._public_final_delivery_projection(  # noqa: SLF001
+        SimpleNamespace(
+            metadata={
+                "post_generation_review_package": {
+                    "review_evidence_receipt_status": "complete",
+                    "doc276_face_integrity_required_output_ids": ["output_visible"],
+                    "inspections": [
+                        {
+                            "output_id": "output_visible",
+                            "asset_id": "asset_visible",
+                            "mode": "hybrid",
+                            "verification_state": "verified",
+                            "status": "pass",
+                            "evidence": {
+                                "face_integrity_attestation": {"status": "pass"},
+                                "reference_comparison_certification": {"status": "not_required"},
+                            },
+                        },
+                        {
+                            "output_id": "output_rear",
+                            "asset_id": "asset_rear",
+                            "mode": "hybrid",
+                            "verification_state": "verified",
+                            "status": "pass",
+                            "evidence": {},
+                        },
+                    ],
+                }
+            }
+        )
+    )
+
+    assert delivery["final_delivery_status"] == "ready"
+    assert eligible_outputs == {"output_visible", "output_rear"}
+    assert eligible_assets == {"asset_visible", "asset_rear"}
+
+
+def test_doc276_legitimate_frozen_no_visible_primary_face_remains_deliverable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trusted rear/obscured contract is not a provider-created exemption."""
+
+    monkeypatch.setenv("V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED", "true")
+    metadata = _non_enforced_server_human_review_metadata()
+    metadata["vision_inspection_mode"] = "vision_model"
+    report = VisionOutputInspector(
+        vision_provider=_StaticVisionProvider(_passing_human_payload())
+    ).inspect(_resolution(tmp_path), metadata=metadata)
+
+    assert V3ProductApiService()._doc276_face_integrity_review_required(  # noqa: SLF001
+        metadata,
+        {
+            "source": "resolved_constraint_ledger",
+            "deliverable_id": "rear_obscured",
+            "primary_face_visibility_expected": False,
+        },
+    ) is False
+    assert report.status == "pass"
+    assert "face_integrity_attestation" not in report.evidence
+
+
 def test_doc276_uncertified_human_review_cannot_enter_final_delivery_and_legacy_stays_history() -> None:
     result = SimpleNamespace(
         metadata={
@@ -464,7 +779,81 @@ def test_doc276_uncertified_human_review_cannot_enter_final_delivery_and_legacy_
     assert eligible_assets == set()
 
 
-def test_doc276_face_retry_uses_existing_bounded_append_only_authority_without_history_replay(tmp_path: Path) -> None:
+def test_doc276_missing_required_review_row_cannot_be_covered_by_another_passing_output() -> None:
+    result = SimpleNamespace(
+        metadata={
+            "post_generation_review_package": {
+                "review_evidence_receipt_status": "complete",
+                "doc276_face_integrity_required_output_ids": ["output_requires_face_receipt"],
+                "inspections": [
+                    {
+                        "output_id": "output_other",
+                        "asset_id": "asset_other",
+                        "mode": "hybrid",
+                        "verification_state": "verified",
+                        "status": "pass",
+                        "evidence": {
+                            "face_integrity_attestation": {"status": "pass"},
+                            "reference_comparison_certification": {"status": "not_required"},
+                        },
+                    }
+                ],
+            }
+        }
+    )
+
+    delivery, eligible_outputs, eligible_assets = V3ProductApiService()._public_final_delivery_projection(result)  # noqa: SLF001
+
+    assert delivery["final_delivery_status"] == "withheld_manual_confirmation"
+    assert delivery["automatic_delivery_available"] is False
+    assert eligible_outputs == set()
+    assert eligible_assets == set()
+
+
+def test_doc276_project_operation_does_not_mislabel_another_manual_hold_as_face_integrity() -> None:
+    result = SimpleNamespace(
+        metadata={
+            "post_generation_review_package": {
+                "doc276_face_integrity_required_output_ids": ["output_face_checked"],
+                "inspections": [
+                    {
+                        "output_id": "output_face_checked",
+                        "evidence": {
+                            "face_integrity_attestation": {"status": "pass"},
+                            "reference_comparison_certification": {"status": "not_required"},
+                        },
+                    }
+                ],
+            }
+        }
+    )
+    record = SimpleNamespace(generation_result=result, planning_result=None)
+
+    class ProductServiceStub:
+        @staticmethod
+        def get_job_record(job_id: str):  # noqa: ANN001
+            return record if job_id == "job_doc276" else None
+
+        @staticmethod
+        def _doc276_face_integrity_delivery_certified(inspection, *, required):  # noqa: ANN001
+            return required and inspection.get("evidence", {}).get("face_integrity_attestation", {}).get("status") == "pass"
+
+        @staticmethod
+        def _public_final_delivery_projection(value):  # noqa: ANN001
+            assert value is result
+            return ({"final_delivery_status": "withheld_manual_confirmation"}, set(), set())
+
+    project_service = object.__new__(V3ProjectModeService)
+    project_service.product_service = ProductServiceStub()
+
+    assert project_service._doc276_face_integrity_current_operation(SimpleNamespace(job_ids=["job_doc276"])) is None  # noqa: SLF001
+
+
+def test_doc276_face_retry_uses_existing_bounded_append_only_authority_without_history_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED", "true")
     retry_payload = {
         "status": "fail_retryable",
         "confidence": 0.94,
@@ -486,6 +875,7 @@ def test_doc276_face_retry_uses_existing_bounded_append_only_authority_without_h
         def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
             self.calls.append(resolution)
             assert isinstance(metadata, dict)
+            assert metadata.get("doc276_face_integrity_review_required") is True
             binding = _server_review_binding(
                 resolution,
                 metadata=metadata,
@@ -497,15 +887,19 @@ def test_doc276_face_retry_uses_existing_bounded_append_only_authority_without_h
                     binding=binding,
                     issue_codes=["human_rendering_artifact"],
                 ),
+                "reference_comparison_certification": _reference_comparison_certification(
+                    binding=binding,
+                ),
             }
 
     provider = BoundRetryVisionProvider()
     service = _service(
         tmp_path,
-        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        output_resolver=_Doc276BoundReadyResolver(_ready_resolution(tmp_path)),
         vision_inspector=VisionOutputInspector(vision_provider=provider),
     )
     created = _create_general_job(service)
+    _install_server_owned_human_review_contract(service, created.job_id)
     generated = service.generate_job(
         created.job_id,
         {
@@ -515,6 +909,10 @@ def test_doc276_face_retry_uses_existing_bounded_append_only_authority_without_h
     )
 
     internal_review = _internal_generation_metadata(service, created.job_id)["post_generation_review_package"]
+    assert internal_review["review_evidence_receipt_status"] == "complete", internal_review.get("review_evidence_receipt_errors")
+    assert "face_integrity_attestation" in internal_review["inspections"][0]["evidence"], internal_review["inspections"][0]["evidence"]
+    assert internal_review["inspections"][0]["evidence"]["face_integrity_attestation"]["status"] == "retry_recommended"
+    assert internal_review["inspections"][0]["status"] == "fail_retryable"
     assert len(provider.calls) == 2
     assert generated.metadata["visual_auto_retry"]["max_attempts"] == 1
     assert generated.metadata["visual_auto_retry"]["executed_count"] == 1
@@ -624,7 +1022,9 @@ def test_doc276_desktop_and_h5_face_withheld_terminal_state_has_one_local_review
                 assert "raw internal face digest" not in public_text
                 assert "preparing" not in public_text.lower()
                 assert "generating" not in public_text.lower()
-                assert "preparing" not in page.locator(progress_selector).inner_text().lower()
+                progress = page.locator(progress_selector)
+                progress_text = progress.inner_text() if progress.count() else ""
+                assert "preparing" not in progress_text.lower()
                 page.locator(action_selector).click()
                 assert page.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0
         finally:

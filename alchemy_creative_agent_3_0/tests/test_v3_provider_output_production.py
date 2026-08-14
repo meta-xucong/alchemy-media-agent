@@ -10,6 +10,7 @@ from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, 
 from alchemy_creative_agent_3_0.app.generation_router.providers import ReferenceInputAdmissionError
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import VisionOutputInspector
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -1461,10 +1462,39 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
             ],
         )
 
+    class CertifyingVisionProvider:
+        provider_name = "certifying_test_vision"
+
+        def available(self, *, force: bool = False) -> bool:  # noqa: ARG002
+            return True
+
+        def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
+            binding = dict((metadata or {}).get("doc276_expected_face_binding") or {})
+            return {
+                "status": "pass",
+                "confidence": 0.98,
+                "issue_codes": [],
+                "human_naturalness_verdict": {"status": "pass", "issue_codes": []},
+                "face_integrity_attestation": {
+                    "schema_version": "doc276_face_integrity_attestation_v1",
+                    "status": "pass",
+                    **binding,
+                    "primary_face_scope": "visible_primary_face",
+                    "issue_codes": [],
+                },
+                "reference_comparison_certification": {
+                    "schema_version": "doc276_reference_comparison_certification_v1",
+                    "status": "not_required",
+                    **binding,
+                    "primary_face_scope": "visible_primary_face",
+                },
+            }
+
     monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
     store = V3GeneratedOutputStore(tmp_path / "product_api_outputs")
     service = V3ProductApiService(
         output_store=store,
+        vision_inspector=VisionOutputInspector(vision_provider=CertifyingVisionProvider()),
         scenario_runtime=ScenarioRuntime(
             llm_brain_adapter=V3LLMBrainAdapter(provider=CompleteRemoteBrain()),
             generation_router=GenerationRouter(production_provider=ProductionImageGenerationProvider(output_store=store)),

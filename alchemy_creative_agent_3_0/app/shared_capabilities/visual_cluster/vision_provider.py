@@ -354,6 +354,7 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
             output_evidence=output_evidence,
             serial_anchor_review=serial_anchor_review,
             body_silhouette_review=body_silhouette_review,
+            metadata=metadata,
         )
     prompt = "\n".join(
         [
@@ -423,13 +424,13 @@ def _inspection_prompt(metadata: dict[str, Any]) -> str:
                 else ""
             ),
             "Allowed issue_codes: visible_text_artifact, watermark_or_signature, faint_corner_watermark, ai_generated_badge_trace, signature_like_artifact, lower_right_mark_artifact, commercial_cleanliness_failure, collage_or_split_panel, identity_drift, bone_structure_drift, face_shape_drift, cheek_jaw_chin_drift, eye_shape_or_spacing_identity_drift, eyebrow_eye_relationship_drift, nose_mouth_relationship_identity_drift, lip_contour_identity_drift, styling_changed_face_geometry, archetype_overrode_reference_identity, same_type_not_same_person, identity_reference_underweighted, hair_or_outfit_drift, camera_distance_drift, identity_card_missing, identity_card_not_applied, identity_feature_drift, eyebrow_shape_drift, eye_shape_or_spacing_drift, nose_mouth_relationship_drift, jaw_chin_direction_drift, unflattering_feature_degradation, beautiful_realism_balance_failure, realism_made_subject_less_attractive, pretty_but_too_ai_filtered, real_but_unflattering, skin_texture_beauty_balance_failure, source_hair_overinherited, source_makeup_overinherited, source_wardrobe_overinherited, source_lighting_overinherited, source_color_temperature_overinherited, source_color_grade_overinherited, source_scene_overinherited, source_camera_overinherited, source_camera_mood_overinherited, source_whole_style_overinherited, reference_used_as_style_when_identity_only, prompt_owned_channel_ignored, selected_anchor_overrode_current_prompt, structured_appearance_lock_misapplied, lighting_mismatch, composition_mismatch, unrelated_object, unrelated_product, product_identity_drift, product_silhouette_drift, product_pattern_registration_drift, product_layer_topology_drift, product_construction_detail_drift, product_material_response_drift, product_drape_behavior_drift, product_label_drift, product_label_unreadable, product_logo_or_label_obscured, brand_asset_drift, deliverable_intent_mismatch, delivery_set_role_mismatch, delivery_evidence_dimension_mismatch, bad_hands_or_body, face_artifact, ai_face_render, plastic_skin, over_smoothed_skin, missing_skin_texture, over_retouching, poreless_beauty_surface, synthetic_fashion_face, weak_photographic_imperfection, synthetic_beauty_filter, doll_like_face, template_smile, over_perfect_symmetry, wax_skin_highlight, uncanny_eye_expression, same_ai_face_repetition, beauty_app_face, idol_photocard_polish, skin_blur_retouching, over_uniform_skin_tone, over_sharp_ai_detail, perfect_smile_repetition, face_slimming_filter, beautified_facial_geometry, generic_ai_beauty_identity, dull_complexion, muddy_skin_tone, underexposed_face, harsh_facial_shadow, overly_matte_documentary_look, tired_expression, unflattering_color_cast, complexion_direction_drift, unintended_skin_darkening, unintended_skin_lightening, unflattering_skin_color_cast, age_identity_drift, age_inappropriate_rendering, suppressed_fair_complexion, forced_tan_or_bronze_cast, gray_brown_skin_cast, head_body_proportion_distortion, oversized_head, compressed_neck_shoulders, unflattering_face_drift, flat_scene_lighting, airbrushed_background_texture, synthetic_material_response, frozen_centered_pose, doll_like_child_face, adultified_child_model, synthetic_child_skin, pageant_polish_child_face, frozen_child_smile, unreal_child_eyes, unreal_child_teeth, child_face_ai_render, same_expression_repetition, same_head_angle_repetition, same_pose_repetition, studio_only_when_lifestyle_requested, role_collapse, flat_catalog_lighting, weak_lifestyle_context, repeated_concept_or_prop, reference_guard_ignored, reference_evidence_unavailable, low_commercial_finish, weak_aesthetic_finish, generic_stock_photo_finish, flat_low_contrast_finish, overexposed_washout, underexposed_muddy_frame, unbalanced_color_grade, weak_subject_readability, weak_depth_and_material_separation, unstable_composition_balance, overprocessed_hdr_finish, uncanny_micro_detail, low_resolution_output, policy_or_safety_block, low_confidence_review.",
-            _review_response_shape(review_contract),
+            _review_response_shape(review_contract, metadata=metadata),
         ]
     )
     return _scope_inspection_prompt(prompt, metadata)
 
 
-def _review_response_shape(contract: dict[str, Any]) -> str:
+def _review_response_shape(contract: dict[str, Any], *, metadata: dict[str, Any] | None = None) -> str:
     """Return the response shape strictly derived from frozen review fields."""
 
     score_shape = {item: 0.0 for item in contract["score_dimensions"]}
@@ -459,6 +460,7 @@ def _review_response_shape(contract: dict[str, Any]) -> str:
             + '"],"integrated_whole_person_review_evidence":'
             + json.dumps(integrated_shape, ensure_ascii=False, separators=(",", ":"))
         )
+    doc276_shape = _doc276_face_integrity_response_shape(dict(metadata or {}))
     return (
         'Return keys: {"status":"pass|warning|fail_retryable|fail_final|manual_review",'
         '"confidence":0.0,"issue_codes":[],"scores":'
@@ -468,6 +470,7 @@ def _review_response_shape(contract: dict[str, Any]) -> str:
         '"violated_directions":[]},"similarity_verdict":{"status":"distinct|near_duplicate|not_verifiable",'
         '"compared_reference_output_ids":[]}'
         + human_verdict
+        + doc276_shape
         + body_evidence
         + ',"retry_patch":{}}'
     )
@@ -485,6 +488,7 @@ def _enforced_inspection_prompt(
     output_evidence: dict[str, Any],
     serial_anchor_review: dict[str, Any],
     body_silhouette_review: dict[str, Any] | None = None,
+    metadata: dict[str, Any],
 ) -> str:
     """Build a lean inspection request directly from frozen enforced truth.
 
@@ -695,8 +699,47 @@ def _enforced_inspection_prompt(
             "Feedback acceptance contract: inspect these user-rejected visual directions as criteria only: "
             + json.dumps(feedback_contract.get("rejected_directions", []), ensure_ascii=False)
         )
-    lines.append(_review_response_shape(review_contract))
+    lines.append(_review_response_shape(review_contract, metadata=metadata))
     return "\n".join(lines)
+
+
+def _doc276_face_integrity_response_shape(metadata: dict[str, Any]) -> str:
+    """Project an opaque server binding into the Vision response contract.
+
+    The model receives a fixed tuple to repeat, never identifiers it may
+    choose itself.  The inspector re-derives and validates the same tuple from
+    the private ReviewEvidencePlan after the call.
+    """
+
+    binding = metadata.get("doc276_expected_face_binding")
+    if metadata.get("doc276_face_integrity_review_required") is not True or not isinstance(binding, dict):
+        return ""
+    required = {
+        "reviewed_project_id",
+        "reviewed_job_id",
+        "reviewed_output_id",
+        "review_evidence_plan_digest",
+        "source_binding_digest",
+        "reference_evidence_digest",
+    }
+    if set(binding) != required or any(not isinstance(binding[key], str) or not binding[key] for key in required):
+        return ""
+    frozen = json.dumps({key: binding[key] for key in sorted(required)}, ensure_ascii=False, separators=(",", ":"))
+    return (
+        ',"face_integrity_attestation":{"schema_version":"doc276_face_integrity_attestation_v1",'
+        '"status":"pass|retry_recommended|not_verifiable","reviewed_project_id":"repeat exact",'
+        '"reviewed_job_id":"repeat exact","reviewed_output_id":"repeat exact",'
+        '"review_evidence_plan_digest":"repeat exact","source_binding_digest":"repeat exact",'
+        '"reference_evidence_digest":"repeat exact","primary_face_scope":"visible_primary_face",'
+        '"issue_codes":[]},"reference_comparison_certification":'
+        '{"schema_version":"doc276_reference_comparison_certification_v1","status":"pass",'
+        '"reviewed_project_id":"repeat exact","reviewed_job_id":"repeat exact",'
+        '"reviewed_output_id":"repeat exact","review_evidence_plan_digest":"repeat exact",'
+        '"source_binding_digest":"repeat exact","reference_evidence_digest":"repeat exact",'
+        '"primary_face_scope":"visible_primary_face"}'
+        ". Doc276 expected binding to repeat verbatim: "
+        + frozen
+    )
 
 
 def _professional_serial_anchor_review_context(
@@ -1406,7 +1449,7 @@ def _scope_inspection_prompt(prompt: str, metadata: dict[str, Any]) -> str:
         if line.startswith("Allowed issue_codes:"):
             line = "Allowed issue_codes: " + ", ".join(contract["issue_codes"]) + "."
         elif line.startswith('Return keys: {"status"'):
-            line = _review_response_shape(contract)
+            line = _review_response_shape(contract, metadata=metadata)
         lines.append(line)
     lines.append("Active review capabilities: " + ", ".join(contract["review_capability_sources"]))
     return "\n".join(lines)

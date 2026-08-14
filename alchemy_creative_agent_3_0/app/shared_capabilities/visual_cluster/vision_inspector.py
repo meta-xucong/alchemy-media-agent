@@ -273,6 +273,8 @@ MANUAL_REVIEW_ISSUE_CODES = {
     "vision_provider_unavailable",
     "low_confidence_review",
     "provider_error",
+    "face_integrity_unverified",
+    "face_reference_comparison_unverified",
     "provider_timeout",
     "metadata_only_non_certifying",
     "hard_semantic_contract_unverified",
@@ -541,6 +543,13 @@ class VisionOutputInspector:
             observed_issue_codes=issue_codes,
         )
         issue_codes = _dedupe([*issue_codes, *human_attestation_issue_codes])
+        face_attestation, reference_comparison, face_integrity_issue_codes = _face_integrity_evidence(
+            payload,
+            resolution=resolution,
+            metadata=metadata,
+            review_contract=review_contract,
+        )
+        issue_codes = _dedupe([*issue_codes, *face_integrity_issue_codes])
         confidence = _safe_float(payload.get("confidence"), default=0.5)
         score_card = _provider_score_card(payload.get("scores"), str(payload.get("status") or ""))
         if review_contract.get("enforced"):
@@ -623,6 +632,14 @@ class VisionOutputInspector:
                 "feedback_review": feedback_evidence,
                 "human_naturalness_attestation": human_attestation,
                 "integrated_whole_person_review_evidence": integrated_review_evidence,
+                **(
+                    {
+                        "face_integrity_attestation": face_attestation,
+                        "reference_comparison_certification": reference_comparison,
+                    }
+                    if face_attestation or reference_comparison
+                    else {}
+                ),
                 **_review_evidence_payload(metadata),
             },
             user_visible_summary=user_summary[:4],
@@ -2059,6 +2076,208 @@ def _human_naturalness_attestation(
             return {"required": True, "status": "invalid", "issue_codes": []}, ["human_naturalness_unverified"]
         return {"required": True, "status": status, "issue_codes": raw_codes}, raw_codes
     return {"required": True, "status": "not_verifiable", "issue_codes": raw_codes}, ["human_naturalness_unverified"]
+
+
+_DOC276_FACE_ATTESTATION_FIELDS = {
+    "schema_version",
+    "status",
+    "reviewed_project_id",
+    "reviewed_job_id",
+    "reviewed_output_id",
+    "review_evidence_plan_digest",
+    "source_binding_digest",
+    "reference_evidence_digest",
+    "primary_face_scope",
+    "issue_codes",
+}
+_DOC276_REFERENCE_COMPARISON_FIELDS = {
+    "schema_version",
+    "status",
+    "reviewed_project_id",
+    "reviewed_job_id",
+    "reviewed_output_id",
+    "review_evidence_plan_digest",
+    "source_binding_digest",
+    "reference_evidence_digest",
+    "primary_face_scope",
+}
+
+
+def _face_integrity_evidence(
+    payload: dict[str, Any],
+    *,
+    resolution: GeneratedOutputResolution,
+    metadata: dict[str, Any],
+    review_contract: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    """Validate Doc276 provider claims against frozen server review evidence."""
+
+    if metadata.get("doc276_face_integrity_review_required") is not True:
+        return {}, {}, []
+
+    expected = _doc276_expected_review_binding(resolution, metadata)
+    if expected is None:
+        return (
+            _doc276_unverified_face_attestation(),
+            _doc276_unverified_reference_comparison(),
+            ["face_integrity_unverified"],
+        )
+
+    if payload.get("face_integrity_attestation") is None and payload.get("reference_comparison_certification") is None:
+        return (
+            _doc276_unverified_face_attestation(expected),
+            {"status": "missing"} if expected["identity_required"] else {"status": "not_required"},
+            [
+                "face_integrity_unverified",
+                *( ["face_reference_comparison_unverified"] if expected["identity_required"] else [] ),
+            ],
+        )
+
+    face = _doc276_validate_face_attestation(payload.get("face_integrity_attestation"), expected)
+    identity_required = bool(expected["identity_required"])
+    comparison = _doc276_validate_reference_comparison(
+        payload.get("reference_comparison_certification"),
+        expected,
+        required=identity_required,
+    )
+    valid_face = face.get("status") in {"pass", "retry_recommended"}
+    valid_comparison = comparison.get("status") in {"pass", "not_required"}
+    if not valid_face or not valid_comparison:
+        # The two claims describe the same frozen review evidence. A malformed
+        # peer claim cannot be retained as an independent certification.
+        return (
+            _doc276_unverified_face_attestation(expected),
+            _doc276_unverified_reference_comparison(expected, required=identity_required),
+            [
+                "face_integrity_unverified",
+                *( ["face_reference_comparison_unverified"] if identity_required else [] ),
+            ],
+        )
+
+    if face["status"] == "retry_recommended":
+        face = {
+            **face,
+            "retry_authority": "shared_brain_authored_bounded_quality_retry",
+            "max_retry_attempts": 1,
+        }
+        return face, comparison, list(face["issue_codes"])
+    return face, comparison, []
+
+
+def _doc276_expected_review_binding(
+    resolution: GeneratedOutputResolution,
+    metadata: dict[str, Any],
+) -> dict[str, Any] | None:
+    raw_plan = metadata.get("review_evidence_plan")
+    if (
+        not isinstance(raw_plan, dict)
+        or metadata.get("review_evidence_plan_authority") != "exact_review_evidence_resolver"
+    ):
+        return None
+    try:
+        plan = ReviewEvidencePlan.model_validate(raw_plan)
+    except Exception:
+        return None
+    if (
+        plan.job_id != str(resolution.job_id or "").strip()
+        or plan.output_id != str(resolution.output_id or "").strip()
+        or plan.review_plan_digest != review_plan_digest(plan.model_dump(mode="json"))
+        or metadata.get("review_evidence_plan_digest") != plan.review_plan_digest
+    ):
+        return None
+    identity = plan.channels["person_identity"]
+    identity_required = identity.applicability == "required"
+    reference_evidence_digest = stable_id(
+        "review_reference_evidence",
+        resolution.project_id,
+        plan.job_id,
+        plan.output_id,
+        plan.source_binding_digest,
+        ",".join(identity.evidence_ids),
+    )
+    return {
+        "reviewed_project_id": str(resolution.project_id or "").strip(),
+        "reviewed_job_id": plan.job_id,
+        "reviewed_output_id": plan.output_id,
+        "review_evidence_plan_digest": plan.review_plan_digest,
+        "source_binding_digest": plan.source_binding_digest,
+        "reference_evidence_digest": reference_evidence_digest,
+        "identity_required": identity_required,
+    }
+
+
+def _doc276_validate_face_attestation(raw: Any, expected: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict) or set(raw) != _DOC276_FACE_ATTESTATION_FIELDS:
+        return _doc276_unverified_face_attestation(expected)
+    if (
+        raw.get("schema_version") != "doc276_face_integrity_attestation_v1"
+        or raw.get("primary_face_scope") != "visible_primary_face"
+        or any(raw.get(key) != expected[key] for key in _doc276_binding_keys())
+    ):
+        return _doc276_unverified_face_attestation(expected)
+    status = str(raw.get("status") or "").strip().lower()
+    raw_codes = raw.get("issue_codes")
+    if not isinstance(raw_codes, list) or any(not isinstance(code, str) for code in raw_codes):
+        return _doc276_unverified_face_attestation(expected)
+    issue_codes = _dedupe(normalize_human_realism_issue_code(code) for code in raw_codes)
+    if any(code not in HUMAN_REALISM_REVIEW_DIMENSIONS for code in issue_codes):
+        return _doc276_unverified_face_attestation(expected)
+    if status == "pass" and issue_codes:
+        return _doc276_unverified_face_attestation(expected)
+    if status == "retry_recommended" and not issue_codes:
+        return _doc276_unverified_face_attestation(expected)
+    if status not in {"pass", "retry_recommended", "not_verifiable"}:
+        return _doc276_unverified_face_attestation(expected)
+    return {**raw, "status": status, "issue_codes": issue_codes}
+
+
+def _doc276_validate_reference_comparison(
+    raw: Any,
+    expected: dict[str, Any],
+    *,
+    required: bool,
+) -> dict[str, Any]:
+    if not required:
+        return {"status": "not_required"}
+    if not isinstance(raw, dict) or set(raw) != _DOC276_REFERENCE_COMPARISON_FIELDS:
+        return _doc276_unverified_reference_comparison(expected, required=True)
+    if (
+        raw.get("schema_version") != "doc276_reference_comparison_certification_v1"
+        or raw.get("status") != "pass"
+        or raw.get("primary_face_scope") != "visible_primary_face"
+        or any(raw.get(key) != expected[key] for key in _doc276_binding_keys())
+    ):
+        return _doc276_unverified_reference_comparison(expected, required=True)
+    return dict(raw)
+
+
+def _doc276_unverified_face_attestation(expected: dict[str, Any] | None = None) -> dict[str, Any]:
+    result = {"status": "not_verifiable", "primary_face_scope": "visible_primary_face", "issue_codes": []}
+    if expected is not None:
+        result.update({key: expected[key] for key in _doc276_binding_keys()})
+    return result
+
+
+def _doc276_unverified_reference_comparison(
+    expected: dict[str, Any] | None = None,
+    *,
+    required: bool = True,
+) -> dict[str, Any]:
+    result = {"status": "not_verifiable" if required else "not_required"}
+    if expected is not None:
+        result.update({key: expected[key] for key in _doc276_binding_keys()})
+    return result
+
+
+def _doc276_binding_keys() -> tuple[str, ...]:
+    return (
+        "reviewed_project_id",
+        "reviewed_job_id",
+        "reviewed_output_id",
+        "review_evidence_plan_digest",
+        "source_binding_digest",
+        "reference_evidence_digest",
+    )
 
 
 def _status_from_issues(issue_codes: list[str], provider_status: str) -> str:

@@ -3733,6 +3733,17 @@ function handleMobileV3Click(event) {
     document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     return;
   }
+  if (projectActionButton?.dataset.mobileV3ProjectAction === "review_project_request") {
+    const project = mobileV3State.currentProject;
+    if (!project?.project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setMobileV3Busy(false);
+    clearMobileV3Progress();
+    updateMobileV3Status("请确认项目需求和参考图后，再明确点击生成。系统不会自动重复提交。");
+    openMobileSurface("v3-compose", projectActionButton);
+    return;
+  }
   if (projectActionButton?.dataset.mobileV3ProjectAction === "review_delivery_options") {
     const project = mobileV3State.currentProject;
     if (!project?.project_id) return;
@@ -4624,6 +4635,42 @@ function mobileV3SizeLabel(size) {
   return labels[size] || "自动";
 }
 
+function mobileV3PlanningOperation(project = mobileV3State.currentProject) {
+  const operation = mobileV3ProjectCurrentOperation(project);
+  return ["planning", "planning_failed"].includes(String(operation?.state || "").trim().toLowerCase())
+    ? operation
+    : null;
+}
+
+async function recoverMobileV3PlannedJob(projectId) {
+  const maxAttempts = 240;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 450 : 2500));
+    try {
+      const payload = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}`);
+      const project = mobileV3ProjectWithResponseMetadata(payload.project || payload, payload);
+      if (String(project?.project_id || "") !== String(projectId || "")) continue;
+      mobileV3State.currentProject = project;
+      mobileV3MergeProjectOutputs(projectId, payload?.metadata?.project_outputs || []);
+      const operation = mobileV3PlanningOperation(project);
+      if (operation?.state === "planning_failed") {
+        renderMobileV3ProjectCurrentOperation(project);
+        return { operation, job: null };
+      }
+      const jobIds = Array.isArray(project?.job_ids) ? project.job_ids : [];
+      const jobId = String(jobIds[jobIds.length - 1] || "").trim();
+      if (!operation && jobId) {
+        const job = await mobileV3Request(`/jobs/${encodeURIComponent(jobId)}`);
+        return { operation: null, job };
+      }
+      setMobileV3Progress("planning", `V3 正在整理本次画面方向，已刷新 ${attempt} 次`);
+    } catch (_error) {
+      setMobileV3Progress("planning", `正在核对后台规划进度，已刷新 ${attempt} 次`);
+    }
+  }
+  return { operation: mobileV3PlanningOperation(), job: null };
+}
+
 async function generateMobileV3Job() {
   if (mobileV3State.busy) return;
   if (!mobileV3State.currentProject?.project_id) {
@@ -4646,10 +4693,26 @@ async function generateMobileV3Job() {
     const uploadedAssets = await uploadMobileV3Files();
     setMobileV3Progress("planning", "V3 正在理解需求并整理画面方向");
     const payload = buildMobileV3JobPayload(uploadedAssets);
-    const created = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}/jobs`, { method: "POST", body: payload });
+    let created = await mobileV3Request(`/projects/${encodeURIComponent(projectId)}/jobs`, { method: "POST", body: payload });
     if (uploadedAssets.length) clearMobileV3PendingUploads({ render: true });
     mobileV3State.currentJob = created;
     mobileV3State.currentProject = mobileV3ProjectWithResponseMetadata(mobileV3State.currentProject, created);
+    if (mobileV3PlanningOperation(mobileV3State.currentProject)?.state === "planning") {
+      mobileV3State.currentJob = null;
+      renderMobileV3ProjectCurrentOperation(mobileV3State.currentProject);
+      const planningResult = await recoverMobileV3PlannedJob(projectId);
+      if (!planningResult?.job) {
+        updateMobileV3Status(
+          planningResult?.operation?.state === "planning_failed"
+            ? "本次规划未完成。项目已保留，请确认需求和参考后再明确点击生成。"
+            : "后台仍在规划这次需求。项目已保留，可稍后刷新继续核对；系统不会重复提交。",
+        );
+        return;
+      }
+      created = planningResult.job;
+      mobileV3State.currentJob = created;
+      mobileV3State.currentProject = mobileV3ProjectWithResponseMetadata(mobileV3State.currentProject, created);
+    }
     const jobId = created.job_id || created.job?.job_id || created.id;
     if (scenarioId === "ecommerce" && jobId) mobileV3SetEcommerceSubmissionReceipt(projectId, jobId);
     if (mobileV3JobNeedsProductInputReview(created)) {
@@ -5229,6 +5292,23 @@ function mobileV3EcommerceDeliveryRouteUnavailableOperation(project = mobileV3St
     && operation?.pending === false;
 }
 
+function mobileV3FaceIntegrityReviewWithheldOperation(project = mobileV3State.currentProject, job = mobileV3State.currentJob) {
+  const operation = mobileV3EcommerceCurrentOperation(project, job);
+  return operation?.state === "review_withheld_face_integrity"
+    && operation?.terminal === true
+    && operation?.pending === false;
+}
+
+function mobileV3SettleFaceIntegrityReviewWithheld(project = mobileV3State.currentProject, job = mobileV3State.currentJob) {
+  if (!mobileV3FaceIntegrityReviewWithheldOperation(project, job)) return false;
+  mobileV3State.ecommerceRecoveryEpoch += 1;
+  setMobileV3Busy(false);
+  clearMobileV3Progress();
+  mobileV3State.progressStageKey = null;
+  updateMobileV3Status("图片已保留在项目复核记录中，未进入正式交付。");
+  return true;
+}
+
 function mobileV3EcommerceNeedsInputMessage() {
   return "商品原图需要重新确认：当前项目里的商品参考图缺少可验证的文件、角色或授权记录，尚未发送生图请求。请检查原始参考图，删除失效或重复的商品图，重新上传正确商品图后再生成。";
 }
@@ -5250,6 +5330,44 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   const node = document.querySelector("#mobileV3ProjectCurrentOperation");
   if (!node) return;
   const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
+  const faceIntegrityWithheld = mobileV3FaceIntegrityReviewWithheldOperation(project, mobileV3State.currentJob);
+  if (faceIntegrityWithheld) {
+    mobileV3SettleFaceIntegrityReviewWithheld(project, mobileV3State.currentJob);
+    openMobileSurface("v3-project-detail");
+    node.hidden = false;
+    node.innerHTML = `
+      <div>
+        <strong>图片已保留，等待人工确认</strong>
+        <span>这次图片没有进入正式交付。请查看项目复核记录后再决定下一步。</span>
+      </div>
+      <button class="button primary compact" type="button" data-mobile-v3-project-action="review_generation_history">查看复核记录</button>
+    `;
+    return;
+  }
+  const planningOperation = mobileV3PlanningOperation(project);
+  if (planningOperation?.state === "planning") {
+    node.hidden = false;
+    node.innerHTML = `
+      <div>
+        <strong>正在整理本次需求</strong>
+        <span>V3 中枢正在规划画面。页面刷新或短暂断开后会继续核对同一项工作，不会重复提交。</span>
+      </div>
+    `;
+    return;
+  }
+  if (planningOperation?.state === "planning_failed" && planningOperation?.terminal === true) {
+    setMobileV3Busy(false);
+    clearMobileV3Progress();
+    node.hidden = false;
+    node.innerHTML = `
+      <div>
+        <strong>本次规划未完成</strong>
+        <span>这次没有创建新的生成任务，也不会自动重复提交。请检查需求和参考后再决定下一步。</span>
+      </div>
+      <button class="button primary compact" type="button" data-mobile-v3-project-action="review_project_request">查看项目需求</button>
+    `;
+    return;
+  }
   const operation = mobileV3EcommerceCurrentOperation(project);
   const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project, mobileV3State.currentJob);
   const deliveryRouteUnavailable = mobileV3EcommerceDeliveryRouteUnavailableOperation(project, mobileV3State.currentJob);

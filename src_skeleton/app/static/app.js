@@ -3791,6 +3791,13 @@ function v3ProjectCurrentOperation(project = v3State.currentProject) {
   return operation && typeof operation === "object" ? operation : null;
 }
 
+function v3ProjectPlanningOperation(project = v3State.currentProject) {
+  const operation = v3ProjectCurrentOperation(project);
+  return ["planning", "planning_failed"].includes(String(operation?.state || "").trim().toLowerCase())
+    ? operation
+    : null;
+}
+
 function v3EcommerceCurrentOperation(project = v3State.currentProject, job = v3State.currentJob) {
   const projectOperation = v3ProjectCurrentOperation(project);
   const jobOperation = job?.metadata?.current_operation;
@@ -3819,6 +3826,24 @@ function v3EcommerceDeliveryRouteUnavailableOperation(project = v3State.currentP
     && operation?.state === "delivery_route_unavailable"
     && operation?.terminal === true
     && operation?.pending === false;
+}
+
+function v3FaceIntegrityReviewWithheldOperation(project = v3State.currentProject, job = v3State.currentJob) {
+  const operation = v3EcommerceCurrentOperation(project, job);
+  return operation?.state === "review_withheld_face_integrity"
+    && operation?.terminal === true
+    && operation?.pending === false;
+}
+
+function settleV3FaceIntegrityReviewWithheld(project = v3State.currentProject, job = v3State.currentJob) {
+  if (!v3FaceIntegrityReviewWithheldOperation(project, job)) return false;
+  clearV3Progress();
+  v3State.progressStageKey = null;
+  v3State.loading = false;
+  if (els.v3CreateJobBtn) {
+    els.v3CreateJobBtn.textContent = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative").createLabel;
+  }
+  return true;
 }
 
 function v3LegacyContinuationReference(ref) {
@@ -4876,7 +4901,7 @@ async function rejectV3ProjectReference(outputId, plainText) {
 function renderV3ProjectWorkflow() {
   if (!els.v3ProjectWorkflow) return;
   const project = v3State.currentProject;
-  if (v3EcommerceReviewWithheldFinalizationOperation(project)) {
+  if (v3FaceIntegrityReviewWithheldOperation(project) || v3EcommerceReviewWithheldFinalizationOperation(project)) {
     if (els.v3WorkflowArtifacts) els.v3WorkflowArtifacts.innerHTML = "";
     els.v3ProjectWorkflow.innerHTML = `
       <div class="v3-workflow-step active">
@@ -5476,6 +5501,60 @@ function renderV3ProjectNextActions() {
   }
   const job = v3State.currentJob;
   const projectScenario = v3ScenarioForTemplate(v3ProjectTemplateId(project));
+  const planningOperation = v3ProjectPlanningOperation(project);
+  if (planningOperation?.state === "planning") {
+    els.v3ProjectNextActions.hidden = false;
+    els.v3ProjectNextActions.innerHTML = `
+      <div class="v3-continuation-panel">
+        <div class="v3-continuation-main">
+          <span>正在整理本次需求</span>
+          <strong>V3 中枢正在规划画面</strong>
+          <p>项目已经记录这次规划。页面刷新或短暂断开后会继续核对同一项工作，不会重复提交。</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  if (planningOperation?.state === "planning_failed" && planningOperation?.terminal === true) {
+    clearV3RecoverPolling();
+    clearV3ProgressTimer();
+    v3State.loading = false;
+    if (els.v3CreateJobBtn) {
+      els.v3CreateJobBtn.disabled = !v3ScenarioCanCreate(v3State.selectedScenario || "general_creative");
+      els.v3CreateJobBtn.textContent = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative").createLabel;
+    }
+    els.v3ProjectNextActions.hidden = false;
+    els.v3ProjectNextActions.innerHTML = `
+      <div class="v3-continuation-panel">
+        <div class="v3-continuation-main">
+          <span>本次规划未完成</span>
+          <strong>项目已保留，等待你确认需求</strong>
+          <p>这次没有创建新的生成任务，也不会自动重复提交。请检查需求和参考后再决定下一步。</p>
+          <div class="v3-continuation-buttons">
+            <button class="button primary compact" type="button" data-v3-project-action="review_project_request">查看项目需求</button>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  if (v3FaceIntegrityReviewWithheldOperation(project, job)) {
+    settleV3FaceIntegrityReviewWithheld(project, job);
+    els.v3ProjectNextActions.hidden = false;
+    els.v3ProjectNextActions.innerHTML = `
+      <div class="v3-continuation-panel">
+        <div class="v3-continuation-main">
+          <span>人工复核</span>
+          <strong>图片已保留，等待人工确认</strong>
+          <p>这次图片没有进入正式交付。请查看项目复核记录后再决定下一步。</p>
+          <div class="v3-continuation-buttons">
+            <button class="button primary compact" type="button" data-v3-project-action="review_generation_history">查看复核记录</button>
+          </div>
+        </div>
+      </div>
+    `;
+    return;
+  }
   if (projectScenario === "photography") {
     els.v3ProjectNextActions.hidden = false;
     const isProfessionalSet = v3State.currentJob?.metadata?.specialized_execution_summary?.roles?.length === 3;
@@ -5913,6 +5992,14 @@ function handleV3ProjectActionClick(event) {
   const currentOperation = v3ProjectCurrentOperation(v3State.currentProject);
   if (v3State.selectedScenario !== projectScenario) setV3Scenario(projectScenario);
   const goal = v3State.currentProject.user_goal || v3State.currentProject.short_summary || "";
+  if (action === "review_project_request") {
+    setV3Busy(false);
+    clearV3Progress();
+    openV3ProjectSubpage("compose");
+    els.v3PromptInput?.focus?.({ preventScroll: true });
+    updateV3Notice("请确认项目需求和参考图后，再明确点击生成。系统不会自动重复提交。", "info");
+    return;
+  }
   if (action === "continue_photography") {
     if (els.v3PromptInput && !els.v3PromptInput.value.trim()) els.v3PromptInput.value = goal;
     els.v3PromptInput?.focus();
@@ -8475,6 +8562,34 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   return payload;
 }
 
+async function recoverV3PlannedJob(projectId) {
+  const maxAttempts = 240;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 450 : 2500));
+    try {
+      const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
+      v3State.currentProject = payload.project || v3State.currentProject;
+      syncV3ProjectOutputsFromPayload(payload);
+      saveV3ProjectSnapshot(v3State.currentProject);
+      const operation = v3ProjectPlanningOperation(v3State.currentProject);
+      if (operation?.state === "planning_failed") {
+        renderV3ProjectDetail();
+        return { operation, job: null };
+      }
+      const jobIds = Array.isArray(v3State.currentProject?.job_ids) ? v3State.currentProject.job_ids : [];
+      const jobId = String(jobIds[jobIds.length - 1] || "").trim();
+      if (!operation && jobId) {
+        const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+        return { operation: null, job };
+      }
+      setV3Progress("planning", `V3 中枢正在理解需求并规划画面，已刷新 ${attempt} 次。`);
+    } catch (_error) {
+      setV3Progress("planning", `正在核对后台规划进度，已刷新 ${attempt} 次。`);
+    }
+  }
+  return { operation: v3ProjectPlanningOperation(v3State.currentProject), job: null };
+}
+
 async function createV3Job() {
   if (v3State.projectVisualAssetBindingState === "blocked") {
     await openV3VisualAssetBindingDialog();
@@ -8513,11 +8628,27 @@ async function createV3Job() {
     };
     updateV3Notice(copy.planningNotice, "info");
     const projectId = encodeURIComponent(v3State.currentProject.project_id);
-    const created = await request(`${v3ApiBase}/projects/${projectId}/jobs`, { method: "POST", body: payload });
+    let created = await request(`${v3ApiBase}/projects/${projectId}/jobs`, { method: "POST", body: payload });
     if (uploadedAssets.length) clearV3PendingUploads({ render: true });
     v3State.currentJob = created;
     v3State.selectedResult = null;
     syncV3ProjectOutputsFromPayload(created);
+    if (v3ProjectPlanningOperation(v3State.currentProject)?.state === "planning") {
+      v3State.currentJob = null;
+      renderV3Job(null);
+      const planningResult = await recoverV3PlannedJob(v3State.currentProject.project_id);
+      if (!planningResult?.job) {
+        if (planningResult?.operation?.state === "planning_failed") {
+          updateV3Notice("本次规划未完成。项目已保留，请确认需求和参考后再明确点击生成。", "warning");
+        } else {
+          updateV3Notice("后台仍在规划这次需求。项目已保留，可稍后刷新继续核对；系统不会重复提交。", "info");
+        }
+        return;
+      }
+      created = planningResult.job;
+      v3State.currentJob = created;
+      syncV3ProjectOutputsFromPayload(created);
+    }
     if (v3State.selectedScenario === "ecommerce" && created?.job_id) {
       v3SetEcommerceSubmissionReceipt(v3State.currentProject?.project_id, created.job_id);
       v3SettleEcommerceTerminalReceipt(created);

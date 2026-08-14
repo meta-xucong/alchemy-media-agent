@@ -655,6 +655,17 @@ def test_project_mode_uses_ready_project_create_product_asset(tmp_path) -> None:
 
     assert job["status"] == "planned"
     assert job["ecommerce"]["product_truth"]["evidence_sources"] == [f"uploaded_asset:{product_asset_id}"]
+    project_record = handlers.project_service._require_project(project["project_id"])  # noqa: SLF001
+    source_library = handlers.project_service._doc270_project_source_library(project_record)  # noqa: SLF001
+    assert len(source_library["entries"]) == 1
+    assert source_library["entries"][0]["asset_id"] == product_asset_id
+    assert source_library["entries"][0]["source_type"] == "uploaded"
+    assert source_library["entries"][0]["use_policy"] == "product"
+    assert source_library["entries"][0]["role"] == "product_reference"
+    assert source_library["entries"][0]["reference_channel"] == "product_truth"
+    assert source_library["entries"][0]["availability_state"] == "ready_verified"
+    assert source_library["entries"][0]["automatic_use_eligible"] is True
+    assert source_library["entries"][0]["ecommerce_product_eligible"] is True
 
 
 def test_project_mode_accepts_ready_saved_product_reference(tmp_path) -> None:

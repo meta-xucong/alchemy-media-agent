@@ -18,6 +18,7 @@ _DOC270_PHASE4_PRIVATE_NAMESPACES = frozenset(
         "doc270_phase4_commands",
         "doc270_phase4_registry_entries",
         "doc270_phase4_resolution_decisions",
+        "doc277_project_planning_operations",
     }
 )
 
@@ -43,6 +44,11 @@ class InMemoryProjectStore:
     def list_projects(self, limit: int = 20) -> list[ProjectRecord]:
         bounded_limit = max(1, min(int(limit or 20), 100))
         return sorted(self._projects.values(), key=lambda project: project.updated_at, reverse=True)[:bounded_limit]
+
+    def list_all_projects(self) -> list[ProjectRecord]:
+        """Return every project for server-owned maintenance recovery only."""
+
+        return sorted(self._projects.values(), key=lambda project: project.updated_at, reverse=True)
 
     def append_timeline(self, item: ProjectTimelineItem) -> ProjectTimelineItem:
         self._timeline.setdefault(item.project_id, []).append(item)
@@ -132,6 +138,10 @@ class PersistentProjectStore(InMemoryProjectStore):
     def list_projects(self, limit: int = 20) -> list[ProjectRecord]:
         self._load_all_projects()
         return super().list_projects(limit)
+
+    def list_all_projects(self) -> list[ProjectRecord]:
+        self._load_all_projects()
+        return super().list_all_projects()
 
     def append_timeline(self, item: ProjectTimelineItem) -> ProjectTimelineItem:
         self._load_timeline(item.project_id)

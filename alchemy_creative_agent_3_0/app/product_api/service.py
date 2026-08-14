@@ -95,6 +95,7 @@ from ..shared_capabilities.visual_cluster.review_evidence import ExactReviewEvid
 from ..shared_capabilities.visual_cluster.vision_provider import (
     VisionInspectionProviderError,
     VisionInspectionProviderUnavailable,
+    active_review_contract,
 )
 from ..schemas import (
     AssetType,
@@ -5537,7 +5538,16 @@ class V3ProductApiService:
             **dict(record.request.metadata or {}),
             **dict(generate_request.metadata or {}),
         }
-        for key in ("review_evidence_plan", "review_evidence_plan_digest", "review_evidence_plans", "review_evidence_plan_digests"):
+        for key in (
+            "review_evidence_plan",
+            "review_evidence_plan_digest",
+            "review_evidence_plans",
+            "review_evidence_plan_digests",
+            "doc276_face_integrity_review_required",
+            "doc276_expected_face_binding",
+            "face_integrity_attestation",
+            "reference_comparison_certification",
+        ):
             public_metadata.pop(key, None)
         review_metadata = {
             **public_metadata,
@@ -5587,7 +5597,10 @@ class V3ProductApiService:
                 reference_policy = result_cluster.get("resolved_reference_policy_package")
                 if isinstance(reference_policy, dict) and reference_policy:
                     review_metadata.setdefault("resolved_reference_policy_package", reference_policy)
-        if self._reference_conditioned_real_review_required(
+        if self._server_required_real_pixel_review(
+            review_metadata,
+            quality_mode=generate_request.quality_mode,
+        ) or self._reference_conditioned_real_review_required(
             review_metadata,
             quality_mode=generate_request.quality_mode,
         ):
@@ -5597,23 +5610,46 @@ class V3ProductApiService:
             generation_result,
             review_metadata,
         )
-        evidence_metadata_by_resolution = [
-            self._admitted_review_reference_metadata(record, resolution)
-            for resolution in resolutions
-        ]
+        evidence_metadata_by_resolution = []
+        frozen_contract_by_resolution = []
+        doc276_required_output_ids: list[str] = []
+        for resolution in resolutions:
+            evidence_metadata = self._admitted_review_reference_metadata(record, resolution)
+            frozen_contract = self._frozen_output_review_contract(
+                resolution,
+                frozen_output_review_contracts,
+            )
+            doc276_required = self._doc276_face_integrity_review_required(
+                review_metadata,
+                frozen_contract,
+            )
+            if doc276_required:
+                output_id = str(getattr(resolution, "output_id", "") or "").strip()
+                if output_id:
+                    doc276_required_output_ids.append(output_id)
+                evidence_metadata["doc276_face_integrity_review_required"] = True
+                binding = self._doc276_expected_face_binding(
+                    resolution,
+                    evidence_metadata=evidence_metadata,
+                )
+                if binding is not None:
+                    evidence_metadata["doc276_expected_face_binding"] = binding
+            evidence_metadata_by_resolution.append(evidence_metadata)
+            frozen_contract_by_resolution.append(frozen_contract)
         inspections = [
             self.vision_inspector.inspect(
                 resolution,
                 metadata={
                     **review_metadata,
                     **evidence_metadata,
-                    "frozen_output_review_contract": self._frozen_output_review_contract(
-                        resolution,
-                        frozen_output_review_contracts,
-                    ),
+                    "frozen_output_review_contract": frozen_contract,
                 },
             )
-            for resolution, evidence_metadata in zip(resolutions, evidence_metadata_by_resolution)
+            for resolution, evidence_metadata, frozen_contract in zip(
+                resolutions,
+                evidence_metadata_by_resolution,
+                frozen_contract_by_resolution,
+            )
         ]
         plans_by_output: dict[str, ReviewEvidencePlan] = {}
         digests_by_output: dict[str, str] = {}
@@ -5664,6 +5700,8 @@ class V3ProductApiService:
             max_attempts=self._visual_auto_retry_max_attempts(generate_request),
         )
         package_payload = package.model_dump(mode="json")
+        if doc276_required_output_ids:
+            package_payload["doc276_face_integrity_required_output_ids"] = sorted(set(doc276_required_output_ids))
         metadata = dict(generation_result.metadata)
         shared_capabilities = dict(metadata.get("shared_capabilities") or {})
         if enforced:
@@ -5733,6 +5771,37 @@ class V3ProductApiService:
         )
         return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
 
+    @staticmethod
+    def _doc276_face_integrity_delivery_enabled() -> bool:
+        """Read the server-owned rollout gate for newly attached reviews."""
+
+        return str(os.getenv("V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+    def _doc276_face_integrity_review_required(
+        self,
+        review_metadata: dict[str, Any],
+        frozen_output_review_contract: dict[str, Any],
+    ) -> bool:
+        """Apply Doc276 only to a server-frozen visible-face Human Realism output.
+
+        Every newly reviewed Human Realism output receives a Product API
+        contract with a default visible-primary-face expectation.  Only an
+        explicit false in an already frozen deliverable may exempt a rear or
+        intentionally obscured output.  Public request metadata and provider
+        claims are not part of this predicate.
+        """
+
+        return (
+            self._doc276_face_integrity_delivery_enabled()
+            and active_review_contract(review_metadata).get("human_naturalness_verdict_required") is True
+            and frozen_output_review_contract.get("primary_face_visibility_expected") is True
+        )
+
     def _admitted_review_reference_metadata(
         self,
         record: ProductJobRecord,
@@ -5758,10 +5827,49 @@ class V3ProductApiService:
         ).resolve(record=record, resolution=resolution)
 
     @staticmethod
+    def _doc276_expected_face_binding(
+        resolution: Any,
+        *,
+        evidence_metadata: dict[str, Any],
+    ) -> dict[str, str] | None:
+        """Derive the provider's opaque Doc276 echo tuple from server evidence."""
+
+        raw_plan = evidence_metadata.get("review_evidence_plan")
+        if evidence_metadata.get("review_evidence_plan_authority") != "exact_review_evidence_resolver":
+            return None
+        try:
+            plan = ReviewEvidencePlan.model_validate(raw_plan)
+        except Exception:
+            return None
+        if (
+            plan.job_id != str(getattr(resolution, "job_id", "") or "").strip()
+            or plan.output_id != str(getattr(resolution, "output_id", "") or "").strip()
+            or plan.review_plan_digest != review_plan_digest(plan.model_dump(mode="json"))
+            or evidence_metadata.get("review_evidence_plan_digest") != plan.review_plan_digest
+        ):
+            return None
+        identity = plan.channels["person_identity"]
+        return {
+            "reviewed_project_id": str(getattr(resolution, "project_id", "") or "").strip(),
+            "reviewed_job_id": plan.job_id,
+            "reviewed_output_id": plan.output_id,
+            "review_evidence_plan_digest": plan.review_plan_digest,
+            "source_binding_digest": plan.source_binding_digest,
+            "reference_evidence_digest": stable_id(
+                "review_reference_evidence",
+                str(getattr(resolution, "project_id", "") or "").strip(),
+                plan.job_id,
+                plan.output_id,
+                plan.source_binding_digest,
+                ",".join(identity.evidence_ids),
+            ),
+        }
+
+    @staticmethod
     def _frozen_output_review_contracts_by_asset_id(
         generation_result: PlanningResult,
         review_metadata: dict[str, Any],
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, Any]]:
         """Bind each generated asset to its frozen deliverable before review.
 
         E-Commerce deliberately emits no shared ``mode_role_recipe``.  The
@@ -5776,9 +5884,9 @@ class V3ProductApiService:
         projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
         deliverables = projection.get("deliverables") if isinstance(projection, dict) else []
         if not isinstance(deliverables, list):
-            return {}
+            deliverables = []
 
-        deliverable_by_index: dict[int, str] = {}
+        deliverables_by_index: dict[int, dict[str, Any]] = {}
         for item in deliverables:
             if not isinstance(item, dict):
                 continue
@@ -5787,29 +5895,50 @@ class V3ProductApiService:
             except (TypeError, ValueError):
                 continue
             deliverable_id = str(item.get("deliverable_id") or "").strip()
-            if index > 0 and deliverable_id and index not in deliverable_by_index:
-                deliverable_by_index[index] = deliverable_id
+            if index > 0 and deliverable_id and index not in deliverables_by_index:
+                deliverables_by_index[index] = dict(item)
 
-        contracts: dict[str, dict[str, str]] = {}
+        contracts: dict[str, dict[str, Any]] = {}
         for asset in generation_result.series_plan.assets:
             asset_id = str(asset.asset_id or "").strip()
             try:
                 output_index = int(asset.priority)
             except (TypeError, ValueError):
                 continue
-            deliverable_id = deliverable_by_index.get(output_index)
-            if asset_id and deliverable_id:
-                contracts[asset_id] = {
-                    "source": "resolved_constraint_ledger",
-                    "deliverable_id": deliverable_id,
-                }
+            if not asset_id or output_index < 1:
+                continue
+            deliverable = deliverables_by_index.get(output_index)
+            deliverable_id = (
+                str(deliverable.get("deliverable_id") or "").strip()
+                if isinstance(deliverable, dict)
+                else ""
+            )
+            deliverable_metadata = (
+                deliverable.get("metadata")
+                if isinstance(deliverable, dict) and isinstance(deliverable.get("metadata"), dict)
+                else {}
+            )
+            visibility = deliverable_metadata.get("primary_face_visibility_expected")
+            contracts[asset_id] = {
+                # Every newly reviewed output has a Product API-owned contract.
+                # A specialized frozen deliverable may opt out only with its
+                # own explicit boolean; arbitrary request, candidate, or
+                # provider metadata cannot create that exception.
+                "source": (
+                    "resolved_constraint_ledger"
+                    if deliverable_id
+                    else "product_api_default_output_review_contract"
+                ),
+                "deliverable_id": deliverable_id or f"output_{output_index}",
+                "primary_face_visibility_expected": visibility if isinstance(visibility, bool) else True,
+            }
         return contracts
 
     @staticmethod
     def _frozen_output_review_contract(
         resolution: Any,
-        contracts_by_asset_id: dict[str, dict[str, str]],
-    ) -> dict[str, str]:
+        contracts_by_asset_id: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
         """Return the pre-bound frozen contract for exactly this output."""
 
         asset_id = str(getattr(resolution, "asset_id", "") or "").strip()
@@ -5878,6 +6007,27 @@ class V3ProductApiService:
                 return True
         package = metadata.get("resolved_reference_policy_package")
         return isinstance(package, dict) and bool(package.get("applies"))
+
+    @staticmethod
+    def _server_required_real_pixel_review(
+        metadata: dict[str, Any],
+        *,
+        quality_mode: str,
+    ) -> bool:
+        """Honor a frozen semantic pixel-review contract before legacy heuristics.
+
+        Reference-conditioned review remains a useful additional trigger, but
+        it cannot downgrade an enforced Human Realism (or other hard semantic)
+        contract to metadata-only merely because the current project has no
+        uploaded reference image. The contract is derived from the server-owned
+        execution envelope, so browser request flags cannot disable it.
+        """
+
+        return (
+            str(quality_mode or "standard") in {"standard", "strict"}
+            and bool(metadata.get("require_real_images"))
+            and active_review_contract(metadata).get("requires_pixel_review") is True
+        )
 
     def _mode_differentiation_review_for_result(
         self,
@@ -6202,9 +6352,87 @@ class V3ProductApiService:
             **base_metadata,
             "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
         }
+        merged_result = self._with_doc276_face_integrity_retry_receipt(
+            merged_result,
+            records=records,
+            max_attempts=max_attempts,
+        )
         if not records:
             return self._with_visual_retry_metadata(merged_result, records, max_attempts)
         return self._with_visual_retry_metadata(merged_result, records, max_attempts)
+
+    def _with_doc276_face_integrity_retry_receipt(
+        self,
+        result: PlanningResult,
+        *,
+        records: list[dict[str, Any]],
+        max_attempts: int,
+    ) -> PlanningResult:
+        """Record the bounded shared retry without replaying the logical Job."""
+
+        if not any(item.get("status") == "executed" for item in records):
+            return result
+        metadata = dict(result.metadata or {})
+        package = metadata.get("post_generation_review_package")
+        if not isinstance(package, dict):
+            return result
+        if not self._doc276_review_history_has_retryable_face_attestation(package):
+            return result
+        receipt = {
+            "maximum_attempts": min(max(0, int(max_attempts)), 1),
+            "historical_job_replay": False,
+            "append_only": True,
+        }
+        package = {**package, "face_integrity_retry_receipt": receipt}
+        visual_cluster = dict(metadata.get("visual_cluster") or {})
+        visual_cluster["post_generation_review_package"] = package
+        shared_capabilities = dict(metadata.get("shared_capabilities") or {})
+        if shared_capabilities:
+            shared_cluster = dict(shared_capabilities.get("visual_cluster") or {})
+            shared_cluster["post_generation_review_package"] = package
+            shared_capabilities["visual_cluster"] = shared_cluster
+        metadata.update(
+            {
+                "post_generation_review_package": package,
+                "visual_cluster": visual_cluster,
+                "shared_capabilities": shared_capabilities,
+            }
+        )
+        asset_pack = result.asset_pack.model_copy(
+            update={
+                "manifest": {**dict(result.asset_pack.manifest), "post_generation_review_package": package},
+                "metadata": {**dict(result.asset_pack.metadata), "post_generation_review_package": package},
+            }
+        )
+        return result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
+
+    def _doc276_review_history_has_retryable_face_attestation(self, package: dict[str, Any]) -> bool:
+        """Read the frozen review chain rather than retry trigger prose.
+
+        The existing retry loop may be triggered by another shared quality
+        finding.  Doc276 still needs to retain its independently verified
+        face-integrity retry fact when that review attempt is append-only
+        history.  No prompt or renderer input is derived here.
+        """
+
+        attempts = package.get("review_attempts")
+        if not isinstance(attempts, list):
+            return False
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            for inspection in attempt.get("inspections", []):
+                if not isinstance(inspection, dict):
+                    continue
+                evidence = inspection.get("evidence")
+                attestation = evidence.get("face_integrity_attestation") if isinstance(evidence, dict) else None
+                if (
+                    isinstance(attestation, dict)
+                    and attestation.get("status") == "retry_recommended"
+                    and bool(self._string_list(attestation.get("issue_codes")))
+                ):
+                    return True
+        return False
 
     def _run_post_retry_identity_closeout(
         self,
@@ -9409,19 +9637,42 @@ class V3ProductApiService:
             )
 
         statuses = {str(item.get("status") or "").strip().lower() for item in real_inspections}
+        doc276_required_output_ids = {
+            str(value).strip()
+            for value in package.get("doc276_face_integrity_required_output_ids", [])
+            if str(value).strip()
+        }
+        inspected_output_ids = {
+            str(item.get("output_id") or "").strip()
+            for item in real_inspections
+            if str(item.get("output_id") or "").strip()
+        }
+        doc276_uncertified = {
+            str(item.get("output_id") or "").strip()
+            for item in real_inspections
+            if not self._doc276_face_integrity_delivery_certified(
+                item,
+                required=str(item.get("output_id") or "").strip() in doc276_required_output_ids,
+            )
+        }
+        # A required output must have an exact verified inspection row.  A
+        # missing row cannot be inferred from another passing output.
+        doc276_uncertified.update(doc276_required_output_ids - inspected_output_ids)
         eligible_output_ids = {
             str(item.get("output_id") or "").strip()
             for item in real_inspections
             if str(item.get("status") or "").strip().lower() in {"pass", "warning"}
             and str(item.get("output_id") or "").strip()
+            and str(item.get("output_id") or "").strip() not in doc276_uncertified
         }
         eligible_asset_ids = {
             str(item.get("asset_id") or "").strip()
             for item in real_inspections
             if str(item.get("status") or "").strip().lower() in {"pass", "warning"}
             and str(item.get("asset_id") or "").strip()
+            and str(item.get("output_id") or "").strip() not in doc276_uncertified
         }
-        if "manual_review" in statuses:
+        if doc276_uncertified or "manual_review" in statuses:
             state = "withheld_manual_confirmation"
             automatic_delivery_available = False
             manual_confirmation_required = True
@@ -9455,6 +9706,26 @@ class V3ProductApiService:
             eligible_output_ids,
             eligible_asset_ids,
         )
+
+    @staticmethod
+    def _doc276_face_integrity_delivery_certified(inspection: dict[str, Any], *, required: bool) -> bool:
+        """Require the new face receipt only where an inspection carries it.
+
+        Legacy append-only review rows have no Doc276 evidence and remain
+        history-compatible. Activated rows with a missing, failed, or malformed
+        face receipt cannot re-enter final delivery through a generic pass.
+        """
+
+        evidence = inspection.get("evidence")
+        if not isinstance(evidence, dict):
+            return not required
+        attestation = evidence.get("face_integrity_attestation")
+        if attestation is None:
+            return not required
+        if not isinstance(attestation, dict) or attestation.get("status") != "pass":
+            return False
+        comparison = evidence.get("reference_comparison_certification")
+        return isinstance(comparison, dict) and comparison.get("status") in {"pass", "not_required"}
 
     @classmethod
     def _public_metadata_projection(cls, value: Any) -> Any:

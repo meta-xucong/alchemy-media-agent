@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from alchemy_creative_agent_3_0.app.app_shell.routes import API_NAMESPACE
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
 from alchemy_creative_agent_3_0.app.product_api import GenerateJobRequest, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
@@ -106,6 +107,12 @@ _v3_generation_executor = ThreadPoolExecutor(
     max_workers=max(1, int(os.getenv("V3_BACKGROUND_GENERATION_WORKERS", "2"))),
     thread_name_prefix="v3-generation",
 )
+_v3_planning_executor = ThreadPoolExecutor(
+    max_workers=max(1, int(os.getenv("V3_BACKGROUND_PLANNING_WORKERS", "1"))),
+    thread_name_prefix="v3-planning",
+)
+_v3_background_planning_operations: dict[str, str] = {}
+_v3_background_planning_operations_lock = threading.Lock()
 _v3_background_generation_jobs: dict[str, str] = {}
 _v3_background_generation_watchdogs: dict[str, threading.Timer] = {}
 _v3_background_generation_jobs_lock = threading.Lock()
@@ -510,6 +517,98 @@ async def _run_v3_handler_threaded(handler, *args):
     return await run_in_threadpool(_run_v3_handler, handler, *args)
 
 
+def _v3_planning_failure_code(exc: Exception) -> str:
+    detail = getattr(exc, "detail", None)
+    detail_code = str(detail.get("code") or "").strip() if isinstance(detail, dict) else ""
+    return "planning_request_invalid" if detail_code == "invalid_v3_request" else "planning_unavailable"
+
+
+def _run_v3_project_planning_background(
+    project_id: str,
+    operation_id: str,
+    planning_payload: dict,
+    auto_generate_payload: dict | None,
+) -> None:
+    key = f"{project_id}:{operation_id}"
+    try:
+        response = _run_v3_handler(v3_route_handlers.post_project_job, project_id, planning_payload)
+        job_id = str(response.get("job_id") or "").strip() if isinstance(response, dict) else ""
+        if not job_id or str(response.get("status") or "").strip().lower() == "blocked":
+            _run_v3_handler(
+                v3_route_handlers.fail_project_planning_operation,
+                project_id,
+                operation_id,
+                failure_code="planning_preflight_blocked",
+            )
+            return
+        _run_v3_handler(
+            v3_route_handlers.complete_project_planning_operation,
+            project_id,
+            operation_id,
+            job_id=job_id,
+        )
+        if isinstance(auto_generate_payload, dict):
+            _start_v3_project_generation_background(project_id, job_id, auto_generate_payload)
+    except Exception as exc:
+        try:
+            _run_v3_handler(
+                v3_route_handlers.fail_project_planning_operation,
+                project_id,
+                operation_id,
+                failure_code=_v3_planning_failure_code(exc),
+            )
+        except Exception:
+            logger.exception(
+                "V3 background planning failure could not be persisted for project=%s operation=%s",
+                project_id,
+                operation_id,
+            )
+        logger.exception(
+            "V3 background project planning failed for project=%s operation=%s",
+            project_id,
+            operation_id,
+        )
+    finally:
+        with _v3_background_planning_operations_lock:
+            _v3_background_planning_operations.pop(key, None)
+
+
+def _start_v3_project_planning_background(
+    project_id: str,
+    operation_id: str,
+    planning_payload: dict,
+    auto_generate_payload: dict | None,
+) -> bool:
+    key = f"{project_id}:{operation_id}"
+    with _v3_background_planning_operations_lock:
+        if key in _v3_background_planning_operations:
+            return False
+        _v3_background_planning_operations[key] = _v3_background_generation_runtime_id
+    try:
+        _v3_planning_executor.submit(
+            _run_v3_project_planning_background,
+            project_id,
+            operation_id,
+            dict(planning_payload or {}),
+            dict(auto_generate_payload or {}) if isinstance(auto_generate_payload, dict) else None,
+        )
+    except Exception:
+        with _v3_background_planning_operations_lock:
+            _v3_background_planning_operations.pop(key, None)
+        raise
+    return True
+
+
+def _recover_v3_interrupted_project_planning_operations() -> int:
+    """Close pre-Job operations from a prior process without replaying Brain."""
+
+    try:
+        return int(_run_v3_handler(v3_route_handlers.close_interrupted_project_planning_operations) or 0)
+    except Exception:
+        logger.exception("V3 planning restart recovery could not close persisted operations")
+        return 0
+
+
 def _run_v3_project_generation_background(project_id: str, job_id: str, payload: dict, background_attempt_id: str):
     key = f"{project_id}:{job_id}"
     try:
@@ -829,6 +928,12 @@ def _recover_v3_interrupted_background_generations() -> int:
 @app.on_event("startup")
 def _recover_v3_interrupted_background_generations_on_startup() -> None:
     _write_v3_local_runtime_descriptor()
+    recovered_planning = _recover_v3_interrupted_project_planning_operations()
+    if recovered_planning:
+        logger.warning(
+            "V3 restart recovery closed %s interrupted planning operation(s) without replay.",
+            recovered_planning,
+        )
     recovered = _recover_v3_interrupted_background_generations()
     if recovered:
         logger.warning(
@@ -1246,15 +1351,43 @@ async def v3_create_project_job_endpoint(project_id: str, request: Request, auth
         payload,
         auto_generate_payload if isinstance(auto_generate_payload, dict) else None,
     )
-    # Planning can make the bounded remote Central Brain call.  Keep that
-    # synchronous V3 domain work off the ASGI event loop so project polling,
-    # health checks, and the browser remain responsive while it is in flight.
-    response = await _run_v3_handler_threaded(v3_route_handlers.post_project_job, project_id, planning_payload)
-    if isinstance(auto_generate_payload, dict) and response.get("job_id") and response.get("status") != "blocked":
-        generate_payload = _v3_payload_with_veyra_owner(dict(auto_generate_payload), user_id)
-        started = _start_v3_project_generation_background(project_id, response["job_id"], generate_payload)
-        return _mark_v3_background_generation_response(response, started=started)
-    return response
+    # Preserve the established synchronous Product Job API for explicit
+    # programmatic planning calls. Browser creation always carries
+    # ``auto_generate`` and therefore receives the durable pre-Job lifecycle
+    # below before it can wait on a slow remote Brain response.
+    if not isinstance(auto_generate_payload, dict):
+        return await _run_v3_handler_threaded(
+            v3_route_handlers.post_project_job,
+            project_id,
+            planning_payload,
+        )
+    operation = _run_v3_handler(
+        v3_route_handlers.begin_project_planning_operation,
+        project_id,
+        planning_payload,
+    )
+    generate_payload = (
+        _v3_payload_with_veyra_owner(dict(auto_generate_payload), user_id)
+        if isinstance(auto_generate_payload, dict)
+        else None
+    )
+    started = _start_v3_project_planning_background(
+        project_id,
+        str(operation.get("operation_id") or ""),
+        planning_payload,
+        generate_payload,
+    )
+    return {
+        "job_id": "",
+        "status": "planning",
+        "api_namespace": API_NAMESPACE,
+        "ui_entry_route": f"{API_NAMESPACE}/projects/{project_id}",
+        "metadata": {
+            "current_operation": operation,
+            "background_planning_started": bool(started),
+            "background_planning_pending": True,
+        },
+    }
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/jobs/{parent_job_id}/ecommerce-slots/{slot_id}/continuations")

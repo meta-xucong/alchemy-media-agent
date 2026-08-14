@@ -129,6 +129,38 @@ class V3ProductRouteHandlers:
     def get_project(self, project_id: str) -> dict[str, Any]:
         return self.project_service.get_project(project_id).model_dump(mode="json")
 
+    def begin_project_planning_operation(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.begin_project_planning_operation(project_id, payload)
+
+    def complete_project_planning_operation(
+        self,
+        project_id: str,
+        operation_id: str,
+        *,
+        job_id: str,
+    ) -> dict[str, Any]:
+        return self.project_service.complete_project_planning_operation(
+            project_id,
+            operation_id,
+            job_id=job_id,
+        )
+
+    def fail_project_planning_operation(
+        self,
+        project_id: str,
+        operation_id: str,
+        *,
+        failure_code: str,
+    ) -> dict[str, Any]:
+        return self.project_service.fail_project_planning_operation(
+            project_id,
+            operation_id,
+            failure_code=failure_code,
+        )
+
+    def close_interrupted_project_planning_operations(self) -> int:
+        return self.project_service.close_interrupted_project_planning_operations()
+
     def post_project_archive(self, project_id: str) -> dict[str, Any]:
         return self.project_service.archive_project(project_id).model_dump(mode="json")
 

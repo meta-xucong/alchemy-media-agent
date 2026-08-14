@@ -997,6 +997,11 @@ def test_v3_auto_generate_real_render_intent_reaches_project_planning(tmp_path, 
         return False
 
     monkeypatch.setattr(app_main, "_start_v3_project_generation_background", fake_start)
+    monkeypatch.setattr(
+        app_main._v3_planning_executor,
+        "submit",
+        lambda fn, *args: fn(*args),
+    )
     created = client.post(
         f"/api/v3/creative-agent/projects/{project['project_id']}/jobs",
         json={
@@ -1015,7 +1020,10 @@ def test_v3_auto_generate_real_render_intent_reaches_project_planning(tmp_path, 
     )
 
     assert created.status_code == 200
-    job_id = created.json()["job_id"]
+    assert created.json()["status"] == "planning"
+    job_id = client.get(
+        f"/api/v3/creative-agent/projects/{project['project_id']}"
+    ).json()["project"]["job_ids"][-1]
     record = handlers.service.job_store.get(job_id)
     assert record is not None
     assert record.request.metadata["require_real_images"] is True

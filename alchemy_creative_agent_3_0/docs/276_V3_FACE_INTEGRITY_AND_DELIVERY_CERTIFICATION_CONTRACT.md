@@ -44,12 +44,32 @@ reviewed output:
 
 1. The output is a verified readable pixel result.
 2. Shared Human Realism is enabled for that output.
-3. The review identifies a visible primary human face in the rendered subject.
+3. The newly frozen, server-owned per-output review contract declares
+   `primary_face_visibility_expected=true` for the rendered subject.
+4. The server-owned Doc276 rollout gate is enabled for newly attached reviews.
 
 No-reference text-to-image, nonhuman imagery, and outputs without a visible
 primary face are not blocked by this contract. Existing General, E-Commerce,
 Photography, Brand, and other template authorities continue to decide whether
 human realism is applicable; Doc276 adds no scenario-specific taxonomy.
+
+The rollout gate is a server configuration boundary, never request metadata or
+an inferred upgrade from legacy review fields. It applies only while attaching
+a new review package. Existing append-only packages remain history unless a
+new server-owned review receipt is created under this contract.
+
+`V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED` is owned by the server release
+configuration and defaults to disabled for compatibility. Controlled local
+provider acceptance must enable it before its delivery assertion, and a VPS
+candidate release must explicitly enable it before deployment is eligible.
+Browser metadata cannot set, override, or observe this gate. Every newly
+reviewed Human Realism output receives a Product API-owned per-output review
+contract with `primary_face_visibility_expected=true` by default. Only an
+explicit `false` already frozen in a trusted rear or intentionally obscured
+deliverable contract can exempt that exact output. A provider cannot self-exempt
+an expected-face output by claiming that no face is visible; when local output
+observation finds a face, such a contradictory claim remains manual/review
+withheld.
 
 ## 4. Frozen Face-Integrity Attestation
 
