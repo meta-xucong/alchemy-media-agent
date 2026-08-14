@@ -53,8 +53,12 @@ commerce-specific deliverables.
     reviewer-approved. It may select one view-appropriate original per output
     only after complete Doc263 admission and Doc264 re-attestation, then
     freezes the result through existing Doc263/Doc269 boundaries.
-20. This E-Commerce module family.
-21. Implementation notes and examples.
+20. E32 / Doc278 Opaque Provider Rejection Hold And Recovery Contract, once
+    reviewer-approved. It may suppress only an exact, zero-pixel repeat of a
+    server-authenticated opaque E-Commerce `image_edit` rejection; it never
+    classifies the failure as policy or changes Doc263/269 reference truth.
+21. This E-Commerce module family.
+22. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -182,6 +186,13 @@ exact, server-resolved current binding before a new command can create a Job;
 it never changes the child/person, garment, original product, locked People,
 selected continuation, or Doc269 final-plan facts to seek a different result.
 
+E32 / Doc278 records the separate Professional E-Commerce hold for an opaque,
+non-retryable zero-pixel `image_edit_invalid_request_unattributed` result. It
+does not infer policy, and it never overrides the higher-priority Doc271
+explicit-policy closure. A matching continuation stops safely before a new
+Job; a server-observable change to goal, source/selected product, locked
+People, or configured route may create a deliberate new command.
+
 ## Definition of preparation complete
 
 Before implementation starts, the team must have accepted:
@@ -232,3 +243,6 @@ Before implementation starts, the team must have accepted:
     reviewer acceptance, before a Professional E-Commerce command may consume
     a Doc270 resolved view receipt to choose a Doc263/Doc269 physical product
     projection.
+23. E32 / Doc278 opaque Provider rejection hold and recovery contract, after
+    reviewer acceptance, before an exact zero-pixel opaque E-Commerce provider
+    rejection may suppress a repeat command without relabeling it as policy.
