@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from io import BytesIO
 import json
 
@@ -15,6 +16,10 @@ from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
 )
 from app import main as app_main
 from app.main import app
+
+
+def _shell_asset_version(path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
 def _png_base64(width: int = 320, height: int = 280) -> str:
@@ -86,8 +91,12 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert 'id="v3ProjectSnapshot"' in index.text
     assert 'id="v3PersistentDisplayRegion"' in index.text
     assert index.text.count('id="v3PersistentDisplayRegion"') == 1
-    assert "/static/styles.css?v=20260811-ecommerce-needs-input-v2" in index.text
-    assert "/static/app.js?v=20260811-ecommerce-needs-input-v2" in index.text
+    desktop_styles_version = _shell_asset_version(app_main.STATIC_DIR / "styles.css")
+    desktop_app_version = _shell_asset_version(app_main.STATIC_DIR / "app.js")
+    assert f"/static/styles.css?v={desktop_styles_version}" in index.text
+    assert f"/static/app.js?v={desktop_app_version}" in index.text
+    assert "__STATIC_STYLES_VERSION__" not in index.text
+    assert "__STATIC_APP_VERSION__" not in index.text
     assert 'id="v3ProjectOutputBoard"' in index.text
     assert 'id="v3UsefulReferenceBoard"' in index.text
     assert 'id="v3ProjectWorkflow"' in index.text
@@ -172,6 +181,12 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
 
     h5 = client.get("/h5")
     assert h5.status_code == 200
+    mobile_styles_version = _shell_asset_version(app_main.MOBILE_STATIC_DIR / "mobile.css")
+    mobile_app_version = _shell_asset_version(app_main.MOBILE_STATIC_DIR / "mobile.js")
+    assert f"/mobile-static/mobile.css?v={mobile_styles_version}" in h5.text
+    assert f"/mobile-static/mobile.js?v={mobile_app_version}" in h5.text
+    assert "__MOBILE_STYLES_VERSION__" not in h5.text
+    assert "__MOBILE_APP_VERSION__" not in h5.text
     assert 'href="/creative-agent-v3"' not in h5.text
     assert 'data-tab="v3"' in h5.text
     assert 'id="mobileV3DeleteProjectBtn"' in h5.text
@@ -189,6 +204,13 @@ def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
     assert "v3-link-tab" in h5.text
     assert "V3 creative OS" in h5.text
     assert h5.text.find("v3-link-tab") < h5.text.find("lab-tab")
+
+    billing = client.get("/admin/billing")
+    billing_admin_version = _shell_asset_version(app_main.STATIC_DIR / "billing-admin.js")
+    assert billing.status_code == 200
+    assert f"/static/styles.css?v={desktop_styles_version}" in billing.text
+    assert f"/static/billing-admin.js?v={billing_admin_version}" in billing.text
+    assert "__STATIC_BILLING_ADMIN_VERSION__" not in billing.text
 
 
 def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
@@ -294,7 +316,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert ".v3-optional-details" in styles.text
     assert "grid-template-columns: repeat(auto-fit, minmax(160px, 1fr))" in styles.text
     assert mobile_styles.status_code == 200
-    assert "/mobile-static/mobile.js?v=20260811-ecommerce-needs-input-v2" in mobile_index.text
+    mobile_app_version = _shell_asset_version(app_main.MOBILE_STATIC_DIR / "mobile.js")
+    assert f"/mobile-static/mobile.js?v={mobile_app_version}" in mobile_index.text
+    assert "__MOBILE_APP_VERSION__" not in mobile_index.text
     assert ".tab.v3-link-tab" in mobile_styles.text
     assert ".module-tabs .tab.v3-link-tab" in mobile_styles.text
     assert ".v3-mobile-upload-button::before" in mobile_styles.text

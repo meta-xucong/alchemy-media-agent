@@ -114,6 +114,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 MOBILE_STATIC_DIR = Path(__file__).resolve().parent / "mobile_static"
 IMMUTABLE_IMAGE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
 APP_SHELL_HEADERS = {"Cache-Control": "no-store"}
+SHELL_ASSET_VERSION_LENGTH = 16
+_shell_asset_version_cache: dict[Path, tuple[int, int, str]] = {}
 V2_BRIDGE_PROJECT_ID = "alchemy_v2_bridge"
 V2_IDEMPOTENCY_PREFIX = "v2:"
 V3_VISUAL_ASSET_CATALOG_ROOT = resolve_runtime_storage_path(
@@ -237,6 +239,35 @@ def _write_v3_local_runtime_descriptor() -> None:
             temporary_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def _shell_asset_version(path: Path) -> str:
+    stat = path.stat()
+    cached = _shell_asset_version_cache.get(path)
+    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        return cached[2]
+    version = hashlib.sha256(path.read_bytes()).hexdigest()[:SHELL_ASSET_VERSION_LENGTH]
+    _shell_asset_version_cache[path] = (stat.st_mtime_ns, stat.st_size, version)
+    return version
+
+
+def _shell_asset_version_replacements() -> dict[str, str]:
+    return {
+        "__STATIC_STYLES_VERSION__": _shell_asset_version(STATIC_DIR / "styles.css"),
+        "__STATIC_APP_VERSION__": _shell_asset_version(STATIC_DIR / "app.js"),
+        "__STATIC_BILLING_ADMIN_VERSION__": _shell_asset_version(STATIC_DIR / "billing-admin.js"),
+        "__MOBILE_STYLES_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.css"),
+        "__MOBILE_APP_VERSION__": _shell_asset_version(MOBILE_STATIC_DIR / "mobile.js"),
+    }
+
+
+def _asset_versioned_shell_response(path: Path) -> HTMLResponse:
+    html = path.read_text(encoding="utf-8")
+    for token, version in _shell_asset_version_replacements().items():
+        html = html.replace(token, version)
+    return HTMLResponse(html, headers=APP_SHELL_HEADERS)
+
+
 v3_output_store = V3GeneratedOutputStore()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/mobile-static", StaticFiles(directory=MOBILE_STATIC_DIR), name="mobile_static")
@@ -247,7 +278,7 @@ def frontend_app(request: Request):
     gate = _veyra_page_gate(request, target="alchemy")
     if gate:
         return gate
-    return FileResponse(STATIC_DIR / "index.html", headers=APP_SHELL_HEADERS)
+    return _asset_versioned_shell_response(STATIC_DIR / "index.html")
 
 
 @app.get("/h5")
@@ -256,7 +287,7 @@ def mobile_frontend_app(request: Request):
     gate = _veyra_page_gate(request, target="alchemy-mobile")
     if gate:
         return gate
-    return FileResponse(MOBILE_STATIC_DIR / "index.html", headers=APP_SHELL_HEADERS)
+    return _asset_versioned_shell_response(MOBILE_STATIC_DIR / "index.html")
 
 
 @app.get("/creative-agent-v3")
@@ -265,12 +296,12 @@ def v3_frontend_app(request: Request):
     gate = _veyra_page_gate(request, target="alchemy-v3")
     if gate:
         return gate
-    return FileResponse(STATIC_DIR / "index.html", headers=APP_SHELL_HEADERS)
+    return _asset_versioned_shell_response(STATIC_DIR / "index.html")
 
 
 @app.get("/admin/billing")
 def billing_admin_app(request: Request):
-    return FileResponse(STATIC_DIR / "billing-admin.html")
+    return _asset_versioned_shell_response(STATIC_DIR / "billing-admin.html")
 
 
 @app.get("/share/image", response_class=HTMLResponse)
