@@ -1,0 +1,291 @@
+name: Guarded VPS Activate Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact prepared candidate commit to activate"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout expected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Atomically activate and verify the prepared candidate
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          expected_sha="$1"
+          deploy_link="/opt/alchemy-media-agent"
+          releases_root="/opt/alchemy-media-agent-releases"
+          v1_container="alchemy-media-agent"
+          public_base_url="https://alchemy.aiself.vip"
+          v2_units=(alchemy-v2-api.service alchemy-v2-worker.service alchemy-v2-sync-worker.service)
+          candidate_release="${releases_root}/doc276-277-${expected_sha:0:12}"
+          compose_cmd=()
+
+          stop_pre() {
+            printf 'GUARDED_ACTIVATE_STOP=%s\n' "$1" >&2
+            exit 1
+          }
+
+          choose_compose() {
+            if docker compose version >/dev/null 2>&1; then
+              compose_cmd=(docker compose)
+              return 0
+            fi
+            if command -v docker-compose >/dev/null 2>&1 && docker-compose version >/dev/null 2>&1; then
+              compose_cmd=(docker-compose)
+              return 0
+            fi
+            return 1
+          }
+
+          read_mount() {
+            local destination="$1"
+            local raw value
+            raw="$(docker inspect "$v1_container" --format '{{range .Mounts}}{{if eq .Destination "'"$destination"'"}}{{printf "%s|" .Source}}{{end}}{{end}}' 2>/dev/null)" || return 1
+            value="${raw%|}"
+            [ -n "$value" ] && [ "$value" != *'|'* ] || return 1
+            printf '%s' "$value"
+          }
+
+          require_v2() {
+            local unit
+            for unit in "${v2_units[@]}"; do
+              systemctl is-active --quiet "$unit" || return 1
+            done
+          }
+
+          restart_v2() {
+            local unit
+            for unit in "${v2_units[@]}"; do
+              systemctl restart "$unit" >/dev/null || return 1
+              systemctl is-active --quiet "$unit" || return 1
+            done
+          }
+
+          state_digest() {
+            python3 - "$1" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          entries = []
+          for group in ("v3_projects", "v3_jobs", "v3_outputs"):
+              directory = root / group
+              for path in sorted(directory.rglob("*.json")) if directory.exists() else []:
+                  entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
+          print(hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest())
+          PY
+          }
+
+          pending_planning_operation_count() {
+            python3 - "$1" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1]) / "v3_projects"
+          pending = 0
+          for path in root.rglob("*.json") if root.exists() else []:
+              try:
+                  payload = json.loads(path.read_text(encoding="utf-8"))
+              except (OSError, json.JSONDecodeError):
+                  continue
+              metadata = payload.get("metadata") if isinstance(payload, dict) else None
+              operation = metadata.get("doc277_planning_current_operation") if isinstance(metadata, dict) else None
+              if isinstance(operation, dict) and operation.get("state") == "planning":
+                  pending += 1
+          print(pending)
+          PY
+          }
+
+          compose_for() {
+            local release="$1"
+            shift
+            (
+              cd "$release"
+              APP_PORT=8017 \
+              V2_API_PROXY_BASE_URL=http://127.0.0.1:8020 \
+              V1_MEDIA_STORAGE_DIR="$v1_media" \
+              V2_STORAGE_DIR="$v2_storage" \
+              "${compose_cmd[@]}" -f "$release/docker-compose.yml" "$@"
+            )
+          }
+
+          atomic_repoint() {
+            local target="$1"
+            local label="$2"
+            local temporary_link="${deploy_link}.${label}.$$"
+            [ ! -e "$temporary_link" ] && [ ! -L "$temporary_link" ] || return 1
+            ln -s "$target" "$temporary_link" || return 1
+            mv -Tf "$temporary_link" "$deploy_link" || return 1
+            [ "$(realpath "$deploy_link")" = "$target" ]
+          }
+
+          remove_v1() {
+            if docker inspect "$v1_container" >/dev/null 2>&1; then
+              docker rm -f "$v1_container" >/dev/null
+            fi
+          }
+
+          wait_for_200() {
+            local url="$1"
+            local attempt=1
+            local status
+            while [ "$attempt" -le 30 ]; do
+              status="$(curl -ksS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null || true)"
+              [ "$status" = 200 ] && return 0
+              sleep 2
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+
+          route_ok() {
+            case "$1" in
+              200|302|303|307) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          protected_ok() {
+            case "$1" in
+              401|403) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          static_contains() {
+            local url="$1"
+            local marker="$2"
+            local temporary_file
+            temporary_file="$(mktemp)"
+            curl -ksSf --compressed --connect-timeout 10 --max-time 20 -o "$temporary_file" "$url"
+            grep -Fq "$marker" "$temporary_file"
+            local result=$?
+            rm -f "$temporary_file"
+            return "$result"
+          }
+
+          rollback() {
+            local reason="$1"
+            local rollback_ok=true
+            set +e
+            atomic_repoint "$old_release" rollback || rollback_ok=false
+            compose_for "$old_release" build alchemy-media-agent >/dev/null || rollback_ok=false
+            remove_v1 || rollback_ok=false
+            compose_for "$old_release" up -d --no-build alchemy-media-agent >/dev/null || rollback_ok=false
+            restart_v2 || rollback_ok=false
+            wait_for_200 http://127.0.0.1:8017/healthz || rollback_ok=false
+            wait_for_200 http://127.0.0.1:8020/api/v2/health || rollback_ok=false
+            [ "$(realpath "$deploy_link")" = "$old_release" ] || rollback_ok=false
+            printf 'GUARDED_ACTIVATE_ROLLBACK=%s|reason=%s\n' "$rollback_ok" "$reason"
+            exit 1
+          }
+
+          fail_post() {
+            local reason="$1"
+            printf 'GUARDED_ACTIVATE_POST_SWITCH_STOP=%s\n' "$reason" >&2
+            rollback "$reason"
+          }
+
+          [ -L "$deploy_link" ] || stop_pre deployment_link_missing
+          old_release="$(realpath "$deploy_link")"
+          [ -e "$old_release/.git" ] || stop_pre active_release_not_git_worktree
+          [ -d "$candidate_release" ] || stop_pre candidate_release_missing
+          [ "$(realpath "$candidate_release")" != "$old_release" ] || stop_pre candidate_matches_active_release
+          [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_sha" ] || stop_pre candidate_head_mismatch
+          git -C "$old_release" diff --quiet || stop_pre active_release_tracked_changes
+          git -C "$candidate_release" diff --quiet || stop_pre candidate_tracked_changes
+          choose_compose || stop_pre docker_compose_unavailable
+          [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop_pre v1_not_running
+          old_env="$(read_mount /app/.env)" || stop_pre old_env_mount_ambiguous
+          v1_media="$(read_mount /app/.media_storage)" || stop_pre v1_media_mount_ambiguous
+          v2_storage="$(read_mount /var/lib/alchemy/v2/storage)" || stop_pre v2_storage_mount_ambiguous
+          [ "$old_env" = "$old_release/src_skeleton/.env" ] || stop_pre old_env_not_active_release_bind
+          [ -f "$candidate_release/src_skeleton/.env" ] || stop_pre candidate_env_missing
+          grep -Fxq 'V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=true' "$candidate_release/src_skeleton/.env" || stop_pre candidate_face_gate_missing
+          [ -d "$candidate_release/custom_media_agent_2_0/.venv" ] || stop_pre candidate_v2_venv_missing
+          [ -d "$candidate_release/custom_media_agent_2_0/.v2_data" ] || stop_pre candidate_v2_data_missing
+          require_v2 || stop_pre v2_units_not_active
+          before_digest="$(state_digest "$v1_media")" || stop_pre historical_state_digest_unreadable
+          [ "$(pending_planning_operation_count "$v1_media")" = 0 ] || stop_pre pending_planning_operations_require_separate_recovery
+
+          atomic_repoint "$candidate_release" candidate || stop_pre candidate_link_switch_failed
+          remove_v1 || fail_post candidate_container_remove_failed
+          compose_for "$candidate_release" up -d --no-build alchemy-media-agent >/dev/null || fail_post candidate_container_start_failed
+          restart_v2 || fail_post v2_restart_failed
+          wait_for_200 http://127.0.0.1:8017/healthz || fail_post v1_health_failed
+          wait_for_200 http://127.0.0.1:8020/api/v2/health || fail_post v2_local_health_failed
+          wait_for_200 "$public_base_url/api/v2/health" || fail_post v2_public_health_failed
+          [ "$(realpath "$deploy_link")" = "$candidate_release" ] || fail_post active_release_mismatch
+          [ "$(git -C "$(realpath "$deploy_link")" rev-parse HEAD)" = "$expected_sha" ] || fail_post active_head_mismatch
+          [ "$(read_mount /app/.env)" = "$candidate_release/src_skeleton/.env" ] || fail_post candidate_env_not_bound
+          docker exec "$v1_container" grep -Fq 'review_withheld_face_integrity' /app/app/static/app.js || fail_post desktop_face_review_marker_missing
+          docker exec "$v1_container" grep -Fq 'review_withheld_face_integrity' /app/app/mobile_static/mobile.js || fail_post mobile_face_review_marker_missing
+          docker exec "$v1_container" python -c 'from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService; assert V3ProductApiService._doc276_face_integrity_delivery_enabled()' || fail_post face_gate_not_enabled
+          desktop_status="$(curl -ksS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$public_base_url/creative-agent-v3?workspace=professional" || true)"
+          route_ok "$desktop_status" || fail_post desktop_route_unhealthy
+          h5_status="$(curl -ksS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$public_base_url/h5" || true)"
+          route_ok "$h5_status" || fail_post h5_route_unhealthy
+          static_contains "$public_base_url/static/app.js" review_withheld_face_integrity || fail_post public_desktop_static_marker_missing
+          static_contains "$public_base_url/mobile-static/mobile.js" review_withheld_face_integrity || fail_post public_mobile_static_marker_missing
+          project_status="$(curl -ksS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$public_base_url/api/v3/creative-agent/projects" || true)"
+          protected_ok "$project_status" || fail_post v3_projects_not_protected
+          [ "$(state_digest "$v1_media")" = "$before_digest" ] || fail_post historical_state_changed_after_switch
+
+          printf 'GUARDED_ACTIVATE_RESULT=pass\n'
+          printf 'GUARDED_ACTIVATE_TARGET_SHA=%s\n' "$expected_sha"
+          printf 'GUARDED_ACTIVATE_OLD_RELEASE=%s\n' "$old_release"
+          printf 'GUARDED_ACTIVATE_ACTIVE_RELEASE=%s\n' "$(realpath "$deploy_link")"
+          printf 'GUARDED_ACTIVATE_HEALTH=v1_v2_local_public_200\n'
+          printf 'GUARDED_ACTIVATE_FRONTEND=desktop_h5_static_markers_verified\n'
+          printf 'GUARDED_ACTIVATE_PROTECTION=v3_projects_%s\n' "$project_status"
+          printf 'GUARDED_ACTIVATE_HISTORICAL_STATE=unchanged\n'
+          printf 'GUARDED_ACTIVATE_ROLLBACK=not_needed\n'
+          REMOTE_SCRIPT
