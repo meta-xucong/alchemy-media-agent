@@ -14,7 +14,7 @@ from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
     ecommerce_test_service,
 )
 from app import main as app_main
-from app.main import app, v3_route_handlers
+from app.main import app
 
 
 def _png_base64(width: int = 320, height: int = 280) -> str:
@@ -42,6 +42,24 @@ def _create_ready_v3_upload(client: TestClient, *, role: str = "product_referenc
     assert ready_upload.status_code == 200
     assert ready_upload.json()["status"] == "ready"
     return upload_payload["asset_id"]
+
+
+def _install_isolated_v3_handlers(
+    tmp_path,
+    monkeypatch,
+    *,
+    brain_provider: EcommerceRemoteBrainTestProvider | None = None,
+) -> V3ProductRouteHandlers:
+    brain = brain_provider if brain_provider is not None else EcommerceRemoteBrainTestProvider()
+    service = ecommerce_test_service(
+        brain_provider=brain,
+        asset_store=V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads"),
+        job_store=InMemoryProductJobStore(),
+        output_store=V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs"),
+    )
+    handlers = V3ProductRouteHandlers(service=service, project_store=InMemoryProjectStore())
+    monkeypatch.setattr(app_main, "v3_route_handlers", handlers)
+    return handlers
 
 
 def test_v3_commercial_shell_is_in_desktop_product_navigation() -> None:
@@ -870,9 +888,8 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path, monkeypa
 
 
 def test_v3_project_generate_endpoint_defaults_to_background(tmp_path, monkeypatch) -> None:
-    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
-    v3_route_handlers.service.job_store = InMemoryProductJobStore()
-    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+    handlers = _install_isolated_v3_handlers(tmp_path, monkeypatch)
+    assert handlers.service.scenario_runtime.llm_brain_adapter.provider.provider == "ecommerce_remote_brain_test_double"
     client = TestClient(app)
 
     created_project = client.post(
@@ -910,9 +927,7 @@ def test_v3_project_generate_endpoint_defaults_to_background(tmp_path, monkeypat
 
 
 def test_v3_project_generate_rejects_invalid_payload_before_background_claim(tmp_path, monkeypatch) -> None:
-    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
-    v3_route_handlers.service.job_store = InMemoryProductJobStore()
-    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+    _install_isolated_v3_handlers(tmp_path, monkeypatch)
     client = TestClient(app)
 
     project = client.post(
@@ -958,10 +973,8 @@ def test_v3_gateway_background_watchdog_budgets_every_planned_provider_render(mo
     ) == 5955.0
 
 
-def test_v3_background_watchdog_closes_only_the_matching_generation_attempt(tmp_path) -> None:
-    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
-    v3_route_handlers.service.job_store = InMemoryProductJobStore()
-    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+def test_v3_background_watchdog_closes_only_the_matching_generation_attempt(tmp_path, monkeypatch) -> None:
+    handlers = _install_isolated_v3_handlers(tmp_path, monkeypatch)
     client = TestClient(app)
     project_id = client.post(
         "/api/v3/creative-agent/projects",
@@ -972,7 +985,7 @@ def test_v3_background_watchdog_closes_only_the_matching_generation_attempt(tmp_
         json={"template_id": "general_template", "user_input": "Create one clean still-life image."},
     ).json()["job_id"]
     attempt_id = "watchdog_attempt"
-    v3_route_handlers.mark_project_job_generating(
+    handlers.mark_project_job_generating(
         project_id,
         job_id,
         background_attempt_id=attempt_id,
@@ -996,10 +1009,8 @@ def test_v3_background_watchdog_closes_only_the_matching_generation_attempt(tmp_
     assert timed_out.json()["metadata"]["generation_lifecycle_timeout"]["timeout_seconds"] == 675
 
 
-def test_v3_restart_recovery_closes_only_abandoned_background_jobs_without_replay(tmp_path) -> None:
-    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
-    v3_route_handlers.service.job_store = InMemoryProductJobStore()
-    v3_route_handlers.project_service.project_store = InMemoryProjectStore()
+def test_v3_restart_recovery_closes_only_abandoned_background_jobs_without_replay(tmp_path, monkeypatch) -> None:
+    handlers = _install_isolated_v3_handlers(tmp_path, monkeypatch)
     client = TestClient(app)
     project_id = client.post(
         "/api/v3/creative-agent/projects",
@@ -1013,14 +1024,14 @@ def test_v3_restart_recovery_closes_only_abandoned_background_jobs_without_repla
         f"/api/v3/creative-agent/projects/{project_id}/jobs",
         json={"template_id": "general_template", "user_input": "Create a second clean still-life image."},
     ).json()["job_id"]
-    v3_route_handlers.mark_project_job_generating(
+    handlers.mark_project_job_generating(
         project_id,
         abandoned_job_id,
         background_attempt_id="abandoned_attempt",
         background_timeout_seconds=675,
         background_runtime_id="previous_runtime",
     )
-    v3_route_handlers.mark_project_job_generating(
+    handlers.mark_project_job_generating(
         project_id,
         active_job_id,
         background_attempt_id="current_attempt",
@@ -1032,7 +1043,7 @@ def test_v3_restart_recovery_closes_only_abandoned_background_jobs_without_repla
 
     abandoned = client.get(f"/api/v3/creative-agent/jobs/{abandoned_job_id}").json()
     active = client.get(f"/api/v3/creative-agent/jobs/{active_job_id}").json()
-    timeline = v3_route_handlers.get_project_timeline(project_id)["items"]
+    timeline = handlers.get_project_timeline(project_id)["items"]
 
     assert abandoned["status"] == "blocked"
     assert abandoned["metadata"]["generation_lifecycle_failure"]["failure_code"] == "background_generation_process_restarted"
@@ -1048,7 +1059,12 @@ def test_v3_restart_recovery_closes_only_abandoned_background_jobs_without_repla
     assert blocked_items[0]["metadata"]["failure_code"] == "background_generation_process_restarted"
 
 
-def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack() -> None:
+def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack(tmp_path, monkeypatch) -> None:
+    _install_isolated_v3_handlers(
+        tmp_path,
+        monkeypatch,
+        brain_provider=EcommerceRemoteBrainTestProvider(fault="unavailable"),
+    )
     client = TestClient(app)
 
     low_level = client.post(
@@ -1079,9 +1095,8 @@ def test_v3_routes_reject_low_level_controls_and_run_ecommerce_pack() -> None:
     assert "capability_activation_failed: remote_creative_brain_required_for_template" in ecommerce_payload["warnings"]
 
 
-def test_v3_upload_routes_feed_ecommerce_export_manifest(tmp_path) -> None:
-    v3_route_handlers.service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
-    v3_route_handlers.service.job_store = InMemoryProductJobStore()
+def test_v3_upload_routes_feed_ecommerce_export_manifest(tmp_path, monkeypatch) -> None:
+    _install_isolated_v3_handlers(tmp_path, monkeypatch)
     client = TestClient(app)
 
     created_upload = client.post(
