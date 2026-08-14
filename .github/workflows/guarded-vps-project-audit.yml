@@ -1,0 +1,227 @@
+name: Guarded VPS Project Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact active VPS release commit to audit"
+        required: true
+        type: string
+      project_id:
+        description: "Server project identifier to inspect read-only"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  project-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout expected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Read project and delivery records without mutation
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PROJECT_ID: ${{ inputs.project_id }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PROJECT_ID" =~ ^project_[a-z0-9]+$ ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_SHA' '$PROJECT_ID'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          expected_sha="$1"
+          project_id="$2"
+          deploy_link="/opt/alchemy-media-agent"
+          v1_container="alchemy-media-agent"
+
+          stop() {
+            printf 'GUARDED_PROJECT_AUDIT_STOP=%s\n' "$1" >&2
+            exit 1
+          }
+
+          read_mount() {
+            local destination="$1"
+            local raw value
+            raw="$(docker inspect "$v1_container" --format '{{range .Mounts}}{{if eq .Destination "'"$destination"'"}}{{printf "%s|" .Source}}{{end}}{{end}}' 2>/dev/null)" || return 1
+            value="${raw%|}"
+            [ -n "$value" ] && [ "$value" != *'|'* ] || return 1
+            printf '%s' "$value"
+          }
+
+          state_digest() {
+            python3 - "$1" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          entries = []
+          for group in ("v3_projects", "v3_jobs", "v3_outputs"):
+              directory = root / group
+              for path in sorted(directory.rglob("*.json")) if directory.exists() else []:
+                  entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
+          print(hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest())
+          PY
+          }
+
+          [ -L "$deploy_link" ] || stop deployment_link_missing
+          active_release="$(realpath "$deploy_link")"
+          [ "$(git -C "$active_release" rev-parse HEAD)" = "$expected_sha" ] || stop active_release_head_mismatch
+          [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop v1_not_running
+          v1_media="$(read_mount /app/.media_storage)" || stop v1_media_mount_ambiguous
+          before_digest="$(state_digest "$v1_media")" || stop historical_state_digest_unreadable
+
+          docker exec -i "$v1_container" python - "$project_id" <<'PY'
+          import json
+          import sys
+          from collections import Counter
+          from pathlib import Path
+
+          project_id = sys.argv[1]
+          root = Path("/app/.media_storage")
+          project_path = root / "v3_projects" / project_id / "project.json"
+          if not project_path.exists():
+              raise SystemExit("project_not_found")
+          project = json.loads(project_path.read_text(encoding="utf-8"))
+          references = project.get("reference_assets") if isinstance(project.get("reference_assets"), list) else []
+          jobs_root = root / "v3_jobs"
+          outputs_root = root / "v3_outputs"
+
+          def job_summary(job_id):
+              path = jobs_root / f"{job_id}.json"
+              if not path.exists():
+                  return {"job_id": job_id, "status": "missing"}
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+              review = metadata.get("post_generation_review_package") or metadata.get("post_generation_review")
+              review = review if isinstance(review, dict) else {}
+              inspections = review.get("inspections") if isinstance(review.get("inspections"), list) else []
+              inspection_states = Counter(
+                  str(item.get("status") or "unknown")
+                  for item in inspections
+                  if isinstance(item, dict)
+              )
+              final_delivery = metadata.get("final_delivery") if isinstance(metadata.get("final_delivery"), dict) else {}
+              return {
+                  "job_id": str(payload.get("job_id") or job_id),
+                  "status": payload.get("status"),
+                  "updated_at": payload.get("updated_at"),
+                  "warning_count": len(payload.get("warnings") or []),
+                  "provider_failure_code": (
+                      (metadata.get("provider_failure_retry") or {}).get("final_failure_code")
+                      if isinstance(metadata.get("provider_failure_retry"), dict)
+                      else None
+                  ),
+                  "final_delivery_status": final_delivery.get("final_delivery_status"),
+                  "automatic_delivery_available": final_delivery.get("automatic_delivery_available"),
+                  "review_states": dict(sorted(inspection_states.items())),
+              }
+
+          job_ids = [str(item) for item in project.get("job_ids") or [] if str(item).strip()]
+          wanted_job_ids = set(job_ids)
+          outputs = []
+          for path in sorted(outputs_root.glob("*/output.json")) if outputs_root.exists() else []:
+              try:
+                  payload = json.loads(path.read_text(encoding="utf-8"))
+              except (OSError, json.JSONDecodeError):
+                  continue
+              metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+              owner = str(payload.get("job_id") or metadata.get("job_id") or payload.get("created_from_job_id") or metadata.get("created_from_job_id") or "")
+              if owner not in wanted_job_ids:
+                  continue
+              image_files = [
+                  item
+                  for item in path.parent.iterdir()
+                  if item.is_file() and item.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+              ]
+              outputs.append(
+                  {
+                      "output_id": str(payload.get("output_id") or path.parent.name),
+                      "job_id": owner,
+                      "status": payload.get("status"),
+                      "delivery_state": payload.get("delivery_state") or metadata.get("delivery_state"),
+                      "review_status": payload.get("review_status") or metadata.get("review_status"),
+                      "image_file_count": len(image_files),
+                  }
+              )
+
+          active_references = [
+              item
+              for item in references
+              if isinstance(item, dict) and str(item.get("status") or "") == "active"
+          ]
+          source_counts = Counter(str(item.get("source_type") or "unknown") for item in references if isinstance(item, dict))
+          policy_counts = Counter(str(item.get("use_policy") or "unknown") for item in references if isinstance(item, dict))
+          metadata = project.get("metadata") if isinstance(project.get("metadata"), dict) else {}
+          current_operation = metadata.get("doc277_planning_current_operation")
+          if not isinstance(current_operation, dict):
+              current_operation = None
+
+          print(
+              json.dumps(
+                  {
+                      "project_id": project_id,
+                      "project_updated_at": project.get("updated_at"),
+                      "job_count": len(job_ids),
+                      "reference_count": len(references),
+                      "active_reference_count": len(active_references),
+                      "reference_source_counts": dict(sorted(source_counts.items())),
+                      "reference_policy_counts": dict(sorted(policy_counts.items())),
+                      "current_operation": (
+                          {
+                              "state": current_operation.get("state"),
+                              "terminal": current_operation.get("terminal"),
+                              "pending": current_operation.get("pending"),
+                          }
+                          if current_operation
+                          else None
+                      ),
+                      "jobs": [job_summary(job_id) for job_id in job_ids[-20:]],
+                      "outputs": outputs[-30:],
+                  },
+                  ensure_ascii=False,
+                  separators=(",", ":"),
+              )
+          )
+          PY
+
+          [ "$(state_digest "$v1_media")" = "$before_digest" ] || stop historical_state_changed_during_audit
+          printf 'GUARDED_PROJECT_AUDIT_RESULT=pass\n'
+          printf 'GUARDED_PROJECT_AUDIT_PROJECT_ID=%s\n' "$project_id"
+          printf 'GUARDED_PROJECT_AUDIT_ACTIVE_SHA=%s\n' "$expected_sha"
+          printf 'GUARDED_PROJECT_AUDIT_HISTORICAL_STATE=unchanged\n'
+          REMOTE_SCRIPT
