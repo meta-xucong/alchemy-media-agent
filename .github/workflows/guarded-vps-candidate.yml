@@ -1,0 +1,217 @@
+name: Guarded VPS Candidate Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact origin/main commit to prepare without activating"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout expected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Prepare a non-active candidate release
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          expected_sha="$1"
+          deploy_link="/opt/alchemy-media-agent"
+          releases_root="/opt/alchemy-media-agent-releases"
+          v1_container="alchemy-media-agent"
+          v2_units=(alchemy-v2-api.service alchemy-v2-worker.service alchemy-v2-sync-worker.service)
+          candidate_release="${releases_root}/doc276-277-${expected_sha:0:12}"
+          compose_cmd=()
+
+          stop() {
+            printf 'GUARDED_CANDIDATE_STOP=%s\n' "$1" >&2
+            exit 1
+          }
+
+          choose_compose() {
+            if docker compose version >/dev/null 2>&1; then
+              compose_cmd=(docker compose)
+              return 0
+            fi
+            if command -v docker-compose >/dev/null 2>&1 && docker-compose version >/dev/null 2>&1; then
+              compose_cmd=(docker-compose)
+              return 0
+            fi
+            return 1
+          }
+
+          read_mount() {
+            local destination="$1"
+            local raw value
+            raw="$(docker inspect "$v1_container" --format '{{range .Mounts}}{{if eq .Destination "'"$destination"'"}}{{printf "%s|" .Source}}{{end}}{{end}}' 2>/dev/null)" || return 1
+            value="${raw%|}"
+            [ -n "$value" ] && [ "$value" != *'|'* ] || return 1
+            printf '%s' "$value"
+          }
+
+          require_v2() {
+            local unit
+            for unit in "${v2_units[@]}"; do
+              systemctl is-active --quiet "$unit" || return 1
+            done
+          }
+
+          state_digest() {
+            python3 - "$1" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          entries = []
+          for group in ("v3_projects", "v3_jobs", "v3_outputs"):
+              directory = root / group
+              for path in sorted(directory.rglob("*.json")) if directory.exists() else []:
+                  entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
+          print(hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest())
+          PY
+          }
+
+          compose_candidate() {
+            (
+              cd "$candidate_release"
+              APP_PORT=8017 \
+              V2_API_PROXY_BASE_URL=http://127.0.0.1:8020 \
+              V1_MEDIA_STORAGE_DIR="$v1_media" \
+              V2_STORAGE_DIR="$v2_storage" \
+              "${compose_cmd[@]}" -f "$candidate_release/docker-compose.yml" "$@"
+            )
+          }
+
+          normalized_env_digest() {
+            local file="$1"
+            grep -v '^V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=' "$file" | sha256sum | awk '{print $1}'
+          }
+
+          configure_candidate_env() {
+            local env_file="$candidate_release/src_skeleton/.env"
+            local gate_count
+            [ -f "$env_file" ] || stop candidate_env_missing
+            [ "$(normalized_env_digest "$env_file")" = "$(normalized_env_digest "$live_env")" ] || stop candidate_env_drift
+            gate_count="$(grep -c '^V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=' "$env_file" || true)"
+            case "$gate_count" in
+              0) printf '\nV3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=true\n' >> "$env_file" ;;
+              1) grep -Fxq 'V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=true' "$env_file" || stop candidate_face_gate_conflict ;;
+              *) stop candidate_face_gate_duplicate ;;
+            esac
+            [ "$(stat -c '%a:%U:%G' "$env_file")" = "$env_metadata" ] || stop candidate_env_metadata_changed
+          }
+
+          [ -L "$deploy_link" ] || stop deployment_link_missing
+          active_release="$(realpath "$deploy_link")"
+          [ -e "$active_release/.git" ] || stop active_release_not_git_worktree
+          [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop v1_not_running
+          git -C "$active_release" diff --quiet || stop active_release_tracked_changes
+          choose_compose || stop docker_compose_unavailable
+          live_env="$(read_mount /app/.env)" || stop v1_env_mount_ambiguous
+          v1_media="$(read_mount /app/.media_storage)" || stop v1_media_mount_ambiguous
+          v2_storage="$(read_mount /var/lib/alchemy/v2/storage)" || stop v2_storage_mount_ambiguous
+          [ "$live_env" = "$active_release/src_skeleton/.env" ] || stop live_env_not_active_release_bind
+          [ -f "$live_env" ] || stop live_env_missing
+          [ -d "$v1_media" ] || stop v1_media_missing
+          [ -d "$v2_storage" ] || stop v2_storage_missing
+          env_metadata="$(stat -c '%a:%U:%G' "$live_env")"
+          require_v2 || stop v2_units_not_active
+          before_digest="$(state_digest "$v1_media")" || stop historical_state_digest_unreadable
+          v1_identity="$(docker inspect "$v1_container" --format '{{.Id}}|{{.State.StartedAt}}')" || stop v1_identity_unreadable
+
+          git -C "$active_release" fetch --prune origin >/dev/null
+          [ "$(git -C "$active_release" rev-parse origin/main)" = "$expected_sha" ] || stop origin_main_target_mismatch
+          [ "$(git -C "$active_release" cat-file -t "${expected_sha}^{commit}")" = commit ] || stop target_commit_unavailable
+          git -C "$active_release" diff --quiet || stop active_release_changed_after_fetch
+
+          if [ -e "$candidate_release" ] || [ -L "$candidate_release" ]; then
+            [ "$(realpath "$candidate_release")" != "$active_release" ] || stop candidate_matches_active_release
+            [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_sha" ] || stop candidate_head_mismatch
+            git -C "$candidate_release" diff --quiet || stop candidate_tracked_changes
+            candidate_mode=resumed
+          else
+            git -C "$active_release" worktree add --detach "$candidate_release" "$expected_sha" >/dev/null
+            candidate_mode=created
+          fi
+
+          [ "$(git -C "$candidate_release" rev-parse HEAD)" = "$expected_sha" ] || stop candidate_head_after_create_mismatch
+          git -C "$candidate_release" diff --quiet || stop candidate_tracked_changes_after_create
+          if [ ! -e "$candidate_release/src_skeleton/.env" ]; then
+            cp -p -- "$live_env" "$candidate_release/src_skeleton/.env"
+          fi
+          configure_candidate_env
+
+          for runtime_entry in .venv .v2_data; do
+            source_path="$active_release/custom_media_agent_2_0/$runtime_entry"
+            target_path="$candidate_release/custom_media_agent_2_0/$runtime_entry"
+            [ -d "$source_path" ] || stop "active_v2_${runtime_entry#\.}_missing"
+            if [ ! -e "$target_path" ]; then
+              cp -a -- "$source_path" "$target_path"
+            fi
+            [ -d "$target_path" ] || stop "candidate_v2_${runtime_entry#\.}_missing"
+          done
+
+          compose_candidate build alchemy-media-agent >/dev/null
+          docker run --rm \
+            --env-file "$candidate_release/src_skeleton/.env" \
+            --entrypoint python \
+            alchemy-media-agent:latest \
+            -c 'from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService; assert V3ProductApiService._doc276_face_integrity_delivery_enabled(); print("GUARDED_CANDIDATE_IMAGE=face_gate_enabled")' \
+            >/dev/null || stop candidate_image_runtime_import_invalid
+
+          [ "$(realpath "$deploy_link")" = "$active_release" ] || stop active_release_changed_during_build
+          [ "$(docker inspect "$v1_container" --format '{{.Id}}|{{.State.StartedAt}}')" = "$v1_identity" ] || stop v1_changed_during_build
+          require_v2 || stop v2_changed_during_build
+          [ "$(state_digest "$v1_media")" = "$before_digest" ] || stop historical_state_changed_during_build
+
+          printf 'GUARDED_CANDIDATE_RESULT=pass\n'
+          printf 'GUARDED_CANDIDATE_TARGET_SHA=%s\n' "$expected_sha"
+          printf 'GUARDED_CANDIDATE_ACTIVE_RELEASE=%s\n' "$active_release"
+          printf 'GUARDED_CANDIDATE_CANDIDATE_RELEASE=%s\n' "$candidate_release"
+          printf 'GUARDED_CANDIDATE_MODE=%s\n' "$candidate_mode"
+          printf 'GUARDED_CANDIDATE_IMAGE=face_gate_enabled\n'
+          printf 'GUARDED_CANDIDATE_HISTORICAL_STATE=unchanged\n'
+          REMOTE_SCRIPT
