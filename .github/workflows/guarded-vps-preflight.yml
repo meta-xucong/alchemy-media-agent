@@ -1,0 +1,131 @@
+name: Guarded VPS Preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact origin/main commit that must be available on the VPS"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout expected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Verify release topology and target availability
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_SHA'" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          expected_sha="$1"
+          deploy_link="/opt/alchemy-media-agent"
+          v1_container="alchemy-media-agent"
+          v2_units=(alchemy-v2-api.service alchemy-v2-worker.service alchemy-v2-sync-worker.service)
+
+          stop() {
+            printf 'GUARDED_PREFLIGHT_STOP=%s\n' "$1" >&2
+            exit 1
+          }
+
+          read_mount() {
+            local destination="$1"
+            local raw value
+            raw="$(docker inspect "$v1_container" --format '{{range .Mounts}}{{if eq .Destination "'"$destination"'"}}{{printf "%s|" .Source}}{{end}}{{end}}' 2>/dev/null)" || return 1
+            value="${raw%|}"
+            [ -n "$value" ] && [ "$value" != *'|'* ] || return 1
+            printf '%s' "$value"
+          }
+
+          require_v2() {
+            local unit
+            for unit in "${v2_units[@]}"; do
+              systemctl is-active --quiet "$unit" || return 1
+            done
+          }
+
+          state_digest() {
+            python3 - "$1" <<'PY'
+          import hashlib
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          entries = []
+          for group in ("v3_projects", "v3_jobs", "v3_outputs"):
+              directory = root / group
+              for path in sorted(directory.rglob("*.json")) if directory.exists() else []:
+                  entries.append((str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest()))
+          print(hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest())
+          PY
+          }
+
+          [ -L "$deploy_link" ] || stop deployment_link_missing
+          active_release="$(realpath "$deploy_link")"
+          [ -e "$active_release/.git" ] || stop active_release_not_git_worktree
+          git -C "$active_release" diff --quiet || stop active_release_tracked_changes
+          [ "$(docker inspect "$v1_container" --format '{{.State.Running}}' 2>/dev/null)" = true ] || stop v1_not_running
+          live_env="$(read_mount /app/.env)" || stop v1_env_mount_ambiguous
+          v1_media="$(read_mount /app/.media_storage)" || stop v1_media_mount_ambiguous
+          v2_storage="$(read_mount /var/lib/alchemy/v2/storage)" || stop v2_storage_mount_ambiguous
+          [ -f "$live_env" ] || stop live_env_missing
+          [ -d "$v1_media" ] || stop v1_media_missing
+          [ -d "$v2_storage" ] || stop v2_storage_missing
+          require_v2 || stop v2_units_not_active
+          before_digest="$(state_digest "$v1_media")" || stop historical_state_digest_unreadable
+
+          git -C "$active_release" fetch --prune origin >/dev/null
+          [ "$(git -C "$active_release" rev-parse origin/main)" = "$expected_sha" ] || stop origin_main_target_mismatch
+          [ "$(git -C "$active_release" cat-file -t "${expected_sha}^{commit}")" = commit ] || stop target_commit_unavailable
+          git -C "$active_release" diff --quiet || stop active_release_changed_after_fetch
+          [ "$(state_digest "$v1_media")" = "$before_digest" ] || stop historical_state_changed_during_preflight
+
+          printf 'GUARDED_PREFLIGHT_RESULT=pass\n'
+          printf 'GUARDED_PREFLIGHT_TARGET_SHA=%s\n' "$expected_sha"
+          printf 'GUARDED_PREFLIGHT_ACTIVE_RELEASE=%s\n' "$active_release"
+          printf 'GUARDED_PREFLIGHT_ACTIVE_SHA=%s\n' "$(git -C "$active_release" rev-parse HEAD)"
+          printf 'GUARDED_PREFLIGHT_V1_ENV=%s\n' "$live_env"
+          printf 'GUARDED_PREFLIGHT_V1_MEDIA=%s\n' "$v1_media"
+          printf 'GUARDED_PREFLIGHT_V2_STORAGE=%s\n' "$v2_storage"
+          printf 'GUARDED_PREFLIGHT_V2_UNITS=all_active\n'
+          printf 'GUARDED_PREFLIGHT_HISTORICAL_STATE_DIGEST=%s\n' "$before_digest"
+          REMOTE_SCRIPT
