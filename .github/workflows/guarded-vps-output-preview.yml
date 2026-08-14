@@ -1,0 +1,98 @@
+name: Guarded VPS Output Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        required: true
+        type: string
+      output_id:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 1
+
+      - name: Prepare SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KEY_B64: ${{ secrets.VPS_SSH_KEY_B64 }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "${VPS_SSH_KEY_B64:-${VPS_SSH_KEY:-}}"
+          mkdir -p ~/.ssh
+          if test -n "${VPS_SSH_KEY_B64:-}"; then
+            printf '%s' "$VPS_SSH_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          else
+            printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          fi
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null
+
+      - name: Copy one verified preview without mutation
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          OUTPUT_ID: ${{ inputs.output_id }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$OUTPUT_ID" =~ ^v3_output_[a-f0-9]{20}$ ]]
+          remote="${VPS_USER:-root}@${VPS_HOST}"
+          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$remote" "bash -s -- '$EXPECTED_SHA' '$OUTPUT_ID'" > preview.png <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          expected_sha="$1"
+          output_id="$2"
+          deploy_link="/opt/alchemy-media-agent"
+          container="alchemy-media-agent"
+          active_release="$(realpath "$deploy_link")"
+          [ "$(git -C "$active_release" rev-parse HEAD)" = "$expected_sha" ]
+          [ "$(docker inspect "$container" --format '{{.State.Running}}' 2>/dev/null)" = true ]
+          docker exec -i "$container" python - "$output_id" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          output_id = sys.argv[1]
+          root = Path("/app/.media_storage") / "v3_outputs" / output_id
+          record = json.loads((root / "output.json").read_text(encoding="utf-8"))
+          if record.get("output_id") != output_id:
+              raise SystemExit("output_identity_mismatch")
+          preview = Path(str(record.get("preview_path") or ""))
+          if preview != root / "preview.png" or not preview.is_file():
+              raise SystemExit("preview_unavailable")
+          data = preview.read_bytes()
+          if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+              raise SystemExit("preview_not_png")
+          sys.stdout.buffer.write(data)
+          PY
+          REMOTE_SCRIPT
+          python - <<'PY'
+          from pathlib import Path
+          data = Path("preview.png").read_bytes()
+          assert data.startswith(b"\x89PNG\r\n\x1a\n")
+          assert len(data) > 1024
+          print(f"GUARDED_OUTPUT_PREVIEW_RESULT=pass bytes={len(data)}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guarded-v3-output-preview-${{ inputs.output_id }}
+          path: preview.png
+          if-no-files-found: error
+          retention-days: 1
