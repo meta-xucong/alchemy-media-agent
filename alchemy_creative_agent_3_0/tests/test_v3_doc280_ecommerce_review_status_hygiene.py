@@ -241,6 +241,10 @@ def test_doc280_unbound_or_conflicting_review_package_fails_closed_without_dispo
     assert "review_disposition" not in public_job["metadata"]
     assert operation is None or operation.get("next_actions") != [{"id": "review_generation_history"}]
     assert RAW_REJECT_WARNING not in public_text
+    if corruption == "resolution_output_mismatch":
+        assert _doc280_output_id("other") not in public_text
+    if corruption == "inspection_asset_mismatch":
+        assert "asset-doc280-other" not in public_text
 
 
 def test_doc280_no_output_terminal_has_typed_disposition_without_browser_authority(tmp_path) -> None:
@@ -472,6 +476,8 @@ def _browser_project() -> dict[str, Any]:
         "start_session_expression",
         "owns_expression",
         "old_recovery_expression",
+        "old_refresh_expression",
+        "old_output_expression",
     ),
     [
         (
@@ -487,6 +493,18 @@ def _browser_project() -> dict[str, Any]:
                 new Error('doc280-old-recovery'),
                 { shouldContinue: () => v3EcommerceGenerationSessionOwns(receipt) },
             ).catch(() => null)""",
+            """(receipt) => refreshV3CurrentProject({
+                silent: true,
+                shouldContinue: () => v3EcommerceGenerationSessionOwns(receipt),
+                sessionReceipt: receipt,
+            }).catch(() => null)""",
+            """(receipt) => loadV3ProjectOutputs({
+                silent: true,
+                force: true,
+                projectId: 'doc263-project',
+                shouldContinue: () => v3EcommerceGenerationSessionOwns(receipt),
+                sessionReceipt: receipt,
+            }).catch(() => null)""",
         ),
         (
             MOBILE_HTML,
@@ -500,6 +518,11 @@ def _browser_project() -> dict[str, Any]:
                 'doc280-old-review',
                 { recoveryReceipt: receipt },
             ).catch(() => null)""",
+            """(receipt) => refreshMobileV3ProjectDetail(
+                'doc263-project',
+                { shouldContinue: () => mobileV3EcommerceGenerationSessionOwns(receipt) },
+            ).catch(() => null)""",
+            "",
         ),
     ],
 )
@@ -511,6 +534,8 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
     start_session_expression: str,
     owns_expression: str,
     old_recovery_expression: str,
+    old_refresh_expression: str,
+    old_output_expression: str,
 ) -> None:
     """Both real submit paths must reject a delayed prior recovery response."""
 
@@ -523,6 +548,7 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
                 """
                 ({ project, stateName }) => {
                   window.__doc263ServerProject = project;
+                  window.__doc280StateName = stateName;
                   if (stateName === "v3State") {
                     v3State.currentProject = project;
                     v3State.currentJob = { job_id: "doc280-old-review", status: "blocked", warnings: [""" + json.dumps(RAW_REJECT_WARNING) + """] };
@@ -563,8 +589,15 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
                 () => {
                   window.__doc280OldRecoveryResolvers = [];
                   window.__doc280CurrentPostResolvers = [];
+                  window.__doc280OldProjectRefreshResolvers = [];
+                  window.__doc280OldProjectOutputsResolvers = [];
                   window.__doc280OldRecoveryRequests = 0;
                   window.__doc280CurrentPosts = 0;
+                  window.__doc280OldProjectRefreshRequests = 0;
+                  window.__doc280OldProjectOutputsRequests = 0;
+                  window.__doc280CurrentProjectOutputsRequests = 0;
+                  window.__doc280HoldOldProjectRefresh = true;
+                  window.__doc280HoldOldProjectOutputs = window.__doc280StateName === "v3State";
                   window.fetch = (input, init = {}) => {
                     const url = String(input);
                     const method = String(init.method || "GET").toUpperCase();
@@ -585,6 +618,10 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
                       }), { status: 200, headers: { "Content-Type": "application/json" } }));
                     }
                     if (/\\/projects\\/doc263-project$/.test(url)) {
+                      if (window.__doc280HoldOldProjectRefresh) {
+                        window.__doc280OldProjectRefreshRequests += 1;
+                        return new Promise((resolve) => window.__doc280OldProjectRefreshResolvers.push(resolve));
+                      }
                       return Promise.resolve(new Response(JSON.stringify({
                         project: window.__doc263ServerProject,
                       }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -593,6 +630,11 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
                       return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
                     }
                     if (/\\/project-outputs/.test(url)) {
+                      if (window.__doc280HoldOldProjectOutputs) {
+                        window.__doc280OldProjectOutputsRequests += 1;
+                        return new Promise((resolve) => window.__doc280OldProjectOutputsResolvers.push(resolve));
+                      }
+                      window.__doc280CurrentProjectOutputsRequests += 1;
                       return Promise.resolve(new Response(JSON.stringify({ items: [], review_items: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
                     }
                     return Promise.resolve(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -603,8 +645,37 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
 
             assert page.evaluate(f"typeof {owns_expression} === 'function'") is True
             old_receipt = page.evaluate(start_session_expression)
-            page.evaluate(old_recovery_expression, old_receipt)
+            page.evaluate(
+                f"""
+                (receipt) => {{
+                  void ({old_recovery_expression})(receipt);
+                  return true;
+                }}
+                """,
+                old_receipt,
+            )
             page.wait_for_function("window.__doc280OldRecoveryRequests === 1", timeout=5000)
+            page.evaluate(
+                f"""
+                (receipt) => {{
+                  void ({old_refresh_expression})(receipt);
+                  return true;
+                }}
+                """,
+                old_receipt,
+            )
+            page.wait_for_function("window.__doc280OldProjectRefreshRequests === 1", timeout=5000)
+            if old_output_expression:
+                page.evaluate(
+                    f"""
+                    (receipt) => {{
+                      void ({old_output_expression})(receipt);
+                      return true;
+                    }}
+                    """,
+                    old_receipt,
+                )
+                page.wait_for_function("window.__doc280OldProjectOutputsRequests === 1", timeout=5000)
 
             page.evaluate(
                 """
@@ -617,10 +688,19 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
                       current_operation: { state: "planning", terminal: false, pending: true, next_actions: [] },
                     },
                   };
+                  window.__doc280HoldOldProjectRefresh = false;
+                  window.__doc280HoldOldProjectOutputs = false;
                 }
                 """
             )
-            page.evaluate(start_expression)
+            page.evaluate(
+                f"""
+                () => {{
+                  void {start_expression};
+                  return true;
+                }}
+                """
+            )
             page.wait_for_function("window.__doc280CurrentPosts === 1", timeout=5000)
 
             # The new session clears the old terminal presentation before its
@@ -655,6 +735,8 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
                 f"{state_name}.currentJob && {state_name}.currentJob.job_id === 'doc280-current-job'",
                 timeout=5000,
             )
+            if old_output_expression:
+                page.wait_for_function("window.__doc280CurrentProjectOutputsRequests >= 1", timeout=5000)
 
             page.evaluate(
                 """
@@ -676,12 +758,65 @@ def test_doc280_new_ecommerce_generation_session_discards_late_prior_recovery_an
                 }
                 """
             )
+            page.evaluate(
+                """
+                () => {
+                  const resolve = window.__doc280OldProjectRefreshResolvers.shift();
+                  resolve(new Response(JSON.stringify({
+                    project: {
+                      ...window.__doc263ServerProject,
+                      job_ids: ["doc280-old-review"],
+                      metadata: {
+                        ...window.__doc263ServerProject.metadata,
+                        current_operation: {
+                          state: "review_withheld_manual_confirmation",
+                          terminal: true,
+                          pending: false,
+                          next_actions: [{ id: "review_generation_history" }],
+                        },
+                      },
+                    },
+                  }), { status: 200, headers: { "Content-Type": "application/json" } }));
+                }
+                """
+            )
+            if old_output_expression:
+                page.evaluate(
+                    """
+                    () => {
+                      const resolve = window.__doc280OldProjectOutputsResolvers.shift();
+                      resolve(new Response(JSON.stringify({
+                        items: [{
+                          output_id: "doc280-old-output",
+                          project_id: "doc263-project",
+                          review_only: true,
+                          review_reason: "old review",
+                        }],
+                        review_items: [{
+                          output_id: "doc280-old-output",
+                          project_id: "doc263-project",
+                          review_only: true,
+                        }],
+                      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+                    }
+                    """
+                )
             page.wait_for_timeout(50)
 
             assert page.evaluate(f"{state_name}.currentJob?.job_id") == "doc280-current-job"
+            assert page.evaluate(
+                f"{state_name}.currentProject?.metadata?.current_operation?.state !== 'review_withheld_manual_confirmation'"
+            ) is True
             assert page.evaluate(f"{state_name}.progressStageKey !== 'failed'") is True
             assert page.evaluate(f"!String({state_name}.progressDetail || '').includes('old review terminal')") is True
             assert page.locator(action_selector).count() == 0
             assert RAW_REJECT_WARNING not in page.locator("body").inner_text()
+            if old_output_expression:
+                assert page.evaluate(
+                    "!((v3State.projectOutputs || []).some((item) => item.output_id === 'doc280-old-output'))"
+                ) is True
+                assert page.evaluate(
+                    "!((v3State.projectReviewOutputs || []).some((item) => item.output_id === 'doc280-old-output'))"
+                ) is True
         finally:
             browser.close()

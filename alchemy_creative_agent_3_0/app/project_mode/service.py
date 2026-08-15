@@ -8881,6 +8881,44 @@ class V3ProjectModeService:
             }
         return None
 
+    def _doc280_ecommerce_review_current_operation(self, project: ProjectRecord) -> dict[str, Any] | None:
+        """Expose one E34 retained-review operation for the newest Job only."""
+
+        if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
+            return None
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            try:
+                status = self.product_service.get_job(job_id)
+            except Exception:
+                return None
+            disposition = dict(getattr(status, "metadata", {}) or {}).get("review_disposition")
+            if not isinstance(disposition, dict):
+                return None
+            if (
+                disposition.get("schema_version") != "doc280_ecommerce_review_disposition_v1"
+                or disposition.get("terminal") is not True
+                or disposition.get("pending") is not False
+            ):
+                return None
+            state = str(disposition.get("state") or "").strip()
+            if state not in {
+                "review_withheld_manual_confirmation",
+                "review_withheld_review_failure",
+            }:
+                return None
+            if disposition.get("next_actions") != [{"id": "review_generation_history"}]:
+                return None
+            return {
+                "state": state,
+                "terminal": True,
+                "pending": False,
+                "next_actions": [{"id": "review_generation_history"}],
+            }
+        return None
+
     @staticmethod
     def _public_project_output_identity(item: dict[str, Any]) -> str:
         return str(
@@ -9865,7 +9903,11 @@ class V3ProjectModeService:
         if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
             metadata["ecommerce_project_view"] = self._ecommerce_project_view(project)
             if operation is None:
-                operation = ecommerce_operation or self._ecommerce_current_operation(project)
+                operation = (
+                    ecommerce_operation
+                    or self._ecommerce_current_operation(project)
+                    or self._doc280_ecommerce_review_current_operation(project)
+                )
                 if operation is not None:
                     metadata["current_operation"] = operation
         return ProjectResponse(

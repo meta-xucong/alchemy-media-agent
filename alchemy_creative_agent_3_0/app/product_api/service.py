@@ -5348,6 +5348,8 @@ class V3ProductApiService:
             if not text:
                 continue
             lowered = text.lower()
+            if cls._doc280_internal_warning_is_not_public(text):
+                continue
             if lowered.startswith("reference_projection_drift:"):
                 projected.append(
                     "The current product references were refreshed for a clean continuation attempt."
@@ -5375,6 +5377,26 @@ class V3ProductApiService:
                 continue
             projected.append(text)
         return list(dict.fromkeys(projected))
+
+    @staticmethod
+    def _doc280_internal_warning_is_not_public(value: str) -> bool:
+        """Keep execution-only retry/package diagnostics inside durable audit."""
+
+        lowered = str(value or "").strip().lower()
+        if not lowered:
+            return False
+        internal_markers = (
+            "exhausted refine budget",
+            "packaged with reject recommendation",
+            "retry budget",
+            "refine budget",
+            "provider_payload",
+            "provider trace",
+            "trace=",
+            "hash=",
+            "file_path",
+        )
+        return any(marker in lowered for marker in internal_markers)
 
     def _provider_failure_retry_summary_from_exception(self, exc: Exception) -> dict[str, Any] | None:
         summary = getattr(exc, "provider_failure_retry", None)
@@ -9008,7 +9030,10 @@ class V3ProductApiService:
                 status=record.status,
                 selected_result=selected,
                 job_status=self._status_from_record(record),
-                warnings=list(record.warnings),
+                warnings=self._public_job_warnings(
+                    list(record.warnings),
+                    dict(record.request.metadata or {}),
+                ),
                 metadata={"source": "V3ProductApiService", "rules_version": RULE_VERSION},
             )
 
@@ -9074,7 +9099,10 @@ class V3ProductApiService:
             status=record.status,
             selected_result=selected,
             job_status=self._status_from_record(record),
-            warnings=list(record.warnings),
+            warnings=self._public_job_warnings(
+                list(record.warnings),
+                dict(record.request.metadata or {}),
+            ),
             metadata={"source": "V3ProductApiService", "rules_version": RULE_VERSION},
         )
 
@@ -9313,6 +9341,17 @@ class V3ProductApiService:
                 **self._doc263_terminal_status_metadata(record),
             },
         )
+        review_disposition = self._doc280_ecommerce_review_disposition(record)
+        if self._is_ecommerce_request(record.request):
+            # E34 packages can be malformed or conflict with the persisted
+            # output binding. Their public representation is still
+            # identifier-free; only the typed disposition may depend on a
+            # successful exact OutputStore revalidation.
+            status.metadata["post_generation_review"] = self._doc280_public_review_summary(
+                status.metadata.get("post_generation_review")
+            )
+        if review_disposition is not None:
+            status.metadata["review_disposition"] = review_disposition
         return self._doc270_ecommerce_phase4_safe_status(record, status)
 
     def _doc270_ecommerce_phase4_safe_status(
@@ -9776,6 +9815,144 @@ class V3ProductApiService:
             eligible_output_ids,
             eligible_asset_ids,
         )
+
+    def _doc280_ecommerce_review_disposition(
+        self,
+        record: ProductJobRecord,
+    ) -> dict[str, Any] | None:
+        """Derive an E34 state from one complete, persisted review set.
+
+        A package is never enough by itself. Every inspection/resolution must
+        correspond to a readable OutputStore record for this exact Job, with
+        matching asset identity, bytes, digest, and final-delivery facts.
+        """
+
+        if not self._is_ecommerce_request(record.request):
+            return None
+        result = record.generation_result
+        if result is None:
+            if record.status in {ProductJobStatusValue.BLOCKED, ProductJobStatusValue.FAILED}:
+                return {
+                    "schema_version": "doc280_ecommerce_review_disposition_v1",
+                    "state": "no_delivery_terminal",
+                    "terminal": True,
+                    "pending": False,
+                    "next_actions": [],
+                }
+            return None
+
+        package = result.metadata.get("post_generation_review_package")
+        if not isinstance(package, dict):
+            return None
+        if str(package.get("review_evidence_receipt_status") or "").strip().lower() != "complete":
+            return None
+        resolutions = package.get("resolutions")
+        inspections = package.get("inspections")
+        if not isinstance(resolutions, list) or not isinstance(inspections, list) or not resolutions or not inspections:
+            return None
+
+        resolution_by_output: dict[str, dict[str, Any]] = {}
+        for resolution in resolutions:
+            if not isinstance(resolution, dict):
+                return None
+            output_id = str(resolution.get("output_id") or "").strip()
+            if (
+                not output_id
+                or output_id in resolution_by_output
+                or str(resolution.get("status") or "").strip().lower() != "ready"
+            ):
+                return None
+            resolution_by_output[output_id] = resolution
+
+        inspection_by_output: dict[str, dict[str, Any]] = {}
+        for inspection in inspections:
+            if not isinstance(inspection, dict):
+                return None
+            output_id = str(inspection.get("output_id") or "").strip()
+            asset_id = str(inspection.get("asset_id") or "").strip()
+            if not output_id or not asset_id or output_id in inspection_by_output:
+                return None
+            inspection_by_output[output_id] = inspection
+
+        expected_output_ids = set(resolution_by_output)
+        if expected_output_ids != set(inspection_by_output):
+            return None
+        try:
+            output_records = self.output_store.list_by_job(record.job_id)
+        except OSError:
+            return None
+        outputs_by_id = {str(output.output_id or "").strip(): output for output in output_records}
+        if set(outputs_by_id) != expected_output_ids:
+            return None
+
+        final_delivery, _eligible_output_ids, _eligible_asset_ids = self._public_final_delivery_projection(result)
+        final_state = str(final_delivery.get("final_delivery_status") or "").strip()
+        state_by_delivery = {
+            "ready": "final_delivery_available",
+            "withheld_manual_confirmation": "review_withheld_manual_confirmation",
+            "withheld_review_failure": "review_withheld_review_failure",
+        }
+        disposition_state = state_by_delivery.get(final_state)
+        if disposition_state is None:
+            return None
+        expected_delivery = {
+            "delivery_gate_applies": True,
+            "final_delivery_status": final_state,
+            "automatic_delivery_available": final_state == "ready",
+            "manual_confirmation_required": final_state == "withheld_manual_confirmation",
+        }
+        for output_id in sorted(expected_output_ids):
+            output = outputs_by_id[output_id]
+            inspection = inspection_by_output[output_id]
+            if (
+                str(output.job_id or "").strip() != record.job_id
+                or str(output.asset_id or "").strip() != str(inspection.get("asset_id") or "").strip()
+            ):
+                return None
+            try:
+                content = Path(str(output.file_path or "")).read_bytes()
+            except OSError:
+                return None
+            actual_sha = hashlib.sha256(content).hexdigest()
+            if actual_sha != str(dict(output.metadata or {}).get("content_sha256") or "").strip():
+                return None
+            persisted_delivery = dict(dict(output.metadata or {}).get("final_delivery") or {})
+            if any(persisted_delivery.get(key) != value for key, value in expected_delivery.items()):
+                return None
+
+        return {
+            "schema_version": "doc280_ecommerce_review_disposition_v1",
+            "state": disposition_state,
+            "terminal": True,
+            "pending": False,
+            "next_actions": (
+                []
+                if disposition_state == "final_delivery_available"
+                else [{"id": "review_generation_history"}]
+            ),
+        }
+
+    @staticmethod
+    def _doc280_public_review_summary(value: Any) -> dict[str, Any]:
+        """Keep retained-review identity private once E34 owns the UI state."""
+
+        raw = dict(value or {}) if isinstance(value, dict) else {}
+        receipt_status = str(raw.get("review_evidence_receipt_status") or "").strip()
+        reference_comparison = raw.get("reference_comparison")
+        return {
+            "review_evidence_receipt_status": receipt_status,
+            "real_pixel_review_attempted": bool(raw.get("real_pixel_review_attempted")),
+            "real_pixel_review_certified": bool(raw.get("real_pixel_review_certified")),
+            "reference_comparison": (
+                {
+                    channel: str(state)
+                    for channel, state in reference_comparison.items()
+                    if channel in {"product_truth", "person_identity"}
+                }
+                if isinstance(reference_comparison, dict)
+                else {}
+            ),
+        }
 
     @staticmethod
     def _doc276_face_integrity_delivery_certified(inspection: dict[str, Any], *, required: bool) -> bool:
@@ -12125,7 +12302,11 @@ class V3ProductApiService:
         public: list[str] = []
         for item in warnings:
             text = self._public_warning_text(str(item))
-            if not text or self._is_internal_warning_text(text, scenario_id=scenario_id):
+            if (
+                not text
+                or self._doc280_internal_warning_is_not_public(text)
+                or self._is_internal_warning_text(text, scenario_id=scenario_id)
+            ):
                 continue
             public.append(text)
         return list(dict.fromkeys(public))

@@ -368,6 +368,7 @@ const v3State = {
   imageHistoryLoaded: false,
   imageHistoryLoading: false,
   projectOutputsRequest: null,
+  projectOutputsRequestOwner: null,
   activeHistoryProjectId: "",
   uploadFingerprints: {},
   progressStartedAt: null,
@@ -377,6 +378,8 @@ const v3State = {
   progressTimer: null,
   recoverPollTimer: null,
   recoverPollAttempt: 0,
+  ecommerceGenerationEpoch: 0,
+  ecommerceGenerationSession: null,
   projectRecoveryKey: "",
   longRunNoticeKey: "",
   presetByScenario: {
@@ -2813,33 +2816,51 @@ async function loadV3History(options = {}) {
   return loadV3ProjectOutputs(options);
 }
 
-async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24, projectId = "" } = {}) {
+async function loadV3ProjectOutputs({
+  silent = false,
+  force = false,
+  limit = 24,
+  projectId = "",
+  shouldContinue = null,
+  sessionReceipt = null,
+} = {}) {
   const scopedProjectId = projectId || v3State.currentProject?.project_id || "";
-  if (v3State.imageHistoryLoading) {
+  const requestOwner = sessionReceipt || null;
+  if (!v3GenerationSessionOwns(shouldContinue)) return [];
+  if (
+    v3State.imageHistoryLoading
+    && v3State.projectOutputsRequest
+    && v3State.projectOutputsRequestOwner === requestOwner
+  ) {
     if (v3State.projectOutputsRequest) await v3State.projectOutputsRequest;
-    return;
+    return [];
   }
   if (v3State.imageHistoryLoaded && !force) {
+    if (!v3GenerationSessionOwns(shouldContinue)) return [];
     if (scopedProjectId && Array.isArray(v3State.imageHistory)) {
       syncV3ProjectOutputsFromList(v3State.imageHistory, v3State.currentProject.project_id);
     }
+    if (!v3GenerationSessionOwns(shouldContinue)) return [];
     renderV3History();
     renderV3HeroHistory();
     renderV3ProjectOutputBoard();
     renderV3ProjectSnapshot();
     renderV3StepCards();
     renderV3ProjectNextActions();
-    return;
+    return Array.isArray(v3State.imageHistory) ? v3State.imageHistory : [];
   }
   v3State.imageHistoryLoading = true;
   if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = true;
+  let requestPromise = null;
   try {
     const cacheBust = force ? `&t=${Date.now()}` : "";
     const boundedLimit = Math.max(12, Math.min(Number(limit || 24), scopedProjectId ? 160 : 80));
     const scoped = scopedProjectId ? `&project_id=${encodeURIComponent(scopedProjectId)}` : "";
-    const requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}`);
+    requestPromise = request(`${v3ApiBase}/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}`);
     v3State.projectOutputsRequest = requestPromise;
+    v3State.projectOutputsRequestOwner = requestOwner;
     const payload = await requestPromise;
+    if (!v3GenerationSessionOwns(shouldContinue)) return [];
     const items = Array.isArray(payload.items) ? payload.items : [];
     const reviewItems = Array.isArray(payload.review_items) ? payload.review_items : [];
     if (!scopedProjectId) {
@@ -2850,21 +2871,31 @@ async function loadV3ProjectOutputs({ silent = false, force = false, limit = 24,
     if (scopedProjectId) {
       syncV3ProjectOutputsFromList(items, scopedProjectId, reviewItems);
     }
+    if (!v3GenerationSessionOwns(shouldContinue)) return [];
     renderV3History();
     renderV3HeroHistory();
     renderV3ProjectOutputBoard();
     renderV3ProjectSnapshot();
     renderV3StepCards();
     renderV3ProjectNextActions();
+    return items;
   } catch (error) {
+    if (!v3GenerationSessionOwns(shouldContinue)) return [];
     v3State.imageHistoryLoaded = true;
     renderV3History();
     renderV3HeroHistory();
     if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
+    return [];
   } finally {
-    v3State.imageHistoryLoading = false;
-    v3State.projectOutputsRequest = null;
-    if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
+    if (
+      v3State.projectOutputsRequest === requestPromise
+      && v3State.projectOutputsRequestOwner === requestOwner
+    ) {
+      v3State.imageHistoryLoading = false;
+      v3State.projectOutputsRequest = null;
+      v3State.projectOutputsRequestOwner = null;
+      if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
+    }
   }
 }
 
@@ -6267,6 +6298,64 @@ function v3SetEcommerceSubmissionReceipt(projectId, jobId) {
   v3State.ecommerceSubmissionReceipt = { projectId: String(projectId), jobId: String(jobId) };
 }
 
+function v3DetachProjectOutputRequestOwner() {
+  v3State.imageHistoryLoading = false;
+  v3State.projectOutputsRequest = null;
+  v3State.projectOutputsRequestOwner = null;
+  if (els.v3RefreshHistoryBtn) els.v3RefreshHistoryBtn.disabled = false;
+}
+
+function v3StartEcommerceGenerationSession(projectId) {
+  const normalizedProjectId = String(projectId || "").trim();
+  const receipt = {
+    projectId: normalizedProjectId,
+    epoch: Number(v3State.ecommerceGenerationEpoch || 0) + 1,
+  };
+  v3State.ecommerceGenerationEpoch = receipt.epoch;
+  v3State.ecommerceGenerationSession = receipt;
+  v3State.projectRecoveryKey = "";
+  v3DetachProjectOutputRequestOwner();
+  v3State.ecommerceSubmissionReceipt = null;
+  v3State.ecommerceSubmissionDiagnostic = "";
+  v3State.ecommerceSubmissionErrorProjectId = "";
+  v3State.currentJob = null;
+  v3State.selectedResult = null;
+  clearV3RecoverPolling();
+  clearV3Progress();
+  setV3Busy(false);
+  updateV3Notice("", "info");
+  if (String(v3State.currentProject?.project_id || "") === normalizedProjectId) {
+    v3State.currentProject = {
+      ...v3State.currentProject,
+      metadata: {
+        ...(v3State.currentProject.metadata || {}),
+        current_operation: {
+          state: "planning",
+          terminal: false,
+          pending: true,
+          next_actions: [],
+        },
+      },
+    };
+  }
+  renderV3Job(null);
+  return receipt;
+}
+
+function v3EcommerceGenerationSessionOwns(receipt) {
+  return Boolean(
+    receipt
+      && v3State.ecommerceGenerationSession
+      && v3State.ecommerceGenerationEpoch === receipt.epoch
+      && v3State.ecommerceGenerationSession.projectId === receipt.projectId
+      && String(v3State.currentProject?.project_id || "") === receipt.projectId,
+  );
+}
+
+function v3GenerationSessionOwns(shouldContinue) {
+  return typeof shouldContinue !== "function" || shouldContinue();
+}
+
 function v3IsTerminalJob(job) {
   return ["blocked", "failed", "not_found"].includes(String(job?.status || "").trim().toLowerCase());
 }
@@ -6365,15 +6454,18 @@ function v3JobHasVisibleImages(job) {
   return v3CurrentJobImageItems(job).length > 0;
 }
 
-async function restoreV3LatestProjectJob(project = v3State.currentProject, { silent = true } = {}) {
+async function restoreV3LatestProjectJob(project = v3State.currentProject, { silent = true, shouldContinue = null } = {}) {
+  if (!v3GenerationSessionOwns(shouldContinue)) return null;
   const receipt = v3EcommerceReceiptForProject(project);
   if (receipt) {
     if (v3State.currentJob?.job_id === receipt.jobId) {
+      if (!v3GenerationSessionOwns(shouldContinue)) return null;
       v3SettleEcommerceTerminalReceipt(v3State.currentJob);
       return v3State.currentJob;
     }
     try {
       const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(receipt.jobId)}`);
+      if (!v3GenerationSessionOwns(shouldContinue)) return null;
       v3State.currentJob = job;
       v3State.selectedResult = null;
       v3SettleEcommerceTerminalReceipt(job);
@@ -6385,20 +6477,24 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
   }
   const jobId = v3LatestProjectJobId(project);
   if (!jobId) return null;
+  if (!v3GenerationSessionOwns(shouldContinue)) return null;
   if (v3State.currentJob?.job_id === jobId && v3JobDeliverySettled(v3State.currentJob) && v3JobHasVisibleImages(v3State.currentJob)) {
     return v3State.currentJob;
   }
   try {
     const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+    if (!v3GenerationSessionOwns(shouldContinue)) return null;
     if (["blocked", "failed", "not_found"].includes(String(job?.status || "").trim().toLowerCase())) {
       const recovered = v3RecoveredJobFromProjectOutputs(jobId, job, { allowPartial: true });
       if (recovered) {
+        if (!v3GenerationSessionOwns(shouldContinue)) return null;
         v3State.currentJob = recovered;
         v3State.selectedResult = null;
         return recovered;
       }
     }
     if (!v3JobDeliverySettled(job)) {
+      if (!v3GenerationSessionOwns(shouldContinue)) return null;
       v3State.currentJob = job;
       // A background job has no delivery to restore yet, but it is still the
       // authoritative result of opening this project.  Return it explicitly
@@ -6407,18 +6503,21 @@ async function restoreV3LatestProjectJob(project = v3State.currentProject, { sil
       return job;
     }
     if (job?.status === "generated" && v3JobHasVisibleImages(job)) {
+      if (!v3GenerationSessionOwns(shouldContinue)) return null;
       v3State.currentJob = job;
       v3State.selectedResult = null;
       return job;
     }
     const recovered = v3RecoveredJobFromProjectOutputs(jobId, job);
     if (recovered) {
+      if (!v3GenerationSessionOwns(shouldContinue)) return null;
       v3State.currentJob = recovered;
       v3State.selectedResult = null;
       return recovered;
     }
     const recoveredLatest = v3RecoveredLatestVisibleProjectOutputs(project, job);
     if (recoveredLatest) {
+      if (!v3GenerationSessionOwns(shouldContinue)) return null;
       v3State.currentJob = recoveredLatest;
       v3State.selectedResult = null;
       return recoveredLatest;
@@ -6457,8 +6556,13 @@ function resumeV3ActiveProjectJobRecovery(job = v3State.currentJob) {
     ),
   })
     .then(async (generated) => {
-      if (v3State.currentProject?.project_id !== projectId) return;
-      await completeV3GeneratedJob(generated);
+      if (v3State.projectRecoveryKey !== recoveryKey || v3State.currentProject?.project_id !== projectId) return;
+      await completeV3GeneratedJob(generated, [], v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative"), {
+        shouldContinue: () => (
+          v3State.projectRecoveryKey === recoveryKey
+          && v3State.currentProject?.project_id === projectId
+        ),
+      });
     })
     .catch((error) => {
       if (v3State.currentProject?.project_id !== projectId) return;
@@ -7986,40 +8090,55 @@ function renderV3ProjectOpeningState(projectId) {
   renderV3Job(null);
 }
 
-async function loadV3ProjectTimeline(projectId, { silent = false } = {}) {
+async function loadV3ProjectTimeline(projectId, { silent = false, shouldContinue = null } = {}) {
+  if (!v3GenerationSessionOwns(shouldContinue)) return [];
   if (!projectId) {
     v3State.projectTimeline = [];
     renderV3ProjectTimeline();
-    return;
+    return [];
   }
   try {
     const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/timeline`);
+    if (!v3GenerationSessionOwns(shouldContinue)) return [];
     v3State.projectTimeline = Array.isArray(payload.items) ? payload.items : [];
   } catch (error) {
+    if (!v3GenerationSessionOwns(shouldContinue)) return [];
     v3State.projectTimeline = [];
     if (!silent) showGlobalToast(`项目记录加载失败：${friendlyError(error)}`, "warning");
   }
+  if (!v3GenerationSessionOwns(shouldContinue)) return [];
   renderV3ProjectTimeline();
+  return v3State.projectTimeline;
 }
 
-async function refreshV3CurrentProject({ silent = true } = {}) {
+async function refreshV3CurrentProject({ silent = true, shouldContinue = null, sessionReceipt = null } = {}) {
   const projectId = v3State.currentProject?.project_id;
-  if (!projectId) return;
+  if (!projectId || !v3GenerationSessionOwns(shouldContinue)) return false;
   try {
     const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
+    if (!v3GenerationSessionOwns(shouldContinue)) return false;
     v3State.currentProject = payload.project || v3State.currentProject;
+    if (!v3GenerationSessionOwns(shouldContinue)) return false;
     syncV3ProjectOutputsFromPayload(payload);
+    if (!v3GenerationSessionOwns(shouldContinue)) return false;
     if (Array.isArray(payload.templates) && payload.templates.length) {
       v3State.templates = payload.templates;
       v3State.templateCatalogStatus = "ready";
     }
+    if (!v3GenerationSessionOwns(shouldContinue)) return false;
     saveV3ProjectSnapshot(v3State.currentProject);
-    await loadV3ProjectTimeline(projectId, { silent: true });
-    await loadV3ProjectOutputs({ silent: true, force: true });
-    await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
+    await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
+    if (!v3GenerationSessionOwns(shouldContinue)) return false;
+    await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
+    if (!v3GenerationSessionOwns(shouldContinue)) return false;
+    await restoreV3LatestProjectJob(v3State.currentProject, { silent: true, shouldContinue });
+    if (!v3GenerationSessionOwns(shouldContinue)) return false;
     renderV3ProjectDetail();
+    return true;
   } catch (error) {
+    if (!v3GenerationSessionOwns(shouldContinue)) return false;
     if (!silent) showGlobalToast(`项目更新失败：${friendlyError(error)}`, "warning");
+    return false;
   }
 }
 
@@ -8624,14 +8743,18 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   return payload;
 }
 
-async function recoverV3PlannedJob(projectId) {
+async function recoverV3PlannedJob(projectId, { shouldContinue = null } = {}) {
   const maxAttempts = 240;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, attempt === 1 ? 450 : 2500));
+    if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
     try {
       const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}`);
+      if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
       v3State.currentProject = payload.project || v3State.currentProject;
+      if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
       syncV3ProjectOutputsFromPayload(payload);
+      if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
       saveV3ProjectSnapshot(v3State.currentProject);
       const operation = v3ProjectPlanningOperation(v3State.currentProject);
       if (operation?.state === "planning_failed") {
@@ -8642,13 +8765,17 @@ async function recoverV3PlannedJob(projectId) {
       const jobId = String(jobIds[jobIds.length - 1] || "").trim();
       if (!operation && jobId) {
         const job = await request(`${v3ApiBase}/jobs/${encodeURIComponent(jobId)}`);
+        if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
         return { operation: null, job };
       }
+      if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
       setV3Progress("planning", `V3 中枢正在理解需求并规划画面，已刷新 ${attempt} 次。`);
     } catch (_error) {
+      if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
       setV3Progress("planning", `正在核对后台规划进度，已刷新 ${attempt} 次。`);
     }
   }
+  if (!v3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
   return { operation: v3ProjectPlanningOperation(v3State.currentProject), job: null };
 }
 
@@ -8658,16 +8785,16 @@ async function createV3Job() {
     showGlobalToast("当前绑定的视觉资产需要先处理。请在弹窗里选择其他已启用资产，或解除绑定后再继续生成。", "warning");
     return;
   }
+  let ecommerceSession = null;
   try {
     const copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative");
     if (v3State.selectedScenario === "ecommerce") {
-      v3State.ecommerceSubmissionReceipt = null;
-      v3State.ecommerceSubmissionDiagnostic = "";
-      v3State.ecommerceSubmissionErrorProjectId = "";
+      ecommerceSession = v3StartEcommerceGenerationSession(v3State.currentProject?.project_id);
     }
     setV3Busy(true, v3State.files.length ? "上传并生成中..." : copy.busyLabel);
     startV3Progress("uploading", v3State.files.length ? "正在上传并理解参考图。" : "正在准备项目上下文。");
     const uploadedAssets = await uploadV3Files();
+    if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;
     setV3Progress("planning", "V3 中枢正在理解需求并规划画面。");
     const payload = buildV3JobPayload(uploadedAssets);
     const generationSettings = v3CurrentGenerationSettings();
@@ -8691,14 +8818,21 @@ async function createV3Job() {
     updateV3Notice(copy.planningNotice, "info");
     const projectId = encodeURIComponent(v3State.currentProject.project_id);
     let created = await request(`${v3ApiBase}/projects/${projectId}/jobs`, { method: "POST", body: payload });
+    if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;
     if (uploadedAssets.length) clearV3PendingUploads({ render: true });
     v3State.currentJob = created;
     v3State.selectedResult = null;
     syncV3ProjectOutputsFromPayload(created);
-    if (v3ProjectPlanningOperation(v3State.currentProject)?.state === "planning") {
+    if (
+      v3ProjectPlanningOperation(v3State.currentProject)?.state === "planning"
+      && !String(created?.job_id || "").trim()
+    ) {
       v3State.currentJob = null;
       renderV3Job(null);
-      const planningResult = await recoverV3PlannedJob(v3State.currentProject.project_id);
+      const planningResult = await recoverV3PlannedJob(v3State.currentProject.project_id, {
+        shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
+      });
+      if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;
       if (!planningResult?.job) {
         if (planningResult?.operation?.state === "planning_failed") {
           updateV3Notice("本次规划未完成。项目已保留，请确认需求和参考后再明确点击生成。", "warning");
@@ -8716,19 +8850,32 @@ async function createV3Job() {
       v3SettleEcommerceTerminalReceipt(created);
     }
     renderV3Job(created);
-    await refreshV3CurrentProject({ silent: true });
+    await refreshV3CurrentProject({
+      silent: true,
+      shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
+      sessionReceipt: ecommerceSession,
+    });
+    if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;
     if (!v3IsTerminalJob(created)) {
       setV3Progress("generating", created?.metadata?.background_generation_started === false ? "后台已有同一任务在生成，正在同步结果。" : "后台已开始生成，页面会持续刷新结果。");
       const generated = await recoverV3GeneratedJob(v3State.currentProject.project_id, created.job_id, new Error("v3_background_generation_pending"), {
         expectedCount: generationSettings.count,
+        shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
+        sessionReceipt: ecommerceSession,
       });
-      await completeV3GeneratedJob(generated, uploadedAssets, copy);
+      await completeV3GeneratedJob(generated, uploadedAssets, copy, {
+        shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
+        sessionReceipt: ecommerceSession,
+      });
       return;
     }
     if (v3IsTerminalJob(created)) {
       const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(created.job_id, created, { allowPartial: true });
       if (recoveredFromOutputs) {
-        await completeV3GeneratedJob(recoveredFromOutputs, uploadedAssets, copy);
+        await completeV3GeneratedJob(recoveredFromOutputs, uploadedAssets, copy, {
+          shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
+          sessionReceipt: ecommerceSession,
+        });
         return;
       }
       const ecommerceFailure = v3EcommerceFailureMessage(created);
@@ -8745,6 +8892,7 @@ async function createV3Job() {
     }
     updateV3Notice(v3IsTerminalJob(created) ? "本次未获得可交付图片。项目和原始参考已保留，请确认需求后再次尝试。" : "已理解需求，可以继续生成图片。", v3IsTerminalJob(created) ? "warning" : "success");
   } catch (error) {
+    if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;
     if (v3State.selectedScenario === "ecommerce") {
       v3SettleEcommerceSubmissionError(error);
       updateV3Notice("本次提交未完成。项目和原始参考已保留，请确认需求后再次尝试。", "warning");
@@ -8758,13 +8906,20 @@ async function createV3Job() {
     }
     updateV3Notice(`V3 暂时没有读到完成结果：${detail}。项目已保留，可以稍后刷新。`, "warning");
   } finally {
+    if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;
     clearV3RecoverPolling();
     clearV3ProgressTimer();
     setV3Busy(false);
   }
 }
 
-async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative")) {
+async function completeV3GeneratedJob(
+  generated,
+  uploadedAssets = [],
+  copy = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative"),
+  { shouldContinue = null, sessionReceipt = null } = {},
+) {
+  if (typeof shouldContinue === "function" && !shouldContinue()) return null;
   v3State.currentJob = generated;
   v3SettleEcommerceTerminalReceipt(generated);
   v3State.activeProjectStep = "compose";
@@ -8783,12 +8938,15 @@ async function completeV3GeneratedJob(generated, uploadedAssets = [], copy = v3S
     generated?.status === "blocked" || deliveryWithheld ? "warning" : partialRecovery ? "warning" : "success"
   );
   renderV3Job(generated);
-  await refreshV3CurrentProject({ silent: true });
-  await loadV3ProjectOutputs({ silent: true, force: true });
+  await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+  if (typeof shouldContinue === "function" && !shouldContinue()) return null;
+  await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
+  if (typeof shouldContinue === "function" && !shouldContinue()) return null;
   if (syncV3CurrentJobFromProjectOutputs({ preferLatest: false })) {
     renderV3Job(v3State.currentJob);
   }
   await maybePersistV3UploadedReferences(uploadedAssets);
+  if (typeof shouldContinue === "function" && !shouldContinue()) return null;
   if (uploadedAssets.length) clearV3PendingUploads({ render: true });
   if (els.v3ProjectSubpage && !els.v3ProjectSubpage.hidden) {
     openV3ProjectSubpage("compose");
@@ -8847,7 +9005,12 @@ function v3IsSoftTimeout(error) {
   return String(error?.message || error || "").includes("v3_generation_soft_timeout");
 }
 
-async function recoverV3GeneratedJob(projectId, jobId, originalError, { expectedCount = null, shouldContinue = null } = {}) {
+async function recoverV3GeneratedJob(
+  projectId,
+  jobId,
+  originalError,
+  { expectedCount = null, shouldContinue = null, sessionReceipt = null } = {},
+) {
   clearV3RecoverPolling();
   let lastError = originalError;
   let recoveryAttemptLimit = v3RecoveryMaxAttempts;
@@ -8866,9 +9029,12 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         v3State.currentJob = job;
         v3SettleEcommerceTerminalReceipt(job);
         renderV3Job(job);
-        await refreshV3CurrentProject({ silent: true });
-        await loadV3ProjectTimeline(projectId, { silent: true });
-        await loadV3ProjectOutputs({ silent: true, force: true });
+        await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
+        await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
+        await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         return job;
       }
       if (v3JobHasExpectedVisibleImages(job, expectedCount)) {
@@ -8878,9 +9044,12 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         v3State.currentJob = job;
         v3SettleEcommerceTerminalReceipt(job);
         renderV3Job(job);
-        await refreshV3CurrentProject({ silent: true });
-        await loadV3ProjectTimeline(projectId, { silent: true });
-        await loadV3ProjectOutputs({ silent: true, force: true });
+        await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
+        await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
+        await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         setV3Progress("completed", "已保留已成功生成的图片；同组后续图片未完成，可先查看、下载或继续生成。", "warning", { forceNotice: true });
         return job;
       }
@@ -8889,9 +9058,12 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         if (recovered) {
           v3State.currentJob = recovered;
           renderV3Job(recovered);
-          await refreshV3CurrentProject({ silent: true });
-          await loadV3ProjectTimeline(projectId, { silent: true });
-          await loadV3ProjectOutputs({ silent: true, force: true });
+          await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+          if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
+          await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
+          if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
+          await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
+          if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
           setV3Progress(
             "completed",
             v3JobHasRecoverablePartialDelivery(recovered, expectedCount)
@@ -8904,9 +9076,12 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         }
         v3State.currentJob = job;
         renderV3Job(job);
-        await refreshV3CurrentProject({ silent: true });
-        await loadV3ProjectTimeline(projectId, { silent: true });
-        await loadV3ProjectOutputs({ silent: true, force: true });
+        await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
+        await loadV3ProjectTimeline(projectId, { silent: true, shouldContinue });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
+        await loadV3ProjectOutputs({ silent: true, force: true, shouldContinue, sessionReceipt });
+        if (!v3GenerationSessionOwns(shouldContinue)) throw new Error("v3_project_recovery_replaced");
         setV3Progress("failed", v3ProviderFailureUserMessage(job), "warning", { forceNotice: true });
         return job;
       }
@@ -8924,8 +9099,14 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
     } catch (error) {
       lastError = error;
     }
+    if (typeof shouldContinue === "function" && !shouldContinue()) {
+      throw new Error("v3_project_recovery_replaced");
+    }
     try {
-      await refreshV3CurrentProject({ silent: true });
+      await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+      if (typeof shouldContinue === "function" && !shouldContinue()) {
+        throw new Error("v3_project_recovery_replaced");
+      }
       const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
       if (recoveredFromOutputs && v3JobHasExpectedVisibleImages(recoveredFromOutputs, expectedCount)) {
         v3State.currentJob = recoveredFromOutputs;
@@ -8935,7 +9116,7 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
         v3State.currentJob = recoveredFromOutputs;
         return recoveredFromOutputs;
       }
-      const restored = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });
+      const restored = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true, shouldContinue });
       if (restored?.job_id === jobId && v3JobHasExpectedVisibleImages(restored, expectedCount)) return restored;
     } catch (error) {
       lastError = error;
@@ -8947,7 +9128,10 @@ async function recoverV3GeneratedJob(projectId, jobId, originalError, { expected
     }
   }
   try {
-    await refreshV3CurrentProject({ silent: true });
+    await refreshV3CurrentProject({ silent: true, shouldContinue, sessionReceipt });
+    if (typeof shouldContinue === "function" && !shouldContinue()) {
+      throw new Error("v3_project_recovery_replaced");
+    }
     const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(jobId, v3State.currentJob);
     if (recoveredFromOutputs && v3JobHasExpectedVisibleImages(recoveredFromOutputs, expectedCount)) return recoveredFromOutputs;
     if (recoveredFromOutputs && v3JobHasRecoverablePartialDelivery(recoveredFromOutputs, expectedCount)) return recoveredFromOutputs;
