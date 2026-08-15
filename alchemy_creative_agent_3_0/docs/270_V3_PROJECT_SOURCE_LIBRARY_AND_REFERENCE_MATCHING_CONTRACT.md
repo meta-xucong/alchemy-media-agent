@@ -753,6 +753,20 @@ closure states, and a bounded real-provider acceptance run only with explicit
 mutation boundaries. Do not use a real generation call as exploratory
 debugging.
 
+### Phase 6: Unified activation and historical association recovery
+
+Doc281 is the authoritative Phase 6 correction contract for completing the
+shared source-library path. It replaces the disabled General-only activation
+seams with one production server-owned evidence, matcher, registry, and
+activation path for new explicit commands, while retaining each template's
+existing channel and physical-plan authority. It also defines the single
+sanitized terminal closure required when an active historical E-Commerce
+product association has upload, role, file, or SHA drift. Phase 6 must not
+rewrite historical Jobs, promote generated/review history to originals, or
+weaken Doc263/264 admission or Doc269 planning.
+
+See `281_V3_UNIFIED_SOURCE_LIBRARY_SMART_MATCHING_AND_DRIFT_RECOVERY_CONTRACT.md`.
+
 ## 10. Required Test Matrix
 
 1. Four originals with front, side, rear, and detail evidence produce a
