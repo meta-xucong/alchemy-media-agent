@@ -3828,6 +3828,14 @@ function v3EcommerceDeliveryRouteUnavailableOperation(project = v3State.currentP
     && operation?.pending === false;
 }
 
+function v3EcommerceAmbiguousProviderRequestHoldOperation(project = v3State.currentProject, job = v3State.currentJob) {
+  const operation = v3EcommerceCurrentOperation(project, job);
+  return v3ScenarioForTemplate(v3ProjectTemplateId(project)) === "ecommerce"
+    && operation?.state === "ambiguous_provider_request_hold"
+    && operation?.terminal === true
+    && operation?.pending === false;
+}
+
 function v3FaceIntegrityReviewWithheldOperation(project = v3State.currentProject, job = v3State.currentJob) {
   const operation = v3EcommerceCurrentOperation(project, job);
   return operation?.state === "review_withheld_face_integrity"
@@ -5581,6 +5589,28 @@ function renderV3ProjectNextActions() {
   const ecommerceActive = projectScenario === "ecommerce";
   const operation = v3EcommerceCurrentOperation(project, job);
   const jobOperation = job?.metadata?.current_operation;
+  if (v3EcommerceAmbiguousProviderRequestHoldOperation(project, job)) {
+    els.v3ProjectNextActions.innerHTML = `
+      <div class="v3-continuation-panel">
+        <div class="v3-continuation-main">
+          <span>需要确认生成条件</span>
+          <strong>项目原图和人物绑定已保留</strong>
+          <p>请查看当前项目的原图、人物绑定和需求后，再决定是否调整条件。系统不会自动重复提交。</p>
+          <div class="v3-continuation-buttons">
+            <button class="button primary compact" type="button" data-v3-project-action="review_generation_conditions">查看生成条件</button>
+          </div>
+        </div>
+      </div>
+    `;
+    els.v3ProjectNextActions.hidden = false;
+    const action = els.v3ProjectNextActions.querySelector("[data-v3-project-action='review_generation_conditions']");
+    action?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openV3GenerationConditionsReview();
+    });
+    return;
+  }
   if (v3EcommerceDeliveryRouteUnavailableOperation(project, job)) {
     els.v3ProjectNextActions.innerHTML = `
       <div class="v3-continuation-panel">
@@ -6269,6 +6299,17 @@ function openV3DeliveryOptions() {
   updateV3Notice("请查看项目参考和历史记录后，再决定下一步。系统不会自动重新提交。", "info");
 }
 
+function openV3GenerationConditionsReview() {
+  v3SettleEcommerceAmbiguousProviderRequestHold();
+  closeV3ProjectSubpage({ silent: true });
+  renderV3UsefulReferences();
+  document.body.dataset.v3GenerationConditionsSurface = "open";
+  const target = els.v3UsefulReferenceBoard || els.v3ProjectOutputBoard;
+  target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  target?.querySelector?.("summary, button, a")?.focus?.({ preventScroll: true });
+  updateV3Notice("请确认项目原图、人物绑定和需求后，再明确点击生成。系统不会自动重复提交。", "info");
+}
+
 function v3SettleEcommerceDeliveryRouteUnavailable() {
   if (!v3EcommerceDeliveryRouteUnavailableOperation(v3State.currentProject, v3State.currentJob)) return false;
   clearV3RecoverPolling();
@@ -6280,6 +6321,21 @@ function v3SettleEcommerceDeliveryRouteUnavailable() {
   v3State.selectedResult = null;
   setV3Busy(false);
   setV3Progress("failed", "当前交付路线不可用。项目和原始参考已保留，请查看交付选项。", "warning", { forceNotice: true });
+  if (els.v3ProjectSubpage?.hidden) openV3ProjectSubpage("review");
+  return true;
+}
+
+function v3SettleEcommerceAmbiguousProviderRequestHold() {
+  if (!v3EcommerceAmbiguousProviderRequestHoldOperation(v3State.currentProject, v3State.currentJob)) return false;
+  clearV3RecoverPolling();
+  clearV3ProgressTimer();
+  v3State.progressStartedAt = null;
+  v3State.progressDetail = "";
+  v3State.ecommerceSubmissionReceipt = null;
+  v3State.currentJob = null;
+  v3State.selectedResult = null;
+  setV3Busy(false);
+  setV3Progress("failed", "本次请求未进入交付。项目原图和人物绑定已保留，请查看生成条件。", "warning", { forceNotice: true });
   if (els.v3ProjectSubpage?.hidden) openV3ProjectSubpage("review");
   return true;
 }
@@ -9357,6 +9413,8 @@ function maybeUpdateV3LongRunningProgress() {
 
 function renderV3Job(job) {
   v3SettleEcommerceTerminalReceipt(job);
+  const ambiguousProviderRequestHold = v3SettleEcommerceAmbiguousProviderRequestHold();
+  if (ambiguousProviderRequestHold) job = null;
   const deliveryRouteUnavailable = v3SettleEcommerceDeliveryRouteUnavailable();
   if (deliveryRouteUnavailable) job = null;
   const reviewWithheldFinalization = v3EcommerceReviewWithheldFinalizationOperation();
@@ -9367,8 +9425,8 @@ function renderV3Job(job) {
     v3State.progressStartedAt = null;
     v3State.progressDetail = "";
   }
-  if (els.v3JobStatus) els.v3JobStatus.textContent = reviewWithheldFinalization ? "人工复核" : (deliveryRouteUnavailable ? "交付选项" : (job ? v3StatusLabel(job.status) : "待创建"));
-  if (els.v3JobId) els.v3JobId.textContent = reviewWithheldFinalization || deliveryRouteUnavailable || v3IsActiveEcommerceTerminalReceipt(job) ? "-" : (job?.job_id ? shortOutputId(job.job_id) : "-");
+  if (els.v3JobStatus) els.v3JobStatus.textContent = reviewWithheldFinalization ? "人工复核" : (deliveryRouteUnavailable ? "交付选项" : (ambiguousProviderRequestHold ? "确认条件" : (job ? v3StatusLabel(job.status) : "待创建")));
+  if (els.v3JobId) els.v3JobId.textContent = reviewWithheldFinalization || deliveryRouteUnavailable || ambiguousProviderRequestHold || v3IsActiveEcommerceTerminalReceipt(job) ? "-" : (job?.job_id ? shortOutputId(job.job_id) : "-");
   renderV3ResultBoard(job);
   renderV3PhotographyRoleBoard(job);
   renderV3ProjectOutputBoard();

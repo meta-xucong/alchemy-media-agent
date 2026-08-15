@@ -130,7 +130,10 @@ def test_doc278_exact_opaque_repeat_stops_before_job_brain_or_provider(tmp_path,
         planning_calls.append((args, kwargs))
         raise AssertionError("Doc278 exact opaque hold reached Brain planning")
 
+    product_create_calls: list[object] = []
+
     def unexpected_create(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        product_create_calls.append((args, kwargs))
         raise AssertionError("Doc278 exact opaque hold reached Product API create")
 
     monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", unexpected_plan)
@@ -142,6 +145,7 @@ def test_doc278_exact_opaque_repeat_stops_before_job_brain_or_provider(tmp_path,
 
     assert held["status"] == ProductJobStatusValue.BLOCKED.value
     assert not held.get("job_id")
+    assert product_create_calls == []
     assert held["metadata"]["current_operation"] == {
         "state": "ambiguous_provider_request_hold",
         "terminal": True,
@@ -152,7 +156,13 @@ def test_doc278_exact_opaque_repeat_stops_before_job_brain_or_provider(tmp_path,
     assert record.request.metadata == before_metadata
     assert planning_calls == []
     assert provider.calls == 1
-    public_text = str({"held": held, "project": handlers.get_project(project["project_id"])})
+    # Project history retains its normal append-only job directory. The
+    # synthetic command response and its current-operation projection must not
+    # turn that historical Job into this command's public receipt.
+    public_text = str({
+        "held": held,
+        "current_operation": handlers.get_project(project["project_id"])["metadata"]["current_operation"],
+    })
     for private in (RAW_OPAQUE_ERROR, record.job_id, "provider_error", "sha256:opaque"):
         assert private not in public_text
 

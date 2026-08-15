@@ -53,6 +53,9 @@ from ..scenario_packs.ecommerce.provider_deliverability_closure import (
     _terminal_job_receipt,
     build_provider_deliverability_closure_receipt,
 )
+from ..scenario_packs.ecommerce.opaque_provider_rejection_hold import (
+    build_ambiguous_provider_request_hold_receipt,
+)
 from ..scenario_packs import ScenarioPackResolution
 from ..scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest
 from ..visual_assets import (
@@ -3189,6 +3192,7 @@ class V3ProductApiService:
                 )
             )
             self._persist_doc271_provider_deliverability_closure(record)
+            self._persist_doc278_ambiguous_provider_request_hold(record)
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
             return self._status_from_record(record)
@@ -3282,6 +3286,7 @@ class V3ProductApiService:
             )
             record.balance_estimate = self._estimate_for_result(generation_result)
             self._persist_doc271_provider_deliverability_closure(record)
+            self._persist_doc278_ambiguous_provider_request_hold(record)
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
             return self._status_from_record(record)
@@ -5445,6 +5450,71 @@ class V3ProductApiService:
             "doc271_terminal_job_receipt": terminal_receipt,
             "provider_deliverability_closure_receipt": closure,
         }
+
+    def _persist_doc278_ambiguous_provider_request_hold(self, record: ProductJobRecord) -> None:
+        """Persist one opaque E-Commerce hold only after a real no-pixel request."""
+
+        if not self._is_ecommerce_request(record.request):
+            return
+        metadata = dict(record.request.metadata or {})
+        # Receipts are append-only. A malformed stored value fails open for
+        # readers and is never repaired or replaced by a later terminal pass.
+        if "ambiguous_provider_request_hold_receipt" in metadata:
+            return
+        failure = metadata.get("provider_failure_retry")
+        if not isinstance(failure, dict):
+            return
+        if (
+            str(failure.get("final_status") or "").strip() != "failed"
+            or str(failure.get("final_classification") or "").strip()
+            != "non_retryable_provider_failure"
+            or str(failure.get("final_failure_code") or "").strip()
+            != "image_edit_invalid_request_unattributed"
+        ):
+            return
+        if self._doc271_record_has_delivered_pixels(record):
+            return
+        audit = failure.get("execution_audit")
+        reference_execution = failure.get("reference_input_execution")
+        try:
+            outer_request_count = int(
+                failure.get("outer_request_count")
+                if failure.get("outer_request_count") is not None
+                else reference_execution.get("outer_request_count")
+                if isinstance(reference_execution, dict)
+                else 0
+            )
+        except (TypeError, ValueError):
+            return
+        if (
+            outer_request_count < 1
+            or not isinstance(audit, dict)
+            or str(audit.get("operation") or "").strip() != "image_edit"
+        ):
+            return
+        normalized_failure = dict(failure)
+        normalized_failure.setdefault(
+            "terminal_receipt_source",
+            "provider_failure_retry.execution_audit",
+        )
+        if not str(normalized_failure.get("terminal_created_at") or "").strip():
+            normalized_failure["terminal_created_at"] = _utc_now_iso()
+        metadata["provider_failure_retry"] = normalized_failure
+        record.request.metadata = metadata
+        receipt = build_ambiguous_provider_request_hold_receipt(
+            record,
+            uploaded_asset_lookup=self.get_uploaded_asset,
+            generated_output_lookup=self.output_store.get_output,
+            source_job_lookup=self.get_job_record,
+            project_goal_snapshot_lookup=self.doc271_project_goal_snapshot_lookup,
+            command_attempt_association_lookup=self.doc271_command_attempt_association_lookup,
+            output_records_lookup=self.output_store.list_by_job,
+        )
+        if receipt is not None:
+            record.request.metadata = {
+                **dict(record.request.metadata or {}),
+                "ambiguous_provider_request_hold_receipt": receipt,
+            }
 
     @staticmethod
     def _doc271_frozen_output_indexes(metadata: dict[str, Any]) -> list[int]:
@@ -9754,6 +9824,7 @@ class V3ProductApiService:
             "visual_auto_retry",
             "doc271_terminal_job_receipt",
             "provider_deliverability_closure_receipt",
+            "ambiguous_provider_request_hold_receipt",
             "doc270_project_source_library",
             "doc270_source_library_binding_receipts",
             "doc270_general_source_activation_receipts",
@@ -9870,7 +9941,10 @@ class V3ProductApiService:
 
     def _project_mode_status_metadata(self, record: ProductJobRecord) -> dict[str, Any]:
         request_metadata = dict(record.request.metadata or {})
-        if isinstance(request_metadata.get("provider_deliverability_closure_receipt"), dict):
+        if isinstance(request_metadata.get("provider_deliverability_closure_receipt"), dict) or isinstance(
+            request_metadata.get("ambiguous_provider_request_hold_receipt"),
+            dict,
+        ):
             # A closure is consumed through Project Mode's deliberately small
             # current-operation projection. Do not turn a terminal Job status
             # into another route for its prompt or private binding evidence.
@@ -12305,6 +12379,7 @@ class V3ProductApiService:
             "doc263_project_canonical_product_asset_ids",
             "doc271_terminal_job_receipt",
             "provider_deliverability_closure_receipt",
+            "ambiguous_provider_request_hold_receipt",
             "doc270_project_source_library",
             "doc270_source_library_binding_receipts",
             "doc270_ecommerce_command_identity",
@@ -12337,6 +12412,7 @@ class V3ProductApiService:
             "doc263_reference_projection_drift_receipt",
             "doc263_project_reference_authority",
             "doc263_project_canonical_product_asset_ids",
+            "ambiguous_provider_request_hold_receipt",
         }
     )
 

@@ -37,6 +37,10 @@ from ..scenario_packs.ecommerce.provider_deliverability_closure import (
     safe_closure_operation,
     verified_provider_deliverability_closure_receipt,
 )
+from ..scenario_packs.ecommerce.opaque_provider_rejection_hold import (
+    safe_ambiguous_provider_request_hold_operation,
+    verified_ambiguous_provider_request_hold_receipt,
+)
 from ..schemas import BrandProfile, ProviderStrategy, ReferenceAsset
 from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityPlanAmendment
 from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
@@ -122,6 +126,7 @@ _ECOMMERCE_IGNORED_CLIENT_METADATA = frozenset(
         "legacy_reference_projection",
         "legacy_upload_authorization_facts",
         "provider_deliverability_closure_receipt",
+        "ambiguous_provider_request_hold_receipt",
         "doc271_terminal_job_receipt",
         "doc271_current_source_binding",
         "doc271_command_binding",
@@ -2469,6 +2474,30 @@ class V3ProjectModeService:
                     api_namespace=API_NAMESPACE,
                     ui_entry_route=f"{API_NAMESPACE}/projects/{project.project_id}",
                     metadata={"current_operation": safe_closure_operation(closure)},
+                )
+            opaque_hold = self._doc278_matching_opaque_provider_hold(
+                project,
+                user_input=str(project.user_goal or "").strip(),
+                command_direction=doc271_command_direction,
+                requested_output_count=_bounded_requested_image_count(
+                    job_request.metadata.get("requested_image_count")
+                )
+                or 1,
+                selected_continuation_admissions=doc269_selected_continuation_admissions,
+                current_source_binding=doc271_current_source_binding,
+                current_reference_binding_digest=current_reference_binding_digest,
+            )
+            if opaque_hold is not None:
+                return ProductJobStatus(
+                    job_id="",
+                    status=ProductJobStatusValue.BLOCKED,
+                    api_namespace=API_NAMESPACE,
+                    ui_entry_route=f"{API_NAMESPACE}/projects/{project.project_id}",
+                    metadata={
+                        "current_operation": safe_ambiguous_provider_request_hold_operation(
+                            opaque_hold
+                        )
+                    },
                 )
             idempotency_key = str(job_request.metadata.get("idempotency_key") or "").strip()
             existing = self._existing_ecommerce_command(
@@ -5195,6 +5224,113 @@ class V3ProjectModeService:
             "provider_route_identity": identity.get("route_identity"),
         }
         return all(receipt.get(key) == value for key, value in route.items())
+
+    def _doc278_matching_opaque_provider_hold(
+        self,
+        project: ProjectRecord,
+        *,
+        user_input: str,
+        command_direction: str | None,
+        requested_output_count: int | None,
+        selected_continuation_admissions: list[dict[str, str]],
+        current_source_binding: dict[str, Any] | None,
+        current_reference_binding_digest: str,
+    ) -> dict[str, Any] | None:
+        """Read only the newest complete opaque terminal record before creation."""
+
+        if (
+            project.primary_template_id != ECOMMERCE_TEMPLATE_ID
+            or not isinstance(current_source_binding, dict)
+            or not str(current_reference_binding_digest or "").strip()
+        ):
+            return None
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            try:
+                status = self.product_service.get_job(job_id)
+            except Exception:
+                continue
+            value = getattr(status, "status", None)
+            normalized = str(getattr(value, "value", value) or "").strip().lower()
+            if not normalized or normalized == ProductJobStatusValue.NOT_FOUND.value:
+                continue
+            receipt = verified_ambiguous_provider_request_hold_receipt(
+                record,
+                uploaded_asset_lookup=self.product_service.get_uploaded_asset,
+                generated_output_lookup=self.product_service.output_store.get_output,
+                source_job_lookup=self.product_service.get_job_record,
+                project_goal_snapshot_lookup=self._doc271_project_goal_snapshot,
+                command_attempt_association_lookup=self._doc271_command_attempt_association,
+                output_records_lookup=self.product_service.output_store.list_by_job,
+            )
+            if (
+                normalized in {
+                    ProductJobStatusValue.BLOCKED.value,
+                    ProductJobStatusValue.FAILED.value,
+                }
+                and receipt is not None
+                and receipt.get("project_id") == project.project_id
+                and self._doc278_current_binding_matches(
+                    project,
+                    receipt=receipt,
+                    user_input=user_input,
+                    command_direction=command_direction,
+                    requested_output_count=requested_output_count,
+                    selected_continuation_admissions=selected_continuation_admissions,
+                    current_source_binding=current_source_binding,
+                    current_reference_binding_digest=current_reference_binding_digest,
+                )
+            ):
+                return receipt
+            # The first readable Job alone owns the current command. An old
+            # opaque terminal record cannot suppress a newer command.
+            return None
+        return None
+
+    def _doc278_current_binding_matches(
+        self,
+        project: ProjectRecord,
+        *,
+        receipt: dict[str, Any],
+        user_input: str,
+        command_direction: str | None,
+        requested_output_count: int | None,
+        selected_continuation_admissions: list[dict[str, str]],
+        current_source_binding: dict[str, Any] | None,
+        current_reference_binding_digest: str,
+    ) -> bool:
+        """Compare only re-derived current create facts to an E32 receipt."""
+
+        try:
+            receipt_count = int(receipt.get("requested_output_count"))
+        except (TypeError, ValueError):
+            return False
+        if (
+            receipt.get("schema_version")
+            != "doc278_ambiguous_provider_request_hold_receipt_v1"
+            or receipt.get("authority") != "v3_ecommerce_opaque_provider_hold"
+            or receipt_count < 1
+            or (
+                requested_output_count is not None
+                and receipt_count != requested_output_count
+            )
+            or receipt.get("current_reference_binding_digest")
+            != current_reference_binding_digest
+            or receipt.get("selected_continuation_admissions_digest")
+            != self._doc271_digest(selected_continuation_admissions)
+        ):
+            return False
+        return self._doc271_current_binding_matches(
+            project,
+            receipt=receipt,
+            user_input=user_input,
+            command_direction=command_direction,
+            requested_output_count=receipt_count,
+            selected_continuation_admissions=selected_continuation_admissions,
+            current_source_binding=current_source_binding,
+        )
 
     def _reference_projection_drift_superseded_job_id(self, project: ProjectRecord) -> str | None:
         for job_id in reversed(project.job_ids):
@@ -8229,6 +8365,47 @@ class V3ProjectModeService:
                     )
                 ):
                     return safe_closure_operation(closure)
+            opaque_hold = verified_ambiguous_provider_request_hold_receipt(
+                record,
+                uploaded_asset_lookup=self.product_service.get_uploaded_asset,
+                generated_output_lookup=self.product_service.output_store.get_output,
+                source_job_lookup=self.product_service.get_job_record,
+                project_goal_snapshot_lookup=self._doc271_project_goal_snapshot,
+                command_attempt_association_lookup=self._doc271_command_attempt_association,
+                output_records_lookup=self.product_service.output_store.list_by_job,
+            )
+            if opaque_hold is not None and opaque_hold.get("project_id") == project.project_id:
+                try:
+                    current_admissions = self._doc269_selected_continuation_admissions(project)
+                    current_source_binding = self._doc271_current_source_binding(
+                        project,
+                        selected_continuation_admissions=current_admissions,
+                    )
+                    current_reference_binding_digest = self._ecommerce_current_reference_binding_digest(
+                        project
+                    )
+                except (OSError, ValueError, KeyError):
+                    current_admissions = []
+                    current_source_binding = None
+                    current_reference_binding_digest = ""
+                if (
+                    normalized
+                    in {
+                        ProductJobStatusValue.BLOCKED.value,
+                        ProductJobStatusValue.FAILED.value,
+                    }
+                    and self._doc278_current_binding_matches(
+                        project,
+                        receipt=opaque_hold,
+                        user_input=str(project.user_goal or "").strip(),
+                        command_direction=None,
+                        requested_output_count=None,
+                        selected_continuation_admissions=current_admissions,
+                        current_source_binding=current_source_binding,
+                        current_reference_binding_digest=current_reference_binding_digest,
+                    )
+                ):
+                    return safe_ambiguous_provider_request_hold_operation(opaque_hold)
             if record is not None and self._doc267_review_withheld_closure_is_valid(
                 dict(record.request.metadata or {}),
                 job_id=record.job_id,

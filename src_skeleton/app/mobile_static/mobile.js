@@ -3756,6 +3756,18 @@ function handleMobileV3Click(event) {
     document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
     return;
   }
+  if (projectActionButton?.dataset.mobileV3ProjectAction === "review_generation_conditions") {
+    const project = mobileV3State.currentProject;
+    if (!project?.project_id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    mobileV3SettleEcommerceAmbiguousProviderRequestHold(project);
+    renderMobileV3ReferenceBoard(project);
+    document.body.dataset.mobileV3GenerationConditionsSurface = "open";
+    openMobileSurface("v3-project-detail", projectActionButton);
+    document.querySelector("#mobileV3ReferenceBoard")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    return;
+  }
   if (projectActionButton?.dataset.mobileV3ProjectAction === "review_continuation_references") {
     const project = mobileV3State.currentProject;
     if (!project?.project_id) return;
@@ -4393,6 +4405,18 @@ function mobileV3SettleEcommerceDeliveryRouteUnavailable(project = mobileV3State
   setMobileV3Busy(false);
   setMobileV3Progress("failed", "当前交付路线不可用。项目和原始参考已保留，请查看交付选项。");
   updateMobileV3Status("当前交付路线不可用。项目和原始参考已保留，请查看交付选项。");
+  return true;
+}
+
+function mobileV3SettleEcommerceAmbiguousProviderRequestHold(project = mobileV3State.currentProject) {
+  if (!mobileV3EcommerceAmbiguousProviderRequestHoldOperation(project)) return false;
+  mobileV3State.ecommerceRecoveryEpoch += 1;
+  mobileV3State.ecommerceSubmissionReceipt = null;
+  mobileV3State.currentJob = null;
+  mobileV3State.selectedResult = null;
+  setMobileV3Busy(false);
+  setMobileV3Progress("failed", "本次请求未进入交付。项目原图和人物绑定已保留，请查看生成条件。");
+  updateMobileV3Status("请确认项目原图、人物绑定和需求后，再明确点击生成。系统不会自动重新提交。");
   return true;
 }
 
@@ -5292,6 +5316,14 @@ function mobileV3EcommerceDeliveryRouteUnavailableOperation(project = mobileV3St
     && operation?.pending === false;
 }
 
+function mobileV3EcommerceAmbiguousProviderRequestHoldOperation(project = mobileV3State.currentProject, job = mobileV3State.currentJob) {
+  const operation = mobileV3EcommerceCurrentOperation(project, job);
+  return mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce"
+    && operation?.state === "ambiguous_provider_request_hold"
+    && operation?.terminal === true
+    && operation?.pending === false;
+}
+
 function mobileV3FaceIntegrityReviewWithheldOperation(project = mobileV3State.currentProject, job = mobileV3State.currentJob) {
   const operation = mobileV3EcommerceCurrentOperation(project, job);
   return operation?.state === "review_withheld_face_integrity"
@@ -5371,6 +5403,7 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   const operation = mobileV3EcommerceCurrentOperation(project);
   const reviewWithheldFinalization = mobileV3EcommerceReviewWithheldFinalizationOperation(project, mobileV3State.currentJob);
   const deliveryRouteUnavailable = mobileV3EcommerceDeliveryRouteUnavailableOperation(project, mobileV3State.currentJob);
+  const ambiguousProviderRequestHold = mobileV3EcommerceAmbiguousProviderRequestHoldOperation(project, mobileV3State.currentJob);
   const needsInput = isEcommerce && operation?.state === "needs_input";
   const phase4NoJobNeedsInput = needsInput && !String(mobileV3State.currentJob?.job_id || "").trim();
   const continuationReferenceUnavailable = isEcommerce && operation?.state === "continuation_reference_unavailable";
@@ -5425,6 +5458,19 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
         <span>项目和原始参考已保留。请查看交付选项后再决定下一步，系统不会自动重新提交。</span>
       </div>
       <button class="button primary compact" type="button" data-mobile-v3-project-action="review_delivery_options">查看交付选项</button>
+    `;
+    return;
+  }
+  if (ambiguousProviderRequestHold) {
+    mobileV3SettleEcommerceAmbiguousProviderRequestHold(project);
+    openMobileSurface("v3-project-detail");
+    node.hidden = false;
+    node.innerHTML = `
+      <div>
+        <strong>需要确认生成条件</strong>
+        <span>项目原图、人物绑定和历史记录已保留。请查看生成条件后再决定是否调整，系统不会自动重新提交。</span>
+      </div>
+      <button class="button primary compact" type="button" data-mobile-v3-project-action="review_generation_conditions">查看生成条件</button>
     `;
     return;
   }
