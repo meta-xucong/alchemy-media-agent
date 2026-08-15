@@ -336,15 +336,17 @@ def test_doc278_incomplete_zero_pixel_legacy_evidence_fails_open(tmp_path, mutat
     assert provider.calls == 1
 
 
-def test_doc278_newer_job_suppresses_old_opaque_hold(tmp_path, monkeypatch) -> None:
+def test_doc278_newer_changed_admitted_job_suppresses_old_opaque_hold(tmp_path, monkeypatch) -> None:
     handlers, _unused, project, product_ids, _faces, provider = _opaque_fixture(tmp_path)
     _created, record = _create_opaque_block(handlers, provider, project, product_ids)
     original_gate = getattr(handlers.project_service, "_doc278_matching_opaque_provider_hold", None)
     if original_gate is not None:
         monkeypatch.setattr(handlers.project_service, "_doc278_matching_opaque_provider_hold", lambda *_args, **_kwargs: None)
+    changed_payload = _payload(product_ids, key="doc278-newer-changed-command")
+    changed_payload["metadata"]["requested_image_count"] = 2
     newer = handlers.post_project_job(
         project["project_id"],
-        _payload(product_ids, key="doc278-newer-planned-authority"),
+        changed_payload,
     )
     if original_gate is not None:
         monkeypatch.setattr(handlers.project_service, "_doc278_matching_opaque_provider_hold", original_gate)

@@ -57,8 +57,13 @@ commerce-specific deliverables.
     reviewer-approved. It may suppress only an exact, zero-pixel repeat of a
     server-authenticated opaque E-Commerce `image_edit` rejection; it never
     classifies the failure as policy or changes Doc263/269 reference truth.
-21. This E-Commerce module family.
-22. Implementation notes and examples.
+21. E33 / Doc279 E-Commerce Predecessor Authority And Transparent Planning
+    Failure Contract, once reviewer-approved. It may skip only a fully
+    server-authenticated, same-fact pre-Provider planning failure while
+    locating an older exact E32 opaque hold; any executed, changed, malformed,
+    or foreign successor remains authoritative.
+22. This E-Commerce module family.
+23. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -246,3 +251,7 @@ Before implementation starts, the team must have accepted:
 23. E32 / Doc278 opaque Provider rejection hold and recovery contract, after
     reviewer acceptance, before an exact zero-pixel opaque E-Commerce provider
     rejection may suppress a repeat command without relabeling it as policy.
+24. E33 / Doc279 predecessor authority and transparent planning-failure
+    contract, after reviewer acceptance, before a same-fact terminal
+    pre-Provider planning failure may be skipped to recognize an older exact
+    E32 opaque hold.
