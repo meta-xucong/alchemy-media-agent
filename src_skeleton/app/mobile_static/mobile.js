@@ -4415,6 +4415,9 @@ function mobileV3SettleEcommerceAmbiguousProviderRequestHold(project = mobileV3S
   mobileV3State.currentJob = null;
   mobileV3State.selectedResult = null;
   setMobileV3Busy(false);
+  clearMobileV3Progress();
+  mobileV3State.progressStage = "failed";
+  mobileV3State.progressStageKey = "failed";
   setMobileV3Progress("failed", "本次请求未进入交付。项目原图和人物绑定已保留，请查看生成条件。");
   updateMobileV3Status("请确认项目原图、人物绑定和需求后，再明确点击生成。系统不会自动重新提交。");
   return true;
@@ -4889,8 +4892,8 @@ function setMobileV3Progress(stageKey, detail = "") {
 function clearMobileV3Progress() {
   if (mobileV3State.progressTimer !== null && mobileV3State.progressTimer !== undefined) {
     window.clearInterval(mobileV3State.progressTimer);
-    mobileV3State.progressTimer = null;
   }
+  mobileV3State.progressTimer = null;
   mobileV3State.progressStartedAt = null;
   mobileV3State.progressStage = "queued";
   mobileV3State.progressStageKey = "queued";
@@ -5390,11 +5393,18 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
   if (planningOperation?.state === "planning_failed" && planningOperation?.terminal === true) {
     setMobileV3Busy(false);
     clearMobileV3Progress();
+    mobileV3State.progressStage = "failed";
+    mobileV3State.progressStageKey = "failed";
+    setMobileV3Progress(
+      "failed",
+      "规划已在图像请求发送前停止，尚未发送图像请求。",
+    );
+    openMobileSurface("v3-project-detail");
     node.hidden = false;
     node.innerHTML = `
       <div>
         <strong>本次规划未完成</strong>
-        <span>这次没有创建新的生成任务，也不会自动重复提交。请检查需求和参考后再决定下一步。</span>
+        <span>规划已在图像请求发送前停止，尚未发送图像请求；项目历史已保留，也不会自动重复提交。请检查需求和参考后再决定下一步。</span>
       </div>
       <button class="button primary compact" type="button" data-mobile-v3-project-action="review_project_request">查看项目需求</button>
     `;

@@ -5527,6 +5527,12 @@ function renderV3ProjectNextActions() {
     clearV3RecoverPolling();
     clearV3ProgressTimer();
     v3State.loading = false;
+    v3State.progressStartedAt = null;
+    setV3Progress(
+      "failed",
+      "规划已在图像请求发送前停止，尚未发送图像请求。",
+      "warning",
+    );
     if (els.v3CreateJobBtn) {
       els.v3CreateJobBtn.disabled = !v3ScenarioCanCreate(v3State.selectedScenario || "general_creative");
       els.v3CreateJobBtn.textContent = v3ScenarioWorkspaceCopy(v3State.selectedScenario || "general_creative").createLabel;
@@ -5537,7 +5543,7 @@ function renderV3ProjectNextActions() {
         <div class="v3-continuation-main">
           <span>本次规划未完成</span>
           <strong>项目已保留，等待你确认需求</strong>
-          <p>这次没有创建新的生成任务，也不会自动重复提交。请检查需求和参考后再决定下一步。</p>
+          <p>规划已在图像请求发送前停止，尚未发送图像请求；项目历史已保留，也不会自动重复提交。请检查需求和参考后再决定下一步。</p>
           <div class="v3-continuation-buttons">
             <button class="button primary compact" type="button" data-v3-project-action="review_project_request">查看项目需求</button>
           </div>

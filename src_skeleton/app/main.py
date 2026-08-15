@@ -523,6 +523,24 @@ def _v3_planning_failure_code(exc: Exception) -> str:
     return "planning_request_invalid" if detail_code == "invalid_v3_request" else "planning_unavailable"
 
 
+def _v3_is_ecommerce_opaque_hold_response(response: object, *, job_id: str) -> bool:
+    """Recognize only the server E32 no-Job terminal response."""
+
+    if str(job_id or "").strip() or not isinstance(response, dict):
+        return False
+    metadata = response.get("metadata")
+    operation = metadata.get("current_operation") if isinstance(metadata, dict) else None
+    if not isinstance(operation, dict):
+        return False
+    actions = operation.get("next_actions")
+    return (
+        operation.get("state") == "ambiguous_provider_request_hold"
+        and operation.get("terminal") is True
+        and operation.get("pending") is False
+        and actions == [{"id": "review_generation_conditions"}]
+    )
+
+
 def _run_v3_project_planning_background(
     project_id: str,
     operation_id: str,
@@ -530,6 +548,7 @@ def _run_v3_project_planning_background(
     auto_generate_payload: dict | None,
 ) -> None:
     key = f"{project_id}:{operation_id}"
+    job_id = ""
     try:
         response = _run_v3_handler(v3_route_handlers.post_project_job, project_id, planning_payload)
         job_id = str(response.get("job_id") or "").strip() if isinstance(response, dict) else ""
@@ -539,6 +558,11 @@ def _run_v3_project_planning_background(
                 project_id,
                 operation_id,
                 failure_code="planning_preflight_blocked",
+                job_id=job_id or None,
+                ecommerce_opaque_hold_response=_v3_is_ecommerce_opaque_hold_response(
+                    response,
+                    job_id=job_id,
+                ),
             )
             return
         _run_v3_handler(
@@ -556,6 +580,7 @@ def _run_v3_project_planning_background(
                 project_id,
                 operation_id,
                 failure_code=_v3_planning_failure_code(exc),
+                job_id=job_id or None,
             )
         except Exception:
             logger.exception(

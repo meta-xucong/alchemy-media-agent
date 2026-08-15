@@ -41,6 +41,14 @@ from ..scenario_packs.ecommerce.opaque_provider_rejection_hold import (
     safe_ambiguous_provider_request_hold_operation,
     verified_ambiguous_provider_request_hold_receipt,
 )
+from ..scenario_packs.ecommerce.predecessor_authority import (
+    DOC279_PRIVATE_NAMESPACE,
+    build_transparent_predecessor_receipt,
+    verified_transparent_predecessor_receipt,
+)
+from ..scenario_packs.ecommerce.provider_deliverability_closure import (
+    _verified_command_binding,
+)
 from ..schemas import BrandProfile, ProviderStrategy, ReferenceAsset
 from ..shared_capabilities.activation import CapabilityActivationPlan, CapabilityPlanAmendment
 from ..shared_capabilities.visual_cluster.reference_channel_policy import ReferenceChannelPolicyModule
@@ -1712,6 +1720,8 @@ class V3ProjectModeService:
         operation_id: str,
         *,
         failure_code: str,
+        job_id: str | None = None,
+        ecommerce_opaque_hold_response: bool = False,
     ) -> dict[str, Any]:
         """Persist a terminal planning closure without exposing internals."""
 
@@ -1723,6 +1733,38 @@ class V3ProjectModeService:
             current = self._doc277_current_planning_operation(project)
             if current is None or current["state"] != "planning" or current["operation_id"] != clean_operation_id:
                 raise ValueError("doc277_planning_operation_not_pending")
+            if str(job_id or "").strip():
+                self._issue_doc279_transparent_predecessor_receipt(
+                    project_id,
+                    str(job_id).strip(),
+                )
+            no_job_e32_projection: dict[str, str] | None = None
+            if (
+                bool(ecommerce_opaque_hold_response)
+                and not str(job_id or "").strip()
+                and str(failure_code or "").strip() == "planning_preflight_blocked"
+            ):
+                try:
+                    opaque_hold, transparent_successor = (
+                        self._doc279_current_opaque_provider_hold(project)
+                    )
+                except (KeyError, OSError, ValueError):
+                    opaque_hold, transparent_successor = None, False
+                hold_receipt_id = str(
+                    (opaque_hold or {}).get("hold_receipt_id") or ""
+                ).strip()
+                if opaque_hold is not None and not transparent_successor and hold_receipt_id:
+                    no_job_e32_projection = {
+                        "schema_version": "doc279_e32_no_job_operation_projection_v1",
+                        "authority": "v3_project_mode",
+                        "project_id": project.project_id,
+                        "operation_id": clean_operation_id,
+                        "state": "ambiguous_provider_request_hold",
+                        "opaque_hold_receipt_id": hold_receipt_id,
+                    }
+                    no_job_e32_projection["projection_digest"] = self._doc277_digest(
+                        no_job_e32_projection
+                    )
             public_operation = {
                 "operation_id": clean_operation_id,
                 "state": "planning_failed",
@@ -1749,6 +1791,15 @@ class V3ProjectModeService:
                     "operation_id": clean_operation_id,
                     "failure_code": str(failure_code or "").strip() or "planning_unavailable",
                     "created_at": now,
+                    **(
+                        {
+                            "doc279_e32_no_job_operation_projection": (
+                                no_job_e32_projection
+                            )
+                        }
+                        if no_job_e32_projection is not None
+                        else {}
+                    ),
                 },
             )
             project.metadata = {
@@ -5225,7 +5276,254 @@ class V3ProjectModeService:
         }
         return all(receipt.get(key) == value for key, value in route.items())
 
-    def _doc278_matching_opaque_provider_hold(
+    @staticmethod
+    def _ecommerce_configured_route_identity() -> str:
+        """Bind a pre-execution record to the configured, not yet invoked route."""
+
+        try:
+            from app.config import settings as app_settings
+        except Exception:
+            return ""
+        provider = str(getattr(app_settings, "default_image_provider", "") or "").strip()
+        model = str(getattr(app_settings, "default_image_model", "") or "").strip()
+        profile = str(
+            getattr(app_settings, "openai_image_transport_profile", "") or ""
+        ).strip()
+        if not provider or not model or not profile:
+            return ""
+        return f"configured:{provider}:{model}:{profile}"
+
+    def _doc279_private_receipt_for_job(
+        self,
+        project: ProjectRecord,
+        record,
+        *,
+        require_current_facts: bool,
+        user_input: str | None = None,
+        command_direction: str | None = None,
+        requested_output_count: int | None = None,
+        selected_continuation_admissions: list[dict[str, str]] | None = None,
+        current_source_binding: dict[str, Any] | None = None,
+        current_reference_binding_digest: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Authenticate one server-private E33 receipt against durable facts."""
+
+        metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+        route_identity = self._ecommerce_configured_route_identity()
+        if (
+            not route_identity
+            or str(metadata.get("project_id") or "").strip() != project.project_id
+            or str(metadata.get("template_id") or "").strip() != ECOMMERCE_TEMPLATE_ID
+        ):
+            return None
+        try:
+            private_records = self.project_store.list_private_records(
+                project.project_id,
+                DOC279_PRIVATE_NAMESPACE,
+            )
+        except ValueError:
+            return None
+        matches = [
+            item
+            for item in private_records
+            if isinstance(item, dict) and item.get("terminal_job_id") == record.job_id
+        ]
+        if len(matches) != 1:
+            return None
+        receipt = verified_transparent_predecessor_receipt(
+            record,
+            matches[0],
+            output_records_lookup=self.product_service.output_store.list_by_job,
+            provider_route_identity=route_identity,
+        )
+        if receipt is None:
+            return None
+        command = _verified_command_binding(
+            record,
+            project_id=project.project_id,
+            template_id=ECOMMERCE_TEMPLATE_ID,
+            project_goal_snapshot_lookup=self._doc271_project_goal_snapshot,
+            command_attempt_association_lookup=self._doc271_command_attempt_association,
+        )
+        if command is None:
+            return None
+        project_goal, stored_direction, _goal_prompt_digest = command
+        raw_command = metadata.get("doc271_command_binding")
+        raw_source = metadata.get("doc271_current_source_binding")
+        raw_locked = metadata.get("frozen_visual_asset_binding_set")
+        raw_continuations = metadata.get("doc269_selected_continuation_admissions", [])
+        try:
+            admission = ProductTruthAdmission.from_mapping(
+                metadata.get("professional_ecommerce_product_truth_admission")
+            )
+        except ValueError:
+            return None
+        current_product_ids = self._ecommerce_product_reference_asset_ids(project, [])
+        if (
+            admission.project_id != project.project_id
+            or admission.job_id != record.job_id
+            or list(admission.canonical_asset_ids) != list(current_product_ids)
+            or not isinstance(raw_command, dict)
+            or receipt.get("command_binding_digest") != raw_command.get("command_binding_digest")
+            or not isinstance(raw_source, dict)
+            or receipt.get("current_source_binding_digest")
+            != raw_source.get("source_binding_digest")
+            or not isinstance(raw_locked, dict)
+            or not isinstance(raw_continuations, list)
+            or receipt.get("selected_continuation_admissions_digest")
+            != self._doc271_digest(raw_continuations)
+            or receipt.get("current_reference_binding_digest")
+            != metadata.get("current_reference_binding_digest")
+        ):
+            return None
+        if not require_current_facts:
+            return receipt
+        admissions = selected_continuation_admissions
+        if admissions is None:
+            try:
+                admissions = self._doc269_selected_continuation_admissions(project)
+            except (OSError, ValueError, KeyError):
+                return None
+        source_binding = current_source_binding
+        if source_binding is None:
+            try:
+                source_binding = self._doc271_current_source_binding(
+                    project,
+                    selected_continuation_admissions=admissions,
+                )
+            except (OSError, ValueError, KeyError):
+                return None
+        reference_binding_digest = (
+            current_reference_binding_digest
+            if current_reference_binding_digest is not None
+            else self._ecommerce_current_reference_binding_digest(project)
+        )
+        if (
+            not isinstance(source_binding, dict)
+            or raw_source != source_binding
+            or receipt.get("current_source_binding_digest")
+            != source_binding.get("source_binding_digest")
+            or str(reference_binding_digest or "").strip() == ""
+            or receipt.get("current_reference_binding_digest") != reference_binding_digest
+            or raw_continuations != admissions
+            or receipt.get("selected_continuation_admissions_digest")
+            != self._doc271_digest(admissions)
+            or receipt.get("provider_route_identity") != route_identity
+        ):
+            return None
+        if self.project_visual_asset_binding_service is None:
+            return None
+        current_locked = self.project_visual_asset_binding_service.current(
+            project_id=project.project_id
+        ).model_dump(mode="json")
+        if (
+            receipt.get("locked_visual_asset_binding") != raw_locked
+            or self._doc271_digest({"bindings": raw_locked.get("bindings", [])})
+            != self._doc271_digest({"bindings": current_locked.get("bindings", [])})
+        ):
+            return None
+        try:
+            receipt_count = int(receipt.get("requested_output_count"))
+        except (TypeError, ValueError):
+            return None
+        if (
+            requested_output_count is not None and receipt_count != requested_output_count
+        ) or receipt_count < 1:
+            return None
+        current_goal = str(user_input if user_input is not None else project.user_goal or "").strip()
+        if current_goal != project_goal:
+            return None
+        if command_direction is not None and str(command_direction or "").strip() != stored_direction:
+            return None
+        return receipt
+
+    def _issue_doc279_transparent_predecessor_receipt(
+        self,
+        project_id: str,
+        job_id: str,
+    ) -> dict[str, Any] | None:
+        """Append one E33 receipt only after re-reading a blocked, no-execution Job."""
+
+        project = self._require_project(project_id)
+        record = self.product_service.get_job_record(str(job_id or "").strip())
+        if record is None or record.job_id not in project.job_ids:
+            return None
+        route_identity = self._ecommerce_configured_route_identity()
+        if not route_identity:
+            return None
+        try:
+            admissions = self._doc269_selected_continuation_admissions(project)
+            source_binding = self._doc271_current_source_binding(
+                project,
+                selected_continuation_admissions=admissions,
+            )
+            reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
+        except (OSError, ValueError, KeyError):
+            return None
+        candidate = build_transparent_predecessor_receipt(
+            record,
+            output_records_lookup=self.product_service.output_store.list_by_job,
+            provider_route_identity=route_identity,
+        )
+        if candidate is None:
+            return None
+        # The candidate is rebuilt from the durable Job.  The same routine
+        # then requires its immutable command/source/People facts to equal the
+        # current Project Mode authority before it can be appended.
+        raw_matches = self._doc279_private_receipt_for_job(
+            project,
+            record,
+            require_current_facts=True,
+            user_input=str(project.user_goal or "").strip(),
+            command_direction=str(getattr(record.request, "user_input", "") or "").strip(),
+            requested_output_count=int(candidate["requested_output_count"]),
+            selected_continuation_admissions=admissions,
+            current_source_binding=source_binding,
+            current_reference_binding_digest=reference_binding_digest,
+        )
+        if raw_matches is not None:
+            return raw_matches
+        # There is intentionally no stored E33 receipt yet. Validate the
+        # candidate against the same durable/current authority before append.
+        metadata = dict(record.request.metadata or {})
+        if (
+            metadata.get("doc271_current_source_binding") != source_binding
+            or metadata.get("current_reference_binding_digest")
+            != reference_binding_digest
+            or metadata.get("doc269_selected_continuation_admissions") != admissions
+        ):
+            return None
+        if self.project_visual_asset_binding_service is None:
+            return None
+        raw_locked = metadata.get("frozen_visual_asset_binding_set")
+        current_locked = self.project_visual_asset_binding_service.current(
+            project_id=project.project_id
+        ).model_dump(mode="json")
+        if (
+            not isinstance(raw_locked, dict)
+            or self._doc271_digest({"bindings": raw_locked.get("bindings", [])})
+            != self._doc271_digest({"bindings": current_locked.get("bindings", [])})
+        ):
+            return None
+        command = _verified_command_binding(
+            record,
+            project_id=project.project_id,
+            template_id=ECOMMERCE_TEMPLATE_ID,
+            project_goal_snapshot_lookup=self._doc271_project_goal_snapshot,
+            command_attempt_association_lookup=self._doc271_command_attempt_association,
+        )
+        if command is None or command[0] != str(project.user_goal or "").strip():
+            return None
+        try:
+            return self.project_store.append_private_record(
+                project.project_id,
+                DOC279_PRIVATE_NAMESPACE,
+                candidate,
+            )
+        except ValueError:
+            return None
+
+    def _doc279_matching_opaque_provider_hold(
         self,
         project: ProjectRecord,
         *,
@@ -5235,15 +5533,16 @@ class V3ProjectModeService:
         selected_continuation_admissions: list[dict[str, str]],
         current_source_binding: dict[str, Any] | None,
         current_reference_binding_digest: str,
-    ) -> dict[str, Any] | None:
-        """Read only the newest complete opaque terminal record before creation."""
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Find E32 only after skipping a verified same-fact E33 successor."""
 
         if (
             project.primary_template_id != ECOMMERCE_TEMPLATE_ID
             or not isinstance(current_source_binding, dict)
             or not str(current_reference_binding_digest or "").strip()
         ):
-            return None
+            return None, False
+        transparent_successor_seen = False
         for job_id in reversed(project.job_ids):
             record = self.product_service.get_job_record(job_id)
             if record is None:
@@ -5256,7 +5555,7 @@ class V3ProjectModeService:
             normalized = str(getattr(value, "value", value) or "").strip().lower()
             if not normalized or normalized == ProductJobStatusValue.NOT_FOUND.value:
                 continue
-            receipt = verified_ambiguous_provider_request_hold_receipt(
+            opaque_hold = verified_ambiguous_provider_request_hold_receipt(
                 record,
                 uploaded_asset_lookup=self.product_service.get_uploaded_asset,
                 generated_output_lookup=self.product_service.output_store.get_output,
@@ -5270,11 +5569,11 @@ class V3ProjectModeService:
                     ProductJobStatusValue.BLOCKED.value,
                     ProductJobStatusValue.FAILED.value,
                 }
-                and receipt is not None
-                and receipt.get("project_id") == project.project_id
+                and opaque_hold is not None
+                and opaque_hold.get("project_id") == project.project_id
                 and self._doc278_current_binding_matches(
                     project,
-                    receipt=receipt,
+                    receipt=opaque_hold,
                     user_input=user_input,
                     command_direction=command_direction,
                     requested_output_count=requested_output_count,
@@ -5283,11 +5582,74 @@ class V3ProjectModeService:
                     current_reference_binding_digest=current_reference_binding_digest,
                 )
             ):
-                return receipt
-            # The first readable Job alone owns the current command. An old
-            # opaque terminal record cannot suppress a newer command.
-            return None
-        return None
+                return opaque_hold, transparent_successor_seen
+            transparent = self._doc279_private_receipt_for_job(
+                project,
+                record,
+                require_current_facts=True,
+                user_input=user_input,
+                command_direction=command_direction,
+                requested_output_count=requested_output_count,
+                selected_continuation_admissions=selected_continuation_admissions,
+                current_source_binding=current_source_binding,
+                current_reference_binding_digest=current_reference_binding_digest,
+            )
+            if transparent is not None:
+                transparent_successor_seen = True
+                continue
+            # Any readable current/executed/delivered/changed/malformed Job is
+            # authoritative; it prevents looking back to an older E32 receipt.
+            return None, False
+        return None, False
+
+    def _doc278_matching_opaque_provider_hold(
+        self,
+        project: ProjectRecord,
+        *,
+        user_input: str,
+        command_direction: str | None,
+        requested_output_count: int | None,
+        selected_continuation_admissions: list[dict[str, str]],
+        current_source_binding: dict[str, Any] | None,
+        current_reference_binding_digest: str,
+    ) -> dict[str, Any] | None:
+        """Return the newest valid E32 receipt after E33 predecessor handling."""
+
+        receipt, _transparent = self._doc279_matching_opaque_provider_hold(
+            project,
+            user_input=user_input,
+            command_direction=command_direction,
+            requested_output_count=requested_output_count,
+            selected_continuation_admissions=selected_continuation_admissions,
+            current_source_binding=current_source_binding,
+            current_reference_binding_digest=current_reference_binding_digest,
+        )
+        return receipt
+
+    def _doc279_current_opaque_provider_hold(
+        self,
+        project: ProjectRecord,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Read the current E32 operation and whether E33 made it reachable."""
+
+        try:
+            admissions = self._doc269_selected_continuation_admissions(project)
+            source_binding = self._doc271_current_source_binding(
+                project,
+                selected_continuation_admissions=admissions,
+            )
+            reference_binding_digest = self._ecommerce_current_reference_binding_digest(project)
+        except (OSError, ValueError, KeyError):
+            return None, False
+        return self._doc279_matching_opaque_provider_hold(
+            project,
+            user_input=str(project.user_goal or "").strip(),
+            command_direction=None,
+            requested_output_count=None,
+            selected_continuation_admissions=admissions,
+            current_source_binding=source_binding,
+            current_reference_binding_digest=reference_binding_digest,
+        )
 
     def _doc278_current_binding_matches(
         self,
@@ -8316,6 +8678,9 @@ class V3ProjectModeService:
                 "channel": "selected_continuation_directions",
                 "next_actions": [{"id": "review_selected_references"}],
             }
+        opaque_hold, _transparent_successor = self._doc279_current_opaque_provider_hold(project)
+        if opaque_hold is not None:
+            return safe_ambiguous_provider_request_hold_operation(opaque_hold)
         for job_id in reversed(project.job_ids):
             record = self.product_service.get_job_record(job_id)
             if record is None:
@@ -9388,6 +9753,76 @@ class V3ProjectModeService:
         serialized = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
+    def _doc279_no_job_e32_projection_matches(
+        self,
+        project: ProjectRecord,
+        operation: dict[str, Any] | None,
+        opaque_hold: dict[str, Any] | None,
+        *,
+        transparent_successor: bool,
+    ) -> bool:
+        """Read a server-issued no-Job E32 projection without changing history."""
+
+        if (
+            transparent_successor
+            or not isinstance(operation, dict)
+            or operation.get("state") != "planning_failed"
+            or opaque_hold is None
+        ):
+            return False
+        operation_id = str(operation.get("operation_id") or "").strip()
+        hold_receipt_id = str(opaque_hold.get("hold_receipt_id") or "").strip()
+        if not operation_id or not hold_receipt_id:
+            return False
+        try:
+            records = self.project_store.list_private_records(
+                project.project_id,
+                _DOC277_PRIVATE_PLANNING_NAMESPACE,
+            )
+        except ValueError:
+            return False
+        for record in reversed(records):
+            if (
+                record.get("record_kind") != "failed"
+                or record.get("project_id") != project.project_id
+                or record.get("operation_id") != operation_id
+            ):
+                continue
+            projection = record.get("doc279_e32_no_job_operation_projection")
+            if not isinstance(projection, dict):
+                return False
+            expected_keys = {
+                "schema_version",
+                "authority",
+                "project_id",
+                "operation_id",
+                "state",
+                "opaque_hold_receipt_id",
+                "projection_digest",
+            }
+            if set(projection) != expected_keys:
+                return False
+            unsigned = {
+                key: value
+                for key, value in projection.items()
+                if key != "projection_digest"
+            }
+            if (
+                str(projection.get("projection_digest") or "").strip()
+                != self._doc277_digest(unsigned)
+            ):
+                return False
+            return (
+                projection.get("schema_version")
+                == "doc279_e32_no_job_operation_projection_v1"
+                and projection.get("authority") == "v3_project_mode"
+                and projection.get("project_id") == project.project_id
+                and projection.get("operation_id") == operation_id
+                and projection.get("state") == "ambiguous_provider_request_hold"
+                and projection.get("opaque_hold_receipt_id") == hold_receipt_id
+            )
+        return False
+
     def _project_response(self, project: ProjectRecord) -> ProjectResponse:
         public_project = self._public_project_record(project)
         metadata = {
@@ -9398,14 +9833,39 @@ class V3ProjectModeService:
             self._doc270_project_source_library(project)
         )
         operation = self._doc277_current_planning_operation(project)
+        ecommerce_operation: dict[str, Any] | None = None
+        ecommerce_transparent_successor = False
+        ecommerce_no_job_e32_projection = False
+        if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
+            opaque_hold, ecommerce_transparent_successor = self._doc279_current_opaque_provider_hold(
+                project
+            )
+            if opaque_hold is not None:
+                ecommerce_operation = safe_ambiguous_provider_request_hold_operation(opaque_hold)
+                ecommerce_no_job_e32_projection = self._doc279_no_job_e32_projection_matches(
+                    project,
+                    operation,
+                    opaque_hold,
+                    transparent_successor=ecommerce_transparent_successor,
+                )
         if operation is None:
             operation = self._doc276_face_integrity_current_operation(project)
+        if (
+            operation is not None
+            and operation.get("state") == "planning_failed"
+            and ecommerce_operation is not None
+            and (
+                ecommerce_transparent_successor
+                or ecommerce_no_job_e32_projection
+            )
+        ):
+            operation = ecommerce_operation
         if operation is not None:
             metadata["current_operation"] = operation
         if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
             metadata["ecommerce_project_view"] = self._ecommerce_project_view(project)
             if operation is None:
-                operation = self._ecommerce_current_operation(project)
+                operation = ecommerce_operation or self._ecommerce_current_operation(project)
                 if operation is not None:
                     metadata["current_operation"] = operation
         return ProjectResponse(

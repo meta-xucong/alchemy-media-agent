@@ -191,6 +191,7 @@ def _opaque_with_transparent_newer_planning_failure(
     monkeypatch,
     *,
     seed_private_receipt: bool = True,
+    run_background_worker: bool = True,
 ):
     handlers, _unused, project, product_ids, _faces, provider = _opaque_fixture(tmp_path)
     _old, historical = _create_opaque_block(handlers, provider, project, product_ids)
@@ -214,31 +215,32 @@ def _opaque_with_transparent_newer_planning_failure(
     _mark_server_transparent_predecessor_failure(handlers, project, newer_record)
     if seed_private_receipt:
         _seed_private_transparent_receipt(handlers, project, newer_record)
-    operation = handlers.begin_project_planning_operation(
-        project["project_id"],
-        _browser_repeat_payload([], key="doc279-server-planning-operation"),
-    )
-    original_post = handlers.post_project_job
-    monkeypatch.setattr(
-        handlers,
-        "post_project_job",
-        lambda *_args, **_kwargs: {
-            "job_id": newer_record.job_id,
-            "status": ProductJobStatusValue.BLOCKED.value,
-        },
-    )
-    monkeypatch.setattr(app_main, "v3_route_handlers", handlers)
-    app_main._run_v3_project_planning_background(
-        project["project_id"],
-        operation["operation_id"],
-        _browser_repeat_payload([], key="doc279-worker-blocked-response"),
-        None,
-    )
-    monkeypatch.setattr(handlers, "post_project_job", original_post)
-    worker_view = handlers.get_project(project["project_id"])
-    assert newer_record.job_id in worker_view["project"]["job_ids"]
-    assert worker_view["metadata"]["current_operation"]["state"] == "planning_failed"
-    assert handlers.service.output_store.list_by_job(newer_record.job_id) == []
+    if run_background_worker:
+        operation = handlers.begin_project_planning_operation(
+            project["project_id"],
+            _browser_repeat_payload([], key="doc279-server-planning-operation"),
+        )
+        original_post = handlers.post_project_job
+        monkeypatch.setattr(
+            handlers,
+            "post_project_job",
+            lambda *_args, **_kwargs: {
+                "job_id": newer_record.job_id,
+                "status": ProductJobStatusValue.BLOCKED.value,
+            },
+        )
+        monkeypatch.setattr(app_main, "v3_route_handlers", handlers)
+        app_main._run_v3_project_planning_background(
+            project["project_id"],
+            operation["operation_id"],
+            _browser_repeat_payload([], key="doc279-worker-blocked-response"),
+            None,
+        )
+        monkeypatch.setattr(handlers, "post_project_job", original_post)
+        worker_view = handlers.get_project(project["project_id"])
+        assert newer_record.job_id in worker_view["project"]["job_ids"]
+        assert worker_view["metadata"]["current_operation"]["state"] == "ambiguous_provider_request_hold"
+        assert handlers.service.output_store.list_by_job(newer_record.job_id) == []
     return handlers, project, product_ids, provider, historical, newer_record
 
 
@@ -350,6 +352,7 @@ def test_doc279_browser_metadata_cannot_author_transparent_predecessor_receipt(
             tmp_path,
             monkeypatch,
             seed_private_receipt=False,
+            run_background_worker=False,
         )
     )
     persisted = dict(newer.request.metadata or {}).get(
@@ -528,7 +531,86 @@ def test_doc279_http_background_no_job_e32_hold_outranks_private_planning_failur
         project["project_id"],
         "doc277_project_planning_operations",
     )
-    assert any(item.get("state") == "planning_failed" for item in history)
+    assert any(
+        item.get("record_kind") == "failed"
+        and item.get("failure_code") == "planning_preflight_blocked"
+        for item in history
+    )
+
+
+def test_doc279_http_background_direct_e32_no_job_hold_preserves_doc277_history(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A direct server E32 response outranks only its own failed Doc277 operation."""
+
+    handlers, _unused, project, product_ids, _faces, provider = _opaque_fixture(tmp_path)
+    _create_opaque_block(handlers, provider, project, product_ids)
+    before_jobs = list(handlers.get_project(project["project_id"])["project"]["job_ids"])
+    product_creates: list[object] = []
+    brain_plans: list[object] = []
+    physical_materializations: list[object] = []
+    queued: list[tuple[object, tuple[object, ...]]] = []
+
+    def unexpected_create(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        product_creates.append((args, kwargs))
+        raise AssertionError("direct E32 no-job hold reached Product API create")
+
+    def unexpected_plan(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        brain_plans.append((args, kwargs))
+        raise AssertionError("direct E32 no-job hold reached Brain planning")
+
+    def unexpected_physical(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        physical_materializations.append((args, kwargs))
+        raise AssertionError("direct E32 no-job hold materialized a physical plan")
+
+    monkeypatch.setattr(handlers.service, "create_project_ecommerce_job", unexpected_create)
+    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", unexpected_plan)
+    monkeypatch.setattr(handlers.service, "_bind_ecommerce_physical_projections", unexpected_physical)
+    monkeypatch.setattr(app_main, "v3_route_handlers", handlers)
+    monkeypatch.setattr(
+        app_main._v3_planning_executor,
+        "submit",
+        lambda fn, *args: queued.append((fn, args)),
+    )
+    client = TestClient(app_main.app)
+    payload = _browser_repeat_payload(product_ids, key="doc279-http-direct-e32-no-job")
+    payload["auto_generate"] = {
+        "quality_mode": "standard",
+        "metadata": {"require_real_images": True},
+    }
+
+    started = client.post(
+        f"/api/v3/creative-agent/projects/{project['project_id']}/jobs",
+        json=payload,
+    )
+
+    assert started.status_code == 200
+    assert started.json()["status"] == "planning"
+    assert len(queued) == 1
+    worker, arguments = queued.pop()
+    worker(*arguments)
+
+    public = client.get(f"/api/v3/creative-agent/projects/{project['project_id']}").json()
+    assert public["project"]["job_ids"] == before_jobs
+    assert public["metadata"]["current_operation"] == {
+        "state": "ambiguous_provider_request_hold",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "review_generation_conditions"}],
+    }
+    history = handlers.project_service.project_store.list_private_records(
+        project["project_id"],
+        "doc277_project_planning_operations",
+    )
+    assert any(
+        item.get("record_kind") == "failed"
+        and item.get("failure_code") == "planning_preflight_blocked"
+        and isinstance(item.get("doc279_e32_no_job_operation_projection"), dict)
+        for item in history
+    )
+    assert product_creates == [] and brain_plans == [] and physical_materializations == []
+    assert provider.calls == 1
 
 
 @pytest.mark.parametrize(("html", "script", "setup"), [

@@ -19,6 +19,7 @@ _DOC270_PHASE4_PRIVATE_NAMESPACES = frozenset(
         "doc270_phase4_registry_entries",
         "doc270_phase4_resolution_decisions",
         "doc277_project_planning_operations",
+        "doc279_ecommerce_transparent_predecessor_receipts",
     }
 )
 
