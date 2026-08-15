@@ -62,8 +62,13 @@ commerce-specific deliverables.
     server-authenticated, same-fact pre-Provider planning failure while
     locating an older exact E32 opaque hold; any executed, changed, malformed,
     or foreign successor remains authoritative.
-22. This E-Commerce module family.
-23. Implementation notes and examples.
+22. E34 / Doc280 Public Review-Status Hygiene And New-Generation Session Reset
+    Contract, once reviewer-approved. It defines the public-safe E-Commerce
+    review disposition and exact browser session ownership needed to keep
+    internal quality diagnostics and superseded terminal state out of a new
+    explicit generation.
+23. This E-Commerce module family.
+24. Implementation notes and examples.
 
 If a commerce rule conflicts with a foundation safety rule, the foundation
 rule wins. If a platform rule conflicts with product truth, product truth wins.
@@ -255,3 +260,7 @@ Before implementation starts, the team must have accepted:
     contract, after reviewer acceptance, before a same-fact terminal
     pre-Provider planning failure may be skipped to recognize an older exact
     E32 opaque hold.
+25. E34 / Doc280 public review-status hygiene and new-generation session-reset
+    contract, after reviewer acceptance, before Product API warnings, the
+    E-Commerce current review disposition, or browser recovery ownership may
+    change for retained review-only output or a newly explicit command.
