@@ -84,6 +84,17 @@ nonce, snapshot, and canonical digest. Forged requirement, cross-project
 binding, stale snapshot, and self-digested wrong evidence are invalid before a
 source can be frozen.
 
+The private General consumption protocol is
+`doc281_general_source_registry_v1`, implemented through the named internal
+`Doc281GeneralSourceRegistry` dependency. Its only operations issue one
+`doc281_general_command_identity_v1` and read one
+`doc281_general_registered_receipt_v1`; neither accepts browser metadata nor an
+arbitrary Project Mode attribute. Registry lookup requires exact private
+project/template/command/plan/output/nonce identity equality and returns the
+immutable SHA-bound requirement/evidence receipt only for that identity. The
+identity's canonical digest is a server record, not a caller-supplied public
+key.
+
 ### 2.2 Template authority remains narrow
 
 General, E-Commerce, Photography, Brand, and future templates can only issue
@@ -167,6 +178,14 @@ Only a relevant repaired product original and a new explicit command may
 replace it. This applies equally to readiness, role/channel, missing-file, and
 SHA/content drift.
 
+Its private persistence namespace is
+`doc281_source_association_terminal_receipts_v1`; the receipt schema is
+`doc281_source_association_terminal_receipt_v1`. Each append-only receipt is
+bound to the server-issued command identity (including its private canonical
+digest) and current project association snapshot, never a public operation key.
+A fresh Project Mode/service/store reader must rehydrate the same terminal
+receipt and public-safe projection.
+
 The public operation must not expose raw exceptions, IDs, hash, file path,
 prompt, provider detail, or analyzer code. It identifies an actionable source
 class such as "a product original needs attention" and the approved repair
@@ -198,10 +217,12 @@ must be idempotent and cannot create a new selection from history.
 
 Both clients must test this at DOM level: a terminal input closure clears an
 already-running progress state, displays exactly its applicable repair action,
-and cannot overwrite a newer command's view. The source board stays at the
-four groups above and adds only a safe per-output used-source category/label;
-it never leaks IDs, hashes, paths, prompts, Provider fields, or history as a
-new original.
+and cannot overwrite a newer command's view. The race test must hold an old
+terminal `needs_input` response, start a newer explicit command/current
+operation, then release the old response and prove the stale callback cannot
+restore its action or progress. The source board stays at the four groups above
+and adds only a safe per-output used-source category/label; it never leaks IDs,
+hashes, paths, prompts, Provider fields, or history as a new original.
 
 General, E-Commerce, and Photography must remain isolated:
 
@@ -227,7 +248,8 @@ Phase 6 implementation is accepted only after deterministic tests prove:
 5. E-Commerce completes full Doc263/264 admission before matching and Doc269
    remains exact final physical-plan authority;
 6. `not_ready` and `role_drift` historical active product associations produce
-   one persistent, sanitized terminal operation instead of raw `ValueError`;
+   one persistent, sanitized terminal operation instead of raw `ValueError`,
+   with zero planning, Brain, materialization/dispatch, and review calls;
 7. file/SHA drift, replay, reload, current-command reset, Desktop/H5 terminal
    precedence, and explicit continuation/history isolation remain correct; and
 8. General/Professional/Photography isolation and the four public reference

@@ -16,7 +16,11 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.app.product_api.contracts import V3AssetUploadStatusValue
-from alchemy_creative_agent_3_0.app.project_mode import source_library
+from alchemy_creative_agent_3_0.app.project_mode import (
+    PersistentProjectStore,
+    V3ProjectModeService,
+    source_library,
+)
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
     ProjectReferenceSourceType,
     ProjectReferenceUsePolicy,
@@ -81,6 +85,95 @@ def _public_safe(value: Any) -> None:
             _public_safe(nested)
 
 
+class _Doc281GeneralSourceRegistryFixture:
+    """Private `doc281_general_source_registry_v1` authority for red contracts."""
+
+    protocol = "doc281_general_source_registry_v1"
+
+    def __init__(self, *, project_id: str, receipt: dict[str, Any]) -> None:
+        self.identity = {
+            "schema_version": "doc281_general_command_identity_v1",
+            "issuer": "v3_doc281_general_command_registry",
+            "protocol": self.protocol,
+            "project_id": project_id,
+            "template_id": "general_template",
+            "command_id": f"doc281-command-{project_id}",
+            "plan_binding_digest": receipt["command_plan_binding_digest"],
+            "coalescing_nonce": f"doc281-nonce-{project_id}",
+        }
+        self.identity["identity_digest"] = source_library.canonical_digest(self.identity)
+        self.receipt = deepcopy(receipt)
+
+    def issue_command_identity(self, *, project_id: str, template_id: str) -> dict[str, Any] | None:
+        if project_id != self.identity["project_id"] or template_id != self.identity["template_id"]:
+            return None
+        return deepcopy(self.identity)
+
+    def lookup_registered_receipt(self, *, project_id: str, command_identity: dict[str, Any]) -> dict[str, Any] | None:
+        if project_id != self.identity["project_id"] or command_identity != self.identity:
+            return None
+        return {
+            "protocol": self.protocol,
+            "schema_version": "doc281_general_registered_receipt_v1",
+            "command_identity": deepcopy(self.identity),
+            "receipt": deepcopy(self.receipt),
+        }
+
+
+class _Doc281ProjectModeRegistryFixture(V3ProjectModeService):
+    """Test-only constructor injection for the named private registry protocol."""
+
+    def __init__(self, *, registry: _Doc281GeneralSourceRegistryFixture, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._doc281_general_source_registry = registry
+
+    def _doc281_general_command_identity_lookup(self, **kwargs: Any) -> dict[str, Any] | None:
+        return self._doc281_general_source_registry.issue_command_identity(
+            project_id=str(kwargs.get("project_id") or ""),
+            template_id=str(kwargs.get("template_id") or ""),
+        )
+
+    def _doc281_general_source_registry_lookup(self, **kwargs: Any) -> dict[str, Any] | None:
+        command_identity = kwargs.get("command_identity")
+        if not isinstance(command_identity, dict):
+            return None
+        return self._doc281_general_source_registry.lookup_registered_receipt(
+            project_id=str(kwargs.get("project_id") or ""),
+            command_identity=command_identity,
+        )
+
+
+def _count_brain_and_review(monkeypatch, handlers: Any) -> dict[str, int]:
+    """Prove terminal input closure precedes both creative and pixel review work."""
+
+    calls = {"brain": 0, "review": 0}
+    runtime = handlers.service.scenario_runtime
+    original_brain_run = runtime.llm_brain_adapter.run
+    original_review = handlers.service._attach_post_generation_review  # noqa: SLF001
+
+    def brain_run(*args: Any, **kwargs: Any) -> Any:
+        calls["brain"] += 1
+        return original_brain_run(*args, **kwargs)
+
+    def review(*args: Any, **kwargs: Any) -> Any:
+        calls["review"] += 1
+        return original_review(*args, **kwargs)
+
+    monkeypatch.setattr(runtime.llm_brain_adapter, "run", brain_run)
+    monkeypatch.setattr(handlers.service, "_attach_post_generation_review", review)
+    return calls
+
+
+def _persistent_project_mode_for_doc281(handlers: Any, storage_root: Path) -> None:
+    """Use a restartable Project Mode store; the test never shares a reader."""
+
+    handlers.project_service = V3ProjectModeService(
+        product_service=handlers.service,
+        project_store=PersistentProjectStore(storage_root),
+        project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
+    )
+
+
 def _general_server_held_match(
     handlers: Any,
     project: dict[str, Any],
@@ -119,10 +212,18 @@ def _general_server_held_match(
     receipt = _shadow_resolve(server_context=context)
     assert receipt["state"] == "resolved"
     assert [item["asset_id"] for item in receipt["matched_references"]] == [asset_id]
-    # Phase 6 must consume these private server lookups, never request metadata.
-    handlers.project_service.doc281_general_trusted_match_context = context  # type: ignore[attr-defined]
-    handlers.project_service.doc281_general_expected_receipt = receipt  # type: ignore[attr-defined]
-    return candidate, receipt
+    registry = _Doc281GeneralSourceRegistryFixture(project_id=project["project_id"], receipt=receipt)
+    previous_service = handlers.project_service
+    handlers.project_service = _Doc281ProjectModeRegistryFixture(
+        registry=registry,
+        product_service=handlers.service,
+        project_store=previous_service.project_store,
+        template_registry=previous_service.template_registry,
+        reference_channel_policy_module=previous_service.reference_channel_policy_module,
+        project_visual_asset_binding_service=previous_service.project_visual_asset_binding_service,
+        ecommerce_view_activation_issuer=previous_service.ecommerce_view_activation_issuer,
+    )
+    return candidate, receipt, registry
 
 
 @pytest.mark.parametrize(
@@ -143,7 +244,7 @@ def test_doc281_general_command_freezes_the_server_held_smart_match_across_domai
     subject_kind: str,
 ) -> None:
     handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    candidate, receipt = _general_server_held_match(
+    candidate, receipt, _registry = _general_server_held_match(
         handlers,
         project,
         snapshot,
@@ -176,6 +277,70 @@ def test_doc281_general_command_freezes_the_server_held_smart_match_across_domai
     assert "browser-never-selects" not in record.request.uploaded_asset_ids
 
 
+def test_doc281_general_smart_match_is_invariant_to_source_order_filename_prose_and_browser_labels(
+    tmp_path,
+) -> None:
+    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
+    candidate, receipt, _registry = _general_server_held_match(
+        handlers,
+        project,
+        snapshot,
+        asset_id=asset_ids[2],
+        kind="object_rear_structure",
+        affordance="object_back_or_structure",
+        view_kind="rear",
+        subject_kind="object_or_product",
+    )
+    durable = handlers.project_service._require_project(project["project_id"])  # noqa: SLF001
+    durable.reference_assets = list(reversed(durable.reference_assets))
+    handlers.project_service.project_store.save_project(durable)
+    renamed = handlers.service.get_uploaded_asset(asset_ids[2])
+    assert renamed is not None
+    handlers.service.asset_store._save_record(renamed.model_copy(update={"filename": "misleading-front-name.png"}))  # noqa: SLF001
+    permuted_snapshot = handlers.project_service._doc270_project_source_library(durable)  # noqa: SLF001
+    assert permuted_snapshot["snapshot_digest"] == snapshot["snapshot_digest"]
+    permuted_candidate = _shadow_entry(permuted_snapshot, candidate["asset_id"])
+    permuted_requirement = _shadow_requirement(
+        project_id=project["project_id"],
+        output_index=1,
+        kind="object_rear_structure",
+        source_snapshot_digest=snapshot["snapshot_digest"],
+    )
+    permuted_context = _shadow_server_context(
+        handlers=handlers,
+        project=project,
+        requirement=permuted_requirement,
+        evidence_by_reference={
+            permuted_candidate["reference_id"]: _shadow_evidence(
+                permuted_candidate,
+                project_id=project["project_id"],
+                affordance="object_back_or_structure",
+                view_kind="rear",
+                subject_kind="object_or_product",
+            )
+        },
+    )
+    permuted_receipt = _shadow_resolve(server_context=permuted_context)
+    assert [item["asset_id"] for item in permuted_receipt["matched_references"]] == [candidate["asset_id"]]
+
+    created = handlers.post_project_job(
+        project["project_id"],
+        {
+            **_general_payload(),
+            "user_input": "Completely different wording with a browser rear label.",
+            "metadata": {
+                "browser_source_order": list(reversed(asset_ids)),
+                "browser_reference_labels": {asset_ids[0]: "rear", asset_ids[2]: "front"},
+            },
+        },
+    )
+    record = handlers.service.get_job_record(created["job_id"])
+    assert record is not None
+    activation = record.request.metadata["doc270_general_source_activation_receipts"][0]
+    assert activation["source_receipt_digest"] == receipt["receipt_digest"]
+    assert record.request.uploaded_asset_ids == [candidate["asset_id"]]
+
+
 def test_doc281_general_optional_uncertainty_is_prompt_only_and_never_needs_input(tmp_path) -> None:
     handlers, _catalog = _handlers(tmp_path)
     project = handlers.post_projects(
@@ -204,7 +369,7 @@ def test_doc281_general_optional_uncertainty_is_prompt_only_and_never_needs_inpu
 @pytest.mark.parametrize("mutation", ["forged_requirement", "cross_project", "stale_snapshot", "wrong_evidence"])
 def test_doc281_general_activation_rejects_forged_server_boundary_inputs(tmp_path, mutation: str) -> None:
     handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    candidate, receipt = _general_server_held_match(
+    candidate, receipt, registry = _general_server_held_match(
         handlers, project, snapshot, asset_id=asset_ids[0], kind="object_rear_structure",
         affordance="object_back_or_structure", view_kind="rear", subject_kind="object_or_product",
     )
@@ -220,7 +385,7 @@ def test_doc281_general_activation_rejects_forged_server_boundary_inputs(tmp_pat
     hostile["receipt_digest"] = source_library.canonical_digest(
         {key: value for key, value in hostile.items() if key != "receipt_digest"}
     )
-    handlers.project_service.doc281_general_expected_receipt = hostile  # type: ignore[attr-defined]
+    registry.receipt = hostile
 
     created = handlers.post_project_job(project["project_id"], _general_payload())
     record = handlers.service.get_job_record(created["job_id"])
@@ -307,6 +472,8 @@ def test_doc281_active_historical_product_drift_closes_once_with_sanitized_termi
     monkeypatch,
 ) -> None:
     handlers, _catalog = _handlers(tmp_path)
+    store_root = tmp_path / "doc281-terminal-project-store"
+    _persistent_project_mode_for_doc281(handlers, store_root)
     project = _project(handlers)
     product_id = _ready_product_upload(
         handlers,
@@ -316,6 +483,7 @@ def test_doc281_active_historical_product_drift_closes_once_with_sanitized_termi
     _add_product_references(handlers, project["project_id"], [product_id])
     upload = handlers.service.get_uploaded_asset(product_id)
     assert upload is not None
+    original_bytes = Path(str(upload.file_path)).read_bytes()
     if fault == "not_ready":
         handlers.service.asset_store._save_record(  # noqa: SLF001
             upload.model_copy(update={"status": V3AssetUploadStatusValue.STORED})
@@ -331,6 +499,7 @@ def test_doc281_active_historical_product_drift_closes_once_with_sanitized_termi
 
     before_job_ids = list(handlers.project_service._require_project(project["project_id"]).job_ids)  # noqa: SLF001
     calls = _count_planning_and_dispatch(monkeypatch, handlers)
+    brain_and_review_calls = _count_brain_and_review(monkeypatch, handlers)
     first = handlers.post_project_job(
         project["project_id"],
         _job_payload(uploaded_asset_ids=[], key=f"doc281-drift-{fault}"),
@@ -344,12 +513,40 @@ def test_doc281_active_historical_product_drift_closes_once_with_sanitized_termi
     assert first["status"] == "blocked"
     assert handlers.project_service._require_project(project["project_id"]).job_ids == before_job_ids  # noqa: SLF001
     assert calls == {"plan": 0, "dispatch": 0}
+    assert brain_and_review_calls == {"brain": 0, "review": 0}
     operation = first["metadata"]["current_operation"]
     assert operation["state"] == "needs_input"
     assert operation["terminal"] is True
     assert operation == second["metadata"]["current_operation"]
-    assert handlers.get_project(project["project_id"])["metadata"]["current_operation"] == operation
     _public_safe(operation)
+    fresh_reader = V3ProjectModeService(
+        product_service=handlers.service,
+        project_store=PersistentProjectStore(store_root),
+        project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
+    )
+    reloaded = fresh_reader.get_project(project["project_id"]).model_dump(mode="json")
+    assert reloaded["metadata"]["current_operation"] == operation
+    durable_receipts = fresh_reader.project_store.list_private_records(
+        project["project_id"],
+        "doc281_source_association_terminal_receipts_v1",
+    )
+    assert len(durable_receipts) == 1
+    assert durable_receipts[0]["schema_version"] == "doc281_source_association_terminal_receipt_v1"
+    assert durable_receipts[0]["command_identity"]["project_id"] == project["project_id"]
+    assert durable_receipts[0]["public_operation"] == operation
+
+    # A repaired original alone never resurrects an old command. A new explicit
+    # command owns the only permitted recovery path and clears the old closure.
+    handlers.service.asset_store._save_record(upload)  # noqa: SLF001
+    if fault in {"file_missing", "digest_drift"}:
+        Path(str(upload.file_path)).write_bytes(original_bytes)
+    repaired = handlers.post_project_job(
+        project["project_id"],
+        _job_payload(uploaded_asset_ids=[], key=f"doc281-repaired-{fault}"),
+    )
+    assert repaired["job_id"]
+    assert repaired["status"] == "planned"
+    assert repaired["metadata"].get("current_operation") is None
 
 
 def test_doc281_explicit_continuation_and_history_never_enter_general_original_match_projection(tmp_path) -> None:
@@ -411,6 +608,116 @@ def test_doc281_new_general_command_replaces_old_terminal_presentation_without_h
     assert first_projection["state"] == "activated_resolved"
     assert second_projection["state"] == "activated_resolved"
     assert set(item["asset_id"] for item in second_projection["sources"]).issubset(set(asset_ids))
+
+
+@pytest.mark.parametrize(
+    ("html_path", "script_path", "mobile"),
+    [(DESKTOP_HTML, DESKTOP_JS, False), (MOBILE_HTML, MOBILE_JS, True)],
+)
+def test_doc281_old_terminal_response_cannot_overwrite_a_newer_explicit_command_dom_session(
+    html_path: Path,
+    script_path: Path,
+    mobile: bool,
+) -> None:
+    """Release a held old terminal response only after the new command owns UI state."""
+
+    old_project = _public_library_project(ecommerce=True)
+    old_project["metadata"]["current_operation"] = {
+        "state": "needs_input",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "review_product_inputs"}],
+    }
+    new_project = deepcopy(old_project)
+    new_project["metadata"]["current_operation"] = {
+        "state": "planning",
+        "terminal": False,
+        "pending": True,
+        "next_actions": [],
+    }
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = _browser_page(browser, html_path=html_path, script_path=script_path)
+            result = page.evaluate(
+                """
+                async ({ oldProject, newProject, mobile }) => {
+                  const response = (payload) => new Response(JSON.stringify(payload), {
+                    status: 200, headers: { "Content-Type": "application/json" },
+                  });
+                  if (!mobile) {
+                    v3State.currentProject = oldProject;
+                    v3State.loading = true;
+                    v3State.progressTimer = window.setTimeout(() => {}, 10000);
+                    const oldReceipt = v3StartEcommerceGenerationSession(oldProject.project_id);
+                    const pending = [];
+                    const originalFetch = window.fetch;
+                    window.fetch = (input, init = {}) => {
+                      const url = String(input);
+                      if (String(init.method || "GET").toUpperCase() === "GET" && url.endsWith(`/projects/${oldProject.project_id}`)) {
+                        return new Promise((resolve) => pending.push(resolve));
+                      }
+                      return originalFetch(input, init);
+                    };
+                    const oldRefresh = refreshV3CurrentProject({
+                      silent: true,
+                      shouldContinue: () => v3EcommerceGenerationSessionOwns(oldReceipt),
+                      sessionReceipt: oldReceipt,
+                    });
+                    await new Promise((resolve) => window.setTimeout(resolve, 0));
+                    v3State.currentProject = newProject;
+                    v3StartEcommerceGenerationSession(newProject.project_id);
+                    renderV3ProjectDetail();
+                    pending.shift()(response({ project: oldProject }));
+                    await oldRefresh;
+                    return {
+                      operation: v3State.currentProject?.metadata?.current_operation?.state || "",
+                      oldActionCount: document.querySelectorAll("[data-v3-project-action='review_product_inputs']").length,
+                      busy: v3State.loading,
+                      progress: v3State.progressTimer === null,
+                    };
+                  }
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  mobileV3State.currentProject = oldProject;
+                  mobileV3State.projects = [oldProject];
+                  mobileV3State.busy = true;
+                  mobileV3State.progressTimer = window.setTimeout(() => {}, 10000);
+                  const oldReceipt = mobileV3StartEcommerceGenerationSession(oldProject.project_id);
+                  const pending = [];
+                  mobileV3Request = (path) => new Promise((resolve) => pending.push({ path, resolve }));
+                  const oldRefresh = refreshMobileV3ProjectDetail(oldProject.project_id, {
+                    shouldContinue: () => mobileV3EcommerceGenerationSessionOwns(oldReceipt),
+                  });
+                  await new Promise((resolve) => window.setTimeout(resolve, 0));
+                  mobileV3State.currentProject = newProject;
+                  mobileV3State.projects = [newProject];
+                  mobileV3StartEcommerceGenerationSession(newProject.project_id);
+                  renderMobileV3ProjectCurrentOperation(mobileV3State.currentProject);
+                  pending.forEach(({ path, resolve }) => {
+                    if (path.endsWith(`/projects/${oldProject.project_id}`)) resolve({ project: oldProject });
+                    else if (path.includes("/timeline")) resolve({ items: [] });
+                    else resolve({ items: [], review_items: [] });
+                  });
+                  await oldRefresh;
+                  return {
+                    operation: mobileV3State.currentProject?.metadata?.current_operation?.state || "",
+                    oldActionCount: document.querySelectorAll("[data-mobile-v3-project-action='review_product_inputs']").length,
+                    busy: mobileV3State.busy,
+                    progress: mobileV3State.progressTimer === null,
+                  };
+                }
+                """,
+                {"oldProject": old_project, "newProject": new_project, "mobile": mobile},
+            )
+            assert result == {
+                "operation": "planning",
+                "oldActionCount": 0,
+                "busy": False,
+                "progress": True,
+            }
+        finally:
+            browser.close()
 
 
 def test_doc281_phase0_contract_keeps_runtime_and_provider_code_unchanged() -> None:
