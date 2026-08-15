@@ -75,6 +75,15 @@ server matcher is the one selector; it ranks image-backed facts and only uses a
 recorded deterministic tie-break after semantic equivalence. Filename, upload
 position, browser labels, and Brain prose are not ranking inputs.
 
+There is one production image-evidence/analyzer and matcher authority in the
+shared foundation. General and E-Commerce consume its verified receipts; E31
+may issue E-Commerce view requirements and activation policy but must not be
+the implementation General depends on. A trusted server plan/command boundary
+issues each requirement and binds template, project, command/plan, output,
+nonce, snapshot, and canonical digest. Forged requirement, cross-project
+binding, stale snapshot, and self-digested wrong evidence are invalid before a
+source can be frozen.
+
 ### 2.2 Template authority remains narrow
 
 General, E-Commerce, Photography, Brand, and future templates can only issue
@@ -150,6 +159,14 @@ command tries to persist/re-upsert that association, the server must:
 4. project a single actionable terminal state with `loading=false`, `busy=false`,
    no timer/recovery owner, and no Brain, planning, provider, or review work.
 
+The closure occurs before `plan_job`, Brain invocation, materialization,
+Provider dispatch, or review. It creates no Job ID and leaves `project.job_ids`
+unchanged. Repeated delivery of the same command returns the one persisted
+terminal receipt, including after constructing a new service/store reader.
+Only a relevant repaired product original and a new explicit command may
+replace it. This applies equally to readiness, role/channel, missing-file, and
+SHA/content drift.
+
 The public operation must not expose raw exceptions, IDs, hash, file path,
 prompt, provider detail, or analyzer code. It identifies an actionable source
 class such as "a product original needs attention" and the approved repair
@@ -178,6 +195,13 @@ terminal result always clears and wins over a stale local "preparing" surface;
 the UI must not show contradictory preparing/stopped text. A new command clears
 the old operation before rendering its own status. Local retry/repair actions
 must be idempotent and cannot create a new selection from history.
+
+Both clients must test this at DOM level: a terminal input closure clears an
+already-running progress state, displays exactly its applicable repair action,
+and cannot overwrite a newer command's view. The source board stays at the
+four groups above and adds only a safe per-output used-source category/label;
+it never leaks IDs, hashes, paths, prompts, Provider fields, or history as a
+new original.
 
 General, E-Commerce, and Photography must remain isolated:
 
@@ -208,6 +232,10 @@ Phase 6 implementation is accepted only after deterministic tests prove:
    precedence, and explicit continuation/history isolation remain correct; and
 8. General/Professional/Photography isolation and the four public reference
    groups remain intact without private leakage.
+9. Object multi-view, person-plus-environment, and scene/brand fixtures yield
+   different bounded General projections. Prompt wording, filename/upload
+   order, source order, and browser metadata cannot change the server-held
+   evidence selection.
 
 Phase 0 changes only this contract, the minimal Doc270 cross-reference, and
 deterministic red tests. It is not permission to implement runtime behavior,
