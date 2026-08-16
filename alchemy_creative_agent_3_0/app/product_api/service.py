@@ -12941,17 +12941,29 @@ class V3ProductApiService:
         self,
         request: CreateCreativeJobRequest,
     ) -> None:
-        """Freeze active People bindings as hard E-Commerce identity evidence.
+        """Freeze People bindings only for a server-owned on-person plan.
 
-        The browser may ask for ordinary reference controls, but it cannot
-        weaken an explicit project-owned People binding.  This keeps the
-        E-Commerce renderer plan separate from generic library behavior while
-        preserving the existing catalog snapshot as provenance.
+        An active People asset remains catalog evidence for the project, but
+        product-only E-Commerce output must not turn it into a renderer input.
+        The server-derived apparel-on-model profile is the specialized
+        authority that permits the separate identity channel.
         """
 
         if not self._is_ecommerce_request(request):
             return
         metadata = dict(request.metadata or {})
+        context = metadata.get("ecommerce_creative_context")
+        profile = (
+            context.get("apparel_on_model_evidence_profile")
+            if isinstance(context, dict)
+            else None
+        )
+        if (
+            metadata.get("ecommerce_creative_context_server_owned") is not True
+            or not isinstance(profile, dict)
+            or profile.get("applies") is not True
+        ):
+            return
         frozen_binding = metadata.get("frozen_visual_asset_binding_set")
         if not isinstance(frozen_binding, dict) or frozen_binding.get("state") != "valid":
             return

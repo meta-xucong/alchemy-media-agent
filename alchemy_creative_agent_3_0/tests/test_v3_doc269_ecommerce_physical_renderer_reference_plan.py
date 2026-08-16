@@ -64,8 +64,21 @@ def _ecommerce_fixture(tmp_path):
     return handlers, capture, project, product_ids, identity_output_ids
 
 
+def _apparel_on_model_payload(*, product_ids: list[str], key: str) -> dict:
+    payload = _job_payload(uploaded_asset_ids=product_ids, key=key)
+    payload["user_input"] = "Generate an apparel-on-model listing image with the supplied product."
+    payload["commerce_profile_patch"] = {
+        "product_category": "apparel",
+        "apparel_construction": {
+            "silhouette": "short-sleeve garment",
+            "material": "soft knit fabric",
+        },
+    }
+    return payload
+
+
 def _capture_ecommerce_request(handlers, capture, project, product_ids, identity_output_ids, *, key: str):
-    payload = _job_payload(uploaded_asset_ids=product_ids, key="doc269-final-plan")
+    payload = _apparel_on_model_payload(product_ids=product_ids, key="doc269-final-plan")
     payload["metadata"]["requested_image_count"] = 1
     payload["metadata"]["idempotency_key"] = key
     created = handlers.post_project_job(project["project_id"], payload)
@@ -221,7 +234,10 @@ def test_doc269_locked_people_face_count_closes_before_brain_or_adapter(
     ) as failure:
         handlers.post_project_job(
             project["project_id"],
-            _job_payload(uploaded_asset_ids=product_ids, key=f"doc269-{fault}-locked-face"),
+            _apparel_on_model_payload(
+                product_ids=product_ids,
+                key=f"doc269-{fault}-locked-face",
+            ),
         )
 
     assert "doc269-forged-fourth-face" not in str(failure.value)
@@ -276,6 +292,44 @@ def test_doc269_default_does_not_infer_generated_history_as_continuation(tmp_pat
 
     assert _source_ids(physical_assets) == [projection["selected_product_asset_ids"][0], *face_output_ids]
     assert all(item.get("source_type") != "generated_selected" for item in physical_assets)
+
+
+def test_doc269_product_only_plan_excludes_active_people_and_history(tmp_path) -> None:
+    handlers, capture, project, product_ids, face_output_ids = _ecommerce_fixture(tmp_path)
+    payload = _apparel_on_model_payload(product_ids=product_ids, key="doc269-product-only")
+    payload["user_input"] = (
+        "Product-only flat lay for the supplied garment. No person wearing it, "
+        "no model, no child, and no face."
+    )
+    payload["metadata"]["requested_image_count"] = 1
+    created = handlers.post_project_job(project["project_id"], payload)
+    record = handlers.service.get_job_record(created["job_id"])
+
+    assert record is not None
+    assert "ecommerce_locked_identity_authority" not in record.request.metadata
+    assert "ecommerce_locked_identity_reference_assets" not in record.request.metadata
+    record.request.metadata["generated_and_review_history"] = [
+        {
+            "output_id": face_output_ids[0],
+            "source_type": "generated_selected",
+        }
+    ]
+    generated = handlers.post_project_job_generate(project["project_id"], record.job_id)
+    assert generated["status"] == "generated"
+
+    request = capture.requests[-1]
+    projection = request.metadata["professional_ecommerce_physical_product_projections"]["1"]
+    materialization = _final_materialization(request)
+    physical_assets = ProductionImageGenerationProvider()._materialized_provider_reference_assets(  # noqa: SLF001
+        materialization.asset_plan
+    )
+
+    assert request.metadata["physical_renderer_reference_plans"]["1"]["reference_image_asset_ids"] == [
+        projection["selected_product_asset_ids"][0]
+    ]
+    assert _source_ids(physical_assets) == [projection["selected_product_asset_ids"][0]]
+    assert [item["source_type"] for item in physical_assets] == ["uploaded"]
+    assert set(face_output_ids).isdisjoint(_source_ids(physical_assets))
 
 
 def test_doc269_explicit_selected_continuation_is_the_only_continuation_admission_path(tmp_path) -> None:
@@ -354,7 +408,7 @@ def test_doc269_planning_snapshot_generated_selected_cannot_enter_renderer_plan(
         encoded_image=_png_base64((90, 120, 150)),
     )
     capture.requests.clear()
-    payload = _job_payload(uploaded_asset_ids=product_ids, key="doc269-planning-snapshot")
+    payload = _apparel_on_model_payload(product_ids=product_ids, key="doc269-planning-snapshot")
     payload["metadata"]["requested_image_count"] = 1
     payload["metadata"]["reference_assets"] = [
         {
@@ -507,7 +561,7 @@ def _rehashed_plan(raw_plan: dict) -> dict:
 
 def test_doc269_freezes_distinct_plan_for_each_output_without_first_output_alias(tmp_path) -> None:
     handlers, capture, project, product_ids, face_output_ids = _ecommerce_fixture(tmp_path)
-    payload = _job_payload(uploaded_asset_ids=product_ids, key="doc269-multi-output")
+    payload = _apparel_on_model_payload(product_ids=product_ids, key="doc269-multi-output")
     payload["metadata"]["requested_image_count"] = 2
     created = handlers.post_project_job(project["project_id"], payload)
     record = handlers.service.get_job_record(created["job_id"])

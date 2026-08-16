@@ -38,9 +38,12 @@ Doc263 ProductTruthAdmission and Doc264 re-attestation
    They never become physical references merely because a receipt is absent,
    stale, invalid, or insufficient.
 5. Locked People/Visual Asset evidence is separately composed by Doc93 and
-   Doc269. Generated and review history remain excluded. A continuation can
-   enter only through an existing explicit Doc265 selected-continuation
-   admission; it cannot seed product matching or repair product truth.
+   enters Doc269 only when the current server-owned E-Commerce
+   apparel-on-model profile applies. An active People binding must not become
+   a product-only renderer input. Generated and review history remain
+   excluded. A continuation can enter only through an existing explicit Doc265
+   selected-continuation admission; it cannot seed product matching or repair
+   product truth.
 
 ## 3. Server-Owned Phase 4 Gate
 

@@ -299,13 +299,21 @@ def _physical_reference_bindings(metadata: dict[str, Any], job_id: str) -> list[
         product = [item for item in references if item["channel"] == "product_truth"]
         faces = [item for item in references if item["channel"] == "people_identity"]
         continuation = [item for item in references if item["channel"] == "generated_selected"]
-        if len(product) != 1 or len(faces) != 3 or len(continuation) > 1:
+        face_count = len(faces)
+        if len(product) != 1 or face_count not in {0, 3} or len(continuation) > 1:
             return None
-        if [item["channel"] for item in references] != ["product_truth", "people_identity", "people_identity", "people_identity"] + (["generated_selected"] if continuation else []):
+        expected_channels = ["product_truth"] + ["people_identity"] * face_count
+        expected_roles = ["product_reference"] + ["face_reference"] * face_count
+        expected_source_types = ["uploaded"] + ["visual_asset_library"] * face_count
+        if continuation:
+            expected_channels.append("generated_selected")
+            expected_roles.append("selected_continuation_reference")
+            expected_source_types.append("generated_selected")
+        if [item["channel"] for item in references] != expected_channels:
             return None
-        if [item["role"] for item in references] != ["product_reference", "face_reference", "face_reference", "face_reference"] + (["selected_continuation_reference"] if continuation else []):
+        if [item["role"] for item in references] != expected_roles:
             return None
-        if [item["source_type"] for item in references] != ["uploaded", "visual_asset_library", "visual_asset_library", "visual_asset_library"] + (["generated_selected"] if continuation else []):
+        if [item["source_type"] for item in references] != expected_source_types:
             return None
         if any(not _SHA256.fullmatch(_clean(item.get("content_sha256")).lower()) for item in references):
             return None

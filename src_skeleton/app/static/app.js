@@ -3487,6 +3487,22 @@ function renderV3ProjectDetail() {
   if (terminalOperation?.terminal === true && terminalOperation?.pending === false) {
     v3State.loading = false;
     clearV3Progress();
+    const terminalState = String(terminalOperation.state || "").trim().toLowerCase();
+    if (terminalState === "delivery_route_unavailable") {
+      setV3Progress(
+        "failed",
+        "当前交付路线不可用。项目和原始参考已保留，请查看交付选项。",
+        "warning",
+        { forceNotice: true },
+      );
+    } else if (terminalState === "ambiguous_provider_request_hold") {
+      setV3Progress(
+        "failed",
+        "本次请求未进入交付。项目原图和人物绑定已保留，请查看生成条件。",
+        "warning",
+        { forceNotice: true },
+      );
+    }
   }
   if (project?.primary_template_id && v3State.view === "workspace") {
     v3State.selectedTemplate = project.primary_template_id;

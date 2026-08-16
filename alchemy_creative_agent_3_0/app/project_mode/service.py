@@ -5640,7 +5640,15 @@ class V3ProjectModeService:
             and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
         ]
         candidate_ids = [reference.asset_ref_id for reference in active_product_references]
-        active_reference_ids = {reference.reference_id for reference in active_product_references}
+        active_product_reference_ids = {
+            reference.reference_id for reference in active_product_references
+        }
+        active_uploaded_reference_ids = {
+            reference.reference_id
+            for reference in project.reference_assets
+            if reference.status == ProjectReferenceStatus.ACTIVE
+            and reference.source_type == ProjectReferenceSourceType.UPLOADED
+        }
         legacy_ids: list[str] = []
         for item in project.uploaded_asset_refs:
             asset_id = str(item.get("asset_id") or "").strip()
@@ -5652,8 +5660,14 @@ class V3ProjectModeService:
                 continue
             reference_id = str(item.get("reference_id") or "").strip()
             source = str(item.get("source") or "").strip().lower()
-            if reference_id in active_reference_ids:
+            if reference_id in active_product_reference_ids:
                 legacy_ids.append(asset_id)
+                continue
+            # A legacy mirror may preserve a product association only while
+            # the canonical active Project reference remains product truth.
+            # It must never promote an active association whose current
+            # server-owned policy has moved to another channel.
+            if reference_id in active_uploaded_reference_ids:
                 continue
             # Project-create selectors are only historical evidence when
             # their durable upload still exists. A fake selector must retain
@@ -6057,7 +6071,7 @@ class V3ProjectModeService:
             if reference.source_type == ProjectReferenceSourceType.UPLOADED
             and reference.use_policy == ProjectReferenceUsePolicy.PRODUCT
         }
-        reference_sets: list[tuple[list[Any], list[Any]]] = []
+        reference_sets: list[tuple[list[Any], list[Any], int]] = []
         for item in bindings:
             binding = item.get("reference_binding") if isinstance(item, dict) else None
             if not isinstance(binding, dict) or item.get("reference_binding_digest") != self._doc271_digest(binding):
@@ -6067,13 +6081,41 @@ class V3ProjectModeService:
             channels = binding.get("ordered_reference_channels")
             roles = binding.get("ordered_reference_roles")
             source_types = binding.get("ordered_reference_source_types")
-            if not isinstance(ids, list) or not isinstance(digests, list) or not isinstance(channels, list) or not isinstance(roles, list) or not isinstance(source_types, list) or len(ids) != len(digests) or len(ids) != len(roles) or len(ids) != len(source_types) or len(ids) not in {4, 5}:
+            locked_face_ids = binding.get("locked_face_output_ids")
+            if (
+                not isinstance(ids, list)
+                or not isinstance(digests, list)
+                or not isinstance(channels, list)
+                or not isinstance(roles, list)
+                or not isinstance(source_types, list)
+                or not isinstance(locked_face_ids, list)
+                or len(ids) != len(digests)
+                or len(ids) != len(roles)
+                or len(ids) != len(source_types)
+                or any(not str(face_id or "").strip() for face_id in locked_face_ids)
+            ):
                 return False
-            if channels != ["product_truth", "people_identity", "people_identity", "people_identity"] + (["generated_selected"] if len(ids) == 5 else []):
+            face_count = len(locked_face_ids)
+            if face_count not in {0, 3}:
                 return False
-            if roles != ["product_reference", "face_reference", "face_reference", "face_reference"] + (["selected_continuation_reference"] if len(ids) == 5 else []):
+            expected_count = 1 + face_count
+            has_continuation = len(ids) == expected_count + 1
+            if len(ids) not in {expected_count, expected_count + 1}:
                 return False
-            if source_types != ["uploaded", "visual_asset_library", "visual_asset_library", "visual_asset_library"] + (["generated_selected"] if len(ids) == 5 else []):
+            expected_channels = ["product_truth"] + ["people_identity"] * face_count
+            expected_roles = ["product_reference"] + ["face_reference"] * face_count
+            expected_source_types = ["uploaded"] + ["visual_asset_library"] * face_count
+            if has_continuation:
+                expected_channels.append("generated_selected")
+                expected_roles.append("selected_continuation_reference")
+                expected_source_types.append("generated_selected")
+            if (
+                channels != expected_channels
+                or roles != expected_roles
+                or source_types != expected_source_types
+                or [str(value) for value in ids[1 : 1 + face_count]]
+                != [str(value) for value in locked_face_ids]
+            ):
                 return False
             product = self.product_service.get_uploaded_asset(str(ids[0]))
             product_path = Path(str(getattr(product, "file_path", "") or "")) if product else None
@@ -6084,40 +6126,54 @@ class V3ProjectModeService:
                 or self._uploaded_asset_content_sha256(product) != str(digests[0]).lower()
             ):
                 return False
-            reference_sets.append((ids, digests))
-        if self.project_visual_asset_binding_service is None:
+            reference_sets.append((ids, digests, face_count))
+        face_counts = {face_count for _ids, _digests, face_count in reference_sets}
+        if len(face_counts) != 1:
             return False
-        current_binding = self.project_visual_asset_binding_service.current(project_id=project.project_id)
-        if current_binding.state != "valid" or self._doc271_digest({"bindings": current_binding.model_dump(mode="json").get("bindings", [])}) != receipt.get("locked_visual_asset_binding_digest"):
-            return False
-        try:
-            current_faces = self.product_service._library_visual_asset_reference_assets(  # noqa: SLF001
-                current_binding,
-                binding_service=self.project_visual_asset_binding_service,
-            )
-        except (OSError, ValueError, KeyError):
-            return False
-        face_by_id = {
-            str(item.get("output_id") or item.get("asset_id") or "").strip(): item
-            for item in current_faces
-            if isinstance(item, dict)
-        }
-        if len(face_by_id) != 3:
-            return False
-        for ids, digests in reference_sets:
-            for source_id, digest in zip(ids[1:4], digests[1:4], strict=True):
-                face = face_by_id.get(str(source_id))
-                path = Path(str(face.get("file_path") or "")) if isinstance(face, dict) else None
-                if path is None or not path.is_file():
-                    return False
-                try:
-                    if hashlib.sha256(path.read_bytes()).hexdigest() != str(digest).lower():
+        locked_face_count = face_counts.pop()
+        if locked_face_count:
+            if self.project_visual_asset_binding_service is None:
+                return False
+            current_binding = self.project_visual_asset_binding_service.current(project_id=project.project_id)
+            if current_binding.state != "valid" or self._doc271_digest({"bindings": current_binding.model_dump(mode="json").get("bindings", [])}) != receipt.get("locked_visual_asset_binding_digest"):
+                return False
+            try:
+                current_faces = self.product_service._library_visual_asset_reference_assets(  # noqa: SLF001
+                    current_binding,
+                    binding_service=self.project_visual_asset_binding_service,
+                )
+            except (OSError, ValueError, KeyError):
+                return False
+            face_by_id = {
+                str(item.get("output_id") or item.get("asset_id") or "").strip(): item
+                for item in current_faces
+                if isinstance(item, dict)
+            }
+            if len(face_by_id) != locked_face_count:
+                return False
+            for ids, digests, _face_count in reference_sets:
+                for source_id, digest in zip(ids[1 : 1 + locked_face_count], digests[1 : 1 + locked_face_count], strict=True):
+                    face = face_by_id.get(str(source_id))
+                    path = Path(str(face.get("file_path") or "")) if isinstance(face, dict) else None
+                    if path is None or not path.is_file():
                         return False
-                except OSError:
-                    return False
+                    try:
+                        if hashlib.sha256(path.read_bytes()).hexdigest() != str(digest).lower():
+                            return False
+                    except OSError:
+                        return False
         continuation = selected_continuation_admissions[0] if selected_continuation_admissions else None
-        continuation_ids = {str(ids[4]) for ids, _digests in reference_sets if len(ids) == 5}
-        continuation_digests = {str(digests[4]).lower() for ids, digests in reference_sets if len(ids) == 5}
+        continuation_index = 1 + locked_face_count
+        continuation_ids = {
+            str(ids[continuation_index])
+            for ids, _digests, _face_count in reference_sets
+            if len(ids) == continuation_index + 1
+        }
+        continuation_digests = {
+            str(digests[continuation_index]).lower()
+            for ids, digests, _face_count in reference_sets
+            if len(ids) == continuation_index + 1
+        }
         if continuation_ids:
             path = Path(str(continuation.get("file_path") or "")) if isinstance(continuation, dict) else None
             if len(continuation_ids) != 1 or len(continuation_digests) != 1 or not isinstance(continuation, dict) or str(continuation.get("output_id") or "") not in continuation_ids or str(continuation.get("content_sha256") or "").lower() not in continuation_digests or path is None or not path.is_file():

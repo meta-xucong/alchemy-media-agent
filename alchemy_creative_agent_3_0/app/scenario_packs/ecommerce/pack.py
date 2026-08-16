@@ -278,7 +278,35 @@ def _category_evidence_questions(category) -> list[str]:
 
 
 def _requests_product_on_person(user_input: str) -> bool:
-    text = str(user_input or "").lower()
+    raw_text = str(user_input or "")
+    text = raw_text.lower()
+    product_only_english = (
+        "product-only",
+        "product only",
+        "flat lay",
+        "on a hanger",
+        "no person",
+        "no model",
+        "without a model",
+        "without people",
+        "no child",
+        "no face",
+    )
+    product_only_chinese = (
+        "只展示商品",
+        "仅展示商品",
+        "商品平铺",
+        "衣架陈列",
+        "不出现真人",
+        "不出现模特",
+        "不出现儿童",
+        "不出现人物",
+        "不出现脸",
+    )
+    if any(token in text for token in product_only_english) or any(
+        token in raw_text for token in product_only_chinese
+    ):
+        return False
     english = (
         "on model",
         "model wearing",
@@ -290,7 +318,7 @@ def _requests_product_on_person(user_input: str) -> bool:
         "apparel-on-model",
     )
     chinese = ("模特上身", "真人上身", "试穿", "穿着", "上身展示")
-    return any(token in text for token in english) or any(token in str(user_input or "") for token in chinese)
+    return any(token in text for token in english) or any(token in raw_text for token in chinese)
 
 
 def _bounded_requested_count(value: object) -> int | None:

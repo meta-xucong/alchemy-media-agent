@@ -168,6 +168,14 @@ def _fixture(tmp_path, *, provider: GenerationProvider | None = None):
 
 def _payload(product_ids: list[str], *, key: str, user_input: str | None = None) -> dict[str, Any]:
     payload = _job_payload(uploaded_asset_ids=product_ids, key=key)
+    payload["user_input"] = "Generate an apparel-on-model listing image with the supplied product."
+    payload["commerce_profile_patch"] = {
+        "product_category": "apparel",
+        "apparel_construction": {
+            "silhouette": "short-sleeve garment",
+            "material": "soft knit fabric",
+        },
+    }
     payload["metadata"]["requested_image_count"] = 1
     if user_input is not None:
         payload["user_input"] = user_input
@@ -535,6 +543,40 @@ def test_doc271_explicit_policy_failure_writes_one_exact_server_owned_closure(tm
     ):
         assert private_field not in public_text
     assert created["job_id"] not in str(public_operation)
+
+
+def test_doc271_product_only_policy_closure_replays_without_people_binding(tmp_path, monkeypatch) -> None:
+    handlers, provider, project, product_ids, face_output_ids = _fixture(tmp_path)
+    product_only = (
+        "Product-only flat lay. No person wearing it, no model, no child, and no face."
+    )
+    created = handlers.post_project_job(
+        project["project_id"],
+        _payload(product_ids, key="doc271-product-only-policy", user_input=product_only),
+    )
+    status = handlers.post_project_job_generate(project["project_id"], created["job_id"])
+    record = handlers.service.get_job_record(created["job_id"])
+
+    assert status["status"] == ProductJobStatusValue.BLOCKED.value
+    assert record is not None
+    binding = _closure(record)["per_output_reference_bindings"][0]["reference_binding"]
+    assert binding["ordered_reference_channels"] == ["product_truth"]
+    assert binding["locked_face_output_ids"] == []
+    assert set(face_output_ids).isdisjoint(binding["ordered_reference_ids"])
+    before_job_ids = list(handlers.get_project(project["project_id"])["project"]["job_ids"])
+
+    def unexpected_provider(_request):  # noqa: ANN001
+        raise AssertionError("product-only closure reached Provider")
+
+    monkeypatch.setattr(provider, "generate", unexpected_provider)
+    closed = handlers.post_project_job(
+        project["project_id"],
+        _payload(product_ids, key="doc271-product-only-replay", user_input=product_only),
+    )
+
+    assert closed["status"] == ProductJobStatusValue.BLOCKED.value
+    assert not closed.get("job_id")
+    assert handlers.get_project(project["project_id"])["project"]["job_ids"] == before_job_ids
 
 
 def test_doc271_same_exact_closed_binding_stops_before_new_job_brain_or_provider(tmp_path, monkeypatch) -> None:
