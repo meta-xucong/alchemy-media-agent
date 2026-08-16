@@ -179,7 +179,13 @@ def build_project_source_library(
         "project_id": project_id,
         "entries": entries,
     }
-    snapshot["snapshot_digest"] = canonical_digest(snapshot)
+    # Associations are an append-only project record, not semantic ranking
+    # input. Keep their existing runtime order for older consumers, but bind a
+    # canonical copy so reference insertion order cannot change Doc281's
+    # identity/snapshot contract.
+    snapshot["snapshot_digest"] = canonical_digest(
+        {**snapshot, "entries": sorted(entries, key=canonical_digest)}
+    )
     return snapshot
 
 

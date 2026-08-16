@@ -434,6 +434,7 @@ def test_doc270_ineligible_product_association_is_hidden_and_ecommerce_still_clo
     assert {
         _association_id(handlers, project["project_id"], asset_id) for asset_id in product_ids[1:]
     }.issubset(by_association)
+    before_job_ids = list(project_view["project"]["job_ids"])
 
     status = handlers.post_project_job(
         project["project_id"],
@@ -442,7 +443,11 @@ def test_doc270_ineligible_product_association_is_hidden_and_ecommerce_still_clo
     assert status["status"] == "blocked"
     operation = status["metadata"]["current_operation"]
     assert operation["state"] == "needs_input"
-    assert status["job_id"]
+    # Doc281 closes historical active-association drift before any Job,
+    # planning, Brain, Provider, or review work. A repair plus a new explicit
+    # command is the only route back into generation.
+    assert status["job_id"] == ""
+    assert handlers.get_project(project["project_id"])["project"]["job_ids"] == before_job_ids
 
 
 def test_doc270_browser_metadata_cannot_author_match_or_replace_channel_selection(tmp_path) -> None:

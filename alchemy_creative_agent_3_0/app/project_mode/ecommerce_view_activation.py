@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .source_library import canonical_digest
+from .source_evidence import OpenAICompatibleSourceEvidenceAnalyzer
 
 
 PHASE4_CAPABILITY = {
@@ -436,7 +437,9 @@ def _configured_production_analyzer() -> EcommerceSourceEvidenceAnalyzer | None:
         # call it directly so a Responses attempt cannot consume the same
         # source-analysis operation before the known-compatible protocol.
         preferred_protocol = "chat"
-    analyzer = OpenAICompatibleEcommerceSourceEvidenceAnalyzer(
+    # E31 owns product deliverable policy, but its image observation transport
+    # is the shared scenario-neutral source-evidence foundation.
+    analyzer = OpenAICompatibleSourceEvidenceAnalyzer(
         api_key=api_key,
         base_url=base_url,
         model=model,

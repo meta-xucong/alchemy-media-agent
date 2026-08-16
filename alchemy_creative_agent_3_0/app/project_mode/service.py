@@ -115,6 +115,12 @@ from .source_library import (
     public_project_source_library,
     resolve_doc270_shadow_reference_requirements,
 )
+from .source_evidence import (
+    CallableSourceEvidenceAnalyzer,
+    OpenAICompatibleSourceEvidenceAnalyzer,
+    SourceEvidenceAnalyzer,
+    semantic_response_is_valid,
+)
 from .ecommerce_view_activation import (
     DisabledEcommerceViewActivationIssuer,
     EcommerceViewActivationIssuer,
@@ -271,6 +277,12 @@ _DOC270_PHASE4_PRIVATE_POLICY_NAMESPACE = "doc270_phase4_activation_policy"
 _DOC270_PHASE4_PRIVATE_COMMAND_NAMESPACE = "doc270_phase4_commands"
 _DOC270_PHASE4_PRIVATE_ENTRY_NAMESPACE = "doc270_phase4_registry_entries"
 _DOC270_PHASE4_PRIVATE_DECISION_NAMESPACE = "doc270_phase4_resolution_decisions"
+_DOC281_TERMINAL_RECEIPT_NAMESPACE = "doc281_source_association_terminal_receipts_v1"
+_DOC281_TERMINAL_RECEIPT_SCHEMA = "doc281_source_association_terminal_receipt_v1"
+_DOC281_GENERAL_COMMAND_NAMESPACE = "doc281_general_commands_v1"
+_DOC281_GENERAL_REQUIREMENT_NAMESPACE = "doc281_general_requirements_v1"
+_DOC281_GENERAL_OBSERVATION_NAMESPACE = "doc281_source_evidence_observations_v1"
+_DOC281_GENERAL_RECEIPT_NAMESPACE = "doc281_general_resolution_receipts_v1"
 _DOC270_PHASE4_REQUIREMENT_ISSUER = {
     "authority": "v3_server_template_requirement_issuer",
     "schema_version": "doc270_requirement_issuer_v1",
@@ -307,6 +319,279 @@ class PhotographyRoleContinuationError(ValueError):
         self.v3_status_code = status_code
 
 
+class Doc281GeneralSourceRegistry:
+    """Named server authority for General original-source activation.
+
+    The registry is intentionally a constructor dependency.  A deployment may
+    compose it with an image-backed analyzer and typed requirement issuer;
+    browser requests can neither install an analyzer nor author a selection.
+    """
+
+    protocol = "doc281_general_source_registry_v1"
+
+    def __init__(self, *, evidence_analyzer: SourceEvidenceAnalyzer | Any | None = None, requirement_issuer: Any | None = None,
+                 analysis_entry_loader: Any | None = None) -> None:
+        self.evidence_analyzer = self._coerce_evidence_analyzer(evidence_analyzer)
+        self.requirement_issuer = requirement_issuer
+        self.analysis_entry_loader = analysis_entry_loader
+        self._identities: dict[str, dict[str, Any]] = {}
+        self._receipts: dict[str, dict[str, Any]] = {}
+        self._observations: dict[str, list[dict[str, Any]]] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self.evidence_analyzer is not None and callable(self.requirement_issuer)
+
+    @staticmethod
+    def _coerce_evidence_analyzer(value: SourceEvidenceAnalyzer | Any | None) -> SourceEvidenceAnalyzer | None:
+        if isinstance(value, SourceEvidenceAnalyzer):
+            return value
+        if callable(value):
+            return CallableSourceEvidenceAnalyzer(value)
+        return None
+
+    def issue_command_identity(self, **kwargs: Any) -> dict[str, Any] | None:
+        if not self.enabled:
+            return None
+        project_id = str(kwargs.get("project_id") or "").strip()
+        template_id = str(kwargs.get("template_id") or "").strip()
+        snapshot = kwargs.get("source_library_snapshot")
+        command_direction = str(kwargs.get("command_direction") or "").strip()
+        requested_output_count = kwargs.get("requested_output_count")
+        if (
+            not project_id or template_id != GENERAL_TEMPLATE_ID or not isinstance(snapshot, dict)
+            or not isinstance(requested_output_count, int) or isinstance(requested_output_count, bool)
+            or not 1 <= requested_output_count <= 8
+        ):
+            return None
+        requirement = self.requirement_issuer(
+            project_id=project_id,
+            template_id=template_id,
+            command_direction=command_direction,
+            source_library_snapshot=dict(snapshot),
+        )
+        if not isinstance(requirement, dict):
+            return None
+        requirement_digest = str(requirement.get("requirement_digest") or "").strip().lower()
+        if len(requirement_digest) != 64:
+            return None
+        output_plan = [
+            {
+                "output_index": output_index,
+                "output_nonce": doc270_canonical_digest({
+                    "project_id": project_id,
+                    "template_id": template_id,
+                    "command_direction": command_direction,
+                    "source_library_snapshot_digest": str(snapshot.get("snapshot_digest") or ""),
+                    "requirement_digest": requirement_digest,
+                    "output_index": output_index,
+                }),
+            }
+            for output_index in range(1, requested_output_count + 1)
+        ]
+        output_plan_digest = doc270_canonical_digest(output_plan)
+        command_facts = {
+            "project_id": project_id,
+            "template_id": template_id,
+            "command_direction": command_direction,
+            "source_library_snapshot_digest": str(snapshot.get("snapshot_digest") or ""),
+            "requirement_digest": requirement_digest,
+            "requested_output_count": requested_output_count,
+            "output_plan_digest": output_plan_digest,
+        }
+        command_facts_digest = doc270_canonical_digest(command_facts)
+        identity = {
+            "schema_version": "doc281_general_command_identity_v1",
+            "issuer": "v3_doc281_general_command_registry",
+            "protocol": self.protocol,
+            "project_id": project_id,
+            "template_id": template_id,
+            "command_id": stable_id("doc281_general_command", command_facts_digest),
+            "plan_binding_digest": doc270_canonical_digest(command_facts),
+            "coalescing_nonce": command_facts_digest,
+            "requested_output_count": requested_output_count,
+            "output_plan_digest": output_plan_digest,
+        }
+        identity["identity_digest"] = doc270_canonical_digest(identity)
+        self._identities[identity["identity_digest"]] = {
+            "identity": dict(identity),
+            "requirement": dict(requirement),
+            "snapshot": dict(snapshot),
+            "output_plan": output_plan,
+        }
+        return dict(identity)
+
+    def lookup_registered_receipt(self, **kwargs: Any) -> dict[str, Any] | None:
+        identity = kwargs.get("command_identity")
+        project_id = str(kwargs.get("project_id") or "").strip()
+        if not self.enabled or not isinstance(identity, dict) or identity.get("project_id") != project_id:
+            return None
+        stored = self._identities.get(str(identity.get("identity_digest") or ""))
+        if not isinstance(stored, dict) or stored.get("identity") != identity:
+            return None
+        receipt = self._receipts.get(str(identity["identity_digest"]))
+        if receipt is None:
+            snapshot = stored["snapshot"]
+            requirement = stored["requirement"]
+            entries = [dict(item) for item in snapshot.get("entries", []) if isinstance(item, dict)]
+            if callable(self.analysis_entry_loader):
+                entries = self.analysis_entry_loader(project_id=project_id, entries=entries) or []
+            expected = {
+                "object_front_presentation": ("object_or_product", "front", "object_front_presentation"),
+                "object_rear_structure": ("object_or_product", "rear", "object_back_or_structure"),
+                "object_detail": ("object_or_product", "detail_or_macro", "object_detail"),
+                "person_environment_context": ("person", "environment_wide", "environment"),
+                "brand_scene_material": ("brand_or_graphic", "packaging", "logo_or_mark"),
+            }.get(str(requirement.get("kind") or ""))
+            matches: list[dict[str, str]] = []
+            profiles: dict[str, dict[str, Any]] = {}
+            analysis_complete = bool(entries)
+            for entry in entries:
+                reference_id = str(entry.get("reference_id") or "")
+                try:
+                    analyzed = self.evidence_analyzer.analyze(project_id=project_id, entries=[dict(entry)])
+                except Exception:
+                    analysis_complete = False
+                    continue
+                if (
+                    not isinstance(analyzed, list)
+                    or len(analyzed) != 1
+                    or not isinstance(analyzed[0], dict)
+                    or not semantic_response_is_valid(analyzed[0])
+                ):
+                    analysis_complete = False
+                    continue
+                profiles[reference_id] = dict(analyzed[0])
+            observations: list[dict[str, Any]] = []
+            for entry in snapshot.get("entries", []):
+                if not isinstance(entry, dict):
+                    continue
+                semantic = profiles.get(str(entry.get("reference_id") or ""))
+                if not isinstance(semantic, dict):
+                    continue
+                profile = {
+                    "schema_version": "doc281_source_evidence_observation_v1",
+                    "project_id": project_id,
+                    "reference_id": str(entry.get("reference_id") or ""),
+                    "asset_id": str(entry.get("asset_id") or ""),
+                    "content_sha256": str(entry.get("content_sha256") or ""),
+                    "semantic": {
+                        key: semantic.get(key)
+                        for key in ("subject_kind", "view_kind", "affordances")
+                    },
+                }
+                if not profile["reference_id"] or not profile["asset_id"] or len(profile["content_sha256"]) != 64:
+                    continue
+                profile["observation_digest"] = doc270_canonical_digest(profile)
+                observations.append(profile)
+            self._observations[str(identity["identity_digest"])] = observations
+            if expected and analysis_complete:
+                for entry in snapshot.get("entries", []):
+                    if not isinstance(entry, dict) or entry.get("automatic_use_eligible") is not True:
+                        continue
+                    profile = profiles.get(str(entry.get("reference_id") or ""))
+                    if not isinstance(profile, dict):
+                        continue
+                    if (
+                        profile.get("subject_kind") == expected[0]
+                        and profile.get("view_kind") == expected[1]
+                        and expected[2] in list(profile.get("affordances") or [])
+                    ):
+                        matches.append({
+                            "reference_id": str(entry["reference_id"]),
+                            "asset_id": str(entry["asset_id"]),
+                            "content_sha256": str(entry["content_sha256"]),
+                        })
+            maximum = min(4, max(1, int(requirement.get("maximum_sources") or 1)))
+            output_bindings = []
+            for plan_item in stored["output_plan"]:
+                binding = {
+                    "output_index": plan_item["output_index"],
+                    "output_nonce": plan_item["output_nonce"],
+                    "matched_references": matches[:maximum],
+                }
+                binding["output_binding_digest"] = doc270_canonical_digest({
+                    "project_id": project_id,
+                    "command_plan_binding_digest": identity["plan_binding_digest"],
+                    "requirement_digest": requirement["requirement_digest"],
+                    "source_library_snapshot_digest": snapshot["snapshot_digest"],
+                    **binding,
+                })
+                output_bindings.append(binding)
+            receipt = {
+                "project_id": project_id,
+                "command_plan_binding_digest": identity["plan_binding_digest"],
+                "requirement_digest": requirement["requirement_digest"],
+                "source_library_snapshot_digest": snapshot["snapshot_digest"],
+                "state": "resolved" if analysis_complete and matches else "optional_uncertain",
+                "matched_references": matches[:maximum],
+                "output_bindings": output_bindings,
+            }
+            receipt["receipt_digest"] = doc270_canonical_digest(receipt)
+            self._receipts[str(identity["identity_digest"])] = receipt
+        return {
+            "protocol": self.protocol,
+            "schema_version": "doc281_general_registered_receipt_v1",
+            "command_identity": dict(identity),
+            "receipt": dict(receipt),
+        }
+
+    def requirement_for_identity(self, identity: dict[str, Any]) -> dict[str, Any] | None:
+        stored = self._identities.get(str(identity.get("identity_digest") or ""))
+        requirement = stored.get("requirement") if isinstance(stored, dict) else None
+        return dict(requirement) if isinstance(requirement, dict) else None
+
+    def observations_for_identity(self, identity: dict[str, Any]) -> list[dict[str, Any]]:
+        return [dict(item) for item in self._observations.get(str(identity.get("identity_digest") or ""), [])]
+
+
+def doc281_general_source_registry_from_environment() -> Doc281GeneralSourceRegistry:
+    """Compose General evidence only from private policy plus V3 vision route."""
+
+    configured = str(os.getenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH") or "").strip()
+    if not configured:
+        return Doc281GeneralSourceRegistry()
+    try:
+        policy = json.loads(Path(configured).read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return Doc281GeneralSourceRegistry()
+    if not isinstance(policy, dict) or set(policy) != {"enabled", "intent_requirements"} or policy.get("enabled") is not True:
+        return Doc281GeneralSourceRegistry()
+    requirements = policy.get("intent_requirements")
+    if not isinstance(requirements, dict):
+        return Doc281GeneralSourceRegistry()
+    try:
+        from ..shared_capabilities.visual_cluster.vision_provider import _lab_vision_enabled, _lab_vision_setting
+        if not _lab_vision_enabled():
+            return Doc281GeneralSourceRegistry()
+        api_key, base_url, model = (_lab_vision_setting(field) for field in ("api_key", "base_url", "model"))
+        analyzer = OpenAICompatibleSourceEvidenceAnalyzer(
+            api_key=api_key, base_url=base_url, model=model,
+            timeout_seconds=float(os.getenv("ALCHEMY_DOC281_GENERAL_SOURCE_ANALYSIS_TIMEOUT_SECONDS", "30")),
+            preferred_protocol="chat",
+        )
+    except (ImportError, ValueError, TypeError):
+        return Doc281GeneralSourceRegistry()
+    if not analyzer.available():
+        return Doc281GeneralSourceRegistry()
+
+    def issue_requirement(*, command_direction: str, **_kwargs: Any) -> dict[str, Any] | None:
+        # This maps only a server-owned explicit command intent to a bounded
+        # semantic requirement. It never sees source IDs or browser selectors.
+        normalized = re.sub(r"\s+", " ", command_direction.lower()).strip()
+        selected = next((value for token, value in requirements.items() if token and token.lower() in normalized), None)
+        if not isinstance(selected, dict) or set(selected) != {"kind", "maximum_sources"}:
+            return None
+        kind = str(selected.get("kind") or "")
+        maximum = selected.get("maximum_sources")
+        if kind not in {"object_front_presentation", "object_rear_structure", "object_detail", "person_environment_context", "brand_scene_material"} or not isinstance(maximum, int) or not 1 <= maximum <= 4:
+            return None
+        value = {"schema_version": "doc281_general_reference_requirement_v1", "kind": kind, "maximum_sources": maximum}
+        return {**value, "requirement_digest": doc270_canonical_digest(value)}
+
+    return Doc281GeneralSourceRegistry(evidence_analyzer=analyzer, requirement_issuer=issue_requirement)
+
+
 class V3ProjectModeService:
     """V3-owned project layer that delegates job execution to Product API."""
 
@@ -318,6 +603,7 @@ class V3ProjectModeService:
         reference_channel_policy_module: ReferenceChannelPolicyModule | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
         ecommerce_view_activation_issuer: EcommerceViewActivationIssuer | None = None,
+        doc281_general_source_registry: Doc281GeneralSourceRegistry | None = None,
     ) -> None:
         self.product_service = product_service or V3ProductApiService()
         self.project_store = project_store or InMemoryProjectStore()
@@ -328,6 +614,12 @@ class V3ProjectModeService:
         self.ecommerce_view_activation_issuer = (
             ecommerce_view_activation_issuer or issuer_from_environment()
         )
+        self.doc281_general_source_registry = doc281_general_source_registry or doc281_general_source_registry_from_environment()
+        if (
+            isinstance(self.doc281_general_source_registry, Doc281GeneralSourceRegistry)
+            and self.doc281_general_source_registry.analysis_entry_loader is None
+        ):
+            self.doc281_general_source_registry.analysis_entry_loader = self._doc281_general_analysis_entries
         self._doc277_planning_lock = threading.RLock()
         # Product API uses this narrow readback only while authenticating a
         # terminal Doc271 record. It reads an append-only Project Mode snapshot
@@ -1155,6 +1447,147 @@ class V3ProjectModeService:
             "selected_original_reference_ids": [item["reference_id"] for item in selected],
             "selected_original_asset_ids": [item["asset_id"] for item in selected],
             "maximum_sources": len(selected),
+            "projection": {
+                "schema_version": "doc270_general_original_source_projection_v1",
+                "state": "activated_resolved",
+                "source_receipt_digest": str(receipt["receipt_digest"]),
+                "source_library_snapshot_digest": str(snapshot["snapshot_digest"]),
+                "sources": selected,
+            },
+        }
+
+    def _doc281_general_registered_receipt_decision(
+        self,
+        project: ProjectRecord,
+        *,
+        identity: dict[str, Any],
+        entry: Any,
+    ) -> dict[str, Any]:
+        """Consume only the named Doc281 private registry response.
+
+        The registry owns requirement/evidence issuance.  This boundary merely
+        re-reads the current project snapshot and freezes a bounded provider
+        projection; it never accepts browser selection metadata.
+        """
+
+        if not isinstance(entry, dict) or set(entry) != {"protocol", "schema_version", "command_identity", "receipt"}:
+            return {"state": "receipt_invalid"}
+        if (
+            entry.get("protocol") != "doc281_general_source_registry_v1"
+            or entry.get("schema_version") != "doc281_general_registered_receipt_v1"
+            or entry.get("command_identity") != identity
+            or not isinstance(entry.get("receipt"), dict)
+        ):
+            return {"state": "receipt_invalid"}
+        receipt = dict(entry["receipt"])
+        if not self._doc270_same_digest_record(receipt, "receipt_digest"):
+            return {"state": "receipt_invalid"}
+        requirement_digest = str(receipt.get("requirement_digest") or "").lower()
+        # A digest-shaped placeholder is not a server-issued requirement
+        # binding. The registry never emits a degenerate digest.
+        if len(requirement_digest) != 64 or len(set(requirement_digest)) == 1:
+            return {"state": "receipt_invalid"}
+        state = str(receipt.get("state") or "").strip()
+        if state in {"not_applicable", "optional_uncertain", "insufficient_evidence", "no_reference"}:
+            return {"state": "prompt_only"}
+        if state != "resolved":
+            return {"state": "receipt_invalid"}
+        try:
+            snapshot = self._doc270_project_source_library(project)
+        except Exception:
+            return {"state": "receipt_invalid"}
+        if (
+            receipt.get("project_id") != project.project_id
+            or receipt.get("command_plan_binding_digest") != identity.get("plan_binding_digest", identity.get("command_plan_binding_digest"))
+            or receipt.get("source_library_snapshot_digest") != snapshot.get("snapshot_digest")
+        ):
+            return {"state": "receipt_invalid"}
+        raw_matches = receipt.get("matched_references")
+        if not isinstance(raw_matches, list) or not raw_matches or len(raw_matches) > 4:
+            return {"state": "receipt_invalid"}
+        entries = {
+            str(item.get("reference_id") or ""): item
+            for item in snapshot.get("entries", [])
+            if isinstance(item, dict)
+        }
+        selected: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in raw_matches:
+            if not isinstance(item, dict):
+                return {"state": "receipt_invalid"}
+            reference_id = str(item.get("reference_id") or "")
+            asset_id = str(item.get("asset_id") or "")
+            sha = str(item.get("content_sha256") or "").lower()
+            entry_item = entries.get(reference_id)
+            if (
+                not reference_id or reference_id in seen or not entry_item
+                or entry_item.get("asset_id") != asset_id
+                or entry_item.get("content_sha256") != sha
+                or entry_item.get("automatic_use_eligible") is not True
+                or entry_item.get("availability_state") != "ready_verified"
+            ):
+                return {"state": "receipt_invalid"}
+            seen.add(reference_id)
+            selected.append({
+                "reference_id": reference_id,
+                "asset_id": asset_id,
+                "content_sha256": sha,
+                "source_receipt_digest": str(receipt["receipt_digest"]),
+            })
+        output_bindings = receipt.get("output_bindings")
+        requested_output_count = identity.get("requested_output_count")
+        output_plan_digest = str(identity.get("output_plan_digest") or "")
+        frozen_output_bindings: list[dict[str, Any]] = []
+        if requested_output_count is not None or output_plan_digest:
+            if (
+                not isinstance(requested_output_count, int) or isinstance(requested_output_count, bool)
+                or not 1 <= requested_output_count <= 8 or len(output_plan_digest) != 64
+                or not isinstance(output_bindings, list) or len(output_bindings) != requested_output_count
+            ):
+                return {"state": "receipt_invalid"}
+            indexes: set[int] = set()
+            for binding in output_bindings:
+                if not isinstance(binding, dict) or set(binding) != {
+                    "output_index", "output_nonce", "matched_references", "output_binding_digest",
+                }:
+                    return {"state": "receipt_invalid"}
+                output_index = binding.get("output_index")
+                output_nonce = str(binding.get("output_nonce") or "")
+                if (
+                    not isinstance(output_index, int) or output_index < 1 or output_index > requested_output_count
+                    or output_index in indexes or len(output_nonce) != 64
+                    or binding.get("matched_references") != raw_matches
+                    or not self._doc270_same_digest_record(
+                        {
+                            "project_id": project.project_id,
+                            "command_plan_binding_digest": identity["plan_binding_digest"],
+                            "requirement_digest": receipt["requirement_digest"],
+                            "source_library_snapshot_digest": receipt["source_library_snapshot_digest"],
+                            "output_index": output_index,
+                            "output_nonce": output_nonce,
+                            "matched_references": raw_matches,
+                            "output_binding_digest": binding.get("output_binding_digest"),
+                        },
+                        "output_binding_digest",
+                    )
+                ):
+                    return {"state": "receipt_invalid"}
+                indexes.add(output_index)
+                frozen_output_bindings.append({
+                    "output_index": output_index,
+                    "output_nonce": output_nonce,
+                    "output_binding_digest": str(binding["output_binding_digest"]),
+                })
+            if indexes != set(range(1, requested_output_count + 1)):
+                return {"state": "receipt_invalid"}
+        return {
+            "state": "activated_resolved",
+            "source_receipt_digest": str(receipt["receipt_digest"]),
+            "source_library_snapshot_digest": str(snapshot["snapshot_digest"]),
+            "selected_original_reference_ids": [item["reference_id"] for item in selected],
+            "selected_original_asset_ids": [item["asset_id"] for item in selected],
+            "maximum_sources": len(selected),
+            "output_source_bindings": frozen_output_bindings,
             "projection": {
                 "schema_version": "doc270_general_original_source_projection_v1",
                 "state": "activated_resolved",
@@ -2318,6 +2751,121 @@ class V3ProjectModeService:
         )
         return self._state_change_response(project, context, feedback=feedback)
 
+    def _doc281_ecommerce_drift_terminal_status(
+        self,
+        project: ProjectRecord,
+        request: CreateProjectJobRequest,
+    ) -> ProductJobStatus | None:
+        """Close a drifted active product association before any write or plan."""
+
+        snapshot = self._doc270_project_source_library(project)
+        drifted = [
+            item for item in snapshot.get("entries", [])
+            if isinstance(item, dict)
+            and item.get("use_policy") == "product"
+            and item.get("availability_state") in {
+                "upload_not_ready", "role_or_channel_invalid", "file_missing", "file_unreadable", "content_drift",
+            }
+        ]
+        if not drifted:
+            return None
+        command_facts = {
+            "project_id": project.project_id,
+            "template_id": ECOMMERCE_TEMPLATE_ID,
+            "explicit_command_key": str(dict(request.metadata or {}).get("idempotency_key") or request.user_input or project.user_goal).strip(),
+            "association_snapshot_digest": str(snapshot.get("snapshot_digest") or ""),
+        }
+        command_identity = {
+            "schema_version": "doc281_source_association_command_identity_v1",
+            "project_id": project.project_id,
+            "template_id": ECOMMERCE_TEMPLATE_ID,
+            "command_id": stable_id("doc281_source_association_command", self._doc270_digest(command_facts)),
+            "command_facts_digest": self._doc270_digest(command_facts),
+        }
+        command_identity["identity_digest"] = self._doc270_digest(command_identity)
+        operation = {
+            "state": "needs_input",
+            "terminal": True,
+            "pending": False,
+            "next_actions": [{"id": "review_product_inputs"}],
+        }
+        receipt = {
+            "schema_version": _DOC281_TERMINAL_RECEIPT_SCHEMA,
+            "identity_digest": command_identity["identity_digest"],
+            "command_identity": command_identity,
+            "association_snapshot_digest": command_facts["association_snapshot_digest"],
+            "public_operation": operation,
+        }
+        receipt["receipt_digest"] = self._doc270_digest(receipt)
+        existing = self.project_store.append_private_record(
+            project.project_id,
+            _DOC281_TERMINAL_RECEIPT_NAMESPACE,
+            receipt,
+        )
+        projected = existing.get("public_operation") if isinstance(existing, dict) else operation
+        return ProductJobStatus(
+            job_id="",
+            status=ProductJobStatusValue.BLOCKED,
+            api_namespace=API_NAMESPACE,
+            ui_entry_route=f"{API_NAMESPACE}/projects/{project.project_id}",
+            metadata={"current_operation": dict(projected) if isinstance(projected, dict) else operation},
+        )
+
+    def _doc281_current_terminal_operation(self, project: ProjectRecord) -> dict[str, Any] | None:
+        """Rehydrate the newest still-current sanitized Doc281 closure."""
+
+        try:
+            snapshot_digest = str(self._doc270_project_source_library(project).get("snapshot_digest") or "")
+        except Exception:
+            return None
+        for receipt in reversed(self.project_store.list_private_records(
+            project.project_id, _DOC281_TERMINAL_RECEIPT_NAMESPACE,
+        )):
+            if not isinstance(receipt, dict) or not self._doc270_same_digest_record(receipt, "receipt_digest"):
+                continue
+            identity = receipt.get("command_identity")
+            operation = receipt.get("public_operation")
+            if (
+                receipt.get("schema_version") != _DOC281_TERMINAL_RECEIPT_SCHEMA
+                or not isinstance(identity, dict)
+                or identity.get("project_id") != project.project_id
+                or identity.get("template_id") != ECOMMERCE_TEMPLATE_ID
+                or receipt.get("association_snapshot_digest") != snapshot_digest
+                or not isinstance(operation, dict)
+                or operation.get("state") != "needs_input"
+                or operation.get("terminal") is not True
+                or operation.get("pending") is not False
+                or operation.get("next_actions") != [{"id": "review_product_inputs"}]
+            ):
+                continue
+            return dict(operation)
+        return None
+
+    def _doc281_general_analysis_entries(self, *, project_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        """Give the shared analyzer only reverified current bytes, ephemerally."""
+
+        result: list[dict[str, Any]] = []
+        for entry in entries:
+            asset_id = str(entry.get("asset_id") or "").strip()
+            expected_sha = str(entry.get("content_sha256") or "").strip().lower()
+            record = self.product_service.get_uploaded_asset(asset_id)
+            path = Path(str(getattr(record, "file_path", "") or "")) if record is not None else None
+            mime_type = str(getattr(record, "mime_type", "") or "").strip().lower()
+            if (
+                not asset_id or len(expected_sha) != 64 or entry.get("automatic_use_eligible") is not True
+                or record is None or str(getattr(getattr(record, "status", None), "value", "")) != "ready"
+                or path is None or not path.is_file() or mime_type not in {"image/png", "image/jpeg", "image/webp"}
+            ):
+                return None
+            try:
+                content = path.read_bytes()
+            except OSError:
+                return None
+            if hashlib.sha256(content).hexdigest() != expected_sha:
+                return None
+            result.append({**entry, "analysis_bytes": content, "mime_type": mime_type})
+        return result or None
+
     def create_project_job(
         self,
         project_id: str,
@@ -2354,35 +2902,98 @@ class V3ProjectModeService:
                     }
                 }
             )
-            capability = self._doc270_general_activation_capability_lookup()
-            if self._doc270_general_activation_capability_valid(
-                capability,
-                template_id=template_manifest.template_id,
-            ):
+            doc281_registry = self.doc281_general_source_registry
+            if doc281_registry.enabled:
                 try:
-                    identity = self._doc270_general_command_identity_lookup(
+                    identity = doc281_registry.issue_command_identity(
                         project_id=project.project_id,
                         template_id=template_manifest.template_id,
+                        command_direction=str(job_request.user_input or project.user_goal or "").strip(),
+                        source_library_snapshot=self._doc270_project_source_library(project),
+                        requested_output_count=_bounded_requested_image_count(
+                            job_request.metadata.get("requested_image_count")
+                        ) or 1,
                     )
-                except Exception:
-                    identity = None
-                if identity is not None:
-                    if self._doc270_general_command_identity_valid(
-                        identity,
+                    if isinstance(identity, dict):
+                        requirement = doc281_registry.requirement_for_identity(identity)
+                        self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_COMMAND_NAMESPACE, {
+                            "schema_version": "doc281_general_command_v1", "identity": dict(identity),
+                            "identity_digest": str(identity.get("identity_digest") or ""),
+                        })
+                        if isinstance(requirement, dict):
+                            self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_REQUIREMENT_NAMESPACE, {
+                                "schema_version": "doc281_general_requirement_v1", "identity_digest": str(identity.get("identity_digest") or ""),
+                                "requirement": dict(requirement),
+                            })
+                    existing_general = (
+                        self._doc270_general_existing_command(project, identity)
+                        if isinstance(identity, dict)
+                        else None
+                    )
+                    if existing_general is not None:
+                        return existing_general
+                    persisted = next((record.get("entry") for record in reversed(self.project_store.list_private_records(
+                        project.project_id, _DOC281_GENERAL_RECEIPT_NAMESPACE,
+                    )) if record.get("identity_digest") == identity.get("identity_digest")), None) if isinstance(identity, dict) else None
+                    entry = dict(persisted) if isinstance(persisted, dict) else doc281_registry.lookup_registered_receipt(
                         project_id=project.project_id,
-                        template_id=template_manifest.template_id,
-                    ) and identity.get("capability_version") == capability.get("capability_version"):
-                        existing_general = self._doc270_general_existing_command(project, identity)
-                        if existing_general is not None:
-                            return existing_general
-                        doc270_general_identity = dict(identity)
-                        doc270_general_activation = self._doc270_general_activation_decision(
-                            project,
+                        command_identity=dict(identity) if isinstance(identity, dict) else None,
+                    )
+                    if isinstance(identity, dict):
+                        for observation in doc281_registry.observations_for_identity(identity):
+                            self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_OBSERVATION_NAMESPACE, {
+                                "schema_version": "doc281_source_evidence_observation_record_v1",
+                                "identity_digest": self._doc270_digest({
+                                    "command_identity_digest": str(identity.get("identity_digest") or ""),
+                                    "observation_digest": str(observation.get("observation_digest") or ""),
+                                }),
+                                "command_identity_digest": str(identity.get("identity_digest") or ""),
+                                "observation": observation,
+                            })
+                    if isinstance(identity, dict) and isinstance(entry, dict):
+                        self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_RECEIPT_NAMESPACE, {
+                            "schema_version": "doc281_general_resolution_receipt_v1", "identity_digest": str(identity.get("identity_digest") or ""),
+                            "entry": dict(entry),
+                        })
+                except Exception:
+                    identity, entry = None, None
+                if isinstance(identity, dict):
+                    doc270_general_identity = dict(identity)
+                    doc270_general_activation = self._doc281_general_registered_receipt_decision(
+                        project,
+                        identity=doc270_general_identity,
+                        entry=entry,
+                    )
+            else:
+                capability = self._doc270_general_activation_capability_lookup()
+                if self._doc270_general_activation_capability_valid(
+                    capability,
+                    template_id=template_manifest.template_id,
+                ):
+                    try:
+                        identity = self._doc270_general_command_identity_lookup(
+                            project_id=project.project_id,
                             template_id=template_manifest.template_id,
-                            identity=doc270_general_identity,
                         )
-                    else:
-                        doc270_general_activation = {"state": "receipt_invalid"}
+                    except Exception:
+                        identity = None
+                    if identity is not None:
+                        if self._doc270_general_command_identity_valid(
+                            identity,
+                            project_id=project.project_id,
+                            template_id=template_manifest.template_id,
+                        ) and identity.get("capability_version") == capability.get("capability_version"):
+                            existing_general = self._doc270_general_existing_command(project, identity)
+                            if existing_general is not None:
+                                return existing_general
+                            doc270_general_identity = dict(identity)
+                            doc270_general_activation = self._doc270_general_activation_decision(
+                                project,
+                                template_id=template_manifest.template_id,
+                                identity=doc270_general_identity,
+                            )
+                        else:
+                            doc270_general_activation = {"state": "receipt_invalid"}
         if template_manifest.template_id == ECOMMERCE_TEMPLATE_ID and (
             job_request.suite_slot_request
             or (
@@ -2404,6 +3015,9 @@ class V3ProjectModeService:
                     }
                 }
             )
+            drift_terminal = self._doc281_ecommerce_drift_terminal_status(project, job_request)
+            if drift_terminal is not None:
+                return drift_terminal
             requested_reference_ids = [
                 str(item).strip()
                 for item in job_request.uploaded_asset_ids
@@ -2639,7 +3253,16 @@ class V3ProjectModeService:
                             ],
                             **(
                                 {
-                                    "doc270_general_original_source_projection": doc270_general_activation["projection"]
+                                    "doc270_general_original_source_projection": doc270_general_activation["projection"],
+                                    **(
+                                        {
+                                            "doc281_general_output_source_bindings_v1": doc270_general_activation[
+                                                "output_source_bindings"
+                                            ],
+                                        }
+                                        if isinstance(doc270_general_activation.get("output_source_bindings"), list)
+                                        else {}
+                                    ),
                                 }
                                 if doc270_general_activation["state"] == "activated_resolved"
                                 else {}
@@ -9863,6 +10486,9 @@ class V3ProjectModeService:
 
     def _project_response(self, project: ProjectRecord) -> ProjectResponse:
         public_project = self._public_project_record(project)
+        disclosures = self._doc281_used_source_disclosures(project)
+        if disclosures:
+            public_project.metadata["doc281_used_source_disclosures"] = disclosures
         metadata = {
             **self._metadata(),
             "project_outputs": self._project_output_items(project, limit=60),
@@ -9870,7 +10496,12 @@ class V3ProjectModeService:
         metadata["project_source_library"] = public_project_source_library(
             self._doc270_project_source_library(project)
         )
-        operation = self._doc277_current_planning_operation(project)
+        # A current association-drift closure is bound to the active source
+        # snapshot and must take precedence over stale planned-job progress.
+        # It is rehydrated privately rather than trusted from project metadata.
+        operation = self._doc281_current_terminal_operation(project)
+        if operation is None:
+            operation = self._doc277_current_planning_operation(project)
         ecommerce_operation: dict[str, Any] | None = None
         ecommerce_transparent_successor = False
         ecommerce_no_job_e32_projection = False
@@ -9919,6 +10550,150 @@ class V3ProjectModeService:
             metadata=metadata,
         )
 
+    def _doc281_used_source_disclosures(self, project: ProjectRecord) -> list[dict[str, Any]]:
+        """Project safe source labels for exact eligible Job/output bindings only."""
+
+        delivered = self._project_output_items(project, limit=60)
+        output_by_id = {
+            self._public_project_output_identity(item): item
+            for item in delivered
+            if self._public_project_output_identity(item)
+        }
+        # Review history is a separate visible surface. Only its established
+        # withheld-review projection may receive a source label; a failed or
+        # merely materialized output is never promoted by this disclosure.
+        for item in self._project_output_items(project, limit=60, include_hidden=True):
+            output_id = self._public_project_output_identity(item)
+            if (
+                output_id
+                and output_id not in output_by_id
+                and self._public_project_output_has_image(item)
+                and str(item.get("certification_state") or "") in {
+                    "manual_confirmation_required", "blocked",
+                }
+            ):
+                output_by_id[output_id] = item
+        visible_positions = {
+            self._public_project_output_identity(item): position
+            for position, item in enumerate(output_by_id.values(), start=1)
+            if self._public_project_output_identity(item)
+        }
+        disclosures: list[dict[str, Any]] = []
+        for output_id, item in output_by_id.items():
+            job_id = str(item.get("job_id") or "").strip()
+            record = self.product_service.get_job_record(job_id)
+            metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+            bindings = metadata.get("doc281_general_output_source_bindings_v1")
+            projection = metadata.get("doc270_general_original_source_projection")
+            if (
+                isinstance(bindings, list)
+                and bindings
+                and isinstance(projection, dict)
+                and isinstance(projection.get("sources"), list)
+                and projection["sources"]
+            ):
+                output_index = self._doc281_persisted_output_binding(
+                    job_id=job_id, output_id=output_id, job_record=record,
+                )
+                if (
+                    isinstance(output_index, int)
+                    and any(
+                        isinstance(binding, dict) and binding.get("output_index") == output_index
+                        for binding in bindings
+                    )
+                ):
+                    disclosures.append({
+                        "output_label": f"Output {visible_positions[output_id]}",
+                        "sources": [{"category": "project_original", "label": "Selected original"}],
+                    })
+                continue
+            receipts = metadata.get("doc270_ecommerce_view_activation_receipts")
+            if not isinstance(receipts, list) or not receipts:
+                continue
+            output_index = self._doc281_persisted_output_binding(
+                job_id=job_id, output_id=output_id, job_record=record,
+            )
+            if (
+                isinstance(output_index, int)
+                and any(
+                    isinstance(receipt, dict)
+                    and receipt.get("output_index") == output_index
+                    and isinstance(receipt.get("matched_references"), list)
+                    and receipt["matched_references"]
+                    for receipt in receipts
+                )
+            ):
+                disclosures.append({
+                    "output_label": f"Output {visible_positions[output_id]}",
+                    "sources": [{"category": "project_original", "label": "Selected original"}],
+                })
+        return disclosures
+
+    def _doc281_persisted_output_binding(
+        self,
+        *,
+        job_id: str,
+        output_id: str,
+        job_record: Any,
+    ) -> int | None:
+        """Read and verify the immutable output-plan envelope on one output."""
+
+        try:
+            output_record = self.product_service.output_store.get_output(output_id)
+        except Exception:
+            return None
+        if output_record is None or str(getattr(output_record, "job_id", "") or "") != job_id:
+            return None
+        envelope = dict(getattr(output_record, "metadata", {}) or {}).get("doc281_output_plan_binding")
+        if not isinstance(envelope, dict) or set(envelope) != {
+            "schema_version", "job_id", "command_identity_digest", "output_index",
+            "output_nonce", "output_binding_digest", "source_receipt_digest", "output_id",
+            "record_binding_digest",
+        } or envelope.get("schema_version") != "doc281_output_plan_binding_v1" \
+            or envelope.get("job_id") != job_id or envelope.get("output_id") != output_id \
+            or not self._doc270_same_digest_record(envelope, "record_binding_digest"):
+            return None
+        metadata = dict(getattr(getattr(job_record, "request", None), "metadata", {}) or {})
+        identity = metadata.get("doc270_general_command_identity")
+        bindings = metadata.get("doc281_general_output_source_bindings_v1")
+        projection = metadata.get("doc270_general_original_source_projection")
+        if isinstance(identity, dict) and isinstance(bindings, list) and isinstance(projection, dict):
+            if envelope.get("command_identity_digest") != identity.get("identity_digest") \
+                or envelope.get("source_receipt_digest") != projection.get("source_receipt_digest"):
+                return None
+            binding = next(
+                (
+                    item for item in bindings
+                    if isinstance(item, dict) and item.get("output_index") == envelope.get("output_index")
+                ),
+                None,
+            )
+            if not isinstance(binding, dict) or any(
+                envelope.get(key) != binding.get(key)
+                for key in ("output_index", "output_nonce", "output_binding_digest")
+            ):
+                return None
+            return envelope["output_index"] if isinstance(envelope.get("output_index"), int) else None
+        ecommerce_identity = metadata.get("doc270_ecommerce_command_identity")
+        receipts = metadata.get("doc270_ecommerce_view_activation_receipts")
+        receipt = next(
+            (
+                item for item in receipts
+                if isinstance(item, dict) and item.get("output_index") == envelope.get("output_index")
+            ),
+            None,
+        ) if isinstance(receipts, list) else None
+        if (
+            not isinstance(ecommerce_identity, dict)
+            or not isinstance(receipt, dict)
+            or envelope.get("command_identity_digest") != ecommerce_identity.get("identity_digest")
+            or envelope.get("output_nonce") != receipt.get("requirement_nonce")
+            or envelope.get("output_binding_digest") != receipt.get("receipt_digest")
+            or envelope.get("source_receipt_digest") != receipt.get("receipt_digest")
+        ):
+            return None
+        return envelope["output_index"] if isinstance(envelope.get("output_index"), int) else None
+
     @staticmethod
     def _public_project_record(project: ProjectRecord) -> ProjectRecord:
         """Keep durable continuation plans out of browser project reads."""
@@ -9939,6 +10714,7 @@ class V3ProjectModeService:
             "imports_lab_runtime",
             "doc90_advanced_reference_controls",
             "advanced_reference_controls",
+            "doc281_used_source_disclosures",
         }
         public_metadata = {
             key: value

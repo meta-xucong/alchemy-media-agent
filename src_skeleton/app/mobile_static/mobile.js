@@ -5472,6 +5472,11 @@ function mobileV3JobNeedsProductInputReview(job) {
 function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentProject) {
   const node = document.querySelector("#mobileV3ProjectCurrentOperation");
   if (!node) return;
+  const terminalOperation = project?.metadata?.current_operation;
+  if (terminalOperation?.terminal === true && terminalOperation?.pending === false) {
+    setMobileV3Busy(false);
+    clearMobileV3Progress();
+  }
   const isEcommerce = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id) === "ecommerce";
   const faceIntegrityWithheld = mobileV3FaceIntegrityReviewWithheldOperation(project, mobileV3State.currentJob);
   if (faceIntegrityWithheld) {
@@ -5789,6 +5794,20 @@ function renderMobileV3EcommerceProjectViewReferences(project, ecommerceView) {
     `;
     board.appendChild(group);
   }
+  const usedSources = Array.isArray(project?.metadata?.doc281_used_source_disclosures)
+    ? project.metadata.doc281_used_source_disclosures : [];
+  usedSources.forEach((disclosure) => {
+    const sources = Array.isArray(disclosure?.sources) ? disclosure.sources : [];
+    const labels = sources
+      .filter((source) => source && typeof source === "object" && source.category === "project_original" && source.label === "Selected original")
+      .map(() => "Selected original")
+      .filter(Boolean);
+    if (!labels.length) return;
+    const note = document.createElement("p");
+    note.className = "v3-mobile-reference-used-source";
+    note.textContent = `${String(disclosure.output_label || "Output").trim()}: ${labels.join("; ")}`;
+    board.appendChild(note);
+  });
 }
 
 function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
@@ -5869,6 +5888,18 @@ function renderMobileV3ReferenceBoard(project = mobileV3State.currentProject) {
     renderGroup("原始参考图", "来自你的上传，是本次生成依据。", groups.original_inputs, "original_inputs");
   }
   renderGroup("已选延续方向", "来自项目成片，只沿用允许继承的方向。", groups.continuation_outputs, "continuation_outputs");
+  const usedSources = Array.isArray(project?.metadata?.doc281_used_source_disclosures)
+    ? project.metadata.doc281_used_source_disclosures : [];
+  usedSources.forEach((disclosure) => {
+    const labels = (Array.isArray(disclosure?.sources) ? disclosure.sources : [])
+      .filter((source) => source && typeof source === "object" && source.category === "project_original" && source.label === "Selected original")
+      .map(() => "Selected original");
+    if (!labels.length) return;
+    const note = document.createElement("p");
+    note.className = "v3-mobile-reference-used-source";
+    note.textContent = `${String(disclosure.output_label || "Output").trim()}: ${labels.join("; ")}`;
+    board.appendChild(note);
+  });
 }
 
 async function selectMobileV3OutputItem(item) {

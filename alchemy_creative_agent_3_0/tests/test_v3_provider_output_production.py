@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
-from alchemy_creative_agent_3_0.app.generation_router.providers import ReferenceInputAdmissionError
+from alchemy_creative_agent_3_0.app.generation_router.providers import (
+    ReferenceInputAdmissionError,
+    build_provider_generation_request,
+)
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import VisionOutputInspector
@@ -299,6 +302,117 @@ def test_production_provider_persists_v3_owned_outputs(tmp_path, monkeypatch) ->
     assert records[0].metadata["final_provider_prompt"] == candidate.metadata["final_provider_prompt"]
     assert records[0].metadata["final_provider_prompt_chars"] == candidate.metadata["final_provider_prompt_chars"]
     assert records[0].metadata["style_notes"] == ["premium", "clean"]
+
+
+def test_production_provider_binds_only_exact_doc281_planned_output_pixels(tmp_path, monkeypatch) -> None:
+    """Exercise the real provider persistence path, not mock materialization."""
+
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+    digest = lambda token: token * 64  # noqa: E731
+    upstream_outputs = [
+        {
+            "b64_json": _png_base64(),
+            "mime_type": "image/png",
+            "format": "png",
+            "output_id": "provider-must-not-own-this-id",
+            "output_index": 999,
+            "output_nonce": "forged",
+        },
+        {
+            "b64_json": _png_base64(80, 64),
+            "mime_type": "image/png",
+            "format": "png",
+        },
+    ]
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001, ARG001
+        return ImageGenerationResult(
+            provider="openai_gpt_image",
+            model="test-image-model",
+            outputs=list(upstream_outputs),
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    try:
+        base = _generation_request()
+        base.generation_plan.metadata = {
+            "job_id": "job_doc281_router",
+            "llm_brain": {
+                "llm_used": True,
+                "fallback_used": False,
+                "canonical_provider_prompts": [{
+                    "output_index": 2,
+                    "prompt": "premium ecommerce product hero image on a clean bright background",
+                    "review_status": "approved",
+                }],
+            },
+            "output_index": 1,
+            "doc270_general_command_identity": {"identity_digest": digest("a")},
+            "doc281_general_output_source_bindings_v1": [{
+                "output_index": 2,
+                "output_nonce": digest("b"),
+                "output_binding_digest": digest("c"),
+            }],
+            "doc270_general_original_source_projection": {
+                "source_receipt_digest": digest("d"),
+                "private_source_asset_id": "must-not-leave-the-frozen-plan",
+            },
+            "final_provider_prompt": "must-not-enter-envelope",
+        }
+        request = build_provider_generation_request(
+            asset_spec=base.asset_spec,
+            layout_plan=base.layout_plan,
+            prompt_compilation=base.prompt_compilation,
+            condition_plan=base.condition_plan,
+            generation_plan=base.generation_plan,
+            job_id="job_doc281_router",
+        )
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        provider.generate(request)
+        records = provider.output_store.list_by_job("job_doc281_router")
+
+        assert len(records) == 2
+        bound_records = [
+            record for record in records if "doc281_output_plan_binding" in record.metadata
+        ]
+        assert len(bound_records) == 1
+        bound_record = bound_records[0]
+        bound = bound_record.metadata["doc281_output_plan_binding"]
+        assert bound["output_index"] == 2
+        assert bound["output_id"] == bound_record.output_id
+        assert bound_record.output_id != "provider-must-not-own-this-id"
+        assert set(bound) == {
+            "schema_version", "job_id", "command_identity_digest", "output_index",
+            "output_nonce", "output_binding_digest", "source_receipt_digest", "output_id",
+            "record_binding_digest",
+        }
+        assert "private_source_asset_id" not in bound
+        assert "final_provider_prompt" not in bound
+        assert sum("doc281_output_plan_binding" not in record.metadata for record in records) == 1
+
+        retry_request = request.model_copy(
+            update={"metadata": {**request.metadata, "visual_auto_retry_attempt": 1}}
+        )
+        provider.generate(retry_request)
+        retry_records = provider.output_store.list_by_job("job_doc281_router")
+        retry_only = [
+            record
+            for record in retry_records
+            if dict(record.metadata or {}).get("visual_auto_retry_attempt") == 1
+        ]
+        assert len(retry_only) == 2
+        assert all(
+            "doc281_output_plan_binding" not in record.metadata
+            for record in retry_only
+        )
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
 
 
 def test_production_provider_blocks_unsigned_request_before_upstream(tmp_path, monkeypatch) -> None:

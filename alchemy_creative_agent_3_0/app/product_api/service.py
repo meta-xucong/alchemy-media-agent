@@ -26,6 +26,7 @@ from ..app_shell.navigation import get_navigation_entry
 from ..app_shell.routes import API_NAMESPACE, get_route_contracts
 from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.rules import RULE_VERSION, stable_id
+from ..creative_core.doc281_output_plan_binding import issue_doc281_output_plan_binding
 from ..generation_router import GenerationRouter, ProductionImageGenerationProvider, safe_runtime_execution_budget
 from ..generation_router.providers import McpMaterializationProvider, build_provider_generation_request
 from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
@@ -3616,7 +3617,15 @@ class V3ProductApiService:
                 output_id=output_id,
                 mime_type=str(handoff.get("artifact_mime_type") or "image/png"),
                 output_format=str(handoff.get("artifact_format") or "png"),
-                metadata={"submitted_mcp_projection": True, "artifact_sha256": artifact_sha256},
+                metadata={
+                    "submitted_mcp_projection": True,
+                    "artifact_sha256": artifact_sha256,
+                    **issue_doc281_output_plan_binding(
+                        record.request.metadata,
+                        job_id=record.job_id,
+                        output_index=1,
+                    ),
+                },
             )
         if (
             existing.job_id != record.job_id
@@ -5010,7 +5019,7 @@ class V3ProductApiService:
 
         updated_assets: list[PackagedAsset] = []
         changed = False
-        for asset in generation_result.asset_pack.assets:
+        for output_index, asset in enumerate(generation_result.asset_pack.assets, start=1):
             metadata = dict(asset.metadata or {})
             candidate_metadata = dict(metadata.get("candidate_metadata") or {})
             candidate_id = str(metadata.get("selected_candidate_id") or "").strip()
@@ -5032,6 +5041,11 @@ class V3ProductApiService:
                         "project_id": record.request.metadata.get("project_id"),
                         "template_id": record.request.metadata.get("template_id"),
                         "requested_image_count": len(generation_result.asset_pack.assets),
+                        **issue_doc281_output_plan_binding(
+                            record.request.metadata,
+                            job_id=record.job_id,
+                            output_index=output_index,
+                        ),
                     },
                 )
             if existing is None:
@@ -12435,8 +12449,17 @@ class V3ProductApiService:
         return payload
 
     def _is_ecommerce_request(self, request: CreateCreativeJobRequest) -> bool:
-        resolution = self.scenario_runtime.scenario_registry.resolve(request.scenario_selection)
-        return resolution.manifest.scenario_id == "ecommerce"
+        # Read-only status/history services may intentionally have no runtime
+        # registry. That is non-E-Commerce, never a browser-controlled guess
+        # or a reason to interrupt review-resume projection.
+        runtime = getattr(self, "scenario_runtime", None)
+        registry = getattr(runtime, "scenario_registry", None)
+        resolver = getattr(registry, "resolve", None)
+        if not callable(resolver):
+            return False
+        resolution = resolver(request.scenario_selection)
+        manifest = getattr(resolution, "manifest", None)
+        return str(getattr(manifest, "scenario_id", "") or "") == "ecommerce"
 
     @staticmethod
     def _normalise_ecommerce_execution_key(value: Any) -> str:
@@ -13971,7 +13994,14 @@ class V3ProductApiService:
         digest_payload = {
             "schema_version": library.get("schema_version"),
             "project_id": library.get("project_id"),
-            "entries": library.get("entries"),
+            # Project Mode binds source-library snapshots independently of
+            # association insertion order.  This check must use the same
+            # canonical view while leaving Doc269's selected physical inputs
+            # and their provider cap untouched.
+            "entries": sorted(
+                library.get("entries"),
+                key=_doc270_canonical_digest,
+            ),
         }
         if not claimed_digest or claimed_digest != _doc270_canonical_digest(digest_payload):
             raise ValueError("doc270_source_library_invalid")

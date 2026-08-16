@@ -105,6 +105,7 @@ class V3GeneratedOutputStore:
         _write_resized_png(content, preview_path, max_side=1600)
         _write_resized_png(content, thumbnail_path, max_side=512)
 
+        stored_metadata = _doc281_bind_output_record_metadata(dict(metadata or {}), output_id=output_id)
         record = V3GeneratedOutputRecord(
             output_id=output_id,
             job_id=job_id,
@@ -123,7 +124,7 @@ class V3GeneratedOutputStore:
             preview_url=preview_route(output_id),
             thumbnail_url=thumbnail_route(output_id),
             created_at=_now_iso(),
-            metadata={**(metadata or {}), "v3_owned_output": True, "content_sha256": content_sha256},
+            metadata={**stored_metadata, "v3_owned_output": True, "content_sha256": content_sha256},
         )
         self._write_record(record)
         self._invalidate_cache()
@@ -315,6 +316,26 @@ def _now_iso() -> str:
 
 def _valid_output_id(output_id: str) -> bool:
     return bool(_OUTPUT_ID_PATTERN.match(str(output_id or "")))
+
+
+def _doc281_bind_output_record_metadata(metadata: dict, *, output_id: str) -> dict:
+    """Bind a server-issued plan item to the immutable persisted output ID."""
+
+    result = dict(metadata)
+    envelope = result.get("doc281_output_plan_binding")
+    required = {
+        "schema_version", "job_id", "command_identity_digest", "output_index",
+        "output_nonce", "output_binding_digest", "source_receipt_digest",
+    }
+    if not isinstance(envelope, dict) or set(envelope) != required:
+        return result
+    bound = {**envelope, "output_id": output_id}
+    digest_payload = json.dumps(bound, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    result["doc281_output_plan_binding"] = {
+        **bound,
+        "record_binding_digest": hashlib.sha256(digest_payload.encode("utf-8")).hexdigest(),
+    }
+    return result
 
 
 def _canonical_output_files_match_record(record: V3GeneratedOutputRecord, output_dir: Path) -> bool:

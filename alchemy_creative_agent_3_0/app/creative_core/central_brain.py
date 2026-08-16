@@ -135,6 +135,24 @@ class CentralCreativeBrain:
                 "mode_role_key": mode_role_recipe.get("role_key") if mode_role_recipe else None,
                 "mode_role_label": mode_role_recipe.get("label") if mode_role_recipe else None,
                 "output_index": index,
+                # Doc281 has a frozen server receipt per planned output. The
+                # router may transport these digest-only facts but Provider
+                # response fields cannot create or select them.
+                "doc270_general_command_identity": context.metadata.get(
+                    "doc270_general_command_identity"
+                ),
+                "doc281_general_output_source_bindings_v1": context.metadata.get(
+                    "doc281_general_output_source_bindings_v1"
+                ),
+                "doc270_general_original_source_projection": context.metadata.get(
+                    "doc270_general_original_source_projection"
+                ),
+                "doc270_ecommerce_command_identity": context.metadata.get(
+                    "doc270_ecommerce_command_identity"
+                ),
+                "doc270_ecommerce_view_activation_receipts": context.metadata.get(
+                    "doc270_ecommerce_view_activation_receipts"
+                ),
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "scenario_id": context.metadata.get("scenario_id"),
@@ -408,6 +426,21 @@ class CentralCreativeBrain:
                 "mode_role_key": mode_role_recipe.get("role_key") if mode_role_recipe else None,
                 "mode_role_label": mode_role_recipe.get("label") if mode_role_recipe else None,
                 "output_index": index,
+                "doc270_general_command_identity": context.metadata.get(
+                    "doc270_general_command_identity"
+                ),
+                "doc281_general_output_source_bindings_v1": context.metadata.get(
+                    "doc281_general_output_source_bindings_v1"
+                ),
+                "doc270_general_original_source_projection": context.metadata.get(
+                    "doc270_general_original_source_projection"
+                ),
+                "doc270_ecommerce_command_identity": context.metadata.get(
+                    "doc270_ecommerce_command_identity"
+                ),
+                "doc270_ecommerce_view_activation_receipts": context.metadata.get(
+                    "doc270_ecommerce_view_activation_receipts"
+                ),
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "scenario_id": context.metadata.get("scenario_id"),

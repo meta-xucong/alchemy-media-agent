@@ -26,6 +26,10 @@ from ..creative_core.mcp_reference_partition import (
     build_mcp_body_reference_partition,
 )
 from ..creative_core.rules import stable_id
+from ..creative_core.doc281_output_plan_binding import (
+    doc281_output_index_from_plan_position,
+    issue_doc281_output_plan_binding,
+)
 from ..condition_engine.providers import ProviderCapabilities
 from ..schemas import AssetSpec, CandidateResult, ConditionPlan, GenerationPlan, LayoutPlan, PromptCompilationResult
 from ..shared_capabilities.visual_cluster.adaptive_reference import infer_target_framing, infer_target_view
@@ -341,6 +345,16 @@ def build_provider_generation_request(
             "generation_channel": metadata.get("generation_channel", "provider"),
             "mcp_operation_id": metadata.get("mcp_operation_id"),
             "mcp_materialization": metadata.get("mcp_materialization"),
+            # The central planner assigns one immutable output position. This
+            # is server plan provenance, never a Provider response field.
+            "doc281_output_plan_index": doc281_output_index_from_plan_position(
+                metadata.get("output_index")
+            ),
+            "doc270_general_command_identity": metadata.get("doc270_general_command_identity"),
+            "doc281_general_output_source_bindings_v1": metadata.get("doc281_general_output_source_bindings_v1"),
+            "doc270_general_original_source_projection": metadata.get("doc270_general_original_source_projection"),
+            "doc270_ecommerce_command_identity": metadata.get("doc270_ecommerce_command_identity"),
+            "doc270_ecommerce_view_activation_receipts": metadata.get("doc270_ecommerce_view_activation_receipts"),
         },
     )
 
@@ -1002,7 +1016,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             app_request,
             reference_assets,
             reference_input_execution=reference_input_execution,
-            output_index=self._frozen_output_index(request),
+            **self._timeout_retry_contract_kwargs(request),
         )
         provider_failure_retry = dict(self._last_provider_failure_retry_summary or {})
         candidates: list[CandidateResult] = []
@@ -1105,14 +1119,29 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if isinstance(output.get("mcp_materialization"), dict)
                 else {}
             )
+            job_id = str(request.metadata.get("job_id") or request.generation_plan.metadata.get("job_id") or "v3_job")
+            planned_output_index = request.metadata.get("doc281_output_plan_index")
+            output_binding = (
+                issue_doc281_output_plan_binding(
+                    request.metadata,
+                    job_id=job_id,
+                    output_index=planned_output_index,
+                    refine_round=retry_attempt,
+                )
+                if index == 0 and type(planned_output_index) is int
+                else {}
+            )
             record = self.output_store.save_base64_output(
-                job_id=str(request.metadata.get("job_id") or request.generation_plan.metadata.get("job_id") or "v3_job"),
+                job_id=job_id,
                 candidate_id=candidate_id,
                 asset_id=request.generation_plan.asset_id,
                 provider=str(getattr(result, "provider", provider_name)),
                 model=str(getattr(result, "model", "") or ""),
                 encoded_image=str(encoded),
-                output_id=output.get("output_id"),
+                # Provider pixels never author the persisted output identity.
+                # The output store creates it, then binds the server-issued
+                # Doc281 skeleton to that immutable record.
+                output_id=None,
                 mime_type=output.get("mime_type"),
                 output_format=output.get("format") or app_request.prompt_plan.output_format,
                 width=output.get("width"),
@@ -1185,6 +1214,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "mode_role_label": mode_role_recipe.get("label"),
                     "strong_reference_closure_package": strong_reference_closure,
                     "mode_quality_profile": mode_quality_profile,
+                    **output_binding,
                 },
             )
             mcp_handoff_id = str(mcp_materialization.get("handoff_id") or "").strip()
@@ -1485,6 +1515,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if value < 1:
             raise ProviderRuntimeError("Generation output index is unavailable.")
         return value
+
+    def _timeout_retry_contract_kwargs(self, request: GenerationRequest) -> dict[str, int]:
+        """Keep the ordinary Provider's per-output retry audit server-bound."""
+
+        return {"output_index": self._frozen_output_index(request)}
 
     @staticmethod
     def _provider_upstream_code(exc: BaseException) -> str:
@@ -6389,6 +6424,11 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
 
     provider_name = "mcp_codex_native_materialization"
     provider_version = "v3.1-doc183-shared-materialization"
+
+    def _timeout_retry_contract_kwargs(self, request: GenerationRequest) -> dict[str, int]:
+        """MCP consumes one explicit handoff; it has no Provider retry index."""
+
+        return {}
 
     def __init__(self, output_store: Any | None = None, handoff_store: McpMaterializationHandoffStore | None = None) -> None:
         super().__init__(output_store=output_store)
