@@ -1169,7 +1169,7 @@ def test_doc281_general_reference_board_renders_only_allowlisted_used_source_dis
             browser.close()
 
 
-@pytest.mark.parametrize("fault", ["not_ready", "role_drift", "file_missing", "digest_drift"])
+@pytest.mark.parametrize("fault", ["not_ready", "role_drift", "upload_missing", "file_missing", "digest_drift"])
 def test_doc281_active_historical_product_drift_closes_once_with_sanitized_terminal_operation(
     tmp_path,
     fault: str,
@@ -1196,7 +1196,9 @@ def test_doc281_active_historical_product_drift_closes_once_with_sanitized_termi
         handlers.service.asset_store._save_record(  # noqa: SLF001
             upload.model_copy(update={"role": "face_reference"})
         )
-    if fault == "file_missing":
+    if fault == "upload_missing":
+        assert handlers.service.asset_store.delete_upload(product_id) is True
+    elif fault == "file_missing":
         Path(str(upload.file_path)).unlink()
     elif fault == "digest_drift":
         Path(str(upload.file_path)).write_bytes(b"doc281-current-sha-drift")
@@ -1242,7 +1244,7 @@ def test_doc281_active_historical_product_drift_closes_once_with_sanitized_termi
     # A repaired original alone never resurrects an old command. A new explicit
     # command owns the only permitted recovery path and clears the old closure.
     handlers.service.asset_store._save_record(upload)  # noqa: SLF001
-    if fault in {"file_missing", "digest_drift"}:
+    if fault in {"upload_missing", "file_missing", "digest_drift"}:
         Path(str(upload.file_path)).write_bytes(original_bytes)
     repaired = handlers.post_project_job(
         project["project_id"],

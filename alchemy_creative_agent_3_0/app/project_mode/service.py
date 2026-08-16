@@ -3011,7 +3011,7 @@ class V3ProjectModeService:
             if isinstance(item, dict)
             and item.get("use_policy") == "product"
             and item.get("availability_state") in {
-                "upload_not_ready", "role_or_channel_invalid", "file_missing", "file_unreadable", "content_drift",
+                "upload_missing", "upload_not_ready", "role_or_channel_invalid", "file_missing", "file_unreadable", "content_drift",
             }
         ]
         if not drifted:

@@ -9,6 +9,9 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
 from alchemy_creative_agent_3_0.app.project_mode.service import EcommerceSlotContinuationError
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 from app.main import app
@@ -20,18 +23,27 @@ ROOT = Path(__file__).resolve().parents[2]
 def _handlers(*, project_store=None) -> V3ProductRouteHandlers:
     """Slot lineage tests use an explicit remote-Brain contract fixture."""
 
-    return V3ProductRouteHandlers(service=ecommerce_test_service(), project_store=project_store)
+    return V3ProductRouteHandlers(
+        service=ecommerce_test_service(),
+        project_store=project_store,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+    )
 
 
-def _png_base64() -> str:
+def _png_base64(color: tuple[int, int, int] = (184, 194, 210)) -> str:
     from PIL import Image
 
     buffer = BytesIO()
-    Image.new("RGB", (16, 16), color=(184, 194, 210)).save(buffer, format="PNG")
+    Image.new("RGB", (16, 16), color=color).save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def _ready_product_upload(handlers: V3ProductRouteHandlers, *, filename: str) -> str:
+def _ready_product_upload(
+    handlers: V3ProductRouteHandlers,
+    *,
+    filename: str,
+    color: tuple[int, int, int] = (184, 194, 210),
+) -> str:
     created = handlers.post_uploads(
         {
             "filename": filename,
@@ -40,7 +52,7 @@ def _ready_product_upload(handlers: V3ProductRouteHandlers, *, filename: str) ->
             "role": "product_reference",
         }
     )
-    handlers.put_upload_content(created["asset_id"], {"content_base64": _png_base64(), "mime_type": "image/png"})
+    handlers.put_upload_content(created["asset_id"], {"content_base64": _png_base64(color), "mime_type": "image/png"})
     assert handlers.post_upload_complete(created["asset_id"])["status"] == "ready"
     return created["asset_id"]
 
@@ -179,7 +191,11 @@ def test_slot_amendment_requires_new_authorized_evidence_and_is_bounded(monkeypa
 
     assert amended["metadata"]["plan_amendment_applied"] is True
     assert amended["lineage"]["plan_amendment_id"]
-    newer_evidence = _ready_product_upload(handlers, filename="newer-evidence.png")
+    newer_evidence = _ready_product_upload(
+        handlers,
+        filename="newer-evidence.png",
+        color=(210, 184, 194),
+    )
     handlers.post_project_reference(
         project["project_id"],
         {"asset_ref_id": newer_evidence, "use_policy": "product", "label": "newer product evidence"},

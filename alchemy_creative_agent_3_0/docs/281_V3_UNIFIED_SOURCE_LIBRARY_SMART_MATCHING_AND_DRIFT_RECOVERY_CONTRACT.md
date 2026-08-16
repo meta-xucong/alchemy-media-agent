@@ -185,10 +185,13 @@ separate; a matcher receipt cannot weaken any of them. The current Doc269
 physical plan remains the only authority for exact provider input order and
 count.
 
-An active product association that now has one of `upload_not_ready`,
-`role_or_channel_invalid`, `file_missing`, or `content_drift` is not absence of
-a product and must not make an E-Commerce command prompt-only. Before a new
-command tries to persist/re-upsert that association, the server must:
+An active product association that now has one of `upload_missing`,
+`upload_not_ready`, `role_or_channel_invalid`, `file_missing`, or
+`content_drift` is not absence of a product and must not make an E-Commerce
+command prompt-only. `upload_missing` means the persisted project association
+outlived its V3 upload record; it belongs to the same no-Job terminal closure
+class as a missing or unreadable file. Before a new command tries to
+persist/re-upsert that association, the server must:
 
 1. inspect the association and current upload/file/SHA facts;
 2. create or return the same idempotent terminal receipt for the current
@@ -202,8 +205,8 @@ Provider dispatch, or review. It creates no Job ID and leaves `project.job_ids`
 unchanged. Repeated delivery of the same command returns the one persisted
 terminal receipt, including after constructing a new service/store reader.
 Only a relevant repaired product original and a new explicit command may
-replace it. This applies equally to readiness, role/channel, missing-file, and
-SHA/content drift.
+replace it. This applies equally to a missing upload record, readiness,
+role/channel, missing-file, and SHA/content drift.
 
 Its private persistence namespace is
 `doc281_source_association_terminal_receipts_v1`; the receipt schema is

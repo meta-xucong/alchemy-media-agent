@@ -16,6 +16,9 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryVisualAssetCreateRequest,
     ProjectVisualAssetBindingService,
@@ -43,6 +46,7 @@ def _handlers(tmp_path) -> tuple[V3ProductRouteHandlers, VisualAssetLibraryCatal
             project_store=InMemoryProjectStore(),
             visual_asset_library_catalog=catalog,
             project_visual_asset_binding_service=bindings,
+            ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
         ),
         catalog,
     )

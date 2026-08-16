@@ -27,11 +27,15 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore
+from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
     ProjectReferenceAsset,
     ProjectReferenceSourceType,
     ProjectReferenceStatus,
     ProjectReferenceUsePolicy,
+)
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
 )
 from alchemy_creative_agent_3_0.app.visual_assets.library import (
     LibraryVisualAssetCreateRequest,
@@ -73,9 +77,39 @@ def _handlers(tmp_path) -> tuple[V3ProductRouteHandlers, VisualAssetLibraryCatal
             project_store=InMemoryProjectStore(),
             visual_asset_library_catalog=catalog,
             project_visual_asset_binding_service=bindings,
+            ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
         ),
         catalog,
     )
+
+
+def test_doc264_legacy_handler_fixture_disables_e31_when_environment_is_enabled(tmp_path, monkeypatch) -> None:
+    """Legacy recovery contracts must not inherit the developer E31 deployment route."""
+
+    class _EnvironmentEnabledIssuer:
+        def capability(self, *, project_id: str) -> dict[str, object]:
+            return {"enabled": True, "project_id": project_id}
+
+        def supports_output_count(self, *, expected_output_count: int) -> bool:
+            return expected_output_count > 0
+
+        def issue(self, **_kwargs):
+            raise AssertionError("The legacy fixture must never use the environment issuer.")
+
+    environment_issuer = _EnvironmentEnabledIssuer()
+    monkeypatch.setattr(
+        project_mode_service,
+        "issuer_from_environment",
+        lambda: environment_issuer,
+    )
+
+    handlers, _catalog = _handlers(tmp_path)
+
+    assert isinstance(
+        handlers.project_service.ecommerce_view_activation_issuer,
+        DisabledEcommerceViewActivationIssuer,
+    )
+    assert handlers.project_service.ecommerce_view_activation_issuer is not environment_issuer
 
 
 def _ready_product_upload(
@@ -254,6 +288,27 @@ def _forbid_planning_and_dispatch(monkeypatch, handlers: V3ProductRouteHandlers)
 
     monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", _unexpected_plan)
     monkeypatch.setattr(handlers.service.scenario_runtime, "generate_job", _unexpected_dispatch)
+    return calls
+
+
+def _forbid_brain_and_review(monkeypatch, handlers: V3ProductRouteHandlers) -> dict[str, int]:
+    """Current association drift must close before creative and review work."""
+
+    calls = {"brain": 0, "review": 0}
+    runtime = handlers.service.scenario_runtime
+    original_brain_run = runtime.llm_brain_adapter.run
+    original_review = handlers.service._attach_post_generation_review  # noqa: SLF001
+
+    def _unexpected_brain(*args, **kwargs):
+        calls["brain"] += 1
+        return original_brain_run(*args, **kwargs)
+
+    def _unexpected_review(*args, **kwargs):
+        calls["review"] += 1
+        return original_review(*args, **kwargs)
+
+    monkeypatch.setattr(runtime.llm_brain_adapter, "run", _unexpected_brain)
+    monkeypatch.setattr(handlers.service, "_attach_post_generation_review", _unexpected_review)
     return calls
 
 
@@ -546,6 +601,8 @@ def test_doc264_invalid_legacy_facts_close_before_brain_or_provider_with_one_san
     else:
         _server_owned_legacy_upload_facts(handlers, product_id, mutation=mutation)
     calls = _forbid_planning_and_dispatch(monkeypatch, handlers)
+    brain_and_review_calls = _forbid_brain_and_review(monkeypatch, handlers)
+    before_job_ids = list(handlers.project_service._require_project(project["project_id"]).job_ids)  # noqa: SLF001
     blocked = handlers.post_project_job(
         project["project_id"],
         {
@@ -577,6 +634,8 @@ def test_doc264_invalid_legacy_facts_close_before_brain_or_provider_with_one_san
     assert "product_truth_admission_invalid" not in public_json
     assert "browser-forged" not in public_json
     assert calls == {"plan": 0, "dispatch": 0}
+    if mutation == "not_ready":
+        assert brain_and_review_calls == {"brain": 0, "review": 0}
     project_response = handlers.get_project(project["project_id"])
     assert project_response["metadata"]["current_operation"] == {
         "state": "needs_input",
@@ -585,14 +644,19 @@ def test_doc264_invalid_legacy_facts_close_before_brain_or_provider_with_one_san
         "next_actions": [{"id": "review_product_inputs"}],
     }
     loaded = project_response["project"]
-    assert loaded["job_ids"][0] == historical["job_id"]
-    assert blocked["job_id"] != historical["job_id"]
     historical_record = handlers.service.get_job_record(historical["job_id"])
-    terminal_record = handlers.service.get_job_record(blocked["job_id"])
     assert historical_record is not None
-    assert terminal_record is not None
     assert historical_record.status == ProductJobStatusValue.BLOCKED
-    assert terminal_record.status == ProductJobStatusValue.BLOCKED
+    if mutation == "not_ready":
+        assert blocked.get("job_id") in (None, "")
+        assert loaded["job_ids"] == before_job_ids
+        assert handlers.service.get_job_record(str(blocked.get("job_id") or "")) is None
+    else:
+        terminal_record = handlers.service.get_job_record(blocked["job_id"])
+        assert loaded["job_ids"][0] == historical["job_id"]
+        assert blocked["job_id"] != historical["job_id"]
+        assert terminal_record is not None
+        assert terminal_record.status == ProductJobStatusValue.BLOCKED
     assert all(
         handlers.service.get_job_record(job_id).status
         not in {
@@ -698,6 +762,8 @@ def test_doc264_active_product_association_with_role_drift_closes_before_text_to
         record.model_copy(update={"role": "face_reference"})
     )
     calls = _forbid_planning_and_dispatch(monkeypatch, handlers)
+    brain_and_review_calls = _forbid_brain_and_review(monkeypatch, handlers)
+    before_job_ids = list(handlers.project_service._require_project(project["project_id"]).job_ids)  # noqa: SLF001
 
     blocked = handlers.post_project_job(
         project["project_id"],
@@ -715,9 +781,12 @@ def test_doc264_active_product_association_with_role_drift_closes_before_text_to
         "pending": False,
         "next_actions": [{"id": "review_product_inputs"}],
     }
-    assert blocked["metadata"]["ecommerce_text_to_image_fallback"] is False
-    assert blocked["metadata"]["has_product_reference"] is True
+    assert blocked.get("job_id") in (None, "")
+    assert handlers.project_service._require_project(project["project_id"]).job_ids == before_job_ids  # noqa: SLF001
+    assert "ecommerce_text_to_image_fallback" not in blocked["metadata"]
+    assert "has_product_reference" not in blocked["metadata"]
     assert calls == {"plan": 0, "dispatch": 0}
+    assert brain_and_review_calls == {"brain": 0, "review": 0}
 
 
 def test_doc264_active_product_association_with_missing_upload_closes_before_text_to_image(
@@ -741,6 +810,8 @@ def test_doc264_active_product_association_with_missing_upload_closes_before_tex
     )
     assert handlers.service.asset_store.delete_upload(product_id) is True
     calls = _forbid_planning_and_dispatch(monkeypatch, handlers)
+    brain_and_review_calls = _forbid_brain_and_review(monkeypatch, handlers)
+    before_job_ids = list(handlers.project_service._require_project(project["project_id"]).job_ids)  # noqa: SLF001
 
     blocked = handlers.post_project_job(
         project["project_id"],
@@ -758,9 +829,12 @@ def test_doc264_active_product_association_with_missing_upload_closes_before_tex
         "pending": False,
         "next_actions": [{"id": "review_product_inputs"}],
     }
-    assert blocked["metadata"]["ecommerce_text_to_image_fallback"] is False
-    assert blocked["metadata"]["has_product_reference"] is True
+    assert blocked.get("job_id") in (None, "")
+    assert handlers.project_service._require_project(project["project_id"]).job_ids == before_job_ids  # noqa: SLF001
+    assert "ecommerce_text_to_image_fallback" not in blocked["metadata"]
+    assert "has_product_reference" not in blocked["metadata"]
     assert calls == {"plan": 0, "dispatch": 0}
+    assert brain_and_review_calls == {"brain": 0, "review": 0}
 
 
 def test_doc264_no_product_reference_ecommerce_keeps_text_to_image_path(tmp_path) -> None:
