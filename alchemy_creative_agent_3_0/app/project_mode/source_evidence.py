@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+from json import JSONDecodeError
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -152,14 +153,14 @@ class OpenAICompatibleSourceEvidenceAnalyzer:
                 timeout=self.timeout_seconds,
                 max_output_tokens=SOURCE_EVIDENCE_OUTPUT_TOKEN_BUDGET,
             )
-            return validated_semantic_response(json.loads(str(getattr(response, "output_text", "") or "")))
+            return semantic_response_from_text(str(getattr(response, "output_text", "") or ""))
         response = client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": [{"type": "text", "text": instruction}, {"type": "image_url", "image_url": {"url": data_url}}]}],
-            response_format={"type": "json_object"}, timeout=self.timeout_seconds,
+            response_format={"type": "json_object"}, temperature=0, timeout=self.timeout_seconds,
             max_tokens=SOURCE_EVIDENCE_OUTPUT_TOKEN_BUDGET,
         )
-        return validated_semantic_response(json.loads(str(response.choices[0].message.content or "")))
+        return semantic_response_from_text(str(response.choices[0].message.content or ""))
 
 
 def semantic_response_schema() -> dict[str, Any]:
@@ -172,9 +173,20 @@ def semantic_response_schema() -> dict[str, Any]:
 
 
 def semantic_analysis_instruction() -> str:
+    subject_values = ", ".join(SEMANTIC_SUBJECT_KINDS)
+    view_values = ", ".join(SEMANTIC_VIEW_KINDS)
+    affordance_values = ", ".join(SEMANTIC_AFFORDANCES)
     return (
-        "Inspect only the supplied image. Return exactly one JSON object with exactly these fields: "
-        "evidence_state, subject_kind, view_kind, affordances. Do not infer identity, filename, project, user intent, or prompt."
+        "Inspect only the supplied image. Return plain JSON only, with no Markdown and no explanation. "
+        "Return exactly this schema: {\"evidence_state\":\"observed\",\"subject_kind\":\"one_enum\","
+        "\"view_kind\":\"one_enum\",\"affordances\":[\"one_primary_enum\"]}. "
+        "Allowed evidence_state: observed. "
+        f"Allowed subject_kind values: {subject_values}. "
+        f"Allowed view_kind values: {view_values}. "
+        f"Allowed affordances values: {affordance_values}. "
+        "Use only exact allowed enum strings. Do not create synonyms or longer labels. "
+        "Choose exactly one primary affordance for the dominant visual evidence; do not include secondary marks or decorative details. "
+        "Do not infer identity, filename, project, user intent, prompt, or private identifiers."
     )
 
 
@@ -192,3 +204,61 @@ def validated_semantic_response(payload: Any) -> dict[str, Any]:
     if not semantic_response_is_valid(payload):
         raise ValueError("source_evidence_response_invalid")
     return dict(payload)
+
+
+def semantic_response_from_text(raw: Any) -> dict[str, Any]:
+    text = str(raw or "").strip()
+    for candidate in _semantic_json_candidates(text):
+        try:
+            payload = json.loads(candidate)
+        except JSONDecodeError:
+            continue
+        return validated_semantic_response(payload)
+    raise ValueError("source_evidence_response_invalid")
+
+
+def _semantic_json_candidates(text: str) -> tuple[str, ...]:
+    if not text:
+        return ()
+    candidates: list[str] = [text]
+    fenced = _strip_markdown_json_fence(text)
+    if fenced and fenced not in candidates:
+        candidates.append(fenced)
+    balanced = _first_balanced_json_object(fenced or text)
+    if balanced and balanced not in candidates:
+        candidates.append(balanced)
+    return tuple(candidates)
+
+
+def _strip_markdown_json_fence(text: str) -> str:
+    lines = text.strip().splitlines()
+    if len(lines) >= 3 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _first_balanced_json_object(text: str) -> str:
+    start = text.find("{")
+    if start < 0:
+        return ""
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, character in enumerate(text[start:], start=start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return ""
