@@ -702,15 +702,8 @@ def test_doc270_phase4_bundled_policy_activates_only_supported_output_counts(mon
         "lab_doubao_vision_base_url": settings.lab_doubao_vision_base_url,
         "lab_doubao_vision_model": settings.lab_doubao_vision_model,
     }
-    policy_path = (
-        Path(__file__).resolve().parents[1]
-        / "app"
-        / "project_mode"
-        / "policies"
-        / "doc270_ecommerce_view_policy_v1.json"
-    )
     try:
-        monkeypatch.setenv("ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH", str(policy_path))
+        monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH", raising=False)
         monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_API_KEY", raising=False)
         monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_BASE_URL", raising=False)
         monkeypatch.delenv("ALCHEMY_DOC270_ECOMMERCE_SOURCE_ANALYSIS_MODEL", raising=False)

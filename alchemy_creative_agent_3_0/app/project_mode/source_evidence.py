@@ -12,6 +12,7 @@ from typing import Any, Protocol, runtime_checkable
 
 
 SOURCE_EVIDENCE_OUTPUT_TOKEN_BUDGET = 640
+REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET = 120
 SEMANTIC_PROFILE_KEYS = frozenset({"evidence_state", "subject_kind", "view_kind", "affordances"})
 SEMANTIC_SUBJECT_KINDS = ("object_or_product", "person", "brand_or_graphic")
 SEMANTIC_VIEW_KINDS = ("front", "rear", "detail_or_macro", "environment_wide", "packaging")
@@ -40,6 +41,73 @@ class CallableSourceEvidenceAnalyzer:
 
     def analyze(self, *, project_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
         return self._callback(project_id=project_id, entries=entries)
+
+
+class OpenAICompatibleTextRequirementIssuer:
+    """Strict text-only Doc281 requirement classifier.
+
+    It deliberately has no source-library argument: candidate evidence remains
+    exclusively with the server matcher after this bounded intent decision.
+    """
+
+    def __init__(self, *, api_key: str | None, base_url: str | None, model: str | None,
+                 allowed_kinds: tuple[str, ...], maximum_sources: int, timeout_seconds: float = 30.0) -> None:
+        self.api_key, self.base_url, self.model = (str(value or "").strip() for value in (api_key, base_url, model))
+        self.allowed_kinds = tuple(item for item in allowed_kinds if isinstance(item, str) and item)
+        self.maximum_sources = maximum_sources
+        self.timeout_seconds = max(0.5, min(float(timeout_seconds), 90.0))
+
+    def available(self) -> bool:
+        return bool(
+            self.api_key
+            and self.base_url
+            and self.model
+            and self.allowed_kinds
+            and len(self.allowed_kinds) == len(set(self.allowed_kinds))
+            and isinstance(self.maximum_sources, int)
+            and not isinstance(self.maximum_sources, bool)
+            and 1 <= self.maximum_sources <= 4
+        )
+
+    def __call__(self, *, command_direction: str) -> dict[str, Any] | None:
+        if not self.available() or not isinstance(command_direction, str) or not command_direction.strip():
+            return None
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=self.api_key, base_url=self.base_url, max_retries=0)
+            response = client.chat.completions.create(model=self.model, messages=[{"role":"user","content":(
+                requirement_classification_instruction(self.allowed_kinds) + "\nCommand: " + command_direction)}],
+                response_format={"type":"json_object"}, timeout=self.timeout_seconds,
+                max_tokens=REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET)
+            value = json.loads(str(response.choices[0].message.content or ""))
+        except Exception:
+            return None
+        if not isinstance(value, dict) or set(value) != {"state", "kind"}:
+            return None
+        state, kind = value.get("state"), value.get("kind")
+        if state == "optional_uncertain" and kind == "none":
+            return {"state": state}
+        if state != "required" or kind not in self.allowed_kinds:
+            return None
+        return {"state": "required", "kind": kind, "maximum_sources": self.maximum_sources}
+
+
+def requirement_classification_instruction(allowed_kinds: tuple[str, ...]) -> str:
+    """Return the complete policy-owned, text-only classifier contract.
+
+    The vocabulary is deliberately rendered by the server from the validated
+    packaged policy.  The command is appended by the caller only after this
+    invariant contract, so no candidate-library value can become a selector.
+    """
+
+    vocabulary = json.dumps(list(allowed_kinds), ensure_ascii=True, separators=(",", ":"))
+    return (
+        "Classify only the command text into this closed requirement vocabulary: " + vocabulary + ". "
+        "Return exactly one JSON object with exactly the keys state and kind. "
+        "For state required, kind must be exactly one vocabulary value. "
+        "For state optional_uncertain, kind must be exactly none. "
+        "Do not add keys, explanations, selections, or assumptions about uploaded material."
+    )
 
 
 class OpenAICompatibleSourceEvidenceAnalyzer:

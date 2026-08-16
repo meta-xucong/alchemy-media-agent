@@ -95,6 +95,33 @@ immutable SHA-bound requirement/evidence receipt only for that identity. The
 identity's canonical digest is a server record, not a caller-supplied public
 key.
 
+General activation uses the versioned packaged
+`project_mode/policies/doc281_general_source_policy_v1.json` when no deployment
+override is set. An explicit unreadable, malformed, or schema-open override
+fails closed to ordinary prompt-only operation; it never falls back silently.
+The policy is selector-free and declares only enabled state, authority/version,
+the closed requirement-kind vocabulary, and a bounded maximum source count.
+
+The server's text-only requirement classifier receives exactly the current
+command and that policy-owned vocabulary. It returns only `required` with one
+allowed kind or `optional_uncertain`; it cannot receive source entries,
+filenames, browser labels, asset/reference IDs, hashes, snapshots, history, or
+Brain prose. A successful classification is stored privately as
+`doc281_general_requirement_classification_receipt_v1`, bound to command,
+canonical source snapshot, policy version, and requested output-plan facts.
+An unchanged fresh service reuses that receipt before either the text classifier
+or image analyzer. Malformed, partial, unavailable, or unknown classifier
+responses are prompt-only and create neither a terminal operation nor a source
+selection.
+
+A persisted classification receipt is authoritative only when its exact schema,
+identity/binding digest, facts, policy-bound requirement shape, requirement
+digest, and receipt digest all validate. A present but invalid, stale, or
+tampered receipt fails closed to prompt-only without classifier retry, image
+analysis, or selected-original projection. A valid `optional_uncertain`
+receipt is also persisted and replayed as prompt-only, rather than repeatedly
+calling the classifier.
+
 ### 2.2 Template authority remains narrow
 
 General, E-Commerce, Photography, Brand, and future templates can only issue

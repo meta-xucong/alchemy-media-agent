@@ -366,6 +366,15 @@ evidence as allowed by Doc93. Its default policy is low-friction:
 - a hard user request for exact source truth invokes the existing strong
   reference policy rather than being weakened by a generic match.
 
+Doc281 supplies General's versioned packaged requirement policy when no
+deployment override is configured. A malformed explicit override disables
+matching rather than silently selecting another policy. Its private
+classification receipt is bound to command text, canonical source snapshot,
+policy version, and requested output-plan facts; unchanged replay reuses that
+receipt before either text intent classification or image analysis. This is a
+shared matcher capability, not an E31 dependency, and does not alter
+E-Commerce ProductTruthAdmission or Doc269's physical input plan.
+
 ### 6.2 Professional E-Commerce
 
 E-Commerce uses the generic catalog and matcher but adds its existing hard

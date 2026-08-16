@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "policy_authority": "v3_general_source_requirement_policy",
+  "policy_version": "doc281_general_source_policy_v1",
+  "allowed_requirement_kinds": [
+    "object_front_presentation",
+    "object_rear_structure",
+    "object_detail",
+    "person_environment_context",
+    "brand_scene_material"
+  ],
+  "maximum_sources": 2
+}

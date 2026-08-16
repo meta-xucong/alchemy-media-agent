@@ -13,6 +13,8 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -24,7 +26,14 @@ from alchemy_creative_agent_3_0.app.project_mode import (
     V3ProjectModeService,
     source_library,
 )
-from alchemy_creative_agent_3_0.app.project_mode.service import Doc281GeneralSourceRegistry
+from alchemy_creative_agent_3_0.app.project_mode.service import (
+    Doc281GeneralSourceRegistry,
+    doc281_general_source_registry_from_environment,
+)
+from alchemy_creative_agent_3_0.app.project_mode.source_evidence import (
+    OpenAICompatibleTextRequirementIssuer,
+    REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET,
+)
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
     ProjectReferenceSourceType,
     ProjectReferenceUsePolicy,
@@ -484,7 +493,15 @@ def test_doc281_normal_service_composes_shared_registry_for_real_bounded_general
             requirement_issuer=requirement_issuer,
         ),
     )
-    created = handlers.post_project_job(project["project_id"], _general_payload())
+    created = handlers.post_project_job(project["project_id"], _general_payload(metadata={
+        "doc281_requirement": {
+            "kind": "browser_forged_kind",
+            "maximum_sources": 4,
+            "asset_id": asset_ids[0],
+        },
+        "selected_original_asset_ids": list(reversed(asset_ids)),
+        "source_library_snapshot": {"browser_label": "browser-forged", "sha256": "a" * 64},
+    }))
     record = handlers.service.get_job_record(created["job_id"])
     assert record is not None
     assert record.request.uploaded_asset_ids == [selected_asset_id]
@@ -498,14 +515,8 @@ def test_doc281_environment_composition_uses_openai_protocol_per_verified_source
 
     handlers, project, asset_ids, _snapshot = _general_project(tmp_path)
     selected_asset_id = asset_ids[1]
-    policy_path = tmp_path / "doc281-general-policy.json"
-    policy_path.write_text(json.dumps({
-        "enabled": True,
-        "intent_requirements": {
-            "faithful source-aware": {"kind": "object_rear_structure", "maximum_sources": 1},
-        },
-    }), encoding="utf-8")
     calls: list[str] = []
+    requirement_calls: list[dict[str, Any]] = []
 
     class OpenAICompatibleAnalyzerMock:
         def __init__(self, **_kwargs: Any) -> None:
@@ -529,13 +540,24 @@ def test_doc281_environment_composition_uses_openai_protocol_per_verified_source
                 "view_kind": "front", "affordances": ["object_front_presentation"],
             }]
 
+    class _TextCompletions:
+        def create(self, **kwargs: Any) -> Any:
+            requirement_calls.append(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "state": "required", "kind": "object_rear_structure",
+            })))])
+
+    class _TextClient:
+        chat = SimpleNamespace(completions=_TextCompletions())
+
     from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
     from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import vision_provider
 
-    monkeypatch.setenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH", str(policy_path))
+    monkeypatch.delenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH", raising=False)
     monkeypatch.setattr(project_mode_service, "OpenAICompatibleSourceEvidenceAnalyzer", OpenAICompatibleAnalyzerMock)
     monkeypatch.setattr(vision_provider, "_lab_vision_enabled", lambda: True)
     monkeypatch.setattr(vision_provider, "_lab_vision_setting", lambda _field: "private-test-route")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kwargs: _TextClient()))
     previous = handlers.project_service
     handlers.project_service = V3ProjectModeService(
         product_service=handlers.service,
@@ -546,10 +568,113 @@ def test_doc281_environment_composition_uses_openai_protocol_per_verified_source
         ecommerce_view_activation_issuer=previous.ecommerce_view_activation_issuer,
     )
     assert handlers.project_service.doc281_general_source_registry.enabled is True
-    created = handlers.post_project_job(project["project_id"], _general_payload())
+    created = handlers.post_project_job(project["project_id"], _general_payload(metadata={
+        "doc281_requirement": {
+            "kind": "browser_forged_kind",
+            "maximum_sources": 4,
+            "asset_id": asset_ids[0],
+        },
+        "selected_original_asset_ids": list(reversed(asset_ids)),
+        "source_library_snapshot": {"browser_label": "browser-forged", "sha256": "a" * 64},
+    }))
     record = handlers.service.get_job_record(created["job_id"])
     assert record is not None and record.request.uploaded_asset_ids == [selected_asset_id]
     assert calls == asset_ids
+    assert len(requirement_calls) == 1
+    assert requirement_calls[0]["max_tokens"] == REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET
+    message = requirement_calls[0]["messages"][0]["content"]
+    assert "asset_id" not in message and "browser-forged" not in message
+    assert all(asset_id not in message for asset_id in asset_ids)
+
+
+@pytest.mark.parametrize("policy", [
+    {
+        "enabled": True,
+        "policy_authority": "server",
+        "policy_version": "v1",
+        "allowed_requirement_kinds": [{"asset_id": "forged"}],
+        "maximum_sources": 2,
+    },
+    {
+        "enabled": True,
+        "policy_authority": "server",
+        "policy_version": "v1",
+        "allowed_requirement_kinds": ["object_front_presentation"],
+        "maximum_sources": True,
+    },
+    {
+        "enabled": True,
+        "intent_requirements": {"legacy": {"kind": "object_front_presentation", "maximum_sources": 1}},
+    },
+])
+def test_doc281_environment_policy_rejects_unclosed_or_legacy_shapes(tmp_path, monkeypatch, policy) -> None:
+    policy_path = tmp_path / "doc281-invalid-policy.json"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH", str(policy_path))
+
+    assert doc281_general_source_registry_from_environment().enabled is False
+
+
+def test_doc281_text_requirement_issuer_is_closed_and_command_only(monkeypatch) -> None:
+    captured: list[dict[str, Any]] = []
+
+    class _TextCompletions:
+        def create(self, **kwargs: Any) -> Any:
+            captured.append(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "state": "required", "kind": "object_rear_structure",
+            })))])
+
+    class _TextClient:
+        chat = SimpleNamespace(completions=_TextCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kwargs: _TextClient()))
+    issuer = OpenAICompatibleTextRequirementIssuer(
+        api_key="test-key",
+        base_url="https://vision.example.test/v1",
+        model="vision-test",
+        allowed_kinds=("object_front_presentation", "object_rear_structure"),
+        maximum_sources=2,
+    )
+
+    assert issuer(command_direction="Create a rear product view.") == {
+        "state": "required",
+        "kind": "object_rear_structure",
+        "maximum_sources": 2,
+    }
+    assert captured[0]["response_format"] == {"type": "json_object"}
+    assert captured[0]["max_tokens"] == REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET
+    message = captured[0]["messages"][0]["content"]
+    assert "Create a rear product view." in message
+    assert "object_front_presentation" in message and "object_rear_structure" in message
+    assert "asset_id" not in message and "source_library_snapshot" not in message
+    assert not any(value in message for value in (
+        "reference_unsafe", "asset_unsafe", "unsafe-filename.png", "browser-label", "a" * 64,
+    ))
+    with pytest.raises(TypeError):
+        issuer(command_direction="Create a rear product view.", source_library_snapshot={})
+
+
+@pytest.mark.parametrize("payload", [
+    "not-json",
+    json.dumps({"state": "required", "kind": "unknown_kind"}),
+    json.dumps({"state": "required", "kind": "object_rear_structure", "extra": True}),
+    json.dumps({"state": "required", "kind": "none"}),
+])
+def test_doc281_text_requirement_issuer_fails_closed_for_invalid_strict_results(monkeypatch, payload: str) -> None:
+    class _TextCompletions:
+        def create(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=payload))])
+
+    class _TextClient:
+        chat = SimpleNamespace(completions=_TextCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kwargs: _TextClient()))
+    issuer = OpenAICompatibleTextRequirementIssuer(
+        api_key="test-key", base_url="https://vision.example.test/v1", model="vision-test",
+        allowed_kinds=("object_rear_structure",), maximum_sources=1,
+    )
+    assert issuer(command_direction="Use a rear perspective.") is None
 
 
 @pytest.mark.parametrize("invalid_result", [None, [], [{"subject_kind": "person"}]])
@@ -619,9 +744,10 @@ def test_doc281_normal_service_registry_optional_match_stays_prompt_only(tmp_pat
 
 def test_doc281_general_registry_replays_durable_receipt_after_fresh_service_and_rematches_source_mutation(tmp_path) -> None:
     handlers, project, asset_ids, _snapshot = _general_project(tmp_path)
-    calls = {"analyzer": 0}
+    calls = {"analyzer": 0, "issuer": 0}
 
     def requirement_issuer(**_kwargs: Any) -> dict[str, Any]:
+        calls["issuer"] += 1
         value = {"kind": "object_rear_structure", "maximum_sources": 1}
         return {**value, "requirement_digest": source_library.canonical_digest(value)}
 
@@ -648,9 +774,10 @@ def test_doc281_general_registry_replays_durable_receipt_after_fresh_service_and
         doc281_general_source_registry=Doc281GeneralSourceRegistry(evidence_analyzer=EvidenceAnalyzer(), requirement_issuer=requirement_issuer),
     )
     first = handlers.post_project_job(project["project_id"], _general_payload())
-    assert first["job_id"] and calls == {"analyzer": len(asset_ids)}
+    assert first["job_id"] and calls == {"analyzer": len(asset_ids), "issuer": 1}
     # A restart has no in-memory receipt. It must reissue identity, read the
-    # durable receipt, and return the one existing Job without analysis.
+    # valid durable receipt, and return the one existing Job without analysis
+    # or requirement classification.
     handlers.project_service = V3ProjectModeService(
         product_service=handlers.service, project_store=previous.project_store,
         template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
@@ -658,14 +785,135 @@ def test_doc281_general_registry_replays_durable_receipt_after_fresh_service_and
         doc281_general_source_registry=Doc281GeneralSourceRegistry(evidence_analyzer=EvidenceAnalyzer(), requirement_issuer=requirement_issuer),
     )
     replay = handlers.post_project_job(project["project_id"], _general_payload())
-    assert replay["job_id"] == first["job_id"] and calls == {"analyzer": len(asset_ids)}
+    assert replay["job_id"] == first["job_id"] and calls == {"analyzer": len(asset_ids), "issuer": 1}
+    # A cache record without a valid self-digest is not authoritative. The
+    # fresh service must fail closed, never classify or select a replacement.
+    private_records = previous.project_store._private_records[project["project_id"]]["doc281_general_requirements_v1"]  # noqa: SLF001
+    classification_record = next(
+        item for item in private_records
+        if item.get("schema_version") == "doc281_general_requirement_classification_receipt_v1"
+    )
+    classification_record["tampered"] = True
+    handlers.project_service = V3ProjectModeService(
+        product_service=handlers.service, project_store=previous.project_store,
+        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
+        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
+        doc281_general_source_registry=Doc281GeneralSourceRegistry(evidence_analyzer=EvidenceAnalyzer(), requirement_issuer=requirement_issuer),
+    )
+    blocked = handlers.post_project_job(project["project_id"], _general_payload())
+    blocked_record = handlers.service.get_job_record(blocked["job_id"])
+    assert blocked_record is not None and blocked_record.request.uploaded_asset_ids == []
+    assert blocked_record.request.metadata["doc270_general_source_activation_receipts"] == [{"state": "prompt_only"}]
+    assert calls == {"analyzer": len(asset_ids), "issuer": 1}
     upload = handlers.service.get_uploaded_asset(asset_ids[0])
     assert upload is not None
     mutated_bytes = Path(str(upload.file_path)).read_bytes() + b"doc281-mutation"
     Path(str(upload.file_path)).write_bytes(mutated_bytes)
     handlers.service.asset_store._save_record(upload.model_copy(update={"content_sha256": hashlib.sha256(mutated_bytes).hexdigest()}))  # noqa: SLF001
     mutated = handlers.post_project_job(project["project_id"], _general_payload())
-    assert mutated["job_id"] != first["job_id"] and calls == {"analyzer": len(asset_ids) * 2}
+    assert mutated["job_id"] != first["job_id"] and calls == {"analyzer": len(asset_ids) * 2, "issuer": 2}
+    changed_command = {**_general_payload(), "user_input": "Create a source-aware rear study."}
+    changed = handlers.post_project_job(project["project_id"], changed_command)
+    assert changed["job_id"] != mutated["job_id"] and calls == {"analyzer": len(asset_ids) * 3, "issuer": 3}
+
+
+@pytest.mark.parametrize("tamper", [
+    lambda receipt: receipt.__setitem__("receipt_digest", "0" * 64),
+    lambda receipt: receipt["requirement"].__setitem__("kind", "object_detail"),
+    lambda receipt: receipt["requirement"].__setitem__("maximum_sources", 2),
+    lambda receipt: receipt.__setitem__("schema_version", "forged_schema"),
+    lambda receipt: receipt.__setitem__("identity_digest", "b" * 64),
+    lambda receipt: receipt.__setitem__("classification_binding_digest", "c" * 64),
+])
+def test_doc281_tampered_requirement_classification_receipt_fails_closed_without_reclassification(tamper: Any) -> None:
+    calls = {"issuer": 0, "analyzer": 0}
+    records: list[dict[str, Any]] = []
+    snapshot = {"entries": [], "snapshot_digest": "a" * 64}
+
+    class Analyzer:
+        def analyze(self, **_kwargs: Any) -> None:
+            calls["analyzer"] += 1
+            return None
+
+    def issuer(*, command_direction: str) -> dict[str, Any]:
+        assert command_direction == "Create a rear view."
+        calls["issuer"] += 1
+        return {"kind": "object_rear_structure", "maximum_sources": 1}
+
+    def append(**kwargs: Any) -> None:
+        receipt = {
+            "schema_version": "doc281_general_requirement_classification_receipt_v1",
+            "identity_digest": kwargs["classification_binding_digest"],
+            "classification_binding_digest": kwargs["classification_binding_digest"],
+            "classification_facts": kwargs["classification_facts"],
+            "state": kwargs["state"],
+            "requirement": kwargs["requirement"],
+        }
+        receipt["receipt_digest"] = source_library.canonical_digest(receipt)
+        records.append(receipt)
+
+    first = Doc281GeneralSourceRegistry(
+        evidence_analyzer=Analyzer(), requirement_issuer=issuer,
+        requirement_receipt_append=append,
+    )
+    assert first.issue_command_identity(
+        project_id="project_doc281_cache", template_id="general_template",
+        command_direction="Create a rear view.", source_library_snapshot=snapshot,
+        requested_output_count=1,
+    ) is not None
+    assert calls == {"issuer": 1, "analyzer": 0} and len(records) == 1
+    forged = deepcopy(records[0])
+    tamper(forged)
+    replay = Doc281GeneralSourceRegistry(
+        evidence_analyzer=Analyzer(), requirement_issuer=issuer,
+        requirement_receipt_lookup=lambda **_kwargs: forged,
+    )
+    assert replay.issue_command_identity(
+        project_id="project_doc281_cache", template_id="general_template",
+        command_direction="Create a rear view.", source_library_snapshot=snapshot,
+        requested_output_count=1,
+    ) is None
+    assert calls == {"issuer": 1, "analyzer": 0}
+
+
+def test_doc281_optional_uncertain_requirement_receipt_replays_without_classifier_or_analysis(tmp_path) -> None:
+    handlers, project, _asset_ids, _snapshot = _general_project(tmp_path)
+    calls = {"issuer": 0, "analyzer": 0}
+
+    class Analyzer:
+        def analyze(self, **_kwargs: Any) -> None:
+            calls["analyzer"] += 1
+            return None
+
+    def optional_issuer(**_kwargs: Any) -> dict[str, Any]:
+        calls["issuer"] += 1
+        return {"state": "optional_uncertain"}
+
+    previous = handlers.project_service
+    handlers.project_service = V3ProjectModeService(
+        product_service=handlers.service, project_store=previous.project_store,
+        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
+        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
+        doc281_general_source_registry=Doc281GeneralSourceRegistry(
+            evidence_analyzer=Analyzer(), requirement_issuer=optional_issuer,
+        ),
+    )
+    first = handlers.post_project_job(project["project_id"], _general_payload())
+    first_record = handlers.service.get_job_record(first["job_id"])
+    assert first_record is not None and first_record.request.uploaded_asset_ids == []
+    assert calls == {"issuer": 1, "analyzer": 0}
+    handlers.project_service = V3ProjectModeService(
+        product_service=handlers.service, project_store=previous.project_store,
+        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
+        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
+        doc281_general_source_registry=Doc281GeneralSourceRegistry(
+            evidence_analyzer=Analyzer(), requirement_issuer=optional_issuer,
+        ),
+    )
+    replay = handlers.post_project_job(project["project_id"], _general_payload())
+    replay_record = handlers.service.get_job_record(replay["job_id"])
+    assert replay_record is not None and replay_record.request.uploaded_asset_ids == []
+    assert calls == {"issuer": 1, "analyzer": 0}
 
 
 def test_doc281_used_source_disclosure_requires_exact_visible_output_binding(tmp_path) -> None:

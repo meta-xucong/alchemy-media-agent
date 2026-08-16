@@ -135,10 +135,12 @@ profiles.
 
 The server gate is enabled only when both of the following are present:
 
-1. `ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH` resolves to a server-owned,
-   versioned JSON policy. The release provides the current policy file under
-   `app/project_mode/policies`; browser input and uploaded files can never
-   provide it.
+1. A server-owned, versioned JSON policy is valid. With no
+   `ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH` override, the release uses its
+   current packaged policy under `app/project_mode/policies`. An explicit
+   unreadable, malformed, or schema-invalid override fails closed and disables
+   E31; it never silently falls back. Browser input and uploaded files can
+   never provide the policy.
 2. A source analyzer is available. A dedicated E31 credential/base/model may
    be configured, otherwise E31 may read only the already-enabled V3
    `LAB_*` vision route. It never falls back to a general Brain, a text-only

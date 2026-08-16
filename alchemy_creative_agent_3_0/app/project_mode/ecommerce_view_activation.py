@@ -353,16 +353,16 @@ class OpenAICompatibleEcommerceSourceEvidenceAnalyzer:
 def issuer_from_environment() -> EcommerceViewActivationIssuer:
     """Build the only production configuration source for Phase4 activation.
 
-    `ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH` must point to a server-owned
-    JSON file. A missing, unreadable, malformed, or disabled config returns a
-    disabled issuer. Its content is never exposed through Project Mode APIs.
+    The bundled server-owned policy is used unless
+    `ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH` selects an override. An
+    unreadable, malformed, or disabled config returns a disabled issuer. Its
+    content is never exposed through Project Mode APIs.
     """
 
     configured = str(os.getenv("ALCHEMY_DOC270_ECOMMERCE_VIEW_POLICY_PATH") or "").strip()
-    if not configured:
-        return DisabledEcommerceViewActivationIssuer()
+    policy_path = Path(configured) if configured else Path(__file__).with_name("policies") / "doc270_ecommerce_view_policy_v1.json"
     try:
-        payload = json.loads(Path(configured).read_text(encoding="utf-8"))
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return DisabledEcommerceViewActivationIssuer()
     allowed_policy_fields = {

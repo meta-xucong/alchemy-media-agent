@@ -283,6 +283,20 @@ _DOC281_GENERAL_COMMAND_NAMESPACE = "doc281_general_commands_v1"
 _DOC281_GENERAL_REQUIREMENT_NAMESPACE = "doc281_general_requirements_v1"
 _DOC281_GENERAL_OBSERVATION_NAMESPACE = "doc281_source_evidence_observations_v1"
 _DOC281_GENERAL_RECEIPT_NAMESPACE = "doc281_general_resolution_receipts_v1"
+_DOC281_ALLOWED_REQUIREMENT_KINDS = frozenset({
+    "object_front_presentation",
+    "object_rear_structure",
+    "object_detail",
+    "person_environment_context",
+    "brand_scene_material",
+})
+_DOC281_GENERAL_SOURCE_POLICY_FIELDS = frozenset({
+    "enabled",
+    "policy_authority",
+    "policy_version",
+    "allowed_requirement_kinds",
+    "maximum_sources",
+})
 _DOC270_PHASE4_REQUIREMENT_ISSUER = {
     "authority": "v3_server_template_requirement_issuer",
     "schema_version": "doc270_requirement_issuer_v1",
@@ -328,12 +342,20 @@ class Doc281GeneralSourceRegistry:
     """
 
     protocol = "doc281_general_source_registry_v1"
+    _CACHE_MISS = "miss"
+    _CACHE_REQUIRED = "required"
+    _CACHE_OPTIONAL = "optional_uncertain"
+    _CACHE_INVALID = "invalid"
 
     def __init__(self, *, evidence_analyzer: SourceEvidenceAnalyzer | Any | None = None, requirement_issuer: Any | None = None,
-                 analysis_entry_loader: Any | None = None) -> None:
+                 analysis_entry_loader: Any | None = None, requirement_policy_version: str = "doc281_general_requirement_policy_v1",
+                 requirement_receipt_lookup: Any | None = None, requirement_receipt_append: Any | None = None) -> None:
         self.evidence_analyzer = self._coerce_evidence_analyzer(evidence_analyzer)
         self.requirement_issuer = requirement_issuer
         self.analysis_entry_loader = analysis_entry_loader
+        self.requirement_policy_version = str(requirement_policy_version or "").strip()
+        self.requirement_receipt_lookup = requirement_receipt_lookup
+        self.requirement_receipt_append = requirement_receipt_append
         self._identities: dict[str, dict[str, Any]] = {}
         self._receipts: dict[str, dict[str, Any]] = {}
         self._observations: dict[str, list[dict[str, Any]]] = {}
@@ -364,12 +386,62 @@ class Doc281GeneralSourceRegistry:
             or not 1 <= requested_output_count <= 8
         ):
             return None
-        requirement = self.requirement_issuer(
+        snapshot_digest = str(snapshot.get("snapshot_digest") or "").strip().lower()
+        if len(snapshot_digest) != 64 or not self.requirement_policy_version:
+            return None
+        classification_facts = {
+            "schema_version": "doc281_general_requirement_classification_v1",
+            "project_id": project_id,
+            "template_id": template_id,
+            "command_direction": command_direction,
+            "source_library_snapshot_digest": snapshot_digest,
+            "policy_version": self.requirement_policy_version,
+            "requested_output_count": requested_output_count,
+        }
+        classification_binding_digest = doc270_canonical_digest(classification_facts)
+        cache_state, requirement = self._cached_requirement(
             project_id=project_id,
-            template_id=template_id,
-            command_direction=command_direction,
-            source_library_snapshot=dict(snapshot),
+            classification_facts=classification_facts,
+            classification_binding_digest=classification_binding_digest,
         )
+        if cache_state in {self._CACHE_INVALID, self._CACHE_OPTIONAL}:
+            # A malformed persisted decision is never an authorization to
+            # classify again or to select a different source on replay.
+            return None
+        if cache_state == self._CACHE_MISS:
+            # This is the only classifier call boundary.  In particular, do
+            # not pass snapshot entries, IDs, SHA values, or browser facts.
+            issued = self.requirement_issuer(command_direction=command_direction)
+            if isinstance(issued, dict) and issued.get("state") == self._CACHE_OPTIONAL:
+                if set(issued) != {"state"}:
+                    return None
+                if callable(self.requirement_receipt_append):
+                    try:
+                        self.requirement_receipt_append(
+                            project_id=project_id,
+                            classification_facts=dict(classification_facts),
+                            classification_binding_digest=classification_binding_digest,
+                            state=self._CACHE_OPTIONAL,
+                            requirement=None,
+                        )
+                    except Exception:
+                        return None
+                return None
+            requirement = self._bound_requirement(
+                issued,
+                classification_binding_digest=classification_binding_digest,
+            )
+            if requirement is not None and callable(self.requirement_receipt_append):
+                try:
+                    self.requirement_receipt_append(
+                        project_id=project_id,
+                        classification_facts=dict(classification_facts),
+                        classification_binding_digest=classification_binding_digest,
+                        state=self._CACHE_REQUIRED,
+                        requirement=dict(requirement),
+                    )
+                except Exception:
+                    return None
         if not isinstance(requirement, dict):
             return None
         requirement_digest = str(requirement.get("requirement_digest") or "").strip().lower()
@@ -382,7 +454,7 @@ class Doc281GeneralSourceRegistry:
                     "project_id": project_id,
                     "template_id": template_id,
                     "command_direction": command_direction,
-                    "source_library_snapshot_digest": str(snapshot.get("snapshot_digest") or ""),
+                    "source_library_snapshot_digest": snapshot_digest,
                     "requirement_digest": requirement_digest,
                     "output_index": output_index,
                 }),
@@ -394,7 +466,7 @@ class Doc281GeneralSourceRegistry:
             "project_id": project_id,
             "template_id": template_id,
             "command_direction": command_direction,
-            "source_library_snapshot_digest": str(snapshot.get("snapshot_digest") or ""),
+            "source_library_snapshot_digest": snapshot_digest,
             "requirement_digest": requirement_digest,
             "requested_output_count": requested_output_count,
             "output_plan_digest": output_plan_digest,
@@ -420,6 +492,100 @@ class Doc281GeneralSourceRegistry:
             "output_plan": output_plan,
         }
         return dict(identity)
+
+    def _cached_requirement(
+        self,
+        *,
+        project_id: str,
+        classification_facts: dict[str, Any],
+        classification_binding_digest: str,
+    ) -> tuple[str, dict[str, Any] | None]:
+        if not callable(self.requirement_receipt_lookup):
+            return self._CACHE_MISS, None
+        try:
+            record = self.requirement_receipt_lookup(
+                project_id=project_id,
+                classification_binding_digest=classification_binding_digest,
+            )
+        except Exception:
+            return self._CACHE_INVALID, None
+        if record is None:
+            return self._CACHE_MISS, None
+        if not self._valid_classification_receipt(
+            record,
+            classification_facts=classification_facts,
+            classification_binding_digest=classification_binding_digest,
+        ):
+            return self._CACHE_INVALID, None
+        if record["state"] == self._CACHE_OPTIONAL:
+            return self._CACHE_OPTIONAL, None
+        requirement = self._bound_requirement(
+            record["requirement"], classification_binding_digest=classification_binding_digest,
+        )
+        return (self._CACHE_REQUIRED, requirement) if requirement is not None else (self._CACHE_INVALID, None)
+
+    def _valid_classification_receipt(
+        self,
+        record: Any,
+        *,
+        classification_facts: dict[str, Any],
+        classification_binding_digest: str,
+    ) -> bool:
+        if not isinstance(record, dict) or set(record) != {
+            "schema_version", "identity_digest", "classification_binding_digest",
+            "classification_facts", "state", "requirement", "receipt_digest",
+        }:
+            return False
+        if (
+            record.get("schema_version") != "doc281_general_requirement_classification_receipt_v1"
+            or record.get("identity_digest") != classification_binding_digest
+            or record.get("classification_binding_digest") != classification_binding_digest
+            or record.get("classification_facts") != classification_facts
+            or record.get("state") not in {self._CACHE_REQUIRED, self._CACHE_OPTIONAL}
+            or not self._same_digest_record(record, "receipt_digest")
+        ):
+            return False
+        if record["state"] == self._CACHE_OPTIONAL:
+            return record.get("requirement") is None
+        requirement = record.get("requirement")
+        if not isinstance(requirement, dict) or set(requirement) != {
+            "schema_version", "kind", "maximum_sources", "policy_version",
+            "classification_binding_digest", "requirement_digest",
+        }:
+            return False
+        expected = self._bound_requirement(
+            requirement, classification_binding_digest=classification_binding_digest,
+        )
+        return expected == requirement
+
+    def _bound_requirement(self, issued: Any, *, classification_binding_digest: str) -> dict[str, Any] | None:
+        if not isinstance(issued, dict):
+            return None
+        kind = issued.get("kind")
+        maximum_sources = issued.get("maximum_sources")
+        if (
+            kind not in _DOC281_ALLOWED_REQUIREMENT_KINDS
+            or not isinstance(maximum_sources, int)
+            or isinstance(maximum_sources, bool)
+            or not 1 <= maximum_sources <= 4
+        ):
+            return None
+        requirement = {
+            "schema_version": "doc281_general_reference_requirement_v1",
+            "kind": kind,
+            "maximum_sources": maximum_sources,
+            "policy_version": self.requirement_policy_version,
+            "classification_binding_digest": classification_binding_digest,
+        }
+        requirement["requirement_digest"] = doc270_canonical_digest(requirement)
+        return requirement
+
+    @staticmethod
+    def _same_digest_record(value: dict[str, Any], field: str) -> bool:
+        digest = str(value.get(field) or "").strip().lower()
+        return len(digest) == 64 and digest == doc270_canonical_digest(
+            {key: item for key, item in value.items() if key != field}
+        )
 
     def lookup_registered_receipt(self, **kwargs: Any) -> dict[str, Any] | None:
         identity = kwargs.get("command_identity")
@@ -549,16 +715,32 @@ def doc281_general_source_registry_from_environment() -> Doc281GeneralSourceRegi
     """Compose General evidence only from private policy plus V3 vision route."""
 
     configured = str(os.getenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH") or "").strip()
-    if not configured:
-        return Doc281GeneralSourceRegistry()
+    policy_path = Path(configured) if configured else Path(__file__).with_name("policies") / "doc281_general_source_policy_v1.json"
     try:
-        policy = json.loads(Path(configured).read_text(encoding="utf-8"))
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return Doc281GeneralSourceRegistry()
-    if not isinstance(policy, dict) or set(policy) != {"enabled", "intent_requirements"} or policy.get("enabled") is not True:
+    if (
+        not isinstance(policy, dict)
+        or set(policy) != _DOC281_GENERAL_SOURCE_POLICY_FIELDS
+        or policy.get("enabled") is not True
+        or not isinstance(policy.get("policy_authority"), str)
+        or not str(policy["policy_authority"]).strip()
+        or not isinstance(policy.get("policy_version"), str)
+        or not str(policy["policy_version"]).strip()
+    ):
         return Doc281GeneralSourceRegistry()
-    requirements = policy.get("intent_requirements")
-    if not isinstance(requirements, dict):
+    kinds = policy.get("allowed_requirement_kinds")
+    maximum_sources = policy.get("maximum_sources")
+    if (
+        not isinstance(kinds, list)
+        or not kinds
+        or not all(isinstance(item, str) and item in _DOC281_ALLOWED_REQUIREMENT_KINDS for item in kinds)
+        or len(kinds) != len(set(kinds))
+        or not isinstance(maximum_sources, int)
+        or isinstance(maximum_sources, bool)
+        or not 1 <= maximum_sources <= 4
+    ):
         return Doc281GeneralSourceRegistry()
     try:
         from ..shared_capabilities.visual_cluster.vision_provider import _lab_vision_enabled, _lab_vision_setting
@@ -575,21 +757,31 @@ def doc281_general_source_registry_from_environment() -> Doc281GeneralSourceRegi
     if not analyzer.available():
         return Doc281GeneralSourceRegistry()
 
-    def issue_requirement(*, command_direction: str, **_kwargs: Any) -> dict[str, Any] | None:
-        # This maps only a server-owned explicit command intent to a bounded
-        # semantic requirement. It never sees source IDs or browser selectors.
-        normalized = re.sub(r"\s+", " ", command_direction.lower()).strip()
-        selected = next((value for token, value in requirements.items() if token and token.lower() in normalized), None)
-        if not isinstance(selected, dict) or set(selected) != {"kind", "maximum_sources"}:
-            return None
-        kind = str(selected.get("kind") or "")
-        maximum = selected.get("maximum_sources")
-        if kind not in {"object_front_presentation", "object_rear_structure", "object_detail", "person_environment_context", "brand_scene_material"} or not isinstance(maximum, int) or not 1 <= maximum <= 4:
-            return None
-        value = {"schema_version": "doc281_general_reference_requirement_v1", "kind": kind, "maximum_sources": maximum}
-        return {**value, "requirement_digest": doc270_canonical_digest(value)}
+    from .source_evidence import OpenAICompatibleTextRequirementIssuer
+    classifier = OpenAICompatibleTextRequirementIssuer(
+        api_key=api_key, base_url=base_url, model=model, allowed_kinds=tuple(kinds),
+        maximum_sources=maximum_sources,
+        timeout_seconds=float(os.getenv("ALCHEMY_DOC281_GENERAL_SOURCE_ANALYSIS_TIMEOUT_SECONDS", "30")),
+    )
+    if not classifier.available():
+        return Doc281GeneralSourceRegistry()
 
-    return Doc281GeneralSourceRegistry(evidence_analyzer=analyzer, requirement_issuer=issue_requirement)
+    def issue_requirement(*, command_direction: str) -> dict[str, Any] | None:
+        value = classifier(command_direction=command_direction)
+        if not isinstance(value, dict):
+            return None
+        if value.get("state") == "optional_uncertain":
+            return {"state": "optional_uncertain"}
+        if value.get("state") != "required":
+            return None
+        requirement = {"schema_version": "doc281_general_reference_requirement_v1", "kind": value["kind"], "maximum_sources": value["maximum_sources"]}
+        return {**requirement, "requirement_digest": doc270_canonical_digest(requirement)}
+
+    return Doc281GeneralSourceRegistry(
+        evidence_analyzer=analyzer,
+        requirement_issuer=issue_requirement,
+        requirement_policy_version=str(policy["policy_version"]),
+    )
 
 
 class V3ProjectModeService:
@@ -620,6 +812,15 @@ class V3ProjectModeService:
             and self.doc281_general_source_registry.analysis_entry_loader is None
         ):
             self.doc281_general_source_registry.analysis_entry_loader = self._doc281_general_analysis_entries
+        if isinstance(self.doc281_general_source_registry, Doc281GeneralSourceRegistry):
+            if self.doc281_general_source_registry.requirement_receipt_lookup is None:
+                self.doc281_general_source_registry.requirement_receipt_lookup = (
+                    self._doc281_general_requirement_receipt_lookup
+                )
+            if self.doc281_general_source_registry.requirement_receipt_append is None:
+                self.doc281_general_source_registry.requirement_receipt_append = (
+                    self._doc281_general_requirement_receipt_append
+                )
         self._doc277_planning_lock = threading.RLock()
         # Product API uses this narrow readback only while authenticating a
         # terminal Doc271 record. It reads an append-only Project Mode snapshot
@@ -657,6 +858,52 @@ class V3ProjectModeService:
         """Read a server-owned Phase 2 receipt entry. Disabled by default."""
 
         return None
+
+    def _doc281_general_requirement_receipt_lookup(
+        self,
+        *,
+        project_id: str,
+        classification_binding_digest: str,
+    ) -> dict[str, Any] | None:
+        """Read one private, exact General intent receipt for replay only."""
+
+        if not isinstance(project_id, str) or not isinstance(classification_binding_digest, str):
+            return None
+        try:
+            records = self.project_store.list_private_records(
+                project_id, _DOC281_GENERAL_REQUIREMENT_NAMESPACE,
+            )
+        except Exception:
+            return None
+        for record in reversed(records):
+            if (
+                isinstance(record, dict)
+                and record.get("classification_binding_digest") == classification_binding_digest
+            ):
+                return dict(record)
+        return None
+
+    def _doc281_general_requirement_receipt_append(
+        self,
+        *,
+        project_id: str,
+        classification_facts: dict[str, Any],
+        classification_binding_digest: str,
+        state: str,
+        requirement: dict[str, Any] | None,
+    ) -> dict[str, object]:
+        receipt = {
+            "schema_version": "doc281_general_requirement_classification_receipt_v1",
+            "identity_digest": classification_binding_digest,
+            "classification_binding_digest": classification_binding_digest,
+            "classification_facts": dict(classification_facts),
+            "state": state,
+            "requirement": dict(requirement) if isinstance(requirement, dict) else None,
+        }
+        receipt["receipt_digest"] = self._doc270_digest(receipt)
+        return self.project_store.append_private_record(
+            project_id, _DOC281_GENERAL_REQUIREMENT_NAMESPACE, receipt,
+        )
 
     def _doc270_ecommerce_view_activation_capability_lookup(
         self,
@@ -2964,6 +3211,11 @@ class V3ProjectModeService:
                         identity=doc270_general_identity,
                         entry=entry,
                     )
+                else:
+                    # An unavailable, optional, or invalid Doc281 decision is
+                    # ordinary prompt-only General.  Do not fall through to
+                    # the legacy project-asset expansion below.
+                    doc270_general_activation = {"state": "prompt_only"}
             else:
                 capability = self._doc270_general_activation_capability_lookup()
                 if self._doc270_general_activation_capability_valid(
