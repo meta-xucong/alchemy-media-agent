@@ -327,8 +327,24 @@ def test_doc269_product_only_plan_excludes_active_people_and_history(tmp_path) -
     assert request.metadata["physical_renderer_reference_plans"]["1"]["reference_image_asset_ids"] == [
         projection["selected_product_asset_ids"][0]
     ]
+    plan_reference = request.metadata["physical_renderer_reference_plans"]["1"]["references"][0]
     assert _source_ids(physical_assets) == [projection["selected_product_asset_ids"][0]]
+    assert [item["asset_id"] for item in physical_assets] == [
+        f"{projection['selected_product_asset_ids'][0]}::product_object_only_crop"
+    ]
     assert [item["source_type"] for item in physical_assets] == ["uploaded"]
+    assert [item["provider_reference_derivative"] for item in physical_assets] == [True]
+    assert [item["derivative_kind"] for item in physical_assets] == ["product_object_only_crop"]
+    assert Path(physical_assets[0]["file_path"]).resolve() != Path(plan_reference["file_path"]).resolve()
+    assert "product_object_only_crop" in Path(physical_assets[0]["file_path"]).name
+    assert [Path(path).resolve() for path in reference_image_paths(materialization.asset_plan, max_images=5)] == [
+        Path(physical_assets[0]["file_path"]).resolve()
+    ]
+    truth_layer = materialization.asset_plan["provider_input_plan"]["reference_truth_layers"][0]
+    assert truth_layer["asset_id"] == physical_assets[0]["asset_id"]
+    assert truth_layer["source_asset_id"] == projection["selected_product_asset_ids"][0]
+    assert truth_layer["source_reference_id"] == plan_reference["reference_id"]
+    assert truth_layer["product_object_only_neutralized"] is True
     assert set(face_output_ids).isdisjoint(_source_ids(physical_assets))
 
 

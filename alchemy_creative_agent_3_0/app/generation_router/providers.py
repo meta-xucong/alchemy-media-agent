@@ -3766,6 +3766,42 @@ class ProductionImageGenerationProvider(GenerationProvider):
             or metadata.get("physical_renderer_reference_plan") is not None
         )
 
+    def _doc269_product_only_object_transport(self, request: GenerationRequest) -> bool:
+        context = self._generation_request_metadata(request).get("ecommerce_creative_context")
+        if not isinstance(context, dict):
+            return False
+        context_metadata = context.get("metadata")
+        if not isinstance(context_metadata, dict):
+            return False
+        transport = context_metadata.get("product_only_renderer_transport")
+        if not isinstance(transport, dict):
+            return False
+        return (
+            transport.get("contract_version") == "v3_ecommerce_product_only_renderer_transport_v1"
+            and transport.get("subject_scope") == "object_only"
+        )
+
+    def _doc269_product_only_provider_derivative(
+        self,
+        entry: Any,
+        path: Path,
+    ) -> dict[str, Any] | None:
+        derivatives = self._reference_truth_derivatives(
+            {
+                "asset_id": entry.reference_id,
+                "file_path": str(path),
+                "filename": path.name,
+                "role": entry.role,
+                "source_type": entry.source_type,
+            },
+            ["product_identity_truth"],
+            reference_policy={"product_identity_derivative_kind": "product_object_only_crop"},
+        )
+        for derivative in derivatives:
+            if derivative.get("derivative_kind") == "product_object_only_crop" and derivative.get("path"):
+                return derivative
+        return None
+
     def _doc269_ecommerce_materialization_asset_plan(
         self,
         request: GenerationRequest,
@@ -3857,10 +3893,47 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 continuation_entries,
             )
             assets: list[dict[str, Any]] = []
+            product_only_object_transport = self._doc269_product_only_object_transport(request)
             for entry in plan.references:
                 path = Path(entry.file_path).resolve(strict=True)
                 if not path.is_file() or self._reference_content_fingerprint(path) != entry.content_sha256:
                     raise ValueError("file_drift")
+                derivative = (
+                    self._doc269_product_only_provider_derivative(entry, path)
+                    if product_only_object_transport and entry.channel == "product_truth"
+                    else None
+                )
+                if derivative is not None:
+                    derivative_path = Path(str(derivative.get("path") or "")).resolve(strict=True)
+                    if not derivative_path.is_file():
+                        raise ValueError("product_only_derivative_missing")
+                    assets.append(
+                        {
+                            "asset_id": f"{entry.reference_id}::{derivative['derivative_kind']}",
+                            "source_asset_id": entry.source_id,
+                            "source_reference_id": entry.reference_id,
+                            "role": entry.role,
+                            "source_type": entry.source_type,
+                            "provider_input_mode": "reference_image",
+                            "storage_path": str(derivative_path),
+                            "filename": derivative.get("path_name") or derivative_path.name,
+                            "mime_type": "image/jpeg",
+                            "provider_reference_order": entry.ordinal,
+                            "doc269_physical_renderer_reference_plan": True,
+                            "doc269_source_reference_id": entry.reference_id,
+                            "doc269_source_content_sha256": entry.content_sha256,
+                            "reference_truth_layer": derivative.get("truth_layer") or "product_identity_truth",
+                            "truth_layers": ["product_identity_truth"],
+                            "provider_reference_derivative": True,
+                            "derivative_kind": derivative.get("derivative_kind"),
+                            "fallback_to_original": bool(derivative.get("fallback_to_original")),
+                            "product_object_only_neutralized": bool(
+                                derivative.get("product_object_only_neutralized")
+                            ),
+                            "provider_reference_bytes": self._provider_reference_file_size(derivative_path),
+                        }
+                    )
+                    continue
                 assets.append(
                     {
                         "asset_id": entry.reference_id,
@@ -3909,8 +3982,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "role": item["role"],
                         "truth_layer": item["reference_truth_layer"],
                         "truth_layers": item["truth_layers"],
-                        "derivative_kind": None,
-                        "provider_reference_derivative": False,
+                        "derivative_kind": item.get("derivative_kind"),
+                        "provider_reference_derivative": bool(item.get("provider_reference_derivative")),
+                        "fallback_to_original": bool(item.get("fallback_to_original")),
+                        "source_reference_id": item.get("source_reference_id"),
+                        "product_object_only_neutralized": bool(
+                            item.get("product_object_only_neutralized")
+                        ),
                     }
                     for item in assets
                 ],
