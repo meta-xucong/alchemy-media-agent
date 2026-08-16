@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainProviderError
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
@@ -39,6 +39,27 @@ def _request(*, count: int = 2, approved_copy: str | None = None) -> dict:
     }
 
 
+def _product_only_request() -> dict:
+    return {
+        "user_input": (
+            "Create one product-only catalog flat lay of the selected garment on a clean studio surface. "
+            "Keep the product unoccupied and match its color, silhouette, and pattern."
+        ),
+        "scenario_selection": {
+            "scenario_id": "ecommerce",
+            "mode_id": "one_click_product_set",
+            "platform_profile": "amazon_us",
+            "parameters": {"requested_image_count": 1, "platform": "amazon_us", "market": "US"},
+        },
+        "uploaded_asset_ids": ["product_garment_front"],
+        "product_profile": {
+            "product_category": "children swimwear",
+            "materials": ["stretch knit"],
+            "color": "blue",
+        },
+    }
+
+
 def test_ecommerce_manifest_is_active_but_names_remote_brain_not_local_recipe_components() -> None:
     resolution = ScenarioPackRegistry().resolve({"scenario_id": "ecommerce"})
 
@@ -70,23 +91,68 @@ def test_planner_prepares_facts_and_questions_but_never_a_visual_recipe() -> Non
     assert output.export_package.naming_pattern == "{opaque_output_id}.png"
 
 
-def test_production_service_fails_closed_when_remote_brain_is_not_available() -> None:
+def test_explicit_product_only_request_freezes_object_only_transport_for_remote_brain() -> None:
+    provider = EcommerceRemoteBrainTestProvider()
+    service = ecommerce_test_service(brain_provider=provider)
+    created = service.create_job(_product_only_request())
+
+    assert created.status == "planned"
+    finalizer = BrainRunRequest.model_validate(
+        next(item for item in provider.requests if item["stage"] == "provider_prompt_finalize")
+    )
+    context = finalizer.metadata["canonical_prompt_context"]["ecommerce_creative_context"]
+    assert context["metadata"]["product_only_renderer_transport"] == {
+        "contract_version": "v3_ecommerce_product_only_renderer_transport_v1",
+        "subject_scope": "object_only",
+        "canonical_prompt_policy": "reference_anchored_generic_product",
+    }
+    payload = json.loads(build_remote_payload(finalizer))
+    assert "subject_scope=object_only" in payload["ecommerce_context_instructions"]
+    frozen = service.job_store.get(created.job_id).request.metadata["frozen_remote_creative_brain"]
+    prompt = frozen["brain_result"]["canonical_provider_prompts"][0]["prompt"].lower()
+    assert not {"person", "model", "child", "face", "swimwear"}.intersection(prompt.split())
+
+
+def test_product_only_finalizer_prompt_with_person_or_sensitive_category_is_rejected_before_provider() -> None:
+    class ViolatingProvider(EcommerceRemoteBrainTestProvider):
+        def run(self, request):  # noqa: ANN001
+            payload = super().run(request)
+            if request.stage == "provider_prompt_finalize":
+                payload["canonical_provider_prompts"][0]["prompt"] = (
+                    "Create a child swimwear model image with a visible face."
+                )
+            return payload
+
+    service = ecommerce_test_service(brain_provider=ViolatingProvider())
+    created = service.create_job(_product_only_request())
+
+    assert created.status == "blocked"
+    assert created.job_id
+    assert service.output_store.list_by_job(created.job_id) == []
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    events = record.request.metadata["ecommerce_runtime_provenance"]["events"]
+    assert events[-1]["failure_reason_codes"] == [
+        "remote_creative_brain_prompt_signoff_invalid"
+    ]
+
+
+def test_production_service_fails_closed_when_remote_brain_is_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
     status = V3ProductApiService().create_job(_request())
 
     assert status.status == "blocked"
     assert "remote_creative_brain_required_for_template" in " ".join(status.warnings)
-    outcome = status.metadata["remote_creative_brain_outcome"]
-    assert outcome == {
-        "schema_version": "v3_remote_creative_brain_outcome_v1",
-        "state": "blocked",
-        "reason_code": "remote_creative_brain_required_for_template",
-        "outcome_class": "remote_provider_unavailable",
-        "llm_used": False,
-        "fallback_used": True,
-        "remote_provider_available": False,
-        "remote_contract_rejected_sections": [],
+    provenance = status.metadata["ecommerce_runtime_provenance"]
+    assert provenance["events"][-1] == {
+        "stage": "planning",
+        "runtime_status": "blocked",
+        "fail_closed": True,
+        "failure_reason_codes": ["remote_creative_brain_required_for_template"],
     }
-    assert not {"provider", "model", "endpoint", "raw_error"}.intersection(outcome)
+    assert "remote_creative_brain_outcome" not in status.metadata
 
 
 class _TimeoutRemoteBrain:
@@ -114,6 +180,7 @@ def test_specialized_remote_provider_error_projects_only_a_safe_error_class() ->
         "remote_provider_available": None,
         "remote_contract_rejected_sections": [],
         "remote_error_class": "timeout",
+        "remote_brain_stage": "plan",
     }
 
 

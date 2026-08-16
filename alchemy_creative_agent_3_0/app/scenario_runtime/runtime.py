@@ -26,6 +26,7 @@ from ..llm_brain.providers import (
 )
 from ..scenario_packs import ScenarioPackRegistry, ScenarioPackResolution, ScenarioSelection
 from ..scenario_packs.ecommerce import (
+    EcommerceCreativeContext,
     EcommerceCreativeRiskPreflight,
     ecommerce_human_realism_review_context_from_preflight_payload,
     professional_identity_view_kinds_from_selectors,
@@ -3049,6 +3050,16 @@ class ScenarioRuntime:
                 "execution_fingerprint": envelope.execution_fingerprint,
             },
         }
+        raw_ecommerce_context = request.metadata.get("ecommerce_creative_context")
+        if request.metadata.get("ecommerce_creative_context_server_owned") is True:
+            try:
+                ecommerce_context = EcommerceCreativeContext.model_validate(raw_ecommerce_context)
+            except ValueError as exc:
+                raise CapabilityActivationError("ecommerce_creative_context_invalid") from exc
+            # The finalizer receives the same validated server facts that
+            # informed the initial Brain pass. This preserves typed
+            # E-Commerce renderer boundaries through the final sign-off.
+            context["ecommerce_creative_context"] = ecommerce_context.model_dump(mode="json")
         reference_ownership = ScenarioRuntime._reference_channel_ownership_decision(
             projection,
             frozen_binding=dict(context["frozen_binding"]),

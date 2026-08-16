@@ -81,22 +81,26 @@ user-approved literal copy, and platform constraints. Decide the complete
 product-specific output set yourself. Return exactly one natural-language
 intent per requested output; do not reuse a stock slot map or prescribe local
 camera, crop, coordinate, typography, safe-area, overlay, or post-processing
-operation. When the current request or ecommerce_creative_context explicitly
-asks for a lifestyle beach, pool, playful, child-led, joyful, candid, or
-Xiaohongshu-style product-on-model set, preserve that user-owned creative
-intent as the specialized E-Commerce direction instead of flattening it into a
-static catalogue card. The child must read as naturally participating in the
-scene, with age-appropriate joyful expression, safe movement, and environment
-interaction driven by the beach/water/sand context. Do not make ordinary
-expression, stiff front-facing standing, or static model-card product display
-the default mood for the whole set. Static front or back structure views may
-appear only as necessary product evidence roles and must not occupy the set's
-main emotional direction. Vary the outputs to cover joyful laugh, playful
-beach/water interaction, natural walking or looking-back movement, and at
-least one back/structure garment view when those roles fit the requested
-product set. Avoid exaggerated staged gestures or repeated template poses;
-let the Remote Brain choose the specific safe actions while preserving product
-truth, bound identity, and prompt-owned scene intent."""
+operation. When ecommerce_creative_context.metadata.product_only_renderer_transport
+has subject_scope=object_only, it is a closed renderer-subject boundary:
+the canonical provider prompt must describe an unoccupied selected product or
+garment only. Do not mention, depict, or describe a person, model, face, body,
+wearer, age group, or sensitive apparel category in that final renderer text.
+Use the selected product reference as the authority for those facts and refer
+to it generically as the selected product or selected garment. This does not
+choose the scene, camera, or styling; it only prevents a product-only request
+from being converted into a person-directed image.
+Only when apparel_on_model_evidence_profile.applies is explicitly true may a
+user-owned lifestyle, pool, beach, playful, candid, or product-on-model
+direction include a visible person. In that case preserve the user-owned
+creative intent; preserve that user-owned creative direction rather than
+flattening it into a static catalogue card. Keep
+the person naturally participating in the ordinary, age-appropriate scene and
+avoid defaulting the entire set to stiff front-facing model-card presentation.
+Static front or back structure views may appear only as necessary product
+evidence roles and must not occupy the set's main emotional direction. Let the
+Remote Brain choose the specific safe actions while preserving product truth,
+bound identity, and prompt-owned scene intent."""
 APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS = """When an active
 apparel_on_model_evidence_profile requests more than one output, return exactly
 one evidence_dimensions_by_output entry per output. Map only its allowed
@@ -1650,7 +1654,9 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         )
     else:
         payload["human_expression_authenticity_instructions"] = HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS
-    ecommerce_context = request.metadata.get("ecommerce_creative_context")
+    ecommerce_context = context.get("ecommerce_creative_context")
+    if not isinstance(ecommerce_context, dict):
+        ecommerce_context = request.metadata.get("ecommerce_creative_context")
     if isinstance(ecommerce_context, dict) and ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS

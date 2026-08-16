@@ -73,6 +73,7 @@ class EcommerceScenarioPackPlanner:
             truth=truth,
             requested_image_count=_bounded_requested_count(scenario_parameters.get("requested_image_count")) or 1,
         )
+        product_only_transport = _explicit_product_only_renderer_transport(user_input)
         category = resolve_category(product_profile.get("product_category"), user_input=user_input)
         approved_copy = _explicit_approved_copy(product_profile, scenario_parameters)
         locale = (
@@ -128,6 +129,11 @@ class EcommerceScenarioPackPlanner:
                 "platform_profile_id": marketplace.metadata.get("profile_id"),
                 "platform_profile_version": marketplace.metadata.get("profile_version"),
                 "apparel_on_model_evidence_contract": bool(apparel_on_model_profile and apparel_on_model_profile.applies),
+                **(
+                    {"product_only_renderer_transport": product_only_transport}
+                    if product_only_transport is not None
+                    else {}
+                ),
             },
         )
 
@@ -280,6 +286,27 @@ def _category_evidence_questions(category) -> list[str]:
 def _requests_product_on_person(user_input: str) -> bool:
     raw_text = str(user_input or "")
     text = raw_text.lower()
+    if _explicit_product_only_renderer_transport(raw_text) is not None:
+        return False
+    english = (
+        "on model",
+        "model wearing",
+        "person wearing",
+        "wearing the supplied",
+        "wearing this",
+        "try-on",
+        "try on",
+        "apparel-on-model",
+    )
+    chinese = ("模特上身", "真人上身", "试穿", "穿着", "上身展示")
+    return any(token in text for token in english) or any(token in raw_text for token in chinese)
+
+
+def _explicit_product_only_renderer_transport(user_input: str) -> dict[str, str] | None:
+    """Return the object-only renderer scope for an explicit user choice."""
+
+    raw_text = str(user_input or "")
+    text = raw_text.lower()
     product_only_english = (
         "product-only",
         "product only",
@@ -306,19 +333,12 @@ def _requests_product_on_person(user_input: str) -> bool:
     if any(token in text for token in product_only_english) or any(
         token in raw_text for token in product_only_chinese
     ):
-        return False
-    english = (
-        "on model",
-        "model wearing",
-        "person wearing",
-        "wearing the supplied",
-        "wearing this",
-        "try-on",
-        "try on",
-        "apparel-on-model",
-    )
-    chinese = ("模特上身", "真人上身", "试穿", "穿着", "上身展示")
-    return any(token in text for token in english) or any(token in raw_text for token in chinese)
+        return {
+            "contract_version": "v3_ecommerce_product_only_renderer_transport_v1",
+            "subject_scope": "object_only",
+            "canonical_prompt_policy": "reference_anchored_generic_product",
+        }
+    return None
 
 
 def _bounded_requested_count(value: object) -> int | None:

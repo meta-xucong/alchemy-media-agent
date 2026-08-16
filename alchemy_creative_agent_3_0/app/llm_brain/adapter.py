@@ -584,6 +584,10 @@ class V3LLMBrainAdapter:
             prompts = [BrainCanonicalProviderPrompt.model_validate(item) for item in prompts_raw]
         except ValidationError as exc:
             raise BrainPromptContractInvalid("Remote Brain returned an invalid canonical provider-prompt contract.") from exc
+        if _product_only_canonical_prompt_violations(request, prompts):
+            raise BrainPromptContractInvalid(
+                "Remote Brain signed a product-only renderer prompt outside the server-owned object-only scope."
+            )
         record_stage_event(
             "brain_adapter",
             "canonical_finalizer_schema_validated",
@@ -1299,6 +1303,71 @@ def _ecommerce_creative_context(
             requested_image_count=requested_image_count,
         )
     return context
+
+
+def _product_only_canonical_prompt_violations(
+    request: BrainRunRequest,
+    prompts: list[BrainCanonicalProviderPrompt],
+) -> list[int]:
+    """Check an already typed object-only boundary at canonical sign-off.
+
+    The E-Commerce pack owns the user-intent decision. This helper does not
+    classify user text; it prevents a signed renderer prompt from changing the
+    known object-only scope into a person- or age-directed image.
+    """
+
+    finalizer_context = request.metadata.get("canonical_prompt_context")
+    finalizer_context = finalizer_context if isinstance(finalizer_context, dict) else {}
+    raw_context = (
+        finalizer_context.get("ecommerce_creative_context")
+        if isinstance(finalizer_context.get("ecommerce_creative_context"), dict)
+        else request.metadata.get("ecommerce_creative_context")
+    )
+    context = raw_context if isinstance(raw_context, dict) else {}
+    context_metadata = context.get("metadata")
+    context_metadata = context_metadata if isinstance(context_metadata, dict) else {}
+    transport = context_metadata.get("product_only_renderer_transport")
+    if not isinstance(transport, dict):
+        return []
+    if (
+        transport.get("contract_version") != "v3_ecommerce_product_only_renderer_transport_v1"
+        or transport.get("subject_scope") != "object_only"
+        or transport.get("canonical_prompt_policy") != "reference_anchored_generic_product"
+    ):
+        return []
+
+    english = re.compile(
+        r"\b(?:person|people|human|model|child|children|minor|kid|toddler|baby|girl|boy|"
+        r"woman|man|face|body|wearing|wears|worn|swimwear|swimsuit|swim\s*suit|"
+        r"bikini|underwear|lingerie)\b",
+        flags=re.IGNORECASE,
+    )
+    chinese_terms = (
+        "人物",
+        "人像",
+        "模特",
+        "儿童",
+        "童装",
+        "小孩",
+        "孩子",
+        "婴儿",
+        "脸",
+        "面部",
+        "身体",
+        "人体",
+        "穿着",
+        "上身",
+        "试穿",
+        "泳装",
+        "泳衣",
+        "比基尼",
+        "内衣",
+    )
+    return [
+        prompt.output_index
+        for prompt in prompts
+        if english.search(prompt.prompt) or any(term in prompt.prompt for term in chinese_terms)
+    ]
 
 
 def _professional_ecommerce_pose_contract(
