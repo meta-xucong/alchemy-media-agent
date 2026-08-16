@@ -7197,14 +7197,16 @@ class V3ProjectModeService:
         return "通用模板已开始理解项目需求。"
 
     def _template_id_for_project_job(self, project: ProjectRecord, job_id: str) -> str:
+        for item in reversed(self.project_store.list_timeline(project.project_id)):
+            if item.job_id == job_id and item.metadata.get("template_id"):
+                return str(item.metadata["template_id"])
+        if project.primary_template_id:
+            return project.primary_template_id
         status = self.product_service.get_job(job_id)
         template_id = status.metadata.get("template_id") if status and status.metadata else None
         if template_id:
             return str(template_id)
-        for item in reversed(self.project_store.list_timeline(project.project_id)):
-            if item.job_id == job_id and item.metadata.get("template_id"):
-                return str(item.metadata["template_id"])
-        return project.primary_template_id or GENERAL_TEMPLATE_ID
+        return GENERAL_TEMPLATE_ID
 
     def _ensure_brand_memory_proposal_available(self, context: ProjectContextPackage) -> None:
         if context.selected_output_assets or context.selected_reference_assets or context.uploaded_reference_assets:

@@ -277,6 +277,32 @@ def test_ecommerce_project_memory_summary_uses_ecommerce_template_default_chip()
     assert summary["confirmed_style_chips"] == ["电商模板"]
 
 
+def test_project_mode_template_authority_ignores_product_runtime_metadata_pollution() -> None:
+    handlers = V3ProductRouteHandlers()
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create a marketplace product image",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "user_input": "Create a clean product listing image",
+            "template_id": "ecommerce_template",
+        },
+    )
+    record = handlers.service.job_store.get(job["job_id"])
+    assert record is not None
+    record.request.metadata["template_id"] = "protected_source"
+    record.request.metadata["template_manifest_id"] = "protected_source"
+    handlers.service.job_store.save(record)
+    stored_project = handlers.project_service.project_store.get_project(project["project_id"])
+    assert stored_project is not None
+
+    assert handlers.project_service._template_id_for_project_job(stored_project, job["job_id"]) == "ecommerce_template"  # noqa: SLF001
+
+
 def test_recent_project_summary_preserves_photography_template_identity_across_reopen(monkeypatch) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     handlers = V3ProductRouteHandlers()
