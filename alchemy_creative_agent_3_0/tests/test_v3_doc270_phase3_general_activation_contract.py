@@ -13,11 +13,16 @@ from typing import Any
 
 import pytest
 
-from alchemy_creative_agent_3_0.app.project_mode import source_library
+from alchemy_creative_agent_3_0.app.project_mode import V3ProjectModeService, source_library
+from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
     ProjectReferenceSourceType,
     ProjectReferenceUsePolicy,
 )
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
+from alchemy_creative_agent_3_0.app.project_mode.service import Doc281GeneralSourceRegistry
 from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_recovery import (
     _handlers,
     _ready_product_upload,
@@ -29,6 +34,13 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc265_reference_channel_recovery 
 
 def _general_project(tmp_path) -> tuple[Any, dict[str, Any], list[str], dict[str, Any]]:
     handlers, _catalog = _handlers(tmp_path)
+    handlers.project_service = V3ProjectModeService(
+        product_service=handlers.service,
+        project_store=handlers.project_service.project_store,
+        project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+        doc281_general_source_registry=Doc281GeneralSourceRegistry(),
+    )
     project = handlers.post_projects(
         {"user_goal": "Create a source-aware general campaign visual.", "primary_template_id": "general_template"}
     )["project"]
@@ -55,6 +67,27 @@ def _general_project(tmp_path) -> tuple[Any, dict[str, Any], list[str], dict[str
         upload_lookup=handlers.service.get_uploaded_asset,
     )
     return handlers, project, asset_ids, snapshot
+
+
+def test_doc270_phase3_legacy_fixture_ignores_an_enabled_doc281_environment_registry(tmp_path, monkeypatch) -> None:
+    """Legacy Doc270 seams are deterministic even when normal General is enabled."""
+
+    environment_registry = Doc281GeneralSourceRegistry(
+        evidence_analyzer=lambda **_kwargs: None,
+        requirement_issuer=lambda **_kwargs: None,
+    )
+    assert environment_registry.enabled is True
+    monkeypatch.setattr(
+        project_mode_service,
+        "doc281_general_source_registry_from_environment",
+        lambda: environment_registry,
+    )
+
+    handlers, _project, _asset_ids, _snapshot = _general_project(tmp_path)
+
+    assert isinstance(handlers.project_service.doc281_general_source_registry, Doc281GeneralSourceRegistry)
+    assert handlers.project_service.doc281_general_source_registry.enabled is False
+    assert handlers.project_service.doc281_general_source_registry is not environment_registry
 
 
 def _association_id(handlers: Any, project_id: str, asset_id: str) -> str:

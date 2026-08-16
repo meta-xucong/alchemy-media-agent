@@ -26,6 +26,10 @@ from alchemy_creative_agent_3_0.app.project_mode import (
     V3ProjectModeService,
     source_library,
 )
+from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
 from alchemy_creative_agent_3_0.app.project_mode.service import (
     Doc281GeneralSourceRegistry,
     doc281_general_source_registry_from_environment,
@@ -209,7 +213,33 @@ def _persistent_project_mode_for_doc281(handlers: Any, storage_root: Path) -> No
         product_service=handlers.service,
         project_store=PersistentProjectStore(storage_root),
         project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
     )
+
+
+def test_doc281_drift_fixture_reconstruction_ignores_an_enabled_environment_issuer(tmp_path, monkeypatch) -> None:
+    """Persistent drift tests own their absent-E31 contract at reconstruction."""
+
+    class _EnvironmentEnabledIssuer:
+        def capability(self, *, project_id: str) -> dict[str, object]:
+            return {"enabled": True, "project_id": project_id}
+
+        def supports_output_count(self, *, expected_output_count: int) -> bool:
+            return expected_output_count > 0
+
+        def issue(self, **_kwargs):
+            raise AssertionError("The Doc281 drift fixture must not use the environment issuer.")
+
+    environment_issuer = _EnvironmentEnabledIssuer()
+    monkeypatch.setattr(project_mode_service, "issuer_from_environment", lambda: environment_issuer)
+    handlers, _catalog = _handlers(tmp_path)
+    _persistent_project_mode_for_doc281(handlers, tmp_path / "doc281-isolated-project-store")
+
+    assert isinstance(
+        handlers.project_service.ecommerce_view_activation_issuer,
+        DisabledEcommerceViewActivationIssuer,
+    )
+    assert handlers.project_service.ecommerce_view_activation_issuer is not environment_issuer
 
 
 def _general_server_held_match(
@@ -1229,6 +1259,7 @@ def test_doc281_active_historical_product_drift_closes_once_with_sanitized_termi
         product_service=handlers.service,
         project_store=PersistentProjectStore(store_root),
         project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
     )
     reloaded = fresh_reader.get_project(project["project_id"]).model_dump(mode="json")
     assert reloaded["metadata"]["current_operation"] == operation
