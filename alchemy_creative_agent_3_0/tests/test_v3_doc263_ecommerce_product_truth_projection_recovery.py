@@ -23,6 +23,11 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
     ReferenceInputAdmissionError,
 )
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
+from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projection import (
     ProductTruthAdmission,
     ProductTruthSource,
@@ -38,6 +43,7 @@ from alchemy_creative_agent_3_0.app.schemas import (
     PromptCompilationResult,
     ProviderStrategy,
 )
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
 
 
 def _png_bytes(color: tuple[int, int, int]) -> bytes:
@@ -320,6 +326,69 @@ def _active_product_references(project: dict[str, object]) -> list[dict[str, obj
         and item.get("source_type") == "uploaded"
         and item.get("use_policy") == "product"
     ]
+
+
+def _doc263_handlers(*, output_store=None) -> V3ProductRouteHandlers:
+    service_kwargs = {} if output_store is None else {"output_store": output_store}
+    return V3ProductRouteHandlers(
+        service=ecommerce_test_service(**service_kwargs),
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+    )
+
+
+def test_doc263_legacy_handler_fixture_ignores_enabled_environment_issuer(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Legacy product-truth tests must not inherit a developer E31 deployment route."""
+
+    class _EnvironmentEnabledIssuer:
+        def capability(self, *, project_id: str) -> dict[str, object]:
+            return {"enabled": True, "project_id": project_id}
+
+        def supports_output_count(self, *, expected_output_count: int) -> bool:
+            return expected_output_count > 0
+
+        def issue(self, **_kwargs):
+            raise AssertionError("The Doc263 legacy fixture must not use the environment issuer.")
+
+    environment_issuer = _EnvironmentEnabledIssuer()
+    monkeypatch.setattr(project_mode_service, "issuer_from_environment", lambda: environment_issuer)
+
+    handlers = _doc263_handlers()
+    assert isinstance(
+        handlers.project_service.ecommerce_view_activation_issuer,
+        DisabledEcommerceViewActivationIssuer,
+    )
+    assert handlers.project_service.ecommerce_view_activation_issuer is not environment_issuer
+
+    product_id = _ready_product_upload(handlers, tmp_path)
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create a professional ecommerce product image.",
+            "primary_template_id": "ecommerce_template",
+        }
+    )["project"]
+    handlers.post_project_reference(
+        project["project_id"],
+        {
+            "asset_ref_id": product_id,
+            "source_type": "uploaded",
+            "use_policy": "product",
+        },
+    )
+
+    created = handlers.post_project_job(
+        project["project_id"],
+        {
+            "template_id": "ecommerce_template",
+            "user_input": "Create the current product image.",
+        },
+    )
+    record = handlers.service.get_job_record(created["job_id"])
+    assert record is not None
+    assert "professional_ecommerce_product_truth_admission" in record.request.metadata
+    assert "professional_ecommerce_physical_product_projections" in record.request.metadata
 
 
 def _ready_product_upload(
@@ -740,10 +809,7 @@ def test_doc263_multi_output_projection_map_rejects_missing_output_and_cross_job
 
 
 def test_doc263_product_api_issues_projection_from_current_project_pool_and_brain_plan(tmp_path) -> None:
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = _doc263_handlers()
     handlers.service.asset_store.storage_root = tmp_path / "uploads"
     product_ids = [
         _ready_product_upload(handlers, tmp_path, color=(100 + index, 120, 140))
@@ -792,10 +858,7 @@ def test_doc263_tampered_server_upload_authorization_receipt_closes_before_plann
     tmp_path,
     monkeypatch,
 ) -> None:
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = _doc263_handlers()
     product_id = _ready_product_upload(handlers, tmp_path)
     upload = handlers.service.get_uploaded_asset(product_id)
     assert upload is not None
@@ -931,10 +994,7 @@ def test_doc263_public_projection_map_and_drift_receipt_cannot_be_forged() -> No
 
 
 def test_doc263_public_historical_drift_marker_cannot_create_superseding_job(tmp_path) -> None:
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = _doc263_handlers()
     product_id = _ready_product_upload(handlers, tmp_path)
     project = handlers.post_projects(
         {
@@ -980,10 +1040,7 @@ def test_doc263_product_api_records_server_owned_drift_receipt_from_pre_dispatch
     tmp_path,
     monkeypatch,
 ) -> None:
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = _doc263_handlers()
     product_id = _ready_product_upload(handlers, tmp_path)
     project = handlers.post_projects(
         {
@@ -1027,10 +1084,7 @@ def test_doc263_product_api_records_server_owned_drift_receipt_from_pre_dispatch
 
 
 def test_doc263_repeated_current_reference_command_has_one_identity(tmp_path) -> None:
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = _doc263_handlers()
     product_id = _ready_product_upload(handlers, tmp_path)
     project = handlers.post_projects(
         {
@@ -1083,10 +1137,7 @@ def test_doc263_repeated_current_reference_command_has_one_identity(tmp_path) ->
 
 
 def test_doc263_first_selected_product_command_is_immediately_idempotent(tmp_path) -> None:
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = _doc263_handlers()
     product_id = _ready_product_upload(handlers, tmp_path)
     project = handlers.post_projects(
         {
@@ -1119,10 +1170,7 @@ def test_doc263_first_selected_product_command_is_immediately_idempotent(tmp_pat
 
 
 def test_doc263_projection_drift_continuation_is_clean_and_superseding(tmp_path) -> None:
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = _doc263_handlers()
     handlers.service.asset_store.storage_root = tmp_path / "uploads"
     product_ids = [
         _ready_product_upload(
@@ -1184,10 +1232,7 @@ def test_doc263_projection_drift_continuation_is_clean_and_superseding(tmp_path)
 
 
 def test_doc263_terminal_public_status_has_one_safe_next_action(tmp_path) -> None:
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service())
+    handlers = _doc263_handlers()
     product_id = _ready_product_upload(handlers, tmp_path)
     project = handlers.post_projects(
         {
@@ -1226,11 +1271,8 @@ def test_doc263_continuation_dedupes_product_content_and_does_not_promote_genera
     tmp_path,
 ) -> None:
     from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
-    from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-    from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
-
     output_store = V3GeneratedOutputStore(storage_root=tmp_path / "outputs")
-    handlers = V3ProductRouteHandlers(service=ecommerce_test_service(output_store=output_store))
+    handlers = _doc263_handlers(output_store=output_store)
     content = base64.b64encode(_png_bytes((150, 170, 190))).decode("ascii")
     first_upload = _ready_product_upload(handlers, tmp_path, color=(150, 170, 190))
     duplicate_created = handlers.post_uploads(
