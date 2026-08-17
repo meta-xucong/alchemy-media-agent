@@ -55,12 +55,13 @@ It owns:
 - marketplace/platform constraints;
 - category evidence questions;
 - seller-provided business facts;
-- optional `apparel_on_model_evidence_profile`;
 - `product_set_style` and `role_specific_creative_intent` when supplied by
   the server-shaped request context.
 
 It explicitly does not own:
 
+- target-subject semantic classification, including whether a person/model is
+  visible in the requested output;
 - shot order;
 - camera and crop recipes;
 - scene or pose recipes;

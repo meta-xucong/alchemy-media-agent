@@ -28,6 +28,11 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import active_review_contract
 
 
+@pytest.fixture(autouse=True)
+def _disable_live_remote_brain(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
+
+
 def _frozen_enforced_plan() -> dict:
     return CapabilityActivationPlan(
         plan_id="doc113-plan",
@@ -116,7 +121,11 @@ def test_direct_product_and_project_entries_normalize_one_count_size_and_text_co
         {
             "user_input": user_input,
             "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 2}},
-            "metadata": {"requested_image_count": 2, "requested_image_size": "1536x1024"},
+            "metadata": {
+                "requested_image_count": 2,
+                "requested_image_size": "1536x1024",
+                "visible_text_policy": "forbidden",
+            },
         }
     )
     product_service = V3ProductApiService()
@@ -124,7 +133,11 @@ def test_direct_product_and_project_entries_normalize_one_count_size_and_text_co
         {
             "user_input": user_input,
             "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 2}},
-            "metadata": {"requested_image_count": 2, "requested_image_size": "1536x1024"},
+            "metadata": {
+                "requested_image_count": 2,
+                "requested_image_size": "1536x1024",
+                "visible_text_policy": "forbidden",
+            },
         }
     )
     product_record = product_service.get_job_record(product.job_id)
@@ -137,7 +150,11 @@ def test_direct_product_and_project_entries_normalize_one_count_size_and_text_co
         {
             "template_id": "general_template",
             "user_input": user_input,
-            "metadata": {"requested_image_count": 2, "requested_image_size": "1536x1024"},
+            "metadata": {
+                "requested_image_count": 2,
+                "requested_image_size": "1536x1024",
+                "visible_text_policy": "forbidden",
+            },
         },
     )
     project_record = handlers.service.get_job_record(project_job["job_id"])
@@ -161,6 +178,21 @@ def test_direct_product_and_project_entries_normalize_one_count_size_and_text_co
         assert intent["text_policy"] == "provider_native_text_forbidden"
         assert delivery["effective_image_count"] == 2
         assert len(delivery["deliverables"]) == 2
+
+
+def test_enforced_normalized_intent_does_not_parse_prompt_text_policy(monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    result = ScenarioRuntime().plan_job(
+        {
+            "user_input": "Create two wide editorial still-life images with no visible text.",
+            "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 2}},
+            "metadata": {"requested_image_count": 2},
+        }
+    )
+
+    intent = result.metadata["normalized_v3_job_intent"]
+    assert intent["visible_text_policy"] == "unspecified"
+    assert intent["text_policy"] == "provider_native_no_forced_text"
 
 
 def test_generation_reuses_the_server_frozen_intent_when_later_parameters_drift() -> None:

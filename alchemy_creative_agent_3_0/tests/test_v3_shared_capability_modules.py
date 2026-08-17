@@ -94,6 +94,39 @@ def test_unknown_uploaded_asset_becomes_face_reference_for_human_task(tmp_path) 
     assert binding["provider_input_required"] is True
 
 
+def test_enforced_asset_analysis_leaves_unknown_sources_for_remote_brain(tmp_path) -> None:
+    source_path = _image(tmp_path / "face_product_catalogue.png", size=(360, 480), color=(210, 190, 176))
+    registry = SharedCapabilityRegistry.with_default_modules()
+
+    result = registry.run(
+        _input(
+            tmp_path,
+            user_input="Create a portrait of a woman wearing the supplied product.",
+            assets=[
+                UploadedAssetInfo(
+                    asset_id="asset_ambiguous",
+                    file_path=str(source_path),
+                    filename=source_path.name,
+                    metadata={"role": "face_reference"},
+                )
+            ],
+            metadata={"brain_semantic_analysis_required": True},
+        ),
+        module_ids=["asset_role_analyzer", "asset_binding_planner"],
+    )
+
+    analysis = result.results[0].facts["asset_analyses"][0]
+    binding = result.results[1].facts["asset_binding_plan"]["bindings"][0]
+    assert analysis["role"] == AssetRole.UNKNOWN_REFERENCE.value
+    assert analysis["semantic_role_decision_owner"] == "remote_brain"
+    assert analysis["width"] == 360
+    assert analysis["height"] == 480
+    assert analysis["provider_input_required"] is False
+    assert result.results[0].constraints == []
+    assert binding["constraint_strength"] == "soft"
+    assert binding["provider_input_required"] is False
+
+
 def test_asset_binding_planner_prioritizes_product_and_warns_logo_conflicts(tmp_path) -> None:
     product_path = _image(tmp_path / "product.png")
     logo_a = _image(tmp_path / "logo_a.png", size=(300, 300), color=(250, 250, 250))

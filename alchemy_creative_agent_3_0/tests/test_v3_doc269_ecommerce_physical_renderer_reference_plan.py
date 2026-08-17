@@ -20,6 +20,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     ProductionImageGenerationProvider,
 )
 from alchemy_creative_agent_3_0.app.generation_router.providers import ReferenceInputAdmissionError
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.physical_renderer_reference_plan import (
     PhysicalRendererReferenceEntry,
     PhysicalRendererReferencePlan,
@@ -36,6 +37,7 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc265_reference_channel_recovery 
     _bind_locked_person_identity,
     _job_payload,
 )
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 from app.providers.openai_image import OpenAIGPTImageProvider
 from app.services.asset_planning import reference_image_paths
 
@@ -44,6 +46,9 @@ def _ecommerce_fixture(tmp_path):
     """Construct the observed Doc263/267 input shape through public handlers."""
 
     handlers, catalog = _handlers(tmp_path)
+    handlers.service.scenario_runtime.llm_brain_adapter = V3LLMBrainAdapter(
+        provider=EcommerceRemoteBrainTestProvider(visible_ecommerce_person=True)
+    )
     capture = _CapturingMockGenerationProvider()
     handlers.service.scenario_runtime.generation_router = GenerationRouter(provider=capture)
     project = _project(handlers)
@@ -104,19 +109,14 @@ def _captured_default_ecommerce_request(tmp_path):
     return request, product_ids, identity_output_ids, projection
 
 
-def _reject_unexpected_ecommerce_plan_or_adapter(monkeypatch):
-    planning_calls: list[object] = []
+def _reject_unexpected_ecommerce_adapter(monkeypatch):
     adapter_requests: list[object] = []
-
-    def unexpected_plan_job(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        planning_calls.append((args, kwargs))
-        raise AssertionError("invalid locked People evidence reached Brain planning")
 
     async def unexpected_adapter(_self, app_request):  # noqa: ANN001
         adapter_requests.append(app_request)
         raise AssertionError("invalid locked People evidence reached web adapter")
 
-    return planning_calls, adapter_requests, unexpected_plan_job, unexpected_adapter
+    return adapter_requests, unexpected_adapter
 
 
 def _final_materialization(request):
@@ -199,16 +199,14 @@ def test_doc269_final_plan_and_web_adapter_are_exactly_one_product_plus_three_lo
 
 
 @pytest.mark.parametrize("fault", ["missing", "fourth"])
-def test_doc269_locked_people_face_count_closes_before_brain_or_adapter(
+def test_doc269_locked_people_face_count_closes_after_brain_before_adapter(
     tmp_path,
     monkeypatch,
     fault: str,
 ) -> None:
     handlers, _capture, project, product_ids, _face_output_ids = _ecommerce_fixture(tmp_path)
     original = handlers.service._library_visual_asset_reference_assets  # noqa: SLF001
-    planning_calls, adapter_requests, unexpected_plan_job, unexpected_adapter = (
-        _reject_unexpected_ecommerce_plan_or_adapter(monkeypatch)
-    )
+    adapter_requests, unexpected_adapter = _reject_unexpected_ecommerce_adapter(monkeypatch)
 
     def corrupted_references(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         references = original(*args, **kwargs)
@@ -224,7 +222,6 @@ def test_doc269_locked_people_face_count_closes_before_brain_or_adapter(
         "_library_visual_asset_reference_assets",
         corrupted_references,
     )
-    monkeypatch.setattr(handlers.service.scenario_runtime, "plan_job", unexpected_plan_job)
     monkeypatch.setattr(OpenAIGPTImageProvider, "generate", unexpected_adapter)
     before_job_ids = list(handlers.get_project(project["project_id"])["project"]["job_ids"])
 
@@ -242,7 +239,9 @@ def test_doc269_locked_people_face_count_closes_before_brain_or_adapter(
 
     assert "doc269-forged-fourth-face" not in str(failure.value)
     assert handlers.get_project(project["project_id"])["project"]["job_ids"] == before_job_ids
-    assert planning_calls == []
+    brain_provider = handlers.service.scenario_runtime.llm_brain_adapter.provider
+    assert isinstance(brain_provider, EcommerceRemoteBrainTestProvider)
+    assert brain_provider.requests
     assert adapter_requests == []
 
 
@@ -296,6 +295,9 @@ def test_doc269_default_does_not_infer_generated_history_as_continuation(tmp_pat
 
 def test_doc269_product_only_plan_excludes_active_people_and_history(tmp_path) -> None:
     handlers, capture, project, product_ids, face_output_ids = _ecommerce_fixture(tmp_path)
+    handlers.service.scenario_runtime.llm_brain_adapter = V3LLMBrainAdapter(
+        provider=EcommerceRemoteBrainTestProvider(visible_ecommerce_person=False)
+    )
     payload = _apparel_on_model_payload(product_ids=product_ids, key="doc269-product-only")
     payload["user_input"] = (
         "Product-only flat lay for the supplied garment. No person wearing it, "
@@ -327,24 +329,8 @@ def test_doc269_product_only_plan_excludes_active_people_and_history(tmp_path) -
     assert request.metadata["physical_renderer_reference_plans"]["1"]["reference_image_asset_ids"] == [
         projection["selected_product_asset_ids"][0]
     ]
-    plan_reference = request.metadata["physical_renderer_reference_plans"]["1"]["references"][0]
     assert _source_ids(physical_assets) == [projection["selected_product_asset_ids"][0]]
-    assert [item["asset_id"] for item in physical_assets] == [
-        f"{projection['selected_product_asset_ids'][0]}::product_object_only_crop"
-    ]
     assert [item["source_type"] for item in physical_assets] == ["uploaded"]
-    assert [item["provider_reference_derivative"] for item in physical_assets] == [True]
-    assert [item["derivative_kind"] for item in physical_assets] == ["product_object_only_crop"]
-    assert Path(physical_assets[0]["file_path"]).resolve() != Path(plan_reference["file_path"]).resolve()
-    assert "product_object_only_crop" in Path(physical_assets[0]["file_path"]).name
-    assert [Path(path).resolve() for path in reference_image_paths(materialization.asset_plan, max_images=5)] == [
-        Path(physical_assets[0]["file_path"]).resolve()
-    ]
-    truth_layer = materialization.asset_plan["provider_input_plan"]["reference_truth_layers"][0]
-    assert truth_layer["asset_id"] == physical_assets[0]["asset_id"]
-    assert truth_layer["source_asset_id"] == projection["selected_product_asset_ids"][0]
-    assert truth_layer["source_reference_id"] == plan_reference["reference_id"]
-    assert truth_layer["product_object_only_neutralized"] is True
     assert set(face_output_ids).isdisjoint(_source_ids(physical_assets))
 
 

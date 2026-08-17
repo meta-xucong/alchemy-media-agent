@@ -157,15 +157,12 @@ QUALITY_MODE_TO_MOCK_PROFILE = {
     "strict": "balanced",
 }
 
-_REMOTE_BRAIN_LIFECYCLE_REASON_CODES = {
-    "remote_brain_unavailable",
-    "remote_brain_unauthorized",
-    "remote_creative_brain_prompt_signoff_unavailable",
-}
+_REMOTE_BRAIN_LIFECYCLE_OUTCOME_SCHEMA = "v3_remote_creative_brain_outcome_v1"
 
 _REMOTE_BRAIN_LIFECYCLE_OUTCOME_CLASSES = {
     "remote_brain_unavailable",
     "remote_brain_unauthorized",
+    "remote_contract_invalid",
     "remote_prompt_signoff_unavailable",
 }
 
@@ -1358,7 +1355,6 @@ class V3ProductApiService:
                 create_request,
                 binding_service=project_visual_asset_binding_service,
             )
-            self._bind_ecommerce_locked_identity_authority(create_request)
         if trusted_professional_anchor_preparation:
             if professional_anchor_view_role is None:
                 raise ValueError("professional_anchor_pack_preparation_stage_invalid")
@@ -1634,6 +1630,7 @@ class V3ProductApiService:
         if activation_metadata:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
         if planning_result is not None:
+            self._bind_ecommerce_locked_identity_authority(create_request)
             self._bind_ecommerce_physical_projections(
                 create_request,
                 planning_result=planning_result,
@@ -10368,14 +10365,19 @@ class V3ProductApiService:
 
     @classmethod
     def _public_remote_brain_lifecycle_outcome(cls, outcome: dict[str, Any]) -> dict[str, Any]:
-        reason_code = cls._closed_string(
-            outcome.get("reason_code"),
-            allowed=_REMOTE_BRAIN_LIFECYCLE_REASON_CODES,
-        )
+        # ScenarioRuntime mints this already-sanitized envelope. Product API
+        # must preserve it as an opaque typed handoff rather than maintaining
+        # a second, inevitably incomplete list of remote Brain failure codes.
+        if (
+            outcome.get("schema_version") != _REMOTE_BRAIN_LIFECYCLE_OUTCOME_SCHEMA
+            or outcome.get("state") != "blocked"
+        ):
+            return {}
+        reason_code = str(outcome.get("reason_code") or "").strip()
         if not reason_code:
             return {}
         projected: dict[str, Any] = {
-            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "schema_version": _REMOTE_BRAIN_LIFECYCLE_OUTCOME_SCHEMA,
             "state": "blocked",
             "reason_code": reason_code,
         }
@@ -12941,27 +12943,41 @@ class V3ProductApiService:
         self,
         request: CreateCreativeJobRequest,
     ) -> None:
-        """Freeze People bindings only for a server-owned on-person plan.
+        """Freeze People bindings only after the remote Brain declares a person.
 
         An active People asset remains catalog evidence for the project, but
         product-only E-Commerce output must not turn it into a renderer input.
-        The server-derived apparel-on-model profile is the specialized
-        authority that permits the separate identity channel.
+        The Brain's typed visual-task profile is the sole semantic authority
+        for the separate identity channel; this method validates and freezes
+        that decision without reclassifying user text locally.
         """
 
         if not self._is_ecommerce_request(request):
             return
         metadata = dict(request.metadata or {})
         context = metadata.get("ecommerce_creative_context")
-        profile = (
-            context.get("apparel_on_model_evidence_profile")
-            if isinstance(context, dict)
+        task_profile = metadata.get("visual_task_profile")
+        rendering_intent = (
+            task_profile.get("rendering_intent")
+            if isinstance(task_profile, dict)
             else None
+        )
+        subjects = task_profile.get("subject_entities") if isinstance(task_profile, dict) else None
+        remote_brain_declared_person = (
+            isinstance(rendering_intent, dict)
+            and rendering_intent.get("decision_owner") == "remote_brain"
+            and isinstance(subjects, list)
+            and any(
+                isinstance(subject, dict)
+                and subject.get("entity_type") == "person"
+                and subject.get("visible_in_target") is True
+                for subject in subjects
+            )
         )
         if (
             metadata.get("ecommerce_creative_context_server_owned") is not True
-            or not isinstance(profile, dict)
-            or profile.get("applies") is not True
+            or not isinstance(context, dict)
+            or not remote_brain_declared_person
         ):
             return
         frozen_binding = metadata.get("frozen_visual_asset_binding_set")
@@ -13017,6 +13033,9 @@ class V3ProductApiService:
 
         controls = dict(metadata.get("advanced_reference_controls") or {})
         controls["preserve_person_identity"] = True
+        provider_reference_budget = dict(context.get("provider_reference_budget") or {})
+        provider_reference_budget["max_identity_sources"] = len(references)
+        provider_reference_budget["max_total_reference_images"] = 5
         metadata.update(
             {
                 "advanced_reference_controls": controls,
@@ -13025,7 +13044,11 @@ class V3ProductApiService:
                 # generic reference history.
                 "professional_anchor_reference_assets": references,
                 "ecommerce_locked_identity_reference_assets": references,
-                "ecommerce_locked_identity_authority": "v3_product_api",
+                "ecommerce_locked_identity_authority": "remote_brain_visual_task_profile",
+                "ecommerce_creative_context": {
+                    **context,
+                    "provider_reference_budget": provider_reference_budget,
+                },
             }
         )
         request.metadata = metadata

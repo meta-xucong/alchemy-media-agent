@@ -81,44 +81,23 @@ user-approved literal copy, and platform constraints. Decide the complete
 product-specific output set yourself. Return exactly one natural-language
 intent per requested output; do not reuse a stock slot map or prescribe local
 camera, crop, coordinate, typography, safe-area, overlay, or post-processing
-operation. When ecommerce_creative_context.metadata.product_only_renderer_transport
-has subject_scope=object_only, it is a closed renderer-subject boundary:
-the canonical provider prompt must describe an unoccupied selected product or
-garment only. Do not mention, depict, or describe a person, model, face, body,
-wearer, age group, or sensitive apparel category in that final renderer text.
-Use the selected product reference as the authority for those facts and refer
-to it generically as the selected product or selected garment. This does not
-choose the scene, camera, or styling; it only prevents a product-only request
-from being converted into a person-directed image.
-Only when apparel_on_model_evidence_profile.applies is explicitly true may a
-user-owned lifestyle, pool, beach, playful, candid, or product-on-model
-direction include a visible person. In that case preserve the user-owned
-creative intent; preserve that user-owned creative direction rather than
-flattening it into a static catalogue card. Keep
-the person naturally participating in the ordinary, age-appropriate scene and
-avoid defaulting the entire set to stiff front-facing model-card presentation.
-Static front or back structure views may appear only as necessary product
-evidence roles and must not occupy the set's main emotional direction. Let the
-Remote Brain choose the specific safe actions while preserving product truth,
-bound identity, and prompt-owned scene intent."""
-APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS = """When an active
-apparel_on_model_evidence_profile requests more than one output, return exactly
-one evidence_dimensions_by_output entry per output. Map only its allowed
-evidence dimensions, use enough distinct dimensions to meet its declared
-count, and treat each entry as a reviewable evidence purpose--never as a stock role,
-scene, camera, crop, pose, or output-order recipe. For product-on-model outputs,
-also return selected_product_truth_asset_ids as one or two uploaded product_truth
-asset_id strings chosen from the supplied product truth pool for that output; do
-not choose identity asset IDs, filenames, or natural-language aliases."""
+operation. visual_task_profile.subject_entities is the sole semantic declaration
+of which target subjects are visibly present. Decide that declaration from the
+complete user request and factual evidence; do not rely on local labels,
+keywords, or inferred preset roles. When your own semantic profile includes a
+visible person, preserve the user-owned creative intent rather than flattening
+it into a static catalogue card. Keep that person naturally participating in
+the ordinary, age-appropriate scene. When it contains no visible person, do
+not introduce a person as a target subject. Let the Remote Brain choose the
+specific safe actions while preserving product truth, bound identity, and
+prompt-owned scene intent."""
 PRODUCT_TRUTH_SELECTION_INSTRUCTIONS = """For Professional E-Commerce product-on-model
 planning, evidence_dimensions_by_output is the frozen product-truth selection
-contract, not an apparel evidence profile unless an active
-apparel_on_model_evidence_profile is explicitly present. Return exactly one
-entry per output. output_index must be a 1-based integer from 1 through
-requested_image_count, never 0. When no active apparel evidence profile is
-present, evidence_dimensions must be exactly an empty list []; do not put
-objects, numbers, natural-language output roles, scene labels, camera labels,
-or product filenames there. product_truth_selection_role must be exactly one of:
+contract. Return exactly one entry per output. output_index must be a 1-based
+integer from 1 through requested_image_count, never 0. evidence_dimensions
+must be exactly an empty list []; do not put objects, numbers,
+natural-language output roles, scene labels, camera labels, or product
+filenames there. product_truth_selection_role must be exactly one of:
 lifestyle_primary_product_view, playful_environment_interaction_view,
 walking_or_lookback_view, back_or_structure_view, product_detail_or_print_view.
 This role is the structured E-Commerce output purpose for choosing product truth
@@ -267,17 +246,6 @@ def _compact_required_remote_creative_schema() -> dict:
     }
 
 
-def _requires_apparel_evidence_dimensions(
-    ecommerce_context: dict[str, object] | None,
-    *,
-    requested_image_count: int,
-) -> bool:
-    if requested_image_count <= 1 or not isinstance(ecommerce_context, dict):
-        return False
-    profile = ecommerce_context.get("apparel_on_model_evidence_profile")
-    return isinstance(profile, dict) and bool(profile.get("applies"))
-
-
 def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     return bool(metadata.get("professional_product_truth_required"))
@@ -330,7 +298,6 @@ def _product_truth_reference_budget(ecommerce_context: dict[str, object] | None)
 def _image_set_evidence_dimensions_schema(
     *,
     requested_image_count: int,
-    requires_apparel_evidence_dimensions: bool,
     requires_product_truth_selection: bool,
     product_truth_reference_budget: int | None = None,
     professional_ecommerce_pose_contract: dict[str, object] | None = None,
@@ -340,11 +307,7 @@ def _image_set_evidence_dimensions_schema(
         "output_index": (
             f"1-based integer from 1 through requested_image_count ({requested_image_count}); never 0"
         ),
-        "evidence_dimensions": (
-            ["allowed active apparel evidence profile values only; every item must be a string"]
-            if requires_apparel_evidence_dimensions
-            else []
-        ),
+        "evidence_dimensions": [],
     }
     if requires_product_truth_selection:
         role_contract = (
@@ -691,24 +654,18 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             ecommerce_context=ecommerce_context,
             photography_context=photography_context,
         )
-        requires_apparel_evidence_dimensions = _requires_apparel_evidence_dimensions(
-            ecommerce_context,
-            requested_image_count=request.requested_image_count,
-        )
         requires_product_truth_selection = _requires_product_truth_selection(request)
         professional_ecommerce_pose_contract = _professional_ecommerce_pose_contract(ecommerce_context)
         requires_professional_body_proportion_receipt = _requires_professional_body_proportion_receipt(request)
         compact_schema = _compact_required_remote_creative_schema()
         if (
-            requires_apparel_evidence_dimensions
-            or requires_product_truth_selection
+            requires_product_truth_selection
             or professional_ecommerce_pose_contract
             or requires_professional_body_proportion_receipt
         ):
             compact_schema["image_set_plan"]["evidence_dimensions_by_output"] = (
                 _image_set_evidence_dimensions_schema(
                     requested_image_count=request.requested_image_count,
-                    requires_apparel_evidence_dimensions=requires_apparel_evidence_dimensions,
                     requires_product_truth_selection=requires_product_truth_selection,
                     product_truth_reference_budget=_product_truth_reference_budget(ecommerce_context),
                     professional_ecommerce_pose_contract=professional_ecommerce_pose_contract,
@@ -883,23 +840,16 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         },
     }
     ecommerce_context = request.metadata.get("ecommerce_creative_context")
-    requires_apparel_evidence_dimensions = _requires_apparel_evidence_dimensions(
-        ecommerce_context if isinstance(ecommerce_context, dict) else None,
-        requested_image_count=request.requested_image_count,
-    )
     requires_product_truth_selection = _requires_product_truth_selection(request)
     requires_professional_body_proportion_receipt = _requires_professional_body_proportion_receipt(request)
     if isinstance(ecommerce_context, dict) and ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
     if (
-        requires_apparel_evidence_dimensions
-        or requires_product_truth_selection
+        requires_product_truth_selection
         or requires_professional_body_proportion_receipt
     ):
         selection_instruction_parts = []
-        if requires_apparel_evidence_dimensions:
-            selection_instruction_parts.append(APPAREL_EVIDENCE_DIMENSION_INSTRUCTIONS)
         if requires_product_truth_selection:
             selection_instruction_parts.append(PRODUCT_TRUTH_SELECTION_INSTRUCTIONS)
         payload["ecommerce_context_instructions"] = (
@@ -910,7 +860,6 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"] = (
             _image_set_evidence_dimensions_schema(
                 requested_image_count=request.requested_image_count,
-                requires_apparel_evidence_dimensions=requires_apparel_evidence_dimensions,
                 requires_product_truth_selection=requires_product_truth_selection,
                 product_truth_reference_budget=_product_truth_reference_budget(
                     ecommerce_context if isinstance(ecommerce_context, dict) else None

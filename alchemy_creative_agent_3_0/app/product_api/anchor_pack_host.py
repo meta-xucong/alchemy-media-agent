@@ -87,6 +87,7 @@ from .service import V3ProductApiService
 _ANCHOR_REMOTE_FAILURE_CODES = {
     "remote_brain_unavailable",
     "remote_brain_unauthorized",
+    "remote_creative_brain_prompt_signoff_invalid",
     "remote_creative_brain_prompt_signoff_unavailable",
 }
 _ANCHOR_PROVIDER_NO_PIXEL_FAILURE_CODES = {
@@ -2260,6 +2261,7 @@ class ProductApiAnchorPackPreparationHost:
             "image_edit_invalid_request_unattributed",
             "remote_brain_unavailable",
             "remote_brain_unauthorized",
+            "remote_creative_brain_prompt_signoff_invalid",
             "remote_creative_brain_prompt_signoff_unavailable",
             "mcp_materialization_pending",
             "mcp_materialization_failed",

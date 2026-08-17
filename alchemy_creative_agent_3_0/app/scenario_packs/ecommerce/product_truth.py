@@ -9,17 +9,6 @@ from .contracts import ProductTruthLock
 from .utils import as_list, clean_text, first_non_empty, unique_preserve_order
 
 
-CATEGORY_HINTS = {
-    "desk_lamp": ("lamp", "lighting", "light", "desk lamp", "table lamp"),
-    "headphones": ("headphone", "earbud", "earphone", "bluetooth"),
-    "skincare": ("skincare", "serum", "cream", "bottle", "cosmetic"),
-    "perfume": ("perfume", "fragrance", "scent"),
-    "drink": ("drink", "beverage", "tea", "coffee", "juice"),
-    "home_storage": ("organizer", "storage", "rack", "shelf", "box"),
-    "pet_product": ("pet", "dog", "cat"),
-    "apparel": ("shirt", "shoe", "bag", "clothing", "apparel"),
-}
-
 CLAIM_RISK_TOKENS = ("certified", "fda", "medical", "cure", "patent", "100%", "guarantee", "guaranteed")
 
 
@@ -117,10 +106,6 @@ class ProductTruthLockBuilder:
         )
         if explicit:
             return explicit.lower().replace(" ", "_")
-        lower = f"{user_input} {product_profile}".lower()
-        for category, tokens in CATEGORY_HINTS.items():
-            if any(token in lower for token in tokens):
-                return category
         return "generic_product"
 
     def _visible_attributes(self, profile: dict[str, Any], uploaded_asset_ids: list[str]) -> list[str]:

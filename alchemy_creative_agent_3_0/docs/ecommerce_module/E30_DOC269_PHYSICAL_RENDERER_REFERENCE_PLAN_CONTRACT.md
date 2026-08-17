@@ -67,23 +67,20 @@ from `uploaded_assets`, `reference_assets`, history, or an adapter-side cap.
 
 For a Professional E-Commerce output, the plan always begins with the one
 Doc263 `PhysicalProductReferenceProjection` selected product original in
-`product_truth`. A project-owned People Visual Asset is not itself permission
-to append face evidence:
-
-1. when the server-owned E-Commerce creative context has an applicable
-   `apparel_on_model_evidence_profile`, the plan then contains the three
-   approved locked People Visual Asset face-evidence outputs in
-   `people_identity`;
-2. when that profile is absent, including a product-only, flat-lay, hanger, or
-   explicit no-person/no-model command, the plan contains no
-   `people_identity` entries.
+`product_truth`. A project-owned People Visual Asset is not itself permission to
+append face evidence. `people_identity` entries may be added only after the
+remote Brain's typed `visual_task_profile.subject_entities` declares a visible
+person for the target output and the Product API has frozen the approved People
+Visual Asset identity binding. Prompt keywords, product filenames, browser
+labels, upload order, and historical generated outputs are not authority for
+adding `people_identity`.
 
 The other active product originals remain canonical Product Truth pool evidence
 for Product API/Brain/review. They are not physical renderer inputs for this
 output. Locked face evidence remains People identity evidence and cannot be
 promoted into product-root truth, product clustering, or adaptive product
 selection, and it must not be auto-promoted from history or an active People
-binding for a product-only output.
+binding when the Brain has not declared a visible person.
 
 ### 3.2 Selected continuation
 
@@ -145,13 +142,14 @@ separate guarded phase after review.
 
 1. Actual Project Mode/Product API construction with four product originals
    and a locked three-face People card produces one selected product plus the
-   three identity sources only for a server-owned apparel-on-model profile.
-   A product-only command produces the one selected product source and no
-   People or generated-history input.
+   three identity sources only when the remote Brain typed profile declares a
+   visible person and Product API freezes the People identity binding. A command
+   without that Brain declaration produces the one selected product source and
+   no People or generated-history input.
 2. `reference_image_asset_ids`, typed final entries,
    `_materialized_provider_reference_assets`, and Web adapter file inputs are
-   equal in order and count, with physical count one for a product-only plan
-   and four for the applicable apparel-on-model plan.
+   equal in order and count, with physical count one when no visible person is
+   Brain-declared and four when the approved People identity binding applies.
 3. Non-selected product originals and unselected generated/review history do
    not enter the final physical plan.
 4. A continuation appears only after an existing explicit selection receipt;

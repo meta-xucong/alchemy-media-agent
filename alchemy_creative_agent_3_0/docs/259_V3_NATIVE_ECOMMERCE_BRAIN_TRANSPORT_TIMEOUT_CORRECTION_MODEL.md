@@ -1229,23 +1229,21 @@ Correction model:
 1. The adapter/runtime must not coerce or repair the Remote Brain response.
    `BrainOutputEvidenceContract` stays strict: `output_index` is 1-based
    (`>=1`), and every `evidence_dimensions` item must be a string.
-2. The Remote Brain product-only contract now explicitly distinguishes
-   product-truth selection from apparel evidence:
+2. The Remote Brain product-truth selection contract is the only per-output
+   provider admission selector:
    - `output_index` must be a 1-based integer from 1 through
      `requested_image_count`, never 0;
-   - when no active `apparel_on_model_evidence_profile` is present,
-     `evidence_dimensions` must be exactly `[]`;
+   - `evidence_dimensions` must be exactly `[]`; target-subject semantics are
+     expressed only through the Brain-owned `visual_task_profile`, not through
+     an E-Commerce local apparel profile;
    - `selected_product_truth_asset_ids` must be one or two uploaded
      `product_truth` asset ID strings from the frozen product truth pool; one
      is the conservative default for ordinary catalogue outputs, while a
      detail-oriented output may select a second truth source only when both
-     selected product inputs fit the final renderer reference capacity; and
-   - product-only selection must not attach apparel evidence profile
-     instructions or allowed-vocabulary semantics.
-3. If an active apparel evidence profile is present, apparel evidence
-   instructions remain scoped to that profile. Product-truth selection remains
-   the per-output provider admission selector and does not become a shared
-   Visual Capability or General Template selector.
+     selected product inputs fit the final renderer reference capacity.
+3. Product-truth selection remains the per-output provider admission selector
+   and does not become a shared Visual Capability, General Template selector,
+   or local target-subject classifier.
 
 Native planner product-pool guard correction:
 

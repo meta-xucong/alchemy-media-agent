@@ -481,6 +481,23 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             and not bool(metadata.get("legacy_prompt_compatibility_record"))
         )
 
+    @staticmethod
+    def _semantic_capability_input(
+        capability_input: CapabilityInput,
+        *,
+        brain_owned_forward: bool,
+    ) -> CapabilityInput:
+        """Prevent legacy helpers from reclassifying an enforced Brain job.
+
+        The original request remains in the job and canonical Brain prompt.
+        This private capability input is only the compatibility boundary for
+        modules that still accept a text argument alongside typed facts.
+        """
+
+        if not brain_owned_forward:
+            return capability_input
+        return capability_input.model_copy(update={"user_input": ""})
+
     @classmethod
     def _quarantine_forward_local_creative_language(
         cls,
@@ -526,6 +543,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         return sanitized
 
     def _build_cluster(self, capability_input: CapabilityInput) -> VisualCapabilityClusterResult:
+        brain_owned_forward = self._is_brain_owned_forward_execution(capability_input)
+        capability_input = self._semantic_capability_input(
+            capability_input,
+            brain_owned_forward=brain_owned_forward,
+        )
         human_realism_active = self._capability_active(capability_input, "human_realism")
         portrait_identity_active = self._capability_active(capability_input, "portrait_identity")
         product_identity_active = self._capability_active(capability_input, "product_identity")
@@ -559,12 +581,23 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             selected_references=selected_references,
             uploaded_references=uploaded_references,
         )
-        template_policy = self._template_consistency_policy(
-            template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
-            scenario_id=capability_input.scenario_id,
-            user_input=capability_input.user_input,
-            allow_product_language=allow_product_language,
-        )
+        if brain_owned_forward:
+            allow_product_language = self._brain_owned_forward_allows_product_language(
+                capability_input=capability_input,
+                selected_references=selected_references,
+                uploaded_references=uploaded_references,
+            )
+            template_policy = self._brain_owned_forward_template_consistency_policy(
+                capability_input,
+                allow_product_language=allow_product_language,
+            )
+        else:
+            template_policy = self._template_consistency_policy(
+                template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
+                scenario_id=capability_input.scenario_id,
+                user_input=capability_input.user_input,
+                allow_product_language=allow_product_language,
+            )
         strong_bindings = self._strong_reference_bindings(
             capability_input=capability_input,
             selected_outputs=selected_outputs,
@@ -684,6 +717,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             grammar_lock=grammar_lock,
             history_reference=history_reference,
             asset_analyses=effective_asset_analyses,
+            include_user_text_signals=not brain_owned_forward,
         )
         style_signals = _sanitize_general_visual_terms(style_signals, allow_product_language=allow_product_language)
         composition_rules = _sanitize_general_visual_terms(
@@ -710,8 +744,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             style_signals=style_signals,
             composition_rules=composition_rules,
             palette_notes=self._palette_notes(effective_asset_analyses, project_context),
-            lighting_notes=self._lighting_notes(style_signals, capability_input.user_input),
-            lens_notes=self._lens_notes(capability_input.user_input, selected_cases),
+            lighting_notes=self._lighting_notes(
+                style_signals,
+                capability_input.user_input,
+                include_user_text_signals=not brain_owned_forward,
+            ),
+            lens_notes=self._lens_notes(
+                capability_input.user_input,
+                selected_cases,
+                include_user_text_signals=not brain_owned_forward,
+            ),
             layout_notes=layout_notes,
             locked_elements=_sanitize_general_visual_terms(
                 _string_list(grammar_lock.get("locked_visual_grammar")),
@@ -1227,6 +1269,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 "advanced_reference_controls": advanced_reference_controls,
                 "doc90_advanced_reference_controls": bool(advanced_reference_controls.get("applies")),
                 "doc93_reference_channel_policy": bool(reference_policy_package.applies),
+                "local_user_input_semantic_inference_disabled": brain_owned_forward,
                 "reference_policy_package_id": reference_policy_package.package_id,
                 "subject_continuity_asset_package_id": subject_asset_package.package_id,
                 "adaptive_reference_selection_plan_id": adaptive_reference_plan.plan_id,
@@ -1311,6 +1354,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         grammar_lock: dict[str, Any],
         history_reference: dict[str, Any],
         asset_analyses: list[dict[str, Any]],
+        include_user_text_signals: bool = True,
     ) -> list[str]:
         signals: list[str] = []
         signals.extend(_string_list(project_context.get("confirmed_visual_tone")))
@@ -1321,6 +1365,8 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         signals.extend(_string_list(grammar_lock.get("visual_signal_brief")))
         for analysis in asset_analyses:
             signals.extend(_string_list(analysis.get("style_signals")))
+        if not include_user_text_signals:
+            return _dedupe(signals)[:14]
         text = capability_input.user_input.lower()
         human_style_context = _looks_like_human_prompt(capability_input.user_input)
         for keyword, label in [
@@ -1419,19 +1465,34 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 notes.append("dominant palette " + ", ".join(str(item.get("hex")) for item in palette[:3] if item.get("hex")))
         return _dedupe(notes)[:8]
 
-    def _lighting_notes(self, style_signals: list[str], user_input: str) -> list[str]:
+    def _lighting_notes(
+        self,
+        style_signals: list[str],
+        user_input: str,
+        *,
+        include_user_text_signals: bool = True,
+    ) -> list[str]:
         notes = [item for item in style_signals if "light" in item.lower() or "bright" in item.lower()]
+        if not include_user_text_signals:
+            return _dedupe(notes)[:8]
         if "清凉" in user_input or "清爽" in user_input:
             notes.append("cool bright daylight feeling")
         if "夏" in user_input:
             notes.append("summer daylight freshness")
         return _dedupe(notes)[:8]
 
-    def _lens_notes(self, user_input: str, selected_cases: list[dict[str, Any]]) -> list[str]:
+    def _lens_notes(
+        self,
+        user_input: str,
+        selected_cases: list[dict[str, Any]],
+        *,
+        include_user_text_signals: bool = True,
+    ) -> list[str]:
         notes: list[str] = []
-        text = user_input.lower()
-        if any(token in text for token in ["portrait", "girl", "woman"]) or any(token in user_input for token in ["美女", "写真", "人像"]):
-            notes.extend(["natural portrait lens feel", "clear face and upper-body subject priority"])
+        if include_user_text_signals:
+            text = user_input.lower()
+            if any(token in text for token in ["portrait", "girl", "woman"]) or any(token in user_input for token in ["美女", "写真", "人像"]):
+                notes.extend(["natural portrait lens feel", "clear face and upper-body subject priority"])
         for case in selected_cases:
             if "cover" in _string_list(case.get("use_case_tags")):
                 notes.append("cover-safe framing")
@@ -1527,21 +1588,109 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             token in user_input for token in ["人像", "写真", "美女", "人物", "脸", "发型"]
         )
         if allow_product_language:
-            return {
-                "policy_id": "product_truth",
-                "primary_priority": "product_identity",
-                "strong_reference_default": "hard",
-                "identity_lock_default": "product",
-                "review_focus": ["product_identity_drift", "unrelated_product_or_object", "visible_text_artifact"],
-            }
+            return self._product_truth_template_policy()
         if _contains_latin_terms(text, ["photographer"]) or portrait_like:
-            return {
-                "policy_id": "portrait_identity",
-                "primary_priority": "character_identity",
-                "strong_reference_default": "hard",
-                "identity_lock_default": "character",
-                "review_focus": ["identity_drift", "hair_or_outfit_drift", "camera_lighting_drift"],
+            return self._portrait_identity_template_policy()
+        return self._general_visual_grammar_template_policy()
+
+    def _brain_owned_forward_template_consistency_policy(
+        self,
+        capability_input: CapabilityInput,
+        *,
+        allow_product_language: bool,
+    ) -> dict[str, Any]:
+        if allow_product_language:
+            return self._product_truth_template_policy()
+        active_capabilities = set(self._active_capability_ids(capability_input))
+        if (
+            "portrait_identity" in active_capabilities
+            or self._brain_owned_forward_has_visible_subject(capability_input, "person")
+        ):
+            return self._portrait_identity_template_policy()
+        return self._general_visual_grammar_template_policy()
+
+    def _brain_owned_forward_allows_product_language(
+        self,
+        *,
+        capability_input: CapabilityInput,
+        selected_references: list[dict[str, Any]],
+        uploaded_references: list[dict[str, Any]],
+    ) -> bool:
+        active_capabilities = set(self._active_capability_ids(capability_input))
+        if (
+            capability_input.scenario_id == "ecommerce"
+            or "product_identity" in active_capabilities
+            or self._brain_owned_forward_has_visible_subject(capability_input, "product")
+            or self._has_product_profile_facts(capability_input.product_profile)
+        ):
+            return True
+        for asset in capability_input.uploaded_assets:
+            role = asset.role.value if hasattr(asset.role, "value") else asset.role
+            if str(role or "").strip().lower() == AssetRole.PRODUCT_REFERENCE.value:
+                return True
+        product_reference_roles = {
+            "product_identity",
+            "product_identity_reference",
+            AssetRole.PRODUCT_REFERENCE.value,
+        }
+        for item in [*selected_references, *uploaded_references]:
+            role_values = {
+                str(item.get("role") or "").strip().lower(),
+                str(item.get("use_policy") or "").strip().lower(),
+                str(item.get("source_role") or "").strip().lower(),
             }
+            if role_values & product_reference_roles:
+                return True
+        return False
+
+    @staticmethod
+    def _brain_owned_forward_has_visible_subject(
+        capability_input: CapabilityInput,
+        entity_type: str,
+    ) -> bool:
+        profile = capability_input.metadata.get("visual_task_profile")
+        if not isinstance(profile, dict):
+            return False
+        entities = profile.get("subject_entities")
+        if not isinstance(entities, list):
+            return False
+        wanted = str(entity_type or "").strip().casefold()
+        return any(
+            isinstance(entity, dict)
+            and str(entity.get("entity_type") or "").strip().casefold() == wanted
+            and entity.get("visible_in_target") is not False
+            for entity in entities
+        )
+
+    @staticmethod
+    def _has_product_profile_facts(product_profile: dict[str, Any]) -> bool:
+        return isinstance(product_profile, dict) and any(
+            value not in (None, "", [], {})
+            for value in product_profile.values()
+        )
+
+    @staticmethod
+    def _product_truth_template_policy() -> dict[str, Any]:
+        return {
+            "policy_id": "product_truth",
+            "primary_priority": "product_identity",
+            "strong_reference_default": "hard",
+            "identity_lock_default": "product",
+            "review_focus": ["product_identity_drift", "unrelated_product_or_object", "visible_text_artifact"],
+        }
+
+    @staticmethod
+    def _portrait_identity_template_policy() -> dict[str, Any]:
+        return {
+            "policy_id": "portrait_identity",
+            "primary_priority": "character_identity",
+            "strong_reference_default": "hard",
+            "identity_lock_default": "character",
+            "review_focus": ["identity_drift", "hair_or_outfit_drift", "camera_lighting_drift"],
+        }
+
+    @staticmethod
+    def _general_visual_grammar_template_policy() -> dict[str, Any]:
         return {
             "policy_id": "general_visual_grammar",
             "primary_priority": "style_and_visual_grammar",

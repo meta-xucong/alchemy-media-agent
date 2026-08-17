@@ -58,13 +58,21 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
         )
 
     def _analyze_asset(self, asset, capability_input: CapabilityInput) -> tuple[dict[str, Any], list[CapabilityWarning]]:
-        role = asset.role or self._suggest_role(asset.filename or asset.asset_id, asset.file_path, asset.metadata)
-        role = self._contextual_role(role, asset, capability_input)
+        semantic_inference_disabled = self._semantic_inference_disabled(capability_input)
+        if semantic_inference_disabled:
+            # Filename, browser metadata, and prompt prose are not evidence of
+            # an image's semantic role. The remote Brain decides unknown source
+            # meaning from the complete request and verified visual evidence.
+            role = AssetRole.UNKNOWN_REFERENCE
+        else:
+            role = asset.role or self._suggest_role(asset.filename or asset.asset_id, asset.file_path, asset.metadata)
+            role = self._contextual_role(role, asset, capability_input)
         path = Path(asset.file_path) if asset.file_path else None
         warnings: list[CapabilityWarning] = []
         base = {
             "asset_id": asset.asset_id,
             "role": role.value,
+            "semantic_role_decision_owner": "remote_brain" if semantic_inference_disabled else "legacy_local_compatibility",
             "filename": asset.filename,
             "file_path": asset.file_path,
             "uri": asset.uri,
@@ -155,6 +163,14 @@ class AssetRoleAnalyzer(SharedCapabilityModule):
                 )
             )
             return {**base, "stored": True, "style_signals": [], "composition": {}}, warnings
+
+    @staticmethod
+    def _semantic_inference_disabled(capability_input: CapabilityInput) -> bool:
+        metadata = capability_input.metadata if isinstance(capability_input.metadata, dict) else {}
+        return bool(
+            metadata.get("brain_semantic_analysis_required") is True
+            or metadata.get("brain_owned_forward_execution") is True
+        )
 
     @staticmethod
     def _formal_face_chain_id(asset_id: str, capability_input: CapabilityInput) -> str | None:

@@ -12,7 +12,10 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_pr
     _inspection_prompt,
     active_review_contract,
 )
-from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
+    EcommerceRemoteBrainTestProvider,
+    ecommerce_test_service,
+)
 
 
 def _apparel_profile() -> dict:
@@ -45,7 +48,9 @@ def _ecommerce_request() -> dict:
 
 def _ecommerce_result(monkeypatch):
     monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
-    service = ecommerce_test_service()
+    service = ecommerce_test_service(
+        brain_provider=EcommerceRemoteBrainTestProvider(visible_ecommerce_person=True)
+    )
     created = service.create_job(_ecommerce_request())
     record = service.job_store.get(created.job_id)
     assert record is not None and record.planning_result is not None
@@ -105,11 +110,11 @@ def test_apparel_truth_is_derived_from_frozen_ledger_and_visible_to_pixel_review
         "product_material_response_drift",
         "product_drape_behavior_drift",
     }
-    assert contract["template_delivery_evidence"]["applies"] is True
-    assert "delivery_evidence_dimension_mismatch" in contract["issue_codes"]
+    assert contract["template_delivery_evidence"]["applies"] is False
+    assert "delivery_evidence_dimension_mismatch" not in contract["issue_codes"]
     assert "blue floral print remains registered" in prompt
-    assert "Frozen template output evidence" in prompt
-    assert delivery["metadata"]["brain_evidence_dimensions"][0] in prompt
+    assert "Frozen template output evidence" not in prompt
+    assert "brain_evidence_dimensions" not in delivery["metadata"]
     assert "child" not in str(contract).lower()
 
 
@@ -133,11 +138,10 @@ def test_pixel_review_accepts_only_frozen_apparel_contract_issue_codes(monkeypat
     )
     inspector = VisionOutputInspector(
         vision_provider=_ContractVisionProvider(
-            [
-                "product_pattern_registration_drift",
-                "delivery_evidence_dimension_mismatch",
-                "ai_face_render",
-                "identity_drift",
+                [
+                    "product_pattern_registration_drift",
+                    "ai_face_render",
+                    "identity_drift",
             ]
         )
     )
@@ -148,7 +152,6 @@ def test_pixel_review_accepts_only_frozen_apparel_contract_issue_codes(monkeypat
     assert report.status == "fail_retryable"
     assert codes == [
         "product_pattern_registration_drift",
-        "delivery_evidence_dimension_mismatch",
         "human_rendering_artifact",
     ]
     assert "identity_drift" in report.evidence["ignored_out_of_scope_issue_codes"]
@@ -161,13 +164,13 @@ def test_owner_retry_keeps_frozen_brain_evidence_map_and_product_truth_without_l
 
     codes, patch, source = service._activation_filtered_retry_signal(
         result,
-        ["product_pattern_registration_drift", "delivery_evidence_dimension_mismatch"],
+        ["product_pattern_registration_drift"],
         {},
         "doc114_phase_d_test",
     )
 
     assert source == "doc114_phase_d_test"
-    assert codes == ["product_pattern_registration_drift", "delivery_evidence_dimension_mismatch"]
+    assert codes == ["product_pattern_registration_drift"]
     assert patch == {}
 
 
@@ -186,6 +189,7 @@ def test_multi_output_pixel_review_binds_each_asset_to_its_frozen_brain_evidence
         assert contracts[asset.asset_id] == {
             "source": "resolved_constraint_ledger",
             "deliverable_id": deliverables[asset.priority],
+            "primary_face_visibility_expected": True,
         }
 
 

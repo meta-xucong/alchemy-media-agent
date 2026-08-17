@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
 import hashlib
 from functools import lru_cache
 from pathlib import Path
@@ -18,12 +17,6 @@ _PORTRAIT_IDENTITY_DERIVATIVE_KINDS = {
     "portrait_identity_geometry_crop",
     "portrait_identity_pose_geometry_crop",
 }
-_PRODUCT_IDENTITY_DERIVATIVE_KINDS = {
-    "product_truth_crop",
-    "product_object_only_crop",
-}
-
-
 def prepare_provider_reference_image(path) -> Path | object:
     """Return an upstream-friendly reference image without modifying the source file."""
     try:
@@ -141,13 +134,7 @@ def prepare_reference_truth_derivatives(
                 for kind in requested_kinds
             )
         if "product_identity_truth" in layers:
-            product_kind = str(
-                (reference_policy or {}).get("product_identity_derivative_kind")
-                or "product_truth_crop"
-            ).strip()
-            if product_kind not in _PRODUCT_IDENTITY_DERIVATIVE_KINDS:
-                return []
-            derivatives.append(_truth_derivative(source, asset_id=asset_id, kind=product_kind))
+            derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="product_truth_crop"))
         if "structured_appearance_truth" in layers:
             derivatives.append(_truth_derivative(source, asset_id=asset_id, kind="appearance_truth_crop"))
         return [item for item in derivatives if item]
@@ -220,7 +207,6 @@ def _truth_derivative(
         "portrait_identity_geometry_crop": "portrait_identity_truth",
         "portrait_identity_pose_geometry_crop": "portrait_identity_truth",
         "product_truth_crop": "product_identity_truth",
-        "product_object_only_crop": "product_identity_truth",
         "appearance_truth_crop": "structured_appearance_truth",
     }.get(kind, "style_context_truth")
     return {
@@ -274,7 +260,6 @@ def _truth_derivative(
         "identity_outer_context_softened": bool(isolation.get("soften_outer_context")) and not fallback,
         "identity_outer_context_neutralized": bool(isolation.get("neutralize_outer_context")) and not fallback,
         "identity_background_neutralized": False,
-        "product_object_only_neutralized": kind == "product_object_only_crop" and not fallback,
         "identity_context_reduced_by_tight_crop": kind in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS and not fallback,
         "identity_stage_dependent_contour_suppressed": (
             kind == _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE and not fallback
@@ -329,13 +314,8 @@ def _cropped_reference_path(
     with Image.open(source) as raw:
         image = ImageOps.exif_transpose(raw)
         image = _to_rgb_on_white(image, Image)
-        if kind == "product_object_only_crop":
-            from PIL import ImageFilter
-
-            cropped = _object_only_product_reference_crop(image, Image, ImageFilter)
-        else:
-            box = _truth_crop_box(image.size, kind, normalized_face_box=normalized_face_box)
-            cropped = image.crop(box)
+        box = _truth_crop_box(image.size, kind, normalized_face_box=normalized_face_box)
+        cropped = image.crop(box)
         if kind in _PORTRAIT_IDENTITY_DERIVATIVE_KINDS:
             from PIL import ImageEnhance
 
@@ -389,134 +369,6 @@ def _cropped_reference_path(
             current = current.resize(next_size, Image.Resampling.LANCZOS)
             current.save(target, format="JPEG", quality=72, optimize=True)
     return target if target.exists() else source
-
-
-def _object_only_product_reference_crop(image, Image, ImageFilter):
-    """Return a provider-only product crop with non-product context muted."""
-
-    crop = image.crop(_truth_crop_box(image.size, "product_truth_crop"))
-    seed = _product_color_seed_mask(crop, Image)
-    seed = _largest_centered_component_mask(seed, Image)
-    if seed.getbbox() is None:
-        return crop
-
-    mask = (
-        seed.filter(ImageFilter.MaxFilter(5))
-        .filter(ImageFilter.GaussianBlur(1.2))
-        .resize(crop.size)
-    )
-    mask = (
-        mask.point(lambda value: 255 if value >= 30 else 0)
-        .filter(ImageFilter.MaxFilter(3))
-        .filter(ImageFilter.GaussianBlur(0.8))
-    )
-    white = Image.new("RGB", crop.size, color=(255, 255, 255))
-    product = Image.composite(crop, white, mask).convert("RGB")
-    _suppress_warm_neutral_product_context(product)
-
-    content_mask = mask.point(lambda value: 255 if value >= 32 else 0)
-    bbox = content_mask.getbbox()
-    if not bbox:
-        return product
-    left, top, right, bottom = bbox
-    margin_x = int((right - left) * 0.08)
-    margin_y = int((bottom - top) * 0.06)
-    return product.crop(
-        (
-            max(0, left - margin_x),
-            max(0, top - margin_y),
-            min(product.width, right + margin_x),
-            min(product.height, bottom + margin_y),
-        )
-    )
-
-
-def _product_color_seed_mask(image, Image):
-    width, height = image.size
-    if width <= 0 or height <= 0:
-        return Image.new("L", (1, 1), color=0)
-    sample = image.resize((max(1, width // 2), max(1, height // 2)))
-    mask = Image.new("L", sample.size, color=0)
-    pixels = sample.load()
-    mask_pixels = mask.load()
-    for y in range(sample.height):
-        for x in range(sample.width):
-            red, green, blue = pixels[x, y]
-            maximum = max(red, green, blue)
-            minimum = min(red, green, blue)
-            saturation = (maximum - minimum) / max(1, maximum)
-            blue_bias = blue - max(red, green)
-            red_bias = red - max(green, blue)
-            if (
-                (blue_bias >= 10 and saturation >= 0.10 and maximum >= 70)
-                or (saturation >= 0.26 and maximum >= 55 and red_bias < 40)
-            ):
-                mask_pixels[x, y] = 255
-    return mask
-
-
-def _largest_centered_component_mask(mask, Image):
-    pixels = mask.load()
-    width, height = mask.size
-    seen: set[tuple[int, int]] = set()
-    components: list[tuple[float, list[tuple[int, int]]]] = []
-    center_x = width / 2
-    center_y = height / 2
-    for start_y in range(height):
-        for start_x in range(width):
-            if pixels[start_x, start_y] < 1 or (start_x, start_y) in seen:
-                continue
-            queue: deque[tuple[int, int]] = deque([(start_x, start_y)])
-            seen.add((start_x, start_y))
-            points: list[tuple[int, int]] = []
-            while queue:
-                x, y = queue.popleft()
-                points.append((x, y))
-                for next_x in (x - 1, x, x + 1):
-                    for next_y in (y - 1, y, y + 1):
-                        point = (next_x, next_y)
-                        if (
-                            next_x < 0
-                            or next_y < 0
-                            or next_x >= width
-                            or next_y >= height
-                            or point in seen
-                            or pixels[next_x, next_y] < 1
-                        ):
-                            continue
-                        seen.add(point)
-                        queue.append(point)
-            if points:
-                mean_x = sum(point[0] for point in points) / len(points)
-                mean_y = sum(point[1] for point in points) / len(points)
-                normalized_distance = (
-                    ((mean_x - center_x) / max(1, width)) ** 2
-                    + ((mean_y - center_y) / max(1, height)) ** 2
-                ) ** 0.5
-                center_bonus = max(0.0, 1.0 - normalized_distance)
-                components.append((len(points) * (1.0 + center_bonus), points))
-
-    result = Image.new("L", mask.size, color=0)
-    if not components:
-        return result
-    result_pixels = result.load()
-    for x, y in max(components, key=lambda item: item[0])[1]:
-        result_pixels[x, y] = 255
-    return result
-
-
-def _suppress_warm_neutral_product_context(image) -> None:
-    pixels = image.load()
-    for y in range(image.height):
-        for x in range(image.width):
-            red, green, blue = pixels[x, y]
-            maximum = max(red, green, blue)
-            minimum = min(red, green, blue)
-            saturation = (maximum - minimum) / max(1, maximum)
-            warm_neutral = red >= green >= blue and (red - blue) >= 8 and (red - green) <= 55
-            light_neutral = saturation <= 0.16 and maximum >= 115
-            if (warm_neutral and saturation <= 0.32 and maximum >= 105) or light_neutral:
-                pixels[x, y] = (255, 255, 255)
 
 
 def _identity_channel_isolation_profile(

@@ -22,6 +22,7 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
     ProductionImageGenerationProvider,
     configured_provider_execution_identity,
 )
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.provider_deliverability_closure import (
     _terminal_job_receipt as _runtime_terminal_job_receipt,
     _normalized_final_policy_evidence,
@@ -50,6 +51,7 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc265_reference_channel_recovery 
     _bind_locked_person_identity,
     _job_payload,
 )
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 from app.config import settings
 from app.providers.base import ProviderRuntimeError
 
@@ -547,6 +549,9 @@ def test_doc271_explicit_policy_failure_writes_one_exact_server_owned_closure(tm
 
 def test_doc271_product_only_policy_closure_replays_without_people_binding(tmp_path, monkeypatch) -> None:
     handlers, provider, project, product_ids, face_output_ids = _fixture(tmp_path)
+    handlers.service.scenario_runtime.llm_brain_adapter = V3LLMBrainAdapter(
+        provider=EcommerceRemoteBrainTestProvider(visible_ecommerce_person=False)
+    )
     product_only = (
         "Product-only flat lay. No person wearing it, no model, no child, and no face."
     )

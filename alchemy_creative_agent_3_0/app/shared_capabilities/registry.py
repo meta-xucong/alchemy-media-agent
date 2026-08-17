@@ -83,7 +83,9 @@ class SharedCapabilityRegistry:
                 required_failures.append(module_id)
 
         for module in selected:
-            run_input = capability_input.model_copy(update={"prior_results": list(prior_results)})
+            run_input = self._semantic_execution_input(
+                capability_input.model_copy(update={"prior_results": list(prior_results)})
+            )
             result = module.run(run_input)
             results.append(result)
             prior_results.append(result)
@@ -108,6 +110,24 @@ class SharedCapabilityRegistry:
                 "required_module_ids": sorted(required),
             },
         )
+
+    @staticmethod
+    def _semantic_execution_input(capability_input: CapabilityInput) -> CapabilityInput:
+        """Keep local capability compatibility code from re-reading intent.
+
+        Enforced V3 jobs retain their original request for the remote Brain and
+        canonical provider prompt. Shared modules receive only typed Brain
+        facts and hard reference records, so legacy keyword helpers cannot
+        create a second semantic authority.
+        """
+
+        metadata = capability_input.metadata if isinstance(capability_input.metadata, dict) else {}
+        if not (
+            metadata.get("brain_semantic_analysis_required") is True
+            or metadata.get("brain_owned_forward_execution") is True
+        ):
+            return capability_input
+        return capability_input.model_copy(update={"user_input": ""})
 
     def _select_modules(self, module_ids: list[str] | None) -> list[SharedCapabilityModule]:
         if module_ids is None:

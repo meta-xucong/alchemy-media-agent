@@ -259,14 +259,12 @@ class PhotographyScenarioPlanningAdapter:
         ]
         parameters = context.metadata.get("scenario_parameters")
         params = dict(parameters) if isinstance(parameters, dict) else {}
-        explicit_identity_request = bool(params.get("preserve_nonhuman_identity")) or any(
-            marker in context.user_input.lower()
-            for marker in ("same pet", "same animal", "same dog", "same cat", "this pet", "this animal")
-        )
-        needs_identity = bool(typed) or explicit_identity_request or (
-            controls.input_mode.value == "reference_to_professional_reshoot"
-            and any(marker in context.user_input.lower() for marker in ("same pet", "same animal", "same dog", "same cat", "this pet", "this animal"))
-        )
+        explicit_identity_request = bool(params.get("preserve_nonhuman_identity"))
+        # Natural-language identity wording is semantic intent and belongs to
+        # the remote Brain. This specialized adapter may enforce the native
+        # non-human identity path only from explicit controls or an already
+        # typed native identity reference.
+        needs_identity = bool(typed) or explicit_identity_request
         if not needs_identity:
             return []
         if not typed:

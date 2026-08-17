@@ -579,6 +579,7 @@ class ScenarioRuntime:
         quality_mode: str | None = None,
     ) -> CapabilityPreparationResult:
         mode = self._capability_activation_mode(request)
+        self._require_trusted_frozen_capability_plan_boundary(request, resolution)
         library_binding, request = self._prepare_library_visual_asset_binding(
             request,
             resolution,
@@ -3557,12 +3558,14 @@ class ScenarioRuntime:
             outcome_class = "remote_provider_error"
         elif audit.get("remote_provider_available") is False:
             outcome_class = "remote_provider_unavailable"
-        elif reason_code == "remote_creative_brain_image_set_plan_invalid":
+        elif reason_code in {
+            "remote_creative_brain_image_set_plan_invalid",
+            "remote_creative_brain_prompt_signoff_invalid",
+        }:
             outcome_class = "remote_contract_invalid"
         elif reason_code == "remote_creative_brain_output_count_mismatch":
             outcome_class = "remote_output_count_mismatch"
         elif reason_code in {
-            "remote_creative_brain_prompt_signoff_invalid",
             "remote_creative_brain_prompt_signoff_unavailable",
             "human_realism_semantic_preflight_missing",
             "human_realism_natural_presence_decision_missing",
@@ -3804,6 +3807,7 @@ class ScenarioRuntime:
             or parameters.get("visible_text_policy")
             or ""
         ).strip().lower()
+        brain_semantic_analysis_required = self._capability_activation_mode(request) == "enforced"
         forbidden_text_markers = (
             "no visible text",
             "without visible text",
@@ -3814,11 +3818,14 @@ class ScenarioRuntime:
             "不加文字",
             "不含文字",
         )
-        user_forbids_visible_text = explicit_visible_text_policy == "forbidden" or any(
-            marker in request.user_input.lower() for marker in forbidden_text_markers
-        )
         if explicit_visible_text_policy not in {"required", "allowed", "forbidden", "unspecified", ""}:
             raise CapabilityActivationError("visible_text_policy_invalid")
+        if brain_semantic_analysis_required:
+            user_forbids_visible_text = explicit_visible_text_policy == "forbidden"
+        else:
+            user_forbids_visible_text = explicit_visible_text_policy == "forbidden" or any(
+                marker in request.user_input.lower() for marker in forbidden_text_markers
+            )
         visible_text_policy = "forbidden" if user_forbids_visible_text else (
             explicit_visible_text_policy or ("required" if explicit_text else "unspecified")
         )
@@ -3933,11 +3940,6 @@ class ScenarioRuntime:
                 f": expected={expected}; brain_image_count={brain_result.image_set_plan.image_count}; "
                 f"brain_direction_count={len(directions)}"
             )
-        evidence_dimensions_by_output = self._validated_ecommerce_apparel_evidence_dimensions(
-            request=request,
-            brain_result=brain_result,
-            expected_count=expected,
-        )
         product_truth_selection_by_output = self._validated_ecommerce_product_truth_selection_by_output(
             request=request,
             brain_result=brain_result,
@@ -3967,14 +3969,11 @@ class ScenarioRuntime:
         deliverables: list[TemplateDeliverable] = []
         for index, direction in enumerate(directions, 1):
             recipe = role_recipes[index - 1] if index <= len(role_recipes) and isinstance(role_recipes[index - 1], dict) else {}
-            evidence_dimensions = evidence_dimensions_by_output.get(index, [])
             factual_acceptance = (
                 ["product_truth", "platform_factual_constraints"]
                 if normalized_intent.scenario_id == "ecommerce"
                 else []
             )
-            if evidence_dimensions:
-                factual_acceptance.append("apparel_on_model_evidence_contract")
             # The Template owns the professional role contract while Central
             # Brain owns the image intent. Carry that frozen role record and
             # the Brain-selected evidence purpose through the deliverable plan
@@ -3989,8 +3988,6 @@ class ScenarioRuntime:
                 if recipe.get("role_key")
                 else {}
             )
-            if evidence_dimensions:
-                deliverable_metadata["brain_evidence_dimensions"] = evidence_dimensions
             product_truth_selection = product_truth_selection_by_output.get(index, {})
             selected_product_truth = (
                 list(product_truth_selection.get("selected_product_truth_asset_ids") or [])
@@ -4347,58 +4344,6 @@ class ScenarioRuntime:
             raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
         return resolved
 
-    @staticmethod
-    def _validated_ecommerce_apparel_evidence_dimensions(
-        *,
-        request: ScenarioRuntimeRequest,
-        brain_result: BrainRunResult,
-        expected_count: int,
-    ) -> dict[int, list[str]]:
-        """Freeze only a Brain-chosen apparel evidence contract for multi-output E-Commerce.
-
-        The E-Commerce context provides an allowed vocabulary and a required
-        diversity floor. It never contributes a local output map, role, scene,
-        camera, crop, pose, or expression recipe.
-        """
-
-        if expected_count <= 1:
-            return {}
-        context = request.metadata.get("ecommerce_creative_context")
-        if not isinstance(context, dict):
-            return {}
-        profile = context.get("apparel_on_model_evidence_profile")
-        if not isinstance(profile, dict) or not profile.get("applies"):
-            return {}
-        allowed = {
-            str(item).strip()
-            for item in profile.get("allowed_evidence_dimensions", [])
-            if str(item).strip()
-        }
-        required_distinct = min(
-            expected_count,
-            max(0, int(profile.get("required_distinct_dimension_count") or 0)),
-        )
-        raw_entries = list(brain_result.image_set_plan.evidence_dimensions_by_output)
-        if len(raw_entries) != expected_count:
-            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_missing_or_incomplete")
-        resolved: dict[int, list[str]] = {}
-        for entry in raw_entries:
-            index = int(entry.output_index)
-            dimensions = list(dict.fromkeys(str(item).strip() for item in entry.evidence_dimensions if str(item).strip()))
-            if index in resolved or index < 1 or index > expected_count or not dimensions:
-                raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid")
-            if not set(dimensions).issubset(allowed):
-                raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid_dimension")
-            resolved[index] = dimensions
-        if sorted(resolved) != list(range(1, expected_count + 1)):
-            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_invalid")
-        signatures = [tuple(dimensions) for _, dimensions in sorted(resolved.items())]
-        if len(set(signatures)) != len(signatures):
-            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_repeated_output")
-        distinct_dimensions = {dimension for dimensions in resolved.values() for dimension in dimensions}
-        if len(distinct_dimensions) < required_distinct:
-            raise CapabilityActivationError("ecommerce_apparel_evidence_contract_insufficient_diversity")
-        return resolved
 
     def _prepare_specialized_scenario_plan(
         self,
@@ -4501,7 +4446,16 @@ class ScenarioRuntime:
         if not module_ids:
             return None
         return self.shared_capability_registry.run(
-            self._capability_input(request, resolution, metadata={"capability_phase": "pre_activation"}),
+            self._capability_input(
+                request,
+                resolution,
+                metadata={
+                    "capability_phase": "pre_activation",
+                    "brain_semantic_analysis_required": (
+                        self._capability_activation_mode(request) == "enforced"
+                    ),
+                },
+            ),
             module_ids=self._dedupe_preserve_order(module_ids),
         )
 
@@ -4554,6 +4508,7 @@ class ScenarioRuntime:
                 if brain_result is not None and brain_result.visual_task_profile is not None
                 else None
             ),
+            "brain_semantic_analysis_required": plan.activation_mode == "enforced",
         }
         ecommerce_review_context = self._ecommerce_human_realism_review_context(
             request,
@@ -5574,6 +5529,28 @@ class ScenarioRuntime:
             if frozen_mode in {"legacy", "shadow", "enforced"}:
                 return frozen_mode
         return mode
+
+    def _require_trusted_frozen_capability_plan_boundary(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+    ) -> None:
+        frozen = request.metadata.get("capability_activation_plan")
+        if not isinstance(frozen, dict) or not frozen.get("plan_id"):
+            return
+        if not request.trusted_capability_plan_reuse:
+            raise CapabilityActivationError("untrusted_frozen_capability_activation_plan")
+        try:
+            plan = CapabilityActivationPlan.model_validate(frozen)
+        except Exception as exc:
+            raise CapabilityActivationError("capability_activation_plan_invalid") from exc
+        provenance = request.metadata.get("capability_plan_provenance")
+        if not self._trusted_frozen_plan_provenance_matches(plan, provenance):
+            raise CapabilityActivationError("capability_activation_plan_provenance_mismatch")
+        if plan.template_id != self._template_id(request, resolution):
+            raise CapabilityActivationError("frozen capability plan template does not match this job")
+        if plan.scenario_id != resolution.manifest.scenario_id:
+            raise CapabilityActivationError("frozen capability plan scenario does not match this job")
 
     def _activation_metadata(self, preparation: CapabilityPreparationResult) -> dict[str, Any]:
         plan = preparation.activation_plan

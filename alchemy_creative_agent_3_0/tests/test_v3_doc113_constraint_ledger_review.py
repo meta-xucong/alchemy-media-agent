@@ -3,6 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
@@ -12,6 +13,11 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     VisionOutputInspector,
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import active_review_contract
+
+
+@pytest.fixture(autouse=True)
+def _disable_live_remote_brain(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
 
 
 def _hard_product_plan(monkeypatch):
@@ -62,6 +68,7 @@ def test_no_visible_text_wins_over_competing_literal_copy_and_template_copy_inte
             "scenario_selection": {"scenario_id": "general_creative", "parameters": {"requested_image_count": 1}},
             "metadata": {
                 "requested_image_count": 1,
+                "visible_text_policy": "forbidden",
                 "approved_literal_copy": ["SUMMER SALE"],
             },
         }

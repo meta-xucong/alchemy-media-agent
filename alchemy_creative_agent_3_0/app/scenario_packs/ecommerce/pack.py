@@ -13,7 +13,7 @@ from ..base import ScenarioPack
 from .category_profiles import resolve_category
 from .commerce_brief import CommerceBriefBuilder
 from .commerce_critic import CommerceCritic
-from .contracts import ApparelOnModelEvidenceProfile, EcommerceCreativeContext, EcommercePackOutput, ProductTruthLock
+from .contracts import EcommerceCreativeContext, EcommercePackOutput, ProductTruthLock
 from .export_packager import EcommerceExportPackager
 from .manifest import ECOMMERCE_MANIFEST
 from .marketplace_rules import MarketplaceRuleEngine
@@ -68,13 +68,7 @@ class EcommerceScenarioPackPlanner:
             uploaded_asset_ids=uploaded_asset_ids,
             parameters=scenario_parameters,
         )
-        apparel_on_model_profile = self._apparel_on_model_evidence_profile(
-            user_input=user_input,
-            truth=truth,
-            requested_image_count=_bounded_requested_count(scenario_parameters.get("requested_image_count")) or 1,
-        )
-        product_only_transport = _explicit_product_only_renderer_transport(user_input)
-        category = resolve_category(product_profile.get("product_category"), user_input=user_input)
+        category = resolve_category(product_profile.get("product_category"))
         approved_copy = _explicit_approved_copy(product_profile, scenario_parameters)
         locale = (
             clean_text(scenario_parameters.get("copy_locale") or scenario_parameters.get("locale"))
@@ -113,7 +107,6 @@ class EcommerceScenarioPackPlanner:
                 scenario_parameters,
             ),
             product_truth=truth,
-            apparel_on_model_evidence_profile=apparel_on_model_profile,
             provider_reference_budget=dict(provider_reference_budget or {}),
             platform_constraints=platform_constraints,
             category_evidence_questions=category_questions,
@@ -128,45 +121,9 @@ class EcommerceScenarioPackPlanner:
                 "category_id": category.category_id if category else "generic_product",
                 "platform_profile_id": marketplace.metadata.get("profile_id"),
                 "platform_profile_version": marketplace.metadata.get("profile_version"),
-                "apparel_on_model_evidence_contract": bool(apparel_on_model_profile and apparel_on_model_profile.applies),
-                **(
-                    {"product_only_renderer_transport": product_only_transport}
-                    if product_only_transport is not None
-                    else {}
-                ),
-            },
-        )
-
-    @staticmethod
-    def _apparel_on_model_evidence_profile(
-        *,
-        user_input: str,
-        truth: ProductTruthLock,
-        requested_image_count: int,
-    ) -> ApparelOnModelEvidenceProfile | None:
-        construction = truth.apparel_construction
-        if construction is None or not construction.facts or not _requests_product_on_person(user_input):
-            return None
-        dimensions = [
-            "product_view",
-            "movement",
-            "construction_proof",
-            "context",
-            "camera_crop",
-            "expression_pose",
-        ]
-        return ApparelOnModelEvidenceProfile(
-            applies=True,
-            source_evidence=unique_preserve_order([construction.source_summary, *truth.evidence_sources]),
-            allowed_evidence_dimensions=dimensions,
-            required_distinct_dimension_count=(
-                min(requested_image_count, len(dimensions)) if requested_image_count > 1 else 0
-            ),
-            metadata={
-                "source": "EcommerceScenarioPackPlanner",
-                "static_recipe_present": False,
-                "brain_maps_dimensions_to_requested_outputs": True,
-                "single_output_product_first": requested_image_count == 1,
+                # The context exposes factual product evidence only. Whether a
+                # target image contains a person is a remote Brain decision.
+                "target_subject_decision_owner": "remote_brain",
             },
         )
 
@@ -281,64 +238,6 @@ def _category_evidence_questions(category) -> list[str]:
         return []
     values = [*category.required_evidence, *category.optional_evidence, *category.review_checks]
     return unique_preserve_order(str(item).strip() for item in values if str(item).strip())[:12]
-
-
-def _requests_product_on_person(user_input: str) -> bool:
-    raw_text = str(user_input or "")
-    text = raw_text.lower()
-    if _explicit_product_only_renderer_transport(raw_text) is not None:
-        return False
-    english = (
-        "on model",
-        "model wearing",
-        "person wearing",
-        "wearing the supplied",
-        "wearing this",
-        "try-on",
-        "try on",
-        "apparel-on-model",
-    )
-    chinese = ("模特上身", "真人上身", "试穿", "穿着", "上身展示")
-    return any(token in text for token in english) or any(token in raw_text for token in chinese)
-
-
-def _explicit_product_only_renderer_transport(user_input: str) -> dict[str, str] | None:
-    """Return the object-only renderer scope for an explicit user choice."""
-
-    raw_text = str(user_input or "")
-    text = raw_text.lower()
-    product_only_english = (
-        "product-only",
-        "product only",
-        "flat lay",
-        "on a hanger",
-        "no person",
-        "no model",
-        "without a model",
-        "without people",
-        "no child",
-        "no face",
-    )
-    product_only_chinese = (
-        "只展示商品",
-        "仅展示商品",
-        "商品平铺",
-        "衣架陈列",
-        "不出现真人",
-        "不出现模特",
-        "不出现儿童",
-        "不出现人物",
-        "不出现脸",
-    )
-    if any(token in text for token in product_only_english) or any(
-        token in raw_text for token in product_only_chinese
-    ):
-        return {
-            "contract_version": "v3_ecommerce_product_only_renderer_transport_v1",
-            "subject_scope": "object_only",
-            "canonical_prompt_policy": "reference_anchored_generic_product",
-        }
-    return None
 
 
 def _bounded_requested_count(value: object) -> int | None:

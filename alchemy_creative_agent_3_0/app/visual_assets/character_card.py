@@ -117,6 +117,7 @@ BodyCandidateGenerationFailureCode = Literal[
     "image_edit_invalid_request_unattributed",
     "remote_brain_unavailable",
     "remote_brain_unauthorized",
+    "remote_creative_brain_prompt_signoff_invalid",
     "remote_creative_brain_prompt_signoff_unavailable",
     "mcp_materialization_pending",
     "mcp_materialization_failed",
@@ -157,6 +158,7 @@ CharacterCardCandidateLifecycleFailureCode = Literal[
     "image_edit_invalid_request_unattributed",
     "remote_brain_unavailable",
     "remote_brain_unauthorized",
+    "remote_creative_brain_prompt_signoff_invalid",
     "remote_creative_brain_prompt_signoff_unavailable",
     "mcp_materialization_pending",
     "mcp_materialization_failed",
@@ -2265,6 +2267,7 @@ class CharacterCardPreparationService:
             "image_edit_invalid_request_unattributed",
             "remote_brain_unavailable",
             "remote_brain_unauthorized",
+            "remote_creative_brain_prompt_signoff_invalid",
             "remote_creative_brain_prompt_signoff_unavailable",
             "mcp_materialization_pending",
             "mcp_materialization_failed",
@@ -2313,6 +2316,7 @@ class CharacterCardPreparationService:
         if raw_code in {
             "remote_brain_unavailable",
             "remote_brain_unauthorized",
+            "remote_creative_brain_prompt_signoff_invalid",
             "remote_creative_brain_prompt_signoff_unavailable",
         }:
             return cls._candidate_lifecycle_projection(
@@ -4193,6 +4197,7 @@ class CharacterCardPreparationService:
             elif raw_code in {
                 "remote_brain_unavailable",
                 "remote_brain_unauthorized",
+                "remote_creative_brain_prompt_signoff_invalid",
                 "remote_creative_brain_prompt_signoff_unavailable",
             }:
                 family = "remote_brain"

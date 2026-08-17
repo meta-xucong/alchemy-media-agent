@@ -24,9 +24,11 @@ class EcommerceRemoteBrainTestProvider:
         *,
         fault: str | None = None,
         developmental_age_intent: str = "not_applicable",
+        visible_ecommerce_person: bool | None = None,
     ) -> None:
         self.fault = fault
         self.developmental_age_intent = developmental_age_intent
+        self.visible_ecommerce_person = visible_ecommerce_person
         self.requests: list[dict] = []
 
     def available(self, *, force: bool = False) -> bool:
@@ -63,7 +65,7 @@ class EcommerceRemoteBrainTestProvider:
                 f"Remote Brain test output {index}: communicate the supplied product facts and this request's buyer need."
                 for index in range(1, count + 1)
             ],
-            "evidence_dimensions_by_output": _apparel_evidence_dimensions(request, count),
+            "evidence_dimensions_by_output": _ecommerce_output_contract(request, count),
             "composition_rules": ["Remote Brain decides the complete image treatment for each requested output."],
             "quality_bar": ["Product facts and approved claims remain faithful."],
         }
@@ -85,6 +87,23 @@ class EcommerceRemoteBrainTestProvider:
                 "decision_owner": "remote_brain",
             },
         }
+        if self.visible_ecommerce_person is not None and request.scenario_id == "ecommerce":
+            payload["visual_task_profile"]["subject_entities"] = (
+                [
+                    {
+                        "entity_id": "test_remote_brain_visible_person",
+                        "entity_type": "person",
+                        "role": "subject",
+                        "source_asset_ids": [],
+                        "visible_in_target": True,
+                        "preservation_level": "balanced",
+                        "confidence": 0.98,
+                        "attributes": {},
+                    }
+                ]
+                if self.visible_ecommerce_person
+                else []
+            )
         context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else {}
         preflight = context.get("final_prompt_semantic_preflight") if isinstance(context, dict) else {}
         requires_human_preflight = isinstance(preflight, dict) and bool(preflight.get("required"))
@@ -557,9 +576,7 @@ def _reference_channel_ownership_intent(request) -> dict:  # noqa: ANN001
     }
 
 
-def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
-    context = request.metadata.get("ecommerce_creative_context") if isinstance(request.metadata, dict) else None
-    profile = context.get("apparel_on_model_evidence_profile") if isinstance(context, dict) else None
+def _ecommerce_output_contract(request, count: int) -> list[dict]:
     pose_contract_by_output = _professional_ecommerce_pose_contract_by_output(request)
     product_truth_ids = _product_truth_asset_ids(request)
     requires_product_truth_selection = bool(
@@ -573,23 +590,12 @@ def _apparel_evidence_dimensions(request, count: int) -> list[dict]:
     if (
         not requires_product_truth_selection
         and not requires_body_proportion_receipt
-        and (not isinstance(profile, dict) or not profile.get("applies") or count <= 1)
+        and not pose_contract_by_output
     ):
         return []
-    dimensions = [
-        str(item)
-        for item in (profile.get("allowed_evidence_dimensions", []) if isinstance(profile, dict) else [])
-        if str(item).strip()
-    ]
     entries = []
     for index in range(1, count + 1):
-        evidence = []
-        if dimensions:
-            primary = dimensions[(index - 1) % len(dimensions)]
-            evidence = [primary]
-        if dimensions and index > len(dimensions):
-            evidence.append(dimensions[index % len(dimensions)])
-        entry = {"output_index": index, "evidence_dimensions": evidence}
+        entry = {"output_index": index, "evidence_dimensions": []}
         if requires_product_truth_selection and product_truth_ids:
             entry["product_truth_selection_role"] = _product_truth_selection_role(index)
             entry["selected_product_truth_asset_ids"] = [

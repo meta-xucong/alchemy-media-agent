@@ -76,7 +76,7 @@ _ALIASES = {
 
 
 def resolve_category(product_category: str | None, *, user_input: str = "") -> CategoryProfile | None:
-    raw = " ".join([str(product_category or ""), str(user_input or "")]).strip().lower()
+    raw = str(product_category or "").strip().lower()
     normalized = raw.replace("-", "_").replace("/", " ")
     for category_id, profile in _PROFILES.items():
         if category_id in normalized:

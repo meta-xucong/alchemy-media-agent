@@ -14,6 +14,7 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
 from alchemy_creative_agent_3_0.app.agents.prompt_compiler_agent import PromptCompilerAgent
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
+from alchemy_creative_agent_3_0.app.shared_capabilities import CapabilityInput
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import HumanPhotorealismLayer
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.module import VisualCapabilityClusterModule
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
@@ -197,9 +198,9 @@ def test_missing_final_signoff_blocks_before_new_job_can_be_planned() -> None:
 
     assert result.status == "blocked"
     assert result.asset_series == []
-    assert result.metadata["remote_creative_brain_outcome"]["reason_code"] == (
-        "remote_creative_brain_prompt_signoff_unavailable"
-    )
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["reason_code"] == "remote_creative_brain_prompt_signoff_invalid"
+    assert outcome["outcome_class"] == "remote_contract_invalid"
 
 
 def test_forward_cluster_quarantine_retains_evidence_but_removes_local_prompt_language() -> None:
@@ -235,6 +236,82 @@ def test_forward_cluster_quarantine_retains_evidence_but_removes_local_prompt_la
     assert sanitized["bone_structure_retry_patch"]["applies"] is True
     assert sanitized["bone_structure_retry_patch"]["reason_codes"] == ["identity_feature_drift"]
     assert sanitized["bone_structure_retry_patch"]["prompt_additions"] == []
+
+
+def _brain_owned_cluster(
+    *,
+    user_input: str,
+    subject_entities: list[dict[str, object]],
+) -> dict[str, object]:
+    result = VisualCapabilityClusterModule().execute(
+        CapabilityInput(
+            job_id="job_doc134_brain_owned_cluster",
+            scenario_id="general_creative",
+            user_input=user_input,
+            metadata={
+                "brain_owned_forward_execution": True,
+                "require_real_images": True,
+                "capability_activation_plan": {
+                    "activation_mode": "enforced",
+                    "dependency_order": ["suite_direction"],
+                },
+                "visual_task_profile": {
+                    "rendering_intent": {
+                        "rendering_mode": "photoreal",
+                        "stylization_scope": "none",
+                        "decision_owner": "remote_brain",
+                    },
+                    "subject_entities": subject_entities,
+                },
+            },
+        )
+    )
+    return result.facts["visual_capability_cluster"]
+
+
+def test_brain_owned_cluster_never_reclassifies_prompt_text_locally() -> None:
+    generic_from_portrait_words = _brain_owned_cluster(
+        user_input="A portrait woman with a face close-up in bright summer daylight.",
+        subject_entities=[],
+    )
+    generic_from_product_words = _brain_owned_cluster(
+        user_input="A premium product-only catalogue object photograph.",
+        subject_entities=[],
+    )
+
+    for cluster in (generic_from_portrait_words, generic_from_product_words):
+        assert cluster["template_consistency_policy"]["policy_id"] == "general_visual_grammar"
+        assert cluster["role_specific_generation_plan"]["subject_type"] == "generic"
+        assert cluster["profile"]["style_signals"] == []
+        assert cluster["profile"]["lighting_notes"] == []
+        assert cluster["profile"]["lens_notes"] == []
+        assert cluster["metadata"]["local_user_input_semantic_inference_disabled"] is True
+
+    person_from_neutral_words = _brain_owned_cluster(
+        user_input="Create a quiet geometric composition.",
+        subject_entities=[
+            {
+                "entity_id": "brain-person",
+                "entity_type": "person",
+                "visible_in_target": True,
+            }
+        ],
+    )
+    product_from_portrait_words = _brain_owned_cluster(
+        user_input="A woman portrait with close face framing.",
+        subject_entities=[
+            {
+                "entity_id": "brain-product",
+                "entity_type": "product",
+                "visible_in_target": True,
+            }
+        ],
+    )
+
+    assert person_from_neutral_words["template_consistency_policy"]["policy_id"] == "portrait_identity"
+    assert person_from_neutral_words["role_specific_generation_plan"]["subject_type"] == "character"
+    assert product_from_portrait_words["template_consistency_policy"]["policy_id"] == "product_truth"
+    assert product_from_portrait_words["role_specific_generation_plan"]["subject_type"] == "product"
 
 
 def test_doc135_forward_boundaries_precede_legacy_local_assemblers() -> None:

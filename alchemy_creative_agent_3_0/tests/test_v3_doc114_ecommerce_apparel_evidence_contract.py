@@ -7,7 +7,6 @@ import json
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import EcommerceScenarioPackPlanner
-from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider, ecommerce_test_service
 
 
@@ -39,7 +38,7 @@ def _request(*, count: int = 4) -> dict:
     }
 
 
-def test_ecommerce_context_declares_dimensions_not_a_static_apparel_recipe() -> None:
+def test_ecommerce_context_exposes_apparel_facts_without_locally_classifying_target_subjects() -> None:
     context = EcommerceScenarioPackPlanner().build_creative_context(
         user_input=_request()["user_input"],
         product_profile=_profile(),
@@ -49,24 +48,12 @@ def test_ecommerce_context_declares_dimensions_not_a_static_apparel_recipe() -> 
         job_key="doc114-ecommerce-context",
     )
 
-    profile = context.apparel_on_model_evidence_profile
-
     assert context.source_version == "ecommerce_creative_context_v2"
-    assert profile is not None and profile.applies is True
-    assert profile.allowed_evidence_dimensions == [
-        "product_view",
-        "movement",
-        "construction_proof",
-        "context",
-        "camera_crop",
-        "expression_pose",
-    ]
-    assert profile.required_distinct_dimension_count == 4
-    assert profile.metadata["static_recipe_present"] is False
     serialized = context.model_dump(mode="json")
     assert "slot" not in serialized
-    assert "scene" not in serialized["apparel_on_model_evidence_profile"]
-    assert "fixed_pose" not in serialized["apparel_on_model_evidence_profile"]
+    assert "apparel_on_model_evidence_profile" not in serialized
+    assert serialized["product_truth"]["apparel_construction"]["facts"]
+    assert serialized["metadata"]["target_subject_decision_owner"] == "remote_brain"
 
 
 def test_remote_brain_payload_exposes_only_the_ecommerce_evidence_boundary() -> None:
@@ -90,17 +77,17 @@ def test_remote_brain_payload_exposes_only_the_ecommerce_evidence_boundary() -> 
     )
     payload = json.loads(build_remote_payload(request))
 
-    profile = payload["ecommerce_creative_context"]["apparel_on_model_evidence_profile"]
-
-    assert profile["metadata"]["static_recipe_present"] is False
+    assert "apparel_on_model_evidence_profile" not in payload["ecommerce_creative_context"]
     assert "evidence_dimensions_by_output" in payload["return_schema"]["image_set_plan"]
     assert payload["return_schema"]["image_set_plan"]["image_count"] == "integer exactly equal to requested_image_count"
-    assert "stock role" in payload["ecommerce_context_instructions"]
+    assert "sole semantic declaration" in payload["ecommerce_context_instructions"]
 
 
-def test_ecommerce_brain_final_contract_maps_distinct_evidence_without_local_role_map(monkeypatch) -> None:
+def test_ecommerce_brain_owns_visible_person_semantics_without_local_role_map(monkeypatch) -> None:
     monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
-    service = ecommerce_test_service()
+    service = ecommerce_test_service(
+        brain_provider=EcommerceRemoteBrainTestProvider(visible_ecommerce_person=True)
+    )
 
     created = service.create_job(_request(count=4))
     record = service.job_store.get(created.job_id)
@@ -108,12 +95,24 @@ def test_ecommerce_brain_final_contract_maps_distinct_evidence_without_local_rol
     assert created.status == "planned"
     assert record is not None and record.planning_result is not None
     delivery = record.planning_result.metadata["template_deliverable_plan"]
-    dimensions = [item["metadata"]["brain_evidence_dimensions"] for item in delivery["deliverables"]]
 
-    assert len(dimensions) == 4
-    assert len({tuple(item) for item in dimensions}) == 4
-    assert len({value for item in dimensions for value in item}) >= 4
-    assert all("apparel_on_model_evidence_contract" in item["factual_acceptance"] for item in delivery["deliverables"])
+    assert record.request.metadata["visual_task_profile"]["subject_entities"] == [
+        {
+            "entity_id": "test_remote_brain_visible_person",
+            "entity_type": "person",
+            "role": "subject",
+            "source_asset_ids": [],
+            "visible_in_target": True,
+            "preservation_level": "balanced",
+            "confidence": 0.98,
+            "attributes": {},
+        }
+    ]
+    assert all(
+        item["factual_acceptance"] == ["product_truth", "platform_factual_constraints"]
+        for item in delivery["deliverables"]
+    )
+    assert all("brain_evidence_dimensions" not in item["metadata"] for item in delivery["deliverables"])
     assert all("specialized_role_key" not in item["metadata"] for item in delivery["deliverables"])
     assert delivery["owner"] == "ecommerce_template"
     assert delivery["creative_direction_owner"] == "remote_v3_llm_brain"
@@ -131,38 +130,3 @@ def test_one_requested_apparel_output_remains_product_first_without_forced_diver
     deliverable = record.planning_result.metadata["template_deliverable_plan"]["deliverables"][0]
     assert deliverable["factual_acceptance"] == ["product_truth", "platform_factual_constraints"]
     assert "brain_evidence_dimensions" not in deliverable["metadata"]
-
-
-class _RepeatedEvidenceRemoteBrainTestProvider(EcommerceRemoteBrainTestProvider):
-    provider = "repeated_evidence_remote_brain_test_double"
-
-    def run(self, request) -> dict:
-        payload = super().run(request)
-        count = request.requested_image_count
-        payload["image_set_plan"]["evidence_dimensions_by_output"] = [
-            {"output_index": index, "evidence_dimensions": ["product_view"]}
-            for index in range(1, count + 1)
-        ]
-        return payload
-
-
-def test_runtime_rejects_repeated_ecommerce_apparel_evidence_contract(monkeypatch) -> None:
-    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
-    context = EcommerceScenarioPackPlanner().build_creative_context(
-        user_input=_request()["user_input"],
-        product_profile=_profile(),
-        uploaded_asset_ids=["dress-reference"],
-        scenario_parameters={"requested_image_count": 4, "provider_max_requested_images": 7},
-        platform_profile=None,
-        job_key="doc114-repeated-evidence",
-    )
-    runtime = ScenarioRuntime(
-        llm_brain_adapter=V3LLMBrainAdapter(provider=_RepeatedEvidenceRemoteBrainTestProvider())
-    )
-    payload = _request(count=4)
-    payload["metadata"]["ecommerce_creative_context"] = context.model_dump(mode="json")
-
-    result = runtime.plan_job(payload)
-
-    assert result.status == ScenarioRuntimeStatus.BLOCKED
-    assert "ecommerce_apparel_evidence_contract_repeated_output" in " ".join(result.warnings)

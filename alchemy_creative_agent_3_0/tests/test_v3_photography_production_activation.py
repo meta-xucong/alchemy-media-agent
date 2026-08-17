@@ -127,16 +127,33 @@ def test_adapter_uses_only_pinned_entry_point_and_composer_materializes_directio
     assert photography_contribution["metadata"]["static_recipe_present"] is False
 
 
-def test_nonhuman_identity_request_blocks_without_typed_native_reference_and_requires_shared_capability(monkeypatch, tmp_path) -> None:
+def test_nonhuman_identity_request_blocks_only_from_explicit_control_or_typed_reference(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("V3_PHOTOGRAPHY_PRODUCTION_ENABLED", "true")
     runtime = ScenarioRuntime(
         llm_brain_adapter=V3LLMBrainAdapter(provider=PhotographyRemoteBrainTestProvider())
     )
     unknown = UploadedAssetInfo(asset_id="asset_dog", role=AssetRole.UNKNOWN_REFERENCE, uri="memory://dog")
-    blocked = runtime.plan_job(
+    prompt_only = runtime.plan_job(
         _request(
             user_input="Create a professional reshoot of the same dog in a forest.",
             scenario_selection={"scenario_id": "photography", "mode_id": "reference_reshoot"},
+            uploaded_assets=[unknown],
+        )
+    )
+    assert prompt_only.status == ScenarioRuntimeStatus.PLANNED
+    assert (
+        "nonhuman_subject_identity"
+        not in prompt_only.metadata["capability_activation_plan"]["dependency_order"]
+    )
+
+    blocked = runtime.plan_job(
+        _request(
+            user_input="Create a professional reshoot of the same dog in a forest.",
+            scenario_selection={
+                "scenario_id": "photography",
+                "mode_id": "reference_reshoot",
+                "parameters": {"preserve_nonhuman_identity": True},
+            },
             uploaded_assets=[unknown],
         )
     )
