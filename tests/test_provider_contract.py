@@ -624,15 +624,14 @@ def test_openai_image_provider_square_b64_reference_edit_transport_is_explicit(m
 
 
 def test_openai_image_provider_can_use_restricted_edit_transport_without_changing_generation(tmp_path, monkeypatch):
+    Image = pytest.importorskip("PIL.Image")
     provider = registry.image("openai_gpt_image")
     monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
     monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "square_b64_reference_edit")
     openai_image_provider._image_edit_capability_cache.reset()
     captured = {}
-    reference_path = tmp_path / "reference.png"
-    reference_path.write_bytes(
-        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
-    )
+    reference_path = tmp_path / "reference.jpg"
+    Image.new("RGB", (1279, 1706), (216, 219, 225)).save(reference_path, format="JPEG", quality=90)
 
     class CapturingImages:
         async def edit(self, **kwargs):
@@ -678,6 +677,12 @@ def test_openai_image_provider_can_use_restricted_edit_transport_without_changin
     assert "quality" not in captured
     assert "output_format" not in captured
     assert "input_fidelity" not in captured
+    assert not isinstance(captured["image"], list)
+    assert captured["image"].name.endswith(".png")
+    with Image.open(captured["image"].name) as prepared:
+        assert prepared.format == "PNG"
+        assert prepared.mode == "RGB"
+        assert prepared.size == (1024, 1024)
     assert result[0]["input_fidelity_applied"] is None
     assert result[0]["input_fidelity_support_state"] == "unknown"
 

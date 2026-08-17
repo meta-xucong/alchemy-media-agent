@@ -24,7 +24,11 @@ from app.providers.base import (
     ProviderRuntimeError,
 )
 from app.services.asset_planning import reference_image_paths
-from app.services.provider_reference import prepare_provider_reference_image, prepare_provider_reference_images
+from app.services.provider_reference import (
+    prepare_provider_reference_image,
+    prepare_provider_reference_images,
+    prepare_square_b64_reference_edit_images,
+)
 from app.storage import media_store
 
 
@@ -288,7 +292,6 @@ class OpenAIGPTImageProvider:
         repair_canvas = self._identity_repair_canvas_path(plan)
         if repair_canvas is not None:
             reference_paths = [repair_canvas, *reference_paths]
-        reference_paths = self._provider_reference_paths(reference_paths)
         repair_mask = self._identity_repair_mask_path(plan)
         self._assert_reference_transport_supported(len(reference_paths))
         timeout_seconds = self._client_timeout_seconds(image_edit=bool(reference_paths), plan=plan)
@@ -431,6 +434,7 @@ class OpenAIGPTImageProvider:
         fidelity_required = self._input_fidelity_is_required(plan)
         capability_key = self._input_fidelity_capability_key()
         support_state, cached_reason = _image_edit_capability_cache.state(capability_key)
+        reference_paths = self._provider_reference_paths(reference_paths, image_edit=True)
         applied_fidelity = (
             requested_fidelity
             if support_state != "unsupported" and self._supports_input_fidelity(image_edit=True)
@@ -478,6 +482,7 @@ class OpenAIGPTImageProvider:
                     raise TimeoutError(f"OpenAI image edit operation exceeded {operation_timeout:.1f}s")
                 with ExitStack() as stack:
                     image_files = [stack.enter_context(path.open("rb")) for path in reference_paths]
+                    image_payload = self._image_edit_payload(image_files)
                     kwargs = self._image_kwargs(plan, image_edit=True)
                     if applied_fidelity:
                         kwargs["input_fidelity"] = applied_fidelity
@@ -486,7 +491,7 @@ class OpenAIGPTImageProvider:
                     response = await self._call_with_timeout(
                         client.images.edit(
                             model=self._model(),
-                            image=image_files,
+                            image=image_payload,
                             prompt=prompt,
                             n=1,
                             **kwargs,
@@ -1246,11 +1251,18 @@ class OpenAIGPTImageProvider:
                     if inspect.isawaitable(result):
                         await result
 
-    def _provider_reference_paths(self, reference_paths: list) -> list:
+    def _provider_reference_paths(self, reference_paths: list, *, image_edit: bool = False) -> list:
+        if image_edit and self._uses_square_b64_transport(image_edit=True):
+            return prepare_square_b64_reference_edit_images(reference_paths)
         return prepare_provider_reference_images(reference_paths)
 
     def _provider_reference_path(self, path):
         return prepare_provider_reference_image(path)
+
+    def _image_edit_payload(self, image_files: list):
+        if len(image_files) == 1 and self._uses_square_b64_transport(image_edit=True):
+            return image_files[0]
+        return image_files
 
     def _model(self) -> str:
         return self.model or settings.openai_image_model

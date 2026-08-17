@@ -1578,11 +1578,18 @@ class ProductionImageGenerationProvider(GenerationProvider):
 
         provider = self._app_provider(provider_name)
         model = str(getattr(provider, "model", "") or "gpt-image-2").strip()
+        transport_profile = (
+            str(getattr(settings, "openai_image_edit_transport_profile", "") or "").strip()
+            if operation == "image_edit"
+            else ""
+        )
+        if not transport_profile:
+            transport_profile = str(getattr(settings, "openai_image_transport_profile", "") or "").strip()
         return configured_provider_execution_identity(
             provider_name=provider_name,
             model=model,
             operation=operation,
-            transport_profile=str(getattr(settings, "openai_image_transport_profile", "") or ""),
+            transport_profile=transport_profile,
         )
 
     @staticmethod

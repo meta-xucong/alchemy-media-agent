@@ -9,6 +9,7 @@ from app.config import settings
 
 
 SUPPORTED_PROVIDER_REFERENCE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+SQUARE_B64_REFERENCE_EDIT_SIZE = 1024
 
 _STAGE_FLEXIBLE_IDENTITY_DERIVATIVE = "portrait_identity_stage_flexible_feature_crop"
 _PORTRAIT_IDENTITY_DERIVATIVE_KINDS = {
@@ -17,6 +18,8 @@ _PORTRAIT_IDENTITY_DERIVATIVE_KINDS = {
     "portrait_identity_geometry_crop",
     "portrait_identity_pose_geometry_crop",
 }
+
+
 def prepare_provider_reference_image(path) -> Path | object:
     """Return an upstream-friendly reference image without modifying the source file."""
     try:
@@ -33,6 +36,22 @@ def prepare_provider_reference_image(path) -> Path | object:
 
 def prepare_provider_reference_images(paths: list) -> list:
     return [prepare_provider_reference_image(path) for path in paths]
+
+
+def prepare_square_b64_reference_edit_image(path) -> Path | object:
+    """Return a square PNG reference for constrained OpenAI-compatible edit routes."""
+
+    try:
+        source = Path(str(path))
+        if not source.exists() or not source.is_file():
+            return path
+        return _square_b64_reference_edit_path(source)
+    except Exception:
+        return path
+
+
+def prepare_square_b64_reference_edit_images(paths: list) -> list:
+    return [prepare_square_b64_reference_edit_image(path) for path in paths]
 
 
 def prepare_identity_repair_artifacts(
@@ -368,6 +387,47 @@ def _cropped_reference_path(
             next_size = tuple(max(1, int(side * 0.88)) for side in current.size)
             current = current.resize(next_size, Image.Resampling.LANCZOS)
             current.save(target, format="JPEG", quality=72, optimize=True)
+    return target if target.exists() else source
+
+
+def _square_b64_reference_edit_path(source: Path) -> Path:
+    try:
+        from PIL import Image, ImageOps
+    except ModuleNotFoundError:
+        return source
+
+    try:
+        with Image.open(source) as existing:
+            if (
+                source.suffix.lower() == ".png"
+                and existing.format == "PNG"
+                and existing.size == (SQUARE_B64_REFERENCE_EDIT_SIZE, SQUARE_B64_REFERENCE_EDIT_SIZE)
+                and existing.mode in {"RGB", "RGBA"}
+            ):
+                return source
+    except Exception:
+        pass
+
+    stat = source.stat()
+    size = SQUARE_B64_REFERENCE_EDIT_SIZE
+    digest = hashlib.sha256(
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}:square-b64-edit-v1:{size}".encode("utf-8")
+    ).hexdigest()[:24]
+    cache_dir = settings.media_storage_root / "provider_reference_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    target = cache_dir / f"{source.stem}-square-b64-edit-{digest}.png"
+    if target.exists() and target.stat().st_size > 0:
+        return target
+
+    with Image.open(source) as raw:
+        image = ImageOps.exif_transpose(raw)
+        image = _to_rgb_on_white(image, Image)
+        image.thumbnail((size, size), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", (size, size), color=(255, 255, 255))
+        left = (size - image.width) // 2
+        top = (size - image.height) // 2
+        canvas.paste(image, (left, top))
+        canvas.save(target, format="PNG", optimize=True, compress_level=9)
     return target if target.exists() else source
 
 
