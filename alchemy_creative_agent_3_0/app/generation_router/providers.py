@@ -1597,8 +1597,24 @@ class ProductionImageGenerationProvider(GenerationProvider):
         detail = getattr(exc, "detail", None)
         if not isinstance(detail, dict):
             return {}
+        result: dict[str, Any] = {}
         transport = detail.get("runtime_transport")
-        return {"runtime_transport": dict(transport)} if isinstance(transport, dict) else {}
+        if isinstance(transport, dict):
+            result["runtime_transport"] = dict(transport)
+        upstream_error: dict[str, Any] = {}
+        status_code = detail.get("status_code")
+        if isinstance(status_code, int) and 100 <= status_code <= 599:
+            upstream_error["status_code"] = status_code
+        for key in ("upstream_code", "upstream_error_type", "upstream_request_id"):
+            value = str(detail.get(key) or "").strip()
+            if value and len(value) <= 180 and all(
+                character.isalnum() or character in {"_", "-", "."}
+                for character in value
+            ):
+                upstream_error[key] = value
+        if upstream_error:
+            result["upstream_error"] = upstream_error
+        return result
 
     def _app_request_prompt_chars(self, app_request) -> int:
         prompt_plan = getattr(app_request, "prompt_plan", None)

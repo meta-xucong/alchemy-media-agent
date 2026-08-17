@@ -722,6 +722,75 @@ def test_explicit_provider_content_policy_signal_is_not_misreported_as_generic_4
     assert exc_info.value.provider_failure_retry["final_failure_code"] == "provider_policy_blocked"
 
 
+def test_openai_adapter_preserves_only_structured_upstream_failure_evidence() -> None:
+    from app.providers.openai_image import OpenAIGPTImageProvider
+
+    class StructuredGatewayFailure(Exception):
+        status_code = 400
+        body = {
+            "error": {
+                "code": "content_policy_violation",
+                "type": "invalid_request_error",
+                "message": "private provider message must not persist",
+            }
+        }
+        response = SimpleNamespace(headers={"x-request-id": "req_provider_42"})
+
+    evidence = OpenAIGPTImageProvider()._upstream_error_evidence(StructuredGatewayFailure())  # noqa: SLF001
+
+    assert evidence == {
+        "status_code": 400,
+        "upstream_code": "content_policy_violation",
+        "upstream_error_type": "invalid_request_error",
+        "upstream_request_id": "req_provider_42",
+    }
+    assert "message" not in evidence
+    assert "body" not in evidence
+
+
+def test_production_provider_persists_structured_upstream_failure_without_public_leak(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    old_key = settings.openai_api_key
+    old_provider = settings.default_image_provider
+    settings.openai_api_key = "test-key"
+    settings.default_image_provider = "openai_gpt_image"
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001, ARG001
+        raise ProviderRuntimeError(
+            "OpenAI image reference generation failed.",
+            provider="openai_gpt_image",
+            detail={
+                "status_code": 400,
+                "upstream_code": "content_policy_violation",
+                "upstream_error_type": "invalid_request_error",
+                "upstream_request_id": "req_provider_42",
+            },
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    try:
+        provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+        with pytest.raises(ProviderRuntimeError) as exc_info:
+            provider.generate(_generation_request(_reference_image(tmp_path / "reference.png")))
+    finally:
+        settings.openai_api_key = old_key
+        settings.default_image_provider = old_provider
+
+    summary = exc_info.value.provider_failure_retry
+    assert summary["final_failure_code"] == "provider_policy_blocked"
+    assert summary["attempts"][0]["upstream_code"] == "content_policy_violation"
+    assert summary["attempts"][0]["upstream_error"] == {
+        "status_code": 400,
+        "upstream_code": "content_policy_violation",
+        "upstream_error_type": "invalid_request_error",
+        "upstream_request_id": "req_provider_42",
+    }
+    public = V3ProductApiService._public_provider_failure_retry(summary)  # noqa: SLF001
+    assert "upstream_error" not in public["attempts"][0]
+    assert "req_provider_42" not in json.dumps(public, sort_keys=True)
+
+
 def test_gateway_nested_content_policy_signal_stops_v3_outer_retry(tmp_path, monkeypatch) -> None:
     from app.config import settings
 

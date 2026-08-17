@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
+import json
 import math
 import re
 import threading
@@ -404,6 +405,7 @@ class OpenAIGPTImageProvider:
                             "runtime_transport": self._runtime_transport_summary(image_edit=False, plan=plan),
                             "upstream_concurrency_limited": self._is_concurrency_limit_error(exc),
                             "upstream_image_quota_limited": self._is_image_quota_limit_error(exc),
+                            **self._upstream_error_evidence(exc),
                         },
                     ) from exc
                 await asyncio.sleep(self._retry_delay_seconds(exc, attempt))
@@ -582,6 +584,7 @@ class OpenAIGPTImageProvider:
                             "upstream_image_quota_limited": self._is_image_quota_limit_error(exc),
                             "status_code": self._status_code_from_exception(exc),
                             "gateway_base_url": self._is_openai_compatible_gateway(),
+                            **self._upstream_error_evidence(exc),
                         },
                     ) from exc
                 if transient_image_edit:
@@ -1041,6 +1044,74 @@ class OpenAIGPTImageProvider:
             return int(status_code) if status_code is not None else None
         except (TypeError, ValueError):
             return None
+
+    def _upstream_error_evidence(self, exc: Exception) -> dict[str, object]:
+        """Keep only structured upstream failure facts in private retry evidence."""
+
+        payload = self._structured_error_body(exc)
+        error = payload.get("error") if isinstance(payload.get("error"), dict) else payload
+        evidence: dict[str, object] = {}
+        status_code = self._status_code_from_exception(exc)
+        if status_code is not None:
+            evidence["status_code"] = status_code
+        upstream_code = self._safe_upstream_error_token(
+            error.get("code") if isinstance(error, dict) else None
+        ) or self._safe_upstream_error_token(getattr(exc, "code", None))
+        if upstream_code:
+            evidence["upstream_code"] = upstream_code
+        upstream_type = self._safe_upstream_error_token(
+            error.get("type") if isinstance(error, dict) else None
+        )
+        if upstream_type:
+            evidence["upstream_error_type"] = upstream_type
+        request_id = self._safe_upstream_request_id(
+            getattr(exc, "request_id", None)
+            or (error.get("request_id") if isinstance(error, dict) else None)
+            or self._request_id_from_exception_headers(exc)
+        )
+        if request_id:
+            evidence["upstream_request_id"] = request_id
+        return evidence
+
+    @staticmethod
+    def _structured_error_body(exc: Exception) -> dict[str, object]:
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            return dict(body)
+        if not isinstance(body, str):
+            return {}
+        try:
+            parsed = json.loads(body)
+        except (TypeError, ValueError):
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+
+    @staticmethod
+    def _safe_upstream_error_token(value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text or len(text) > 120:
+            return ""
+        return text if all(character.isalnum() or character in {"_", "-", "."} for character in text) else ""
+
+    @staticmethod
+    def _safe_upstream_request_id(value: object) -> str:
+        text = str(value or "").strip()
+        if not text or len(text) > 180:
+            return ""
+        return text if all(character.isalnum() or character in {"_", "-", "."} for character in text) else ""
+
+    def _request_id_from_exception_headers(self, exc: Exception) -> str:
+        headers = self._headers_from_exception(exc)
+        if not headers:
+            return ""
+        for key in ("x-request-id", "request-id", "x-amzn-requestid"):
+            try:
+                value = headers.get(key)
+            except AttributeError:
+                return ""
+            if value:
+                return str(value)
+        return ""
 
     def _is_openai_compatible_gateway(self) -> bool:
         base_url = str(settings.openai_base_url or "").strip().lower()
