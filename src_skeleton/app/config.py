@@ -220,6 +220,9 @@ class Settings(BaseModel):
     # the standard OpenAI Images contract; a constrained OpenAI-compatible
     # gateway can explicitly opt into a smaller, generation-only transport.
     openai_image_transport_profile: str = os.getenv("OPENAI_IMAGE_TRANSPORT_PROFILE", "openai_standard").strip().lower() or "openai_standard"
+    # Empty inherits the generation transport. Set only when an operator has
+    # certified that image editing supports a different request envelope.
+    openai_image_edit_transport_profile: str = os.getenv("OPENAI_IMAGE_EDIT_TRANSPORT_PROFILE", "").strip().lower()
     # Zero keeps the V3 provider's normal prompt budget.  A constrained gateway
     # can lower this cap; user-authored direction stays lossless while repeated
     # framework guidance is compacted for transport.

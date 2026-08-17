@@ -623,6 +623,65 @@ def test_openai_image_provider_square_b64_reference_edit_transport_is_explicit(m
     assert provider._supports_input_fidelity() is False  # noqa: SLF001
 
 
+def test_openai_image_provider_can_use_restricted_edit_transport_without_changing_generation(tmp_path, monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "square_b64_reference_edit")
+    openai_image_provider._image_edit_capability_cache.reset()
+    captured = {}
+    reference_path = tmp_path / "reference.png"
+    reference_path.write_bytes(
+        base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+    )
+
+    class CapturingImages:
+        async def edit(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        b64_json="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+                    )
+                ]
+            )
+
+    plan = ImagePromptPlan(
+        main_subject="product",
+        count=1,
+        size="1024x1024",
+        quality="medium",
+        output_format="png",
+        variables={"input_fidelity": "high"},
+    )
+    assert provider._image_kwargs(plan) == {  # noqa: SLF001
+        "quality": "medium",
+        "output_format": "png",
+        "size": "1024x1024",
+    }
+    assert provider._image_kwargs(plan, image_edit=True) == {  # noqa: SLF001
+        "size": "1024x1024",
+        "response_format": "b64_json",
+    }
+
+    result = asyncio.run(
+        provider._generate_one_with_references(
+            SimpleNamespace(images=CapturingImages()),
+            "reference edit",
+            plan,
+            [reference_path],
+            index=0,
+        )
+    )
+
+    assert captured["size"] == "1024x1024"
+    assert captured["response_format"] == "b64_json"
+    assert "quality" not in captured
+    assert "output_format" not in captured
+    assert "input_fidelity" not in captured
+    assert result[0]["input_fidelity_applied"] is None
+    assert result[0]["input_fidelity_support_state"] == "unknown"
+
+
 def test_openai_image_provider_accepts_url_response(monkeypatch):
     provider = registry.image("openai_gpt_image")
     tiny_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")

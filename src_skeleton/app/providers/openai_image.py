@@ -203,14 +203,15 @@ class OpenAIGPTImageProvider:
 
     async def capabilities(self) -> ProviderCapabilities:
         configured = bool(settings.openai_api_key)
-        generation_only_square = self._uses_generation_only_square_b64_transport()
         square_b64_transport = self._uses_square_b64_transport()
+        image_edit_generation_only_square = self._uses_generation_only_square_b64_transport(image_edit=True)
+        image_edit_square_b64_transport = self._uses_square_b64_transport(image_edit=True)
         return ProviderCapabilities(
             provider=self.name,
             configured=configured,
             models=[self._model()],
-            operations=["generate"] if generation_only_square else ["generate", "edit", "image_reference", "image_edit"],
-            advanced_asset_roles=[] if generation_only_square else [
+            operations=["generate"] if image_edit_generation_only_square else ["generate", "edit", "image_reference", "image_edit"],
+            advanced_asset_roles=[] if image_edit_generation_only_square else [
                 "style_reference",
                 "subject_reference",
                 "logo_overlay",
@@ -221,8 +222,8 @@ class OpenAIGPTImageProvider:
             model_capabilities=[
                 {
                     "id": self._model(),
-                    "capabilities": ["text_to_image"] if generation_only_square else ["text_to_image", "image_reference", "image_edit"],
-                    "advanced_asset_roles": [] if generation_only_square else [
+                    "capabilities": ["text_to_image"] if image_edit_generation_only_square else ["text_to_image", "image_reference", "image_edit"],
+                    "advanced_asset_roles": [] if image_edit_generation_only_square else [
                         "style_reference",
                         "subject_reference",
                         "logo_overlay",
@@ -245,6 +246,13 @@ class OpenAIGPTImageProvider:
                 },
                 "qualities": [] if square_b64_transport else ["auto", "low", "medium", "high"],
                 "transport_profile": self._transport_profile(),
+                "image_edit_transport_profile": self._transport_profile(image_edit=True),
+                "image_edit_formats": ["png"] if image_edit_square_b64_transport else ["png", "jpeg", "webp"],
+                "image_edit_sizes": (
+                    ["1024x1024"]
+                    if image_edit_square_b64_transport
+                    else ["auto", "1024x1024", "1024x1536", "1536x1024", "custom_dimensions"]
+                ),
                 "local_max_requests_per_minute": settings.openai_image_local_max_requests_per_minute,
                 "local_max_outputs_per_minute": settings.openai_image_local_max_outputs_per_minute,
                 "local_queue_timeout_seconds": settings.openai_image_local_queue_timeout_seconds,
@@ -423,22 +431,26 @@ class OpenAIGPTImageProvider:
         fidelity_required = self._input_fidelity_is_required(plan)
         capability_key = self._input_fidelity_capability_key()
         support_state, cached_reason = _image_edit_capability_cache.state(capability_key)
-        applied_fidelity = requested_fidelity if support_state != "unsupported" and self._supports_input_fidelity() else None
+        applied_fidelity = (
+            requested_fidelity
+            if support_state != "unsupported" and self._supports_input_fidelity(image_edit=True)
+            else None
+        )
         fidelity_fallback_reason = cached_reason if applied_fidelity is None and requested_fidelity else None
-        if fidelity_required and (support_state == "unsupported" or not self._supports_input_fidelity()):
+        if fidelity_required and (support_state == "unsupported" or not self._supports_input_fidelity(image_edit=True)):
             raise ProviderCapabilityMismatchError(
                 "This request requires native high-fidelity reference conditioning, but the configured image transport cannot provide it.",
                 provider=self.name,
                 detail={
-                    "transport_profile": self._transport_profile(),
+                    "transport_profile": self._transport_profile(image_edit=True),
                     "input_fidelity_requested": requested_fidelity,
                     "input_fidelity_required": True,
                     "input_fidelity_support_state": support_state,
                 },
             )
-        if requested_fidelity and not self._supports_input_fidelity():
+        if requested_fidelity and not self._supports_input_fidelity(image_edit=True):
             fidelity_fallback_reason = (
-                f"Configured OpenAI image transport profile {self._transport_profile()} does not accept input_fidelity."
+                f"Configured OpenAI image transport profile {self._transport_profile(image_edit=True)} does not accept input_fidelity."
             )
         operation_timeout = self._client_timeout_seconds(image_edit=True, plan=plan)
         operation_deadline = time.monotonic() + operation_timeout
@@ -466,7 +478,7 @@ class OpenAIGPTImageProvider:
                     raise TimeoutError(f"OpenAI image edit operation exceeded {operation_timeout:.1f}s")
                 with ExitStack() as stack:
                     image_files = [stack.enter_context(path.open("rb")) for path in reference_paths]
-                    kwargs = self._image_kwargs(plan)
+                    kwargs = self._image_kwargs(plan, image_edit=True)
                     if applied_fidelity:
                         kwargs["input_fidelity"] = applied_fidelity
                     if mask_path is not None:
@@ -503,7 +515,7 @@ class OpenAIGPTImageProvider:
                             detail={
                                 "input_fidelity_requested": requested_fidelity,
                                 "input_fidelity_required": True,
-                                "transport_profile": self._transport_profile(),
+                                "transport_profile": self._transport_profile(image_edit=True),
                                 "message": fidelity_fallback_reason,
                             },
                         ) from exc
@@ -617,6 +629,7 @@ class OpenAIGPTImageProvider:
                 str(settings.openai_base_url or "https://api.openai.com/v1").rstrip("/").lower(),
                 self.name,
                 self._model().lower(),
+                self._transport_profile(image_edit=True),
             ]
         )
 
@@ -752,15 +765,15 @@ class OpenAIGPTImageProvider:
         except (AttributeError, ValueError):
             return None, None
 
-    def _image_kwargs(self, plan) -> dict[str, str]:
-        if self._uses_square_b64_transport():
+    def _image_kwargs(self, plan, *, image_edit: bool = False) -> dict[str, str]:
+        if self._uses_square_b64_transport(image_edit=image_edit):
             requested_size = str(getattr(plan, "size", "") or "").strip().lower()
             if requested_size and requested_size not in {"auto", "1024x1024"}:
                 raise ProviderCapabilityMismatchError(
                     "Configured OpenAI image transport only supports 1024x1024 images.",
                     provider=self.name,
                     detail={
-                        "transport_profile": self._transport_profile(),
+                        "transport_profile": self._transport_profile(image_edit=image_edit),
                         "requested_size": requested_size,
                         "supported_sizes": ["1024x1024"],
                     },
@@ -774,8 +787,14 @@ class OpenAIGPTImageProvider:
             kwargs["size"] = plan.size
         return kwargs
 
-    def _transport_profile(self) -> str:
-        configured = str(getattr(settings, "openai_image_transport_profile", "") or "").strip().lower()
+    def _transport_profile(self, *, image_edit: bool = False) -> str:
+        configured = (
+            str(getattr(settings, "openai_image_edit_transport_profile", "") or "").strip().lower()
+            if image_edit
+            else ""
+        )
+        if not configured:
+            configured = str(getattr(settings, "openai_image_transport_profile", "") or "").strip().lower()
         if configured in {
             self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE,
             self._SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE,
@@ -783,25 +802,25 @@ class OpenAIGPTImageProvider:
             return configured
         return self._STANDARD_TRANSPORT_PROFILE
 
-    def _uses_square_b64_transport(self) -> bool:
-        return self._transport_profile() in {
+    def _uses_square_b64_transport(self, *, image_edit: bool = False) -> bool:
+        return self._transport_profile(image_edit=image_edit) in {
             self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE,
             self._SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE,
         }
 
-    def _uses_generation_only_square_b64_transport(self) -> bool:
-        return self._transport_profile() == self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE
+    def _uses_generation_only_square_b64_transport(self, *, image_edit: bool = False) -> bool:
+        return self._transport_profile(image_edit=image_edit) == self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE
 
-    def _supports_input_fidelity(self) -> bool:
-        return not self._uses_square_b64_transport()
+    def _supports_input_fidelity(self, *, image_edit: bool = False) -> bool:
+        return not self._uses_square_b64_transport(image_edit=image_edit)
 
     def _assert_reference_transport_supported(self, reference_image_count: int) -> None:
-        if reference_image_count and self._uses_generation_only_square_b64_transport():
+        if reference_image_count and self._uses_generation_only_square_b64_transport(image_edit=True):
             raise ProviderCapabilityMismatchError(
                 "Configured OpenAI image transport supports text-to-image generation only and cannot preserve uploaded or selected image references.",
                 provider=self.name,
                 detail={
-                    "transport_profile": self._transport_profile(),
+                    "transport_profile": self._transport_profile(image_edit=True),
                     "reference_image_count": reference_image_count,
                     "unsupported_operation": "image_reference",
                 },
