@@ -208,6 +208,7 @@ async def veyra_login(body: dict, response: Response):
     except VeyraAuthUnauthorized as exc:
         raise HTTPException(status_code=401, detail={"error_code": exc.code, "message": "Ticket is invalid or expired."}) from exc
     except VeyraAuthError as exc:
+        _log_veyra_bridge_failure("login_ticket_exchange", exc)
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
 
 
@@ -241,6 +242,7 @@ async def veyra_me(request: Request, authorization: str = Header(default="")):
     except VeyraAuthMisconfigured as exc:
         raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
     except VeyraAuthError as exc:
+        _log_veyra_bridge_failure("account_read", exc)
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
     return {"user": account.__dict__}
 
@@ -349,8 +351,18 @@ async def _veyra_request_context(request: Request, authorization: str = "") -> d
     except VeyraAuthMisconfigured as exc:
         raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": "Veyra auth is not configured."}) from exc
     except VeyraAuthError as exc:
+        _log_veyra_bridge_failure("account_read", exc)
         raise HTTPException(status_code=502, detail={"error_code": exc.code, "message": "Veyra bridge request failed."}) from exc
     return {"user_id": user_id, "account": account, "is_admin": str(account.role).lower() == "admin"}
+
+
+def _log_veyra_bridge_failure(operation: str, exc: VeyraAuthError) -> None:
+    logger.warning(
+        "Veyra bridge failed: operation=%s reason=%s error_type=%s",
+        operation,
+        getattr(exc, "reason", "unknown"),
+        type(exc).__name__,
+    )
 
 
 async def _require_veyra_admin(request: Request, authorization: str = ""):

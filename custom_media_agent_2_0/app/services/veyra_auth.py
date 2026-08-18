@@ -16,6 +16,10 @@ from app.config import settings
 class VeyraAuthError(RuntimeError):
     code = "veyra_auth_error"
 
+    def __init__(self, message: str, *, reason: str = "unknown"):
+        super().__init__(message)
+        self.reason = reason
+
 
 class VeyraAuthDisabled(VeyraAuthError):
     code = "veyra_auth_disabled"
@@ -105,7 +109,7 @@ class VeyraSub2APIClient:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.get(self.base_url + path, headers=self._headers())
         except (OSError, httpx.HTTPError) as exc:
-            raise VeyraAuthError(str(exc)) from exc
+            raise VeyraAuthError("Veyra bridge transport failed.", reason="transport_error") from exc
         return _checked_json(response)
 
     async def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -113,7 +117,7 @@ class VeyraSub2APIClient:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 response = await client.post(self.base_url + path, headers=self._headers(), json=payload)
         except (OSError, httpx.HTTPError) as exc:
-            raise VeyraAuthError(str(exc)) from exc
+            raise VeyraAuthError("Veyra bridge transport failed.", reason="transport_error") from exc
         return _checked_json(response)
 
     def _headers(self) -> dict[str, str]:
@@ -170,20 +174,23 @@ def _checked_json(response: httpx.Response) -> dict[str, Any]:
     if response.status_code == 402:
         raise VeyraInsufficientBalance("Insufficient sub2api balance.")
     if response.status_code >= 400:
-        raise VeyraAuthError(f"Veyra bridge returned HTTP {response.status_code}.")
+        raise VeyraAuthError(
+            f"Veyra bridge returned HTTP {response.status_code}.",
+            reason=f"upstream_http_{response.status_code}",
+        )
     try:
         data = response.json()
     except ValueError as exc:
-        raise VeyraAuthError("Veyra bridge returned non-JSON response.") from exc
+        raise VeyraAuthError("Veyra bridge returned non-JSON response.", reason="response_non_json") from exc
     if not isinstance(data, dict):
-        raise VeyraAuthError("Veyra bridge returned invalid JSON.")
+        raise VeyraAuthError("Veyra bridge returned invalid JSON.", reason="response_invalid_shape")
     return data
 
 
 def _data(payload: dict[str, Any]) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
-        raise VeyraAuthError("Veyra bridge response is missing data.")
+        raise VeyraAuthError("Veyra bridge response is missing data.", reason="response_missing_data")
     return data
 
 

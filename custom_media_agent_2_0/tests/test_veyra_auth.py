@@ -13,6 +13,7 @@ import app.services.generation as generation_service
 from app.services.veyra_billing_settings import reset_billing_settings_cache
 from app.services.veyra_auth import (
     VeyraAuthDisabled,
+    VeyraAuthError,
     VeyraAuthMisconfigured,
     VeyraInsufficientBalance,
     VeyraSub2APIClient,
@@ -73,9 +74,12 @@ def test_veyra_login_route_disabled() -> None:
     assert response.json()["detail"]["error_code"] == "veyra_auth_disabled"
 
 
-def test_veyra_login_wraps_http_client_os_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_veyra_login_wraps_http_client_os_errors_without_logging_ticket_or_token(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     object.__setattr__(settings, "veyra_auth_enabled", True)
-    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret-not-for-logs")
     object.__setattr__(settings, "veyra_session_secret", "session-secret")
     object.__setattr__(settings, "veyra_sub2api_base_url", "https://sub2api.test")
 
@@ -86,10 +90,23 @@ def test_veyra_login_wraps_http_client_os_errors(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(veyra_auth_module.httpx, "AsyncClient", BrokenAsyncClient)
     client = TestClient(app)
 
-    response = client.post("/api/v2/veyra/login", json={"ticket": "ticket-1"})
+    response = client.post("/api/v2/veyra/login", json={"ticket": "ticket-not-for-logs"})
 
     assert response.status_code == 502
     assert response.json()["detail"]["error_code"] == "veyra_auth_error"
+    assert "Veyra bridge failed: operation=login_ticket_exchange reason=transport_error error_type=VeyraAuthError" in caplog.messages
+    assert "ticket-not-for-logs" not in caplog.text
+    assert "bridge-secret-not-for-logs" not in caplog.text
+
+
+def test_veyra_upstream_http_failure_has_a_safe_reason_code() -> None:
+    from app.services.veyra_auth import _checked_json
+
+    with pytest.raises(VeyraAuthError) as raised:
+        _checked_json(httpx.Response(503, content=b"upstream-body-not-for-logs"))
+
+    assert raised.value.reason == "upstream_http_503"
+    assert "upstream-body-not-for-logs" not in str(raised.value)
 
 
 def test_veyra_optional_routes_degrade_when_auth_disabled(tmp_path) -> None:
