@@ -216,6 +216,7 @@ const v2State = {
   templates: [],
   visibleTemplates: [],
   history: [],
+  historyLoadEpoch: 0,
   historyFavoritesOnly: false,
   historyTotal: 0,
   historyLoadingMore: false,
@@ -8168,6 +8169,14 @@ function modelEffectMessage(runtime) {
   return `配置已生效：${imageRoute}；思考 ${thinkingProviderLabel(thinkingProvider)} 优先，${thinkingProviderLabel(otherThinkingProvider(thinkingProvider))} 兜底。`;
 }
 
+function applyV2HistoryResponse(historyResponse = {}) {
+  v2State.historyRenderLimit = v2HistoryPageSize;
+  v2State.history = historyResponse.items || [];
+  v2State.historyTotal = Number.isFinite(historyResponse.total) ? historyResponse.total : v2State.history.length;
+  renderV2History(v2State.history);
+  if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
+}
+
 async function initV2({ silent = true, force = false } = {}) {
   if (!force && v2State.loaded) {
     renderV2ProviderInheritance();
@@ -8179,9 +8188,20 @@ async function initV2({ silent = true, force = false } = {}) {
   const showPageOverlay = activePanelName() === "v2" || !silent;
   if (showPageOverlay) setMobilePageLoading(true, "正在加载 V2", "正在读取历史、模板和中枢状态。");
   updateV2Notice("正在检查 V2.0 Agent 中枢。", "info");
+  const historyLoadEpoch = (v2State.historyLoadEpoch || 0) + 1;
+  v2State.historyLoadEpoch = historyLoadEpoch;
+  const historyResponsePromise = loadV2HistoryResponse({
+    limit: v2HistoryFetchPageSize,
+    offset: 0,
+    timeoutMs: v2AccountHistoryTimeoutMs,
+    optional: true,
+  }).catch(() => ({ items: [], total: 0, unavailable: true }));
+  historyResponsePromise.then((historyResponse) => {
+    if (v2State.historyLoadEpoch !== historyLoadEpoch) return;
+    applyV2HistoryResponse(historyResponse);
+  });
   try {
     const [
-      historyResponse,
       health,
       providersResponse,
       imageProviderCapabilities,
@@ -8190,7 +8210,6 @@ async function initV2({ silent = true, force = false } = {}) {
       orchestratorStatus,
       modelSettings,
     ] = await Promise.all([
-      loadV2HistoryResponse({ limit: v2HistoryFetchPageSize, offset: 0, timeoutMs: v2AccountHistoryTimeoutMs, optional: true }),
       loadV2OptionalResource("/health", { agents_sdk_available: false }),
       loadV2OptionalResource("/resource-providers", { providers: [] }),
       loadV2OptionalResource("/provider-capabilities", { providers: [] }),
@@ -8199,11 +8218,6 @@ async function initV2({ silent = true, force = false } = {}) {
       loadV2OptionalResource("/orchestrator/status", null),
       loadV2OptionalResource("/runtime/model-settings", null),
     ]);
-    v2State.historyRenderLimit = v2HistoryPageSize;
-    v2State.history = historyResponse.items || [];
-    v2State.historyTotal = Number.isFinite(historyResponse.total) ? historyResponse.total : v2State.history.length;
-    renderV2History(v2State.history);
-    if (activePanelName() === "v2") renderHeroHistory(v2State.history, { source: "v2" });
     v2State.health = health;
     v2State.providers = providersResponse?.providers || [];
     v2State.imageProviderCapabilities = imageProviderCapabilities?.providers || [];
@@ -8221,16 +8235,7 @@ async function initV2({ silent = true, force = false } = {}) {
     renderV2ProviderInheritance();
     renderV2Brain(null, orchestratorStatus);
     renderV2AssetPanel();
-    const readyMessage = historyResponse.unavailable
-      ? "V2.0 Agent 中枢已连接，历史记录暂时没加载出来。"
-      : v2State.history.length
-      ? silent
-        ? "V2.0 历史已加载，中枢状态同步完成。"
-        : "V2.0 Agent 中枢已就绪，历史已加载。"
-      : silent
-        ? "V2.0 Agent 中枢待命。"
-        : "V2.0 Agent 中枢已就绪。";
-    updateV2Notice(readyMessage, "success");
+    updateV2Notice("V2.0 Agent 中枢已就绪，模板已加载，历史记录继续读取。", "success");
   } catch (error) {
     v2State.loaded = false;
     if (els.v2HealthState) els.v2HealthState.textContent = "离线";
@@ -10523,6 +10528,7 @@ function updateV2Notice(message, type = "info") {
 }
 
 const v2AccountHistoryTimeoutMs = 8000;
+const v2HistoryFallbackTimeoutMs = 8000;
 const v2OptionalResourceTimeoutMs = 3500;
 
 function v2HistoryEndpoint(basePath, { limit = v2HistoryFetchPageSize, offset = 0, full = false } = {}) {
@@ -10574,7 +10580,7 @@ async function loadV2OptionalResource(path, fallbackValue = null, { timeoutMs = 
 
 async function loadV2ImageHistoryFallback(reason = "", options = {}) {
   try {
-    const response = await v2Request(v2HistoryEndpoint("/image/history", options));
+    const response = await loadV2RequestWithTimeout(v2HistoryEndpoint("/image/history", options), v2HistoryFallbackTimeoutMs);
     if (v2HistoryItemCount(response) && reason) {
       console.warn(`V2 account history unavailable, using image history fallback: ${reason}`);
     }

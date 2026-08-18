@@ -2543,6 +2543,25 @@ def test_mobile_h5_app_is_served_independently():
     assert "分享链接" in mobile_script.text
 
 
+def test_v2_template_catalog_is_not_blocked_by_slow_history_fallback():
+    scripts = [
+        main_module.STATIC_DIR / "app.js",
+        main_module.MOBILE_STATIC_DIR / "mobile.js",
+    ]
+
+    for script_path in scripts:
+        script = script_path.read_text(encoding="utf-8")
+        init_body = script.split("async function initV2", 1)[1].split("function renderV2ModelSettings", 1)[0]
+        assert "const historyLoadEpoch = (v2State.historyLoadEpoch || 0) + 1;" in init_body
+        assert "const historyResponsePromise = loadV2HistoryResponse({" in init_body
+        assert "historyResponsePromise.then((historyResponse) =>" in init_body
+        resource_phase = init_body.split("try {", 1)[1]
+        assert "loadV2HistoryResponse" not in resource_phase
+        assert "模板已加载，历史记录继续读取" in resource_phase
+        assert "loadV2RequestWithTimeout(v2HistoryEndpoint(\"/image/history\", options), v2HistoryFallbackTimeoutMs)" in script
+        assert "const v2HistoryFallbackTimeoutMs = 8000;" in script
+
+
 def test_v1_frontend_generation_success_is_not_overridden_by_refresh_failures():
     client = TestClient(app)
     desktop_script = client.get("/static/app.js")
