@@ -1,15 +1,14 @@
-"""Phase 0 red contracts for Doc281 unified source-library activation.
+"""Doc281 General source-selection contracts.
 
-These tests use only local in-memory stores and deterministic uploaded image
-fixtures. They intentionally assert the next server-owned behavior before its
-runtime implementation exists. They never select a live Provider, contact MCP
-or ImageGen, write a real Job, or deploy a service.
+These tests keep the semantic decision in an explicit Brain double. Project
+Mode owns only current-source revalidation, opaque-handle binding, durable
+replay, and safe public projection. No filename, browser label, source role,
+or local semantic taxonomy is used to select a General original.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -18,61 +17,17 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from playwright.sync_api import sync_playwright
 
-from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue, V3AssetUploadStatusValue
-from alchemy_creative_agent_3_0.app.project_mode import (
-    PersistentProjectStore,
-    V3ProjectModeService,
-    source_library,
-)
+from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, V3ProjectModeService, source_library
 from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
-from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
-    DisabledEcommerceViewActivationIssuer,
-)
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import DisabledEcommerceViewActivationIssuer
 from alchemy_creative_agent_3_0.app.project_mode.service import (
     Doc281GeneralSourceRegistry,
     doc281_general_source_registry_from_environment,
 )
 from alchemy_creative_agent_3_0.app.project_mode.source_evidence import (
-    OpenAICompatibleTextRequirementIssuer,
-    REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET,
-)
-from alchemy_creative_agent_3_0.app.project_mode.contracts import (
-    ProjectReferenceSourceType,
-    ProjectReferenceUsePolicy,
-)
-from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_recovery import (
-    _project,
-)
-from alchemy_creative_agent_3_0.tests.test_v3_doc265_reference_channel_recovery import (
-    _add_product_references,
-    _job_payload,
-    _save_history_output,
-)
-from alchemy_creative_agent_3_0.tests.test_v3_doc270_phase3_general_activation_contract import (
-    _general_payload,
-    _general_project,
-)
-from alchemy_creative_agent_3_0.tests.test_v3_doc270_phase2_shadow_matcher_contract import (
-    _entry as _shadow_entry,
-    _evidence as _shadow_evidence,
-    _requirement as _shadow_requirement,
-    _resolve as _shadow_resolve,
-    _server_context as _shadow_server_context,
-)
-from alchemy_creative_agent_3_0.tests.test_v3_doc270_phase4_ecommerce_view_activation_contract import (
-    _count_planning_and_dispatch,
-)
-from alchemy_creative_agent_3_0.tests.test_v3_doc270_project_source_library_reference_matching import (
-    _public_library_project,
-)
-from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_browser import (
-    DESKTOP_HTML,
-    DESKTOP_JS,
-    MOBILE_HTML,
-    MOBILE_JS,
-    _browser_page,
+    GENERAL_SOURCE_SELECTION_OUTPUT_TOKEN_BUDGET,
+    general_source_selection_response_from_text,
 )
 from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_recovery import (
     _handlers,
@@ -80,19 +35,117 @@ from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_
 )
 
 
-def _public_safe(value: Any) -> None:
-    forbidden = (
-        "asset_id",
-        "reference_id",
-        "sha",
-        "digest",
-        "path",
-        "file",
-        "prompt",
-        "provider",
-        "exception",
-        "traceback",
+def _candidate_handle(entry: dict[str, Any]) -> str:
+    return source_library.canonical_digest(
+        {
+            "schema_version": "doc281_general_source_candidate_handle_v1",
+            "reference_id": str(entry["reference_id"]),
+            "asset_id": str(entry["asset_id"]),
+            "content_sha256": str(entry["content_sha256"]),
+        }
     )
+
+
+def _general_project(tmp_path: Path) -> tuple[Any, dict[str, Any], list[str], dict[str, Any]]:
+    handlers, _catalog = _handlers(tmp_path)
+    handlers.project_service = V3ProjectModeService(
+        product_service=handlers.service,
+        project_store=handlers.project_service.project_store,
+        project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+        doc281_general_source_registry=Doc281GeneralSourceRegistry(),
+    )
+    project = handlers.post_projects(
+        {
+            "user_goal": "Create a source-aware general campaign visual.",
+            "primary_template_id": "general_template",
+        }
+    )["project"]
+    asset_ids = [
+        _ready_product_upload(
+            handlers,
+            filename=f"doc281-general-{index}.png",
+            color=(50 + index * 35, 90 + index * 20, 135),
+        )
+        for index in range(1, 4)
+    ]
+    for asset_id in asset_ids:
+        record = handlers.service.get_uploaded_asset(asset_id)
+        assert record is not None
+        handlers.service.asset_store._save_record(record.model_copy(update={"role": "general"}))  # noqa: SLF001
+        handlers.post_project_reference(
+            project["project_id"],
+            {"asset_ref_id": asset_id, "source_type": "uploaded", "use_policy": "general"},
+        )
+    durable = handlers.project_service._require_project(project["project_id"])  # noqa: SLF001
+    snapshot = source_library.build_project_source_library(
+        project_id=durable.project_id,
+        references=durable.reference_assets,
+        upload_lookup=handlers.service.get_uploaded_asset,
+    )
+    return handlers, project, asset_ids, snapshot
+
+
+def _replace_general_service(handlers: Any, registry: Doc281GeneralSourceRegistry) -> None:
+    previous = handlers.project_service
+    handlers.project_service = V3ProjectModeService(
+        product_service=handlers.service,
+        project_store=previous.project_store,
+        template_registry=previous.template_registry,
+        reference_channel_policy_module=previous.reference_channel_policy_module,
+        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+        doc281_general_source_registry=registry,
+    )
+
+
+def _selection_registry(
+    snapshot: dict[str, Any],
+    *,
+    target_asset_id: str | None,
+    calls: dict[str, int] | None = None,
+) -> Doc281GeneralSourceRegistry:
+    target = next(
+        (
+            item
+            for item in snapshot.get("entries", [])
+            if isinstance(item, dict) and item.get("asset_id") == target_asset_id
+        ),
+        None,
+    )
+    target_handle = _candidate_handle(target) if target is not None else None
+
+    def select(**kwargs: Any) -> dict[str, Any]:
+        if calls is not None:
+            calls["brain"] = calls.get("brain", 0) + 1
+        entries = kwargs["entries"]
+        assert entries
+        assert all(set(item) == {"candidate_handle", "analysis_bytes", "mime_type"} for item in entries)
+        assert all("asset_id" not in item and "reference_id" not in item for item in entries)
+        if target_handle is None or target_handle not in {item["candidate_handle"] for item in entries}:
+            return {"state": "prompt_only", "output_selections": []}
+        count = int(kwargs["requested_output_count"])
+        return {
+            "state": "selected",
+            "output_selections": [
+                {"output_index": index, "candidate_handles": [target_handle]}
+                for index in range(1, count + 1)
+            ],
+        }
+
+    return Doc281GeneralSourceRegistry(selection_brain=select, maximum_sources=1)
+
+
+def _general_payload(*, user_input: str = "Create a source-aware image.", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "user_input": user_input,
+        "template_id": "general_template",
+        "metadata": {"requested_image_count": 1, **(metadata or {})},
+    }
+
+
+def _public_safe(value: Any) -> None:
+    forbidden = ("asset_id", "reference_id", "sha", "digest", "path", "file", "prompt", "provider")
     if isinstance(value, dict):
         for key, nested in value.items():
             assert not any(fragment in str(key).lower() for fragment in forbidden)
@@ -102,1386 +155,216 @@ def _public_safe(value: Any) -> None:
             _public_safe(nested)
 
 
-class _Doc281GeneralSourceRegistryFixture:
-    """Private `doc281_general_source_registry_v1` authority for red contracts."""
-
-    protocol = "doc281_general_source_registry_v1"
-    enabled = True
-
-    def __init__(self, *, project_id: str, receipt: dict[str, Any]) -> None:
-        resolved = receipt.get("state") == "resolved"
-        output_plan = [{"output_index": 1, "output_nonce": "a" * 64}] if resolved else []
-        self.identity = {
-            "schema_version": "doc281_general_command_identity_v1",
-            "issuer": "v3_doc281_general_command_registry",
-            "protocol": self.protocol,
-            "project_id": project_id,
-            "template_id": "general_template",
-            "command_id": f"doc281-command-{project_id}",
-            "plan_binding_digest": receipt["command_plan_binding_digest"],
-            "coalescing_nonce": f"doc281-nonce-{project_id}",
-            **(
-                {
-                    "requested_output_count": 1,
-                    "output_plan_digest": source_library.canonical_digest(output_plan),
-                }
-                if resolved
-                else {}
-            ),
-        }
-        self.identity["identity_digest"] = source_library.canonical_digest(self.identity)
-        self._issued_identities: dict[str, dict[str, Any]] = {}
-        self.receipt = deepcopy(receipt)
-        if resolved:
-            binding = {
-                "output_index": 1,
-                "output_nonce": output_plan[0]["output_nonce"],
-                "matched_references": deepcopy(self.receipt.get("matched_references") or []),
-            }
-            binding["output_binding_digest"] = source_library.canonical_digest({
-                "project_id": project_id,
-                "command_plan_binding_digest": self.identity["plan_binding_digest"],
-                "requirement_digest": self.receipt["requirement_digest"],
-                "source_library_snapshot_digest": self.receipt["source_library_snapshot_digest"],
-                **binding,
-            })
-            self.receipt["output_bindings"] = [binding]
-            self.receipt["receipt_digest"] = source_library.canonical_digest({
-                key: value for key, value in self.receipt.items() if key != "receipt_digest"
-            })
-            receipt.clear()
-            receipt.update(deepcopy(self.receipt))
-
-    def issue_command_identity(self, *, project_id: str, template_id: str, command_direction: str, **_kwargs: Any) -> dict[str, Any] | None:
-        if project_id != self.identity["project_id"] or template_id != self.identity["template_id"]:
-            return None
-        identity = deepcopy(self.identity)
-        direction_digest = source_library.canonical_digest({"command_direction": command_direction})
-        identity["command_id"] = f"doc281-command-{direction_digest[:16]}"
-        identity["coalescing_nonce"] = direction_digest
-        identity["identity_digest"] = source_library.canonical_digest({
-            key: value for key, value in identity.items() if key != "identity_digest"
-        })
-        self._issued_identities[identity["identity_digest"]] = deepcopy(identity)
-        return identity
-
-    def lookup_registered_receipt(self, *, project_id: str, command_identity: dict[str, Any]) -> dict[str, Any] | None:
-        if (
-            project_id != self.identity["project_id"]
-            or self._issued_identities.get(str(command_identity.get("identity_digest") or "")) != command_identity
-        ):
-            return None
-        return {
-            "protocol": self.protocol,
-            "schema_version": "doc281_general_registered_receipt_v1",
-            "command_identity": deepcopy(command_identity),
-            "receipt": deepcopy(self.receipt),
-        }
-
-    def requirement_for_identity(self, _identity: dict[str, Any]) -> dict[str, Any] | None:
-        return None
-
-    def observations_for_identity(self, _identity: dict[str, Any]) -> list[dict[str, Any]]:
-        return []
-
-
-def _count_brain_and_review(monkeypatch, handlers: Any) -> dict[str, int]:
-    """Prove terminal input closure precedes both creative and pixel review work."""
-
-    calls = {"brain": 0, "review": 0}
-    runtime = handlers.service.scenario_runtime
-    original_brain_run = runtime.llm_brain_adapter.run
-    original_review = handlers.service._attach_post_generation_review  # noqa: SLF001
-
-    def brain_run(*args: Any, **kwargs: Any) -> Any:
-        calls["brain"] += 1
-        return original_brain_run(*args, **kwargs)
-
-    def review(*args: Any, **kwargs: Any) -> Any:
-        calls["review"] += 1
-        return original_review(*args, **kwargs)
-
-    monkeypatch.setattr(runtime.llm_brain_adapter, "run", brain_run)
-    monkeypatch.setattr(handlers.service, "_attach_post_generation_review", review)
-    return calls
-
-
-def _persistent_project_mode_for_doc281(handlers: Any, storage_root: Path) -> None:
-    """Use a restartable Project Mode store; the test never shares a reader."""
-
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service,
-        project_store=PersistentProjectStore(storage_root),
-        project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
-        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
-    )
-
-
-def test_doc281_drift_fixture_reconstruction_ignores_an_enabled_environment_issuer(tmp_path, monkeypatch) -> None:
-    """Persistent drift tests own their absent-E31 contract at reconstruction."""
-
-    class _EnvironmentEnabledIssuer:
-        def capability(self, *, project_id: str) -> dict[str, object]:
+def test_doc281_fixture_reconstruction_ignores_an_enabled_environment_issuer(tmp_path, monkeypatch) -> None:
+    class EnabledIssuer:
+        def capability(self, *, project_id: str) -> dict[str, Any]:
             return {"enabled": True, "project_id": project_id}
 
         def supports_output_count(self, *, expected_output_count: int) -> bool:
             return expected_output_count > 0
 
-        def issue(self, **_kwargs):
-            raise AssertionError("The Doc281 drift fixture must not use the environment issuer.")
+        def issue(self, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("legacy fixture must not use the environment issuer")
 
-    environment_issuer = _EnvironmentEnabledIssuer()
-    monkeypatch.setattr(project_mode_service, "issuer_from_environment", lambda: environment_issuer)
-    handlers, _catalog = _handlers(tmp_path)
-    _persistent_project_mode_for_doc281(handlers, tmp_path / "doc281-isolated-project-store")
-
-    assert isinstance(
-        handlers.project_service.ecommerce_view_activation_issuer,
-        DisabledEcommerceViewActivationIssuer,
-    )
-    assert handlers.project_service.ecommerce_view_activation_issuer is not environment_issuer
+    issuer = EnabledIssuer()
+    monkeypatch.setattr(project_mode_service, "issuer_from_environment", lambda: issuer)
+    handlers, _project, _asset_ids, _snapshot = _general_project(tmp_path)
+    assert isinstance(handlers.project_service.ecommerce_view_activation_issuer, DisabledEcommerceViewActivationIssuer)
+    assert handlers.project_service.ecommerce_view_activation_issuer is not issuer
 
 
-def _general_server_held_match(
-    handlers: Any,
-    project: dict[str, Any],
-    snapshot: dict[str, Any],
-    *,
-    asset_id: str,
-    kind: str,
-    affordance: str,
-    view_kind: str,
-    subject_kind: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Build trusted test evidence and prove its matcher selection before activation."""
-
-    candidate = _shadow_entry(snapshot, asset_id)
-    requirement = _shadow_requirement(
-        project_id=project["project_id"],
-        output_index=1,
-        kind=kind,
-        source_snapshot_digest=snapshot["snapshot_digest"],
-    )
-    evidence = {
-        candidate["reference_id"]: _shadow_evidence(
-            candidate,
-            project_id=project["project_id"],
-            affordance=affordance,
-            view_kind=view_kind,
-            subject_kind=subject_kind,
-        )
-    }
-    context = _shadow_server_context(
-        handlers=handlers,
-        project=project,
-        requirement=requirement,
-        evidence_by_reference=evidence,
-    )
-    receipt = _shadow_resolve(server_context=context)
-    assert receipt["state"] == "resolved"
-    assert [item["asset_id"] for item in receipt["matched_references"]] == [asset_id]
-    registry = _Doc281GeneralSourceRegistryFixture(project_id=project["project_id"], receipt=receipt)
-    previous_service = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        doc281_general_source_registry=registry,
-        product_service=handlers.service,
-        project_store=previous_service.project_store,
-        template_registry=previous_service.template_registry,
-        reference_channel_policy_module=previous_service.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous_service.project_visual_asset_binding_service,
-        ecommerce_view_activation_issuer=previous_service.ecommerce_view_activation_issuer,
-    )
-    return candidate, receipt, registry
-
-
-@pytest.mark.parametrize(
-    ("user_input", "asset_index", "kind", "affordance", "view_kind", "subject_kind"),
-    [
-        ("Create an object image that needs the detail original.", 0, "object_rear_structure", "object_back_or_structure", "rear", "object_or_product"),
-        ("Create a person image with optional environment inspiration.", 1, "person_environment_context", "environment", "environment_wide", "person"),
-        ("Create a scene image using a brand or graphic source.", 2, "brand_scene_material", "logo_or_mark", "packaging", "brand_or_graphic"),
-    ],
-)
-def test_doc281_general_command_freezes_the_server_held_smart_match_across_domains(
-    tmp_path,
-    user_input: str,
-    asset_index: int,
-    kind: str,
-    affordance: str,
-    view_kind: str,
-    subject_kind: str,
-) -> None:
+def test_doc281_general_brain_selection_binds_only_current_opaque_handles(tmp_path) -> None:
     handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    candidate, receipt, _registry = _general_server_held_match(
-        handlers,
-        project,
-        snapshot,
-        asset_id=asset_ids[asset_index],
-        kind=kind,
-        affordance=affordance,
-        view_kind=view_kind,
-        subject_kind=subject_kind,
-    )
-
+    calls: dict[str, int] = {}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[1], calls=calls))
     created = handlers.post_project_job(
         project["project_id"],
-        {
-            **_general_payload(),
-            "user_input": user_input,
-            "metadata": {
-                "selected_original_asset_ids": ["browser-never-selects"],
-                "source_evidence_profile": {"view_kind": "browser-never-certifies"},
-            },
-        },
+        _general_payload(
+            metadata={
+                "selected_original_asset_ids": [asset_ids[0]],
+                "source_evidence_profile": {"view_kind": "browser-forged"},
+                "browser_source_labels": {asset_ids[2]: "front"},
+            }
+        ),
     )
     record = handlers.service.get_job_record(created["job_id"])
     assert record is not None
-    activation = record.request.metadata["doc270_general_source_activation_receipts"][0]
-    assert activation["state"] == "activated_resolved"
-    assert activation["source_receipt_digest"] == receipt["receipt_digest"]
-    projection = record.request.metadata["doc270_general_original_source_projection"]
-    assert [item["reference_id"] for item in projection["sources"]] == [candidate["reference_id"]]
-    assert record.request.uploaded_asset_ids == [candidate["asset_id"]]
-    assert "browser-never-selects" not in record.request.uploaded_asset_ids
+    assert calls == {"brain": 1}
+    assert record.request.uploaded_asset_ids == [asset_ids[1]]
+    activation = record.request.metadata["doc270_general_source_activation_receipts"]
+    assert activation[0]["state"] == "activated_resolved"
+    assert record.request.metadata["doc270_general_original_source_projection"]["sources"][0]["asset_id"] == asset_ids[1]
 
 
-def test_doc281_general_smart_match_is_invariant_to_source_order_filename_prose_and_browser_labels(
-    tmp_path,
-) -> None:
+def test_doc281_source_order_filename_and_browser_prose_do_not_change_snapshot_or_server_binding(tmp_path) -> None:
     handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    candidate, receipt, _registry = _general_server_held_match(
-        handlers,
-        project,
-        snapshot,
-        asset_id=asset_ids[2],
-        kind="object_rear_structure",
-        affordance="object_back_or_structure",
-        view_kind="rear",
-        subject_kind="object_or_product",
-    )
+    calls: dict[str, int] = {}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[2], calls=calls))
+    first = handlers.post_project_job(project["project_id"], _general_payload(user_input="Use the third current original."))
+    record = handlers.service.get_job_record(first["job_id"])
+    assert record is not None and record.request.uploaded_asset_ids == [asset_ids[2]]
+
     durable = handlers.project_service._require_project(project["project_id"])  # noqa: SLF001
     durable.reference_assets = list(reversed(durable.reference_assets))
     handlers.project_service.project_store.save_project(durable)
     renamed = handlers.service.get_uploaded_asset(asset_ids[2])
     assert renamed is not None
     handlers.service.asset_store._save_record(renamed.model_copy(update={"filename": "misleading-front-name.png"}))  # noqa: SLF001
-    permuted_snapshot = handlers.project_service._doc270_project_source_library(durable)  # noqa: SLF001
-    assert permuted_snapshot["snapshot_digest"] == snapshot["snapshot_digest"]
-    permuted_candidate = _shadow_entry(permuted_snapshot, candidate["asset_id"])
-    permuted_requirement = _shadow_requirement(
-        project_id=project["project_id"],
-        output_index=1,
-        kind="object_rear_structure",
-        source_snapshot_digest=snapshot["snapshot_digest"],
-    )
-    permuted_context = _shadow_server_context(
-        handlers=handlers,
-        project=project,
-        requirement=permuted_requirement,
-        evidence_by_reference={
-            permuted_candidate["reference_id"]: _shadow_evidence(
-                permuted_candidate,
-                project_id=project["project_id"],
-                affordance="object_back_or_structure",
-                view_kind="rear",
-                subject_kind="object_or_product",
-            )
-        },
-    )
-    permuted_receipt = _shadow_resolve(server_context=permuted_context)
-    assert [item["asset_id"] for item in permuted_receipt["matched_references"]] == [candidate["asset_id"]]
+    permuted = handlers.project_service._doc270_project_source_library(durable)  # noqa: SLF001
+    assert permuted["snapshot_digest"] == snapshot["snapshot_digest"]
 
-    created = handlers.post_project_job(
-        project["project_id"],
-        {
-            **_general_payload(),
-            "user_input": "Completely different wording with a browser rear label.",
-            "metadata": {
-                "browser_source_order": list(reversed(asset_ids)),
-                "browser_reference_labels": {asset_ids[0]: "rear", asset_ids[2]: "front"},
-            },
-        },
-    )
+
+def test_doc281_prompt_only_has_no_job_source_expansion_or_needs_input(tmp_path) -> None:
+    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None))
+    created = handlers.post_project_job(project["project_id"], _general_payload())
     record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None
-    activation = record.request.metadata["doc270_general_source_activation_receipts"][0]
-    assert activation["source_receipt_digest"] == receipt["receipt_digest"]
-    assert record.request.uploaded_asset_ids == [candidate["asset_id"]]
-
-
-def test_doc281_general_optional_uncertainty_is_prompt_only_and_never_needs_input(tmp_path) -> None:
-    handlers, _catalog = _handlers(tmp_path)
-    project = handlers.post_projects(
-        {
-            "user_goal": "Create a prompt-only General image without project originals.",
-            "primary_template_id": "general_template",
-        }
-    )["project"]
-    receipt = {
-        "state": "optional_uncertain",
-        "requirement_digest": source_library.canonical_digest(
-            {"authority": "doc281_general_source_registry_v1", "case": "optional_uncertain"}
-        ),
-        "command_plan_binding_digest": "doc281-optional-uncertain-command",
-    }
-    receipt["receipt_digest"] = source_library.canonical_digest(receipt)
-    registry = _Doc281GeneralSourceRegistryFixture(project_id=project["project_id"], receipt=receipt)
-    previous_service = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        doc281_general_source_registry=registry,
-        product_service=handlers.service,
-        project_store=previous_service.project_store,
-        template_registry=previous_service.template_registry,
-        reference_channel_policy_module=previous_service.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous_service.project_visual_asset_binding_service,
-        ecommerce_view_activation_issuer=previous_service.ecommerce_view_activation_issuer,
-    )
-
-
-def _materialize_doc281_bound_outputs(handlers: Any, *, job_id: str, output_count: int = 1) -> list[Any]:
-    """Exercise Product API's output persistence boundary, never client metadata."""
-
-    record = handlers.service.get_job_record(job_id)
-    assert record is not None and record.planning_result is not None
-    source_assets = list(record.planning_result.asset_pack.assets)
-    assert source_assets
-    base_metadata = dict(source_assets[0].metadata or {})
-    base_metadata["selected_candidate_id"] = "candidate-doc281-output-1"
-    base_metadata["candidate_metadata"] = {
-        **dict(base_metadata.get("candidate_metadata") or {}),
-        "candidate_id": "candidate-doc281-output-1",
-    }
-    base_asset = source_assets[0].model_copy(update={"metadata": base_metadata})
-    assets = [base_asset]
-    for index in range(2, output_count + 1):
-        metadata = dict(base_asset.metadata or {})
-        metadata["selected_candidate_id"] = f"candidate-doc281-output-{index}"
-        metadata["candidate_metadata"] = {"candidate_id": f"candidate-doc281-output-{index}"}
-        assets.append(base_asset.model_copy(update={
-            "asset_id": f"{base_asset.asset_id}-doc281-{index}", "metadata": metadata,
-        }))
-    generation_result = record.planning_result.model_copy(
-        update={"asset_pack": record.planning_result.asset_pack.model_copy(update={"assets": assets})}
-    )
-    record.generation_result = handlers.service._materialize_mock_output_records(record, generation_result)  # noqa: SLF001
-    record.status = ProductJobStatusValue.GENERATED
-    handlers.service.job_store.save(record)
-    return handlers.service.output_store.list_by_job(job_id)
-
-    created = handlers.post_project_job(
-        project["project_id"],
-        {
-            **_general_payload(),
-            "user_input": "Use an optional uncertain scene original when appropriate.",
-        },
-    )
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None
-    assert record.request.metadata.get("doc270_general_source_activation_receipts") == [
-        {"state": "prompt_only"}
-    ]
+    assert record is not None and record.request.uploaded_asset_ids == []
+    assert record.request.metadata["doc270_general_source_activation_receipts"] == [{"state": "prompt_only"}]
     assert created["status"] == "planned"
     assert "current_operation" not in created["metadata"]
 
 
-def test_doc281_normal_service_composes_shared_registry_for_real_bounded_general_match(tmp_path) -> None:
-    handlers, project, asset_ids, _snapshot = _general_project(tmp_path)
-    selected_asset_id = asset_ids[1]
-    selected_reference_id = next(
-        item.reference_id
-        for item in handlers.project_service._require_project(project["project_id"]).reference_assets  # noqa: SLF001
-        if item.asset_ref_id == selected_asset_id
-    )
+def test_doc281_environment_composition_uses_openai_visual_route_and_opaque_selection(tmp_path, monkeypatch) -> None:
+    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
+    calls: list[dict[str, Any]] = []
 
-    def requirement_issuer(**_kwargs: Any) -> dict[str, Any]:
-        value = {"kind": "object_rear_structure", "maximum_sources": 1}
-        return {**value, "requirement_digest": source_library.canonical_digest(value)}
-
-    class EvidenceAnalyzer:
-        def analyze(self, *, project_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-            assert project_id == project["project_id"] and len(entries) == 1
-            if entries[0]["reference_id"] != selected_reference_id:
-                return [{
-                    "evidence_state": "observed", "subject_kind": "object_or_product",
-                    "view_kind": "front", "affordances": ["object_front_presentation"],
-                }]
-            return [{
-                "evidence_state": "observed", "subject_kind": "object_or_product",
-                "view_kind": "rear", "affordances": ["object_back_or_structure"],
-            }]
-
-    previous = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service,
-        project_store=previous.project_store,
-        template_registry=previous.template_registry,
-        reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        ecommerce_view_activation_issuer=previous.ecommerce_view_activation_issuer,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(
-                evidence_analyzer=EvidenceAnalyzer(),
-            requirement_issuer=requirement_issuer,
-        ),
-    )
-    created = handlers.post_project_job(project["project_id"], _general_payload(metadata={
-        "doc281_requirement": {
-            "kind": "browser_forged_kind",
-            "maximum_sources": 4,
-            "asset_id": asset_ids[0],
-        },
-        "selected_original_asset_ids": list(reversed(asset_ids)),
-        "source_library_snapshot": {"browser_label": "browser-forged", "sha256": "a" * 64},
-    }))
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None
-    assert record.request.uploaded_asset_ids == [selected_asset_id]
-    assert record.request.metadata["doc270_general_source_activation_receipts"][0]["state"] == "activated_resolved"
-    public_project = handlers.get_project(project["project_id"])["project"]
-    assert "doc281_used_source_disclosures" not in public_project["metadata"]
-
-
-def test_doc281_environment_composition_uses_openai_protocol_per_verified_source(tmp_path, monkeypatch) -> None:
-    """The ordinary service must compose a real analyzer protocol, not a test callback."""
-
-    handlers, project, asset_ids, _snapshot = _general_project(tmp_path)
-    selected_asset_id = asset_ids[1]
-    calls: list[str] = []
-    requirement_calls: list[dict[str, Any]] = []
-
-    class OpenAICompatibleAnalyzerMock:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def available(self) -> bool:
-            return True
-
-        def analyze(self, *, project_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-            assert project_id == project["project_id"] and len(entries) == 1
-            entry = entries[0]
-            assert isinstance(entry.get("analysis_bytes"), bytes)
-            calls.append(str(entry["asset_id"]))
-            if entry["asset_id"] == selected_asset_id:
-                return [{
-                    "evidence_state": "observed", "subject_kind": "object_or_product",
-                    "view_kind": "rear", "affordances": ["object_back_or_structure"],
-                }]
-            return [{
-                "evidence_state": "observed", "subject_kind": "object_or_product",
-                "view_kind": "front", "affordances": ["object_front_presentation"],
-            }]
-
-    class _TextCompletions:
+    class Completions:
         def create(self, **kwargs: Any) -> Any:
-            requirement_calls.append(kwargs)
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
-                "state": "required", "kind": "object_rear_structure",
-            })))])
+            calls.append(kwargs)
+            content = kwargs["messages"][0]["content"]
+            handles = [
+                part["text"].split(": ", 1)[1]
+                for part in content
+                if part.get("type") == "text" and str(part.get("text", "")).startswith("Candidate handle: ")
+            ]
+            count = int(next(part["text"].split(": ", 1)[1] for part in content if str(part.get("text", "")).startswith("Requested output count: ")))
+            target_handle = handles[0]
+            payload = {
+                "state": "selected",
+                "output_selections": [
+                    {"output_index": index, "candidate_handles": [target_handle]}
+                    for index in range(1, count + 1)
+                ],
+            }
+            assert general_source_selection_response_from_text(
+                json.dumps(payload),
+                candidate_handles=set(handles),
+                requested_output_count=count,
+                maximum_sources=2,
+            ) is not None
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload)))])
 
-    class _TextClient:
-        chat = SimpleNamespace(completions=_TextCompletions())
+    class Client:
+        chat = SimpleNamespace(completions=Completions())
 
-    from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
     from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import vision_provider
 
     monkeypatch.delenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH", raising=False)
-    monkeypatch.setattr(project_mode_service, "OpenAICompatibleSourceEvidenceAnalyzer", OpenAICompatibleAnalyzerMock)
     monkeypatch.setattr(vision_provider, "_lab_vision_enabled", lambda: True)
     monkeypatch.setattr(vision_provider, "_lab_vision_setting", lambda _field: "private-test-route")
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kwargs: _TextClient()))
-    previous = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service,
-        project_store=previous.project_store,
-        template_registry=previous.template_registry,
-        reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        ecommerce_view_activation_issuer=previous.ecommerce_view_activation_issuer,
-    )
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kwargs: Client()))
+    registry = doc281_general_source_registry_from_environment()
+    _replace_general_service(handlers, registry)
     assert handlers.project_service.doc281_general_source_registry.enabled is True
-    created = handlers.post_project_job(project["project_id"], _general_payload(metadata={
-        "doc281_requirement": {
-            "kind": "browser_forged_kind",
-            "maximum_sources": 4,
-            "asset_id": asset_ids[0],
-        },
-        "selected_original_asset_ids": list(reversed(asset_ids)),
-        "source_library_snapshot": {"browser_label": "browser-forged", "sha256": "a" * 64},
-    }))
+    created = handlers.post_project_job(project["project_id"], _general_payload())
     record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None and record.request.uploaded_asset_ids == [selected_asset_id]
-    assert calls == asset_ids
-    assert len(requirement_calls) == 1
-    assert requirement_calls[0]["max_tokens"] == REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET
-    message = requirement_calls[0]["messages"][0]["content"]
-    assert "asset_id" not in message and "browser-forged" not in message
-    assert all(asset_id not in message for asset_id in asset_ids)
+    assert record is not None and len(record.request.uploaded_asset_ids) == 1
+    selected_asset = record.request.uploaded_asset_ids[0]
+    assert selected_asset in asset_ids
+    assert len(calls) == 1
+    assert calls[0]["max_tokens"] == GENERAL_SOURCE_SELECTION_OUTPUT_TOKEN_BUDGET
+    text_parts = [part["text"] for part in calls[0]["messages"][0]["content"] if part.get("type") == "text"]
+    assert all(asset_id not in "\n".join(text_parts) for asset_id in asset_ids)
+    assert "browser" not in "\n".join(text_parts).lower()
 
 
-@pytest.mark.parametrize("policy", [
-    {
-        "enabled": True,
-        "policy_authority": "server",
-        "policy_version": "v1",
-        "allowed_requirement_kinds": [{"asset_id": "forged"}],
-        "maximum_sources": 2,
-    },
-    {
-        "enabled": True,
-        "policy_authority": "server",
-        "policy_version": "v1",
-        "allowed_requirement_kinds": ["object_front_presentation"],
-        "maximum_sources": True,
-    },
-    {
-        "enabled": True,
-        "intent_requirements": {"legacy": {"kind": "object_front_presentation", "maximum_sources": 1}},
-    },
-])
-def test_doc281_environment_policy_rejects_unclosed_or_legacy_shapes(tmp_path, monkeypatch, policy) -> None:
-    policy_path = tmp_path / "doc281-invalid-policy.json"
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"enabled": True, "policy_authority": "server", "policy_version": "v1", "maximum_sources": True},
+        {"enabled": True, "policy_authority": "server", "policy_version": "v1", "maximum_sources": 2, "extra": True},
+        {"enabled": True, "policy_authority": "server", "maximum_sources": 2},
+    ],
+)
+def test_doc281_environment_policy_rejects_invalid_shapes(tmp_path, monkeypatch, policy) -> None:
+    policy_path = tmp_path / "invalid-policy.json"
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     monkeypatch.setenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH", str(policy_path))
-
     assert doc281_general_source_registry_from_environment().enabled is False
 
 
-def test_doc281_text_requirement_issuer_is_closed_and_command_only(monkeypatch) -> None:
-    captured: list[dict[str, Any]] = []
-
-    class _TextCompletions:
-        def create(self, **kwargs: Any) -> Any:
-            captured.append(kwargs)
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
-                "state": "required", "kind": "object_rear_structure",
-            })))])
-
-    class _TextClient:
-        chat = SimpleNamespace(completions=_TextCompletions())
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kwargs: _TextClient()))
-    issuer = OpenAICompatibleTextRequirementIssuer(
-        api_key="test-key",
-        base_url="https://vision.example.test/v1",
-        model="vision-test",
-        allowed_kinds=("object_front_presentation", "object_rear_structure"),
-        maximum_sources=2,
-    )
-
-    assert issuer(command_direction="Create a rear product view.") == {
-        "state": "required",
-        "kind": "object_rear_structure",
-        "maximum_sources": 2,
-    }
-    assert captured[0]["response_format"] == {"type": "json_object"}
-    assert captured[0]["max_tokens"] == REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET
-    message = captured[0]["messages"][0]["content"]
-    assert "Create a rear product view." in message
-    assert "object_front_presentation" in message and "object_rear_structure" in message
-    assert "asset_id" not in message and "source_library_snapshot" not in message
-    assert not any(value in message for value in (
-        "reference_unsafe", "asset_unsafe", "unsafe-filename.png", "browser-label", "a" * 64,
-    ))
-    with pytest.raises(TypeError):
-        issuer(command_direction="Create a rear product view.", source_library_snapshot={})
+def test_doc281_openai_selection_response_is_strict_and_semantic_free() -> None:
+    handles = {"a" * 64, "b" * 64}
+    valid = json.dumps({"state": "selected", "output_selections": [{"output_index": 1, "candidate_handles": ["a" * 64]}]})
+    assert general_source_selection_response_from_text(valid, candidate_handles=handles, requested_output_count=1, maximum_sources=1)
+    for raw in ("not-json", json.dumps({"state": "selected", "output_selections": [{"output_index": 1, "candidate_handles": ["forged"]}]}), json.dumps({"state": "selected", "output_selections": []})):
+        assert general_source_selection_response_from_text(raw, candidate_handles=handles, requested_output_count=1, maximum_sources=1) is None
 
 
-@pytest.mark.parametrize("payload", [
-    "not-json",
-    json.dumps({"state": "required", "kind": "unknown_kind"}),
-    json.dumps({"state": "required", "kind": "object_rear_structure", "extra": True}),
-    json.dumps({"state": "required", "kind": "none"}),
-])
-def test_doc281_text_requirement_issuer_fails_closed_for_invalid_strict_results(monkeypatch, payload: str) -> None:
-    class _TextCompletions:
-        def create(self, **_kwargs: Any) -> Any:
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=payload))])
+def test_doc281_invalid_brain_selection_degrades_to_prompt_only(tmp_path) -> None:
+    handlers, project, _asset_ids, _snapshot = _general_project(tmp_path)
 
-    class _TextClient:
-        chat = SimpleNamespace(completions=_TextCompletions())
+    def forged_selection(**_kwargs: Any) -> dict[str, Any]:
+        return {"state": "selected", "output_selections": [{"output_index": 1, "candidate_handles": ["f" * 64]}]}
 
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_kwargs: _TextClient()))
-    issuer = OpenAICompatibleTextRequirementIssuer(
-        api_key="test-key", base_url="https://vision.example.test/v1", model="vision-test",
-        allowed_kinds=("object_rear_structure",), maximum_sources=1,
-    )
-    assert issuer(command_direction="Use a rear perspective.") is None
-
-
-@pytest.mark.parametrize("invalid_result", [None, [], [{"subject_kind": "person"}]])
-def test_doc281_partial_or_invalid_single_source_analysis_is_prompt_only(tmp_path, invalid_result: Any) -> None:
-    handlers, project, asset_ids, _snapshot = _general_project(tmp_path)
-
-    def requirement_issuer(**_kwargs: Any) -> dict[str, Any]:
-        value = {"kind": "object_rear_structure", "maximum_sources": 1}
-        return {**value, "requirement_digest": source_library.canonical_digest(value)}
-
-    class PartiallyUnavailableAnalyzer:
-        def analyze(self, *, project_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-            assert project_id == project["project_id"] and len(entries) == 1
-            if entries[0]["asset_id"] == asset_ids[-1]:
-                return invalid_result
-            return [{
-                "evidence_state": "observed", "subject_kind": "object_or_product",
-                "view_kind": "rear", "affordances": ["object_back_or_structure"],
-            }]
-
-    previous = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service, project_store=previous.project_store,
-        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(
-            evidence_analyzer=PartiallyUnavailableAnalyzer(), requirement_issuer=requirement_issuer,
-        ),
-    )
+    _replace_general_service(handlers, Doc281GeneralSourceRegistry(selection_brain=forged_selection, maximum_sources=1))
     created = handlers.post_project_job(project["project_id"], _general_payload())
     record = handlers.service.get_job_record(created["job_id"])
     assert record is not None and record.request.uploaded_asset_ids == []
     assert record.request.metadata["doc270_general_source_activation_receipts"] == [{"state": "prompt_only"}]
 
 
-def test_doc281_normal_service_registry_optional_match_stays_prompt_only(tmp_path) -> None:
-    handlers, _catalog = _handlers(tmp_path)
-    project = handlers.post_projects({
-        "user_goal": "Create a General prompt-only image.",
-        "primary_template_id": "general_template",
-    })["project"]
-
-    def requirement_issuer(**_kwargs: Any) -> dict[str, Any]:
-        value = {"kind": "brand_scene_material", "maximum_sources": 1}
-        return {**value, "requirement_digest": source_library.canonical_digest(value)}
-
-    previous = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service,
-        project_store=previous.project_store,
-        template_registry=previous.template_registry,
-        reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        ecommerce_view_activation_issuer=previous.ecommerce_view_activation_issuer,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(
-            evidence_analyzer=lambda **_kwargs: {},
-            requirement_issuer=requirement_issuer,
-        ),
-    )
-    created = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None and created["status"] == "planned"
-    assert record.request.uploaded_asset_ids == []
-    assert record.request.metadata["doc270_general_source_activation_receipts"] == [{"state": "prompt_only"}]
-    assert "current_operation" not in created["metadata"]
-
-
-def test_doc281_general_registry_replays_durable_receipt_after_fresh_service_and_rematches_source_mutation(tmp_path) -> None:
-    handlers, project, asset_ids, _snapshot = _general_project(tmp_path)
-    calls = {"analyzer": 0, "issuer": 0}
-
-    def requirement_issuer(**_kwargs: Any) -> dict[str, Any]:
-        calls["issuer"] += 1
-        value = {"kind": "object_rear_structure", "maximum_sources": 1}
-        return {**value, "requirement_digest": source_library.canonical_digest(value)}
-
-    class EvidenceAnalyzer:
-        def analyze(self, *, project_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-            assert project_id == project["project_id"] and len(entries) == 1
-            entry = entries[0]
-            calls["analyzer"] += 1
-            if entry["asset_id"] != asset_ids[0]:
-                return [{
-                    "evidence_state": "observed", "subject_kind": "object_or_product",
-                    "view_kind": "front", "affordances": ["object_front_presentation"],
-                }]
-            return [{
-                "evidence_state": "observed", "subject_kind": "object_or_product",
-                "view_kind": "rear", "affordances": ["object_back_or_structure"],
-            }]
-
-    previous = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service, project_store=previous.project_store,
-        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(evidence_analyzer=EvidenceAnalyzer(), requirement_issuer=requirement_issuer),
-    )
+def test_doc281_selection_receipt_replays_after_fresh_service_and_source_mutation_creates_new_identity(tmp_path) -> None:
+    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
+    calls = {"brain": 0}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
     first = handlers.post_project_job(project["project_id"], _general_payload())
-    assert first["job_id"] and calls == {"analyzer": len(asset_ids), "issuer": 1}
-    # A restart has no in-memory receipt. It must reissue identity, read the
-    # valid durable receipt, and return the one existing Job without analysis
-    # or requirement classification.
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service, project_store=previous.project_store,
-        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(evidence_analyzer=EvidenceAnalyzer(), requirement_issuer=requirement_issuer),
-    )
+    assert calls == {"brain": 1}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
     replay = handlers.post_project_job(project["project_id"], _general_payload())
-    assert replay["job_id"] == first["job_id"] and calls == {"analyzer": len(asset_ids), "issuer": 1}
-    # A cache record without a valid self-digest is not authoritative. The
-    # fresh service must fail closed, never classify or select a replacement.
-    private_records = previous.project_store._private_records[project["project_id"]]["doc281_general_requirements_v1"]  # noqa: SLF001
-    classification_record = next(
-        item for item in private_records
-        if item.get("schema_version") == "doc281_general_requirement_classification_receipt_v1"
-    )
-    classification_record["tampered"] = True
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service, project_store=previous.project_store,
-        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(evidence_analyzer=EvidenceAnalyzer(), requirement_issuer=requirement_issuer),
-    )
-    blocked = handlers.post_project_job(project["project_id"], _general_payload())
-    blocked_record = handlers.service.get_job_record(blocked["job_id"])
-    assert blocked_record is not None and blocked_record.request.uploaded_asset_ids == []
-    assert blocked_record.request.metadata["doc270_general_source_activation_receipts"] == [{"state": "prompt_only"}]
-    assert calls == {"analyzer": len(asset_ids), "issuer": 1}
+    assert replay["job_id"] == first["job_id"] and calls == {"brain": 1}
+
     upload = handlers.service.get_uploaded_asset(asset_ids[0])
     assert upload is not None
-    mutated_bytes = Path(str(upload.file_path)).read_bytes() + b"doc281-mutation"
-    Path(str(upload.file_path)).write_bytes(mutated_bytes)
-    handlers.service.asset_store._save_record(upload.model_copy(update={"content_sha256": hashlib.sha256(mutated_bytes).hexdigest()}))  # noqa: SLF001
-    mutated = handlers.post_project_job(project["project_id"], _general_payload())
-    assert mutated["job_id"] != first["job_id"] and calls == {"analyzer": len(asset_ids) * 2, "issuer": 2}
-    changed_command = {**_general_payload(), "user_input": "Create a source-aware rear study."}
-    changed = handlers.post_project_job(project["project_id"], changed_command)
-    assert changed["job_id"] != mutated["job_id"] and calls == {"analyzer": len(asset_ids) * 3, "issuer": 3}
+    mutated = Path(str(upload.file_path)).read_bytes() + b"doc281-source-mutation"
+    Path(str(upload.file_path)).write_bytes(mutated)
+    handlers.service.asset_store._save_record(upload.model_copy(update={"content_sha256": hashlib.sha256(mutated).hexdigest()}))  # noqa: SLF001
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
+    changed = handlers.post_project_job(project["project_id"], _general_payload(user_input="Use the current original after mutation."))
+    assert changed["job_id"] != first["job_id"] and calls == {"brain": 2}
 
 
-@pytest.mark.parametrize("tamper", [
-    lambda receipt: receipt.__setitem__("receipt_digest", "0" * 64),
-    lambda receipt: receipt["requirement"].__setitem__("kind", "object_detail"),
-    lambda receipt: receipt["requirement"].__setitem__("maximum_sources", 2),
-    lambda receipt: receipt.__setitem__("schema_version", "forged_schema"),
-    lambda receipt: receipt.__setitem__("identity_digest", "b" * 64),
-    lambda receipt: receipt.__setitem__("classification_binding_digest", "c" * 64),
-])
-def test_doc281_tampered_requirement_classification_receipt_fails_closed_without_reclassification(tamper: Any) -> None:
-    calls = {"issuer": 0, "analyzer": 0}
-    records: list[dict[str, Any]] = []
-    snapshot = {"entries": [], "snapshot_digest": "a" * 64}
-
-    class Analyzer:
-        def analyze(self, **_kwargs: Any) -> None:
-            calls["analyzer"] += 1
-            return None
-
-    def issuer(*, command_direction: str) -> dict[str, Any]:
-        assert command_direction == "Create a rear view."
-        calls["issuer"] += 1
-        return {"kind": "object_rear_structure", "maximum_sources": 1}
-
-    def append(**kwargs: Any) -> None:
-        receipt = {
-            "schema_version": "doc281_general_requirement_classification_receipt_v1",
-            "identity_digest": kwargs["classification_binding_digest"],
-            "classification_binding_digest": kwargs["classification_binding_digest"],
-            "classification_facts": kwargs["classification_facts"],
-            "state": kwargs["state"],
-            "requirement": kwargs["requirement"],
-        }
-        receipt["receipt_digest"] = source_library.canonical_digest(receipt)
-        records.append(receipt)
-
-    first = Doc281GeneralSourceRegistry(
-        evidence_analyzer=Analyzer(), requirement_issuer=issuer,
-        requirement_receipt_append=append,
-    )
-    assert first.issue_command_identity(
-        project_id="project_doc281_cache", template_id="general_template",
-        command_direction="Create a rear view.", source_library_snapshot=snapshot,
-        requested_output_count=1,
-    ) is not None
-    assert calls == {"issuer": 1, "analyzer": 0} and len(records) == 1
-    forged = deepcopy(records[0])
-    tamper(forged)
-    replay = Doc281GeneralSourceRegistry(
-        evidence_analyzer=Analyzer(), requirement_issuer=issuer,
-        requirement_receipt_lookup=lambda **_kwargs: forged,
-    )
-    assert replay.issue_command_identity(
-        project_id="project_doc281_cache", template_id="general_template",
-        command_direction="Create a rear view.", source_library_snapshot=snapshot,
-        requested_output_count=1,
-    ) is None
-    assert calls == {"issuer": 1, "analyzer": 0}
-
-
-def test_doc281_optional_uncertain_requirement_receipt_replays_without_classifier_or_analysis(tmp_path) -> None:
-    handlers, project, _asset_ids, _snapshot = _general_project(tmp_path)
-    calls = {"issuer": 0, "analyzer": 0}
-
-    class Analyzer:
-        def analyze(self, **_kwargs: Any) -> None:
-            calls["analyzer"] += 1
-            return None
-
-    def optional_issuer(**_kwargs: Any) -> dict[str, Any]:
-        calls["issuer"] += 1
-        return {"state": "optional_uncertain"}
-
-    previous = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service, project_store=previous.project_store,
-        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(
-            evidence_analyzer=Analyzer(), requirement_issuer=optional_issuer,
-        ),
-    )
+def test_doc281_tampered_selection_receipt_fails_closed_without_reselection(tmp_path) -> None:
+    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
+    calls = {"brain": 0}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
     first = handlers.post_project_job(project["project_id"], _general_payload())
-    first_record = handlers.service.get_job_record(first["job_id"])
-    assert first_record is not None and first_record.request.uploaded_asset_ids == []
-    assert calls == {"issuer": 1, "analyzer": 0}
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service, project_store=previous.project_store,
-        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(
-            evidence_analyzer=Analyzer(), requirement_issuer=optional_issuer,
-        ),
-    )
+    assert first["job_id"] and calls == {"brain": 1}
+    records = handlers.project_service.project_store._private_records[project["project_id"]]["doc281_general_selection_receipts_v2"]  # noqa: SLF001
+    records[-1]["receipt_digest"] = "0" * 64
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0], calls=calls))
+    second = handlers.post_project_job(project["project_id"], _general_payload())
+    record = handlers.service.get_job_record(second["job_id"])
+    assert record is not None and record.request.uploaded_asset_ids == [] and calls == {"brain": 1}
+
+
+def test_doc281_prompt_only_receipt_replays_without_brain(tmp_path) -> None:
+    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
+    calls = {"brain": 0}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
+    first = handlers.post_project_job(project["project_id"], _general_payload())
+    assert calls == {"brain": 1}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
     replay = handlers.post_project_job(project["project_id"], _general_payload())
-    replay_record = handlers.service.get_job_record(replay["job_id"])
-    assert replay_record is not None and replay_record.request.uploaded_asset_ids == []
-    assert calls == {"issuer": 1, "analyzer": 0}
+    assert replay["job_id"] == first["job_id"] and calls == {"brain": 1}
 
 
-def test_doc281_used_source_disclosure_requires_exact_visible_output_binding(tmp_path) -> None:
+def test_doc281_public_activation_has_no_private_selection_disclosure(tmp_path) -> None:
     handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    _general_server_held_match(
-        handlers, project, snapshot, asset_id=asset_ids[0], kind="object_rear_structure",
-        affordance="object_back_or_structure", view_kind="rear", subject_kind="object_or_product",
-    )
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0]))
     created = handlers.post_project_job(project["project_id"], _general_payload())
-    before = handlers.get_project(project["project_id"])["project"]
-    assert "doc281_used_source_disclosures" not in before["metadata"]
-    outputs = _materialize_doc281_bound_outputs(handlers, job_id=created["job_id"])
-    assert len(outputs) == 1 and "doc281_output_plan_binding" in outputs[0].metadata
-    after = handlers.get_project(project["project_id"])["project"]
-    disclosure = after["metadata"]["doc281_used_source_disclosures"]
-    assert disclosure == [{
-        "output_label": "Output 1",
-        "sources": [{"category": "project_original", "label": "Selected original"}],
-    }]
-    _public_safe(disclosure)
-
-
-def test_doc281_used_source_disclosure_binds_each_actual_output_and_excludes_foreign_jobs(tmp_path) -> None:
-    handlers, project, asset_ids, _snapshot = _general_project(tmp_path)
-
-    def requirement_issuer(**_kwargs: Any) -> dict[str, Any]:
-        value = {"kind": "object_rear_structure", "maximum_sources": 1}
-        return {**value, "requirement_digest": source_library.canonical_digest(value)}
-
-    class EvidenceAnalyzer:
-        def analyze(self, *, project_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
-            assert project_id == project["project_id"] and len(entries) == 1
-            rear = entries[0]["asset_id"] == asset_ids[0]
-            return [{
-                "evidence_state": "observed", "subject_kind": "object_or_product",
-                "view_kind": "rear" if rear else "front",
-                "affordances": ["object_back_or_structure"] if rear else ["object_front_presentation"],
-            }]
-
-    previous = handlers.project_service
-    handlers.project_service = V3ProjectModeService(
-        product_service=handlers.service, project_store=previous.project_store,
-        template_registry=previous.template_registry, reference_channel_policy_module=previous.reference_channel_policy_module,
-        project_visual_asset_binding_service=previous.project_visual_asset_binding_service,
-        doc281_general_source_registry=Doc281GeneralSourceRegistry(
-            evidence_analyzer=EvidenceAnalyzer(), requirement_issuer=requirement_issuer,
-        ),
-    )
-    created = handlers.post_project_job(project["project_id"], _general_payload(metadata={"requested_image_count": 2}))
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None
-    assert record.request.metadata["doc281_general_output_source_bindings_v1"]
-    assert len(record.request.metadata["doc281_general_output_source_bindings_v1"]) == 2
-    outputs = _materialize_doc281_bound_outputs(handlers, job_id=created["job_id"], output_count=2)
-    assert len(outputs) == 2
-    _save_history_output(handlers, job_id="job_foreign_doc281", index=283)
-    disclosures = handlers.get_project(project["project_id"])["project"]["metadata"]["doc281_used_source_disclosures"]
-    assert len(disclosures) == 2
-    assert {item["output_label"] for item in disclosures} == {"Output 1", "Output 2"}
-    assert all(item["sources"] == [{"category": "project_original", "label": "Selected original"}] for item in disclosures)
-    _public_safe(disclosures)
-    # A process/retry output without the persistence-bound plan envelope does
-    # not become a disclosed source just because it shares the same Job.
-    _save_history_output(handlers, job_id=created["job_id"], index=285)
-    assert len(handlers.get_project(project["project_id"])["project"]["metadata"]["doc281_used_source_disclosures"]) == 2
-
-    store = handlers.service.output_store
-    first, second = outputs
-    swapped = dict(first.metadata or {})
-    swapped["doc281_output_plan_binding"] = deepcopy(second.metadata["doc281_output_plan_binding"])
-    store._write_record(replace(first, metadata=swapped))  # noqa: SLF001
-    store._invalidate_cache()  # noqa: SLF001
-    # A swapped envelope names the other output ID and fails exact binding.
-    assert len(handlers.get_project(project["project_id"])["project"]["metadata"]["doc281_used_source_disclosures"]) == 1
-
-    missing = dict(second.metadata or {})
-    missing.pop("doc281_output_plan_binding", None)
-    store._write_record(replace(second, metadata=missing))  # noqa: SLF001
-    store._invalidate_cache()  # noqa: SLF001
-    assert "doc281_used_source_disclosures" not in handlers.get_project(project["project_id"])["project"]["metadata"]
-
-
-def test_doc281_review_visible_output_disclosure_is_exact_but_not_delivery(tmp_path) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    _general_server_held_match(
-        handlers, project, snapshot, asset_id=asset_ids[0], kind="object_rear_structure",
-        affordance="object_back_or_structure", view_kind="rear", subject_kind="object_or_product",
-    )
-    created = handlers.post_project_job(project["project_id"], _general_payload())
-    output = _materialize_doc281_bound_outputs(handlers, job_id=created["job_id"])[0]
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None and record.planning_result is not None
-    record.status = ProductJobStatusValue.GENERATED
-    record.generation_result = record.planning_result.model_copy(update={
-        "metadata": {
-            **dict(record.planning_result.metadata or {}),
-            "post_generation_review": {"inspections": [{
-                "output_id": output.output_id,
-                "mode": "vision_model",
-                "status": "manual_review",
-                "verification_state": "verified",
-            }]},
-            "final_delivery": {
-                "delivery_gate_applies": True,
-                "final_delivery_status": "withheld_manual_confirmation",
-            },
-        },
-    })
-    handlers.service.job_store.save(record)
-    response = handlers.get_project(project["project_id"])["project"]
-    assert response["metadata"].get("project_outputs", []) == []
-    assert response["metadata"]["doc281_used_source_disclosures"] == [{
-        "output_label": "Output 1",
-        "sources": [{"category": "project_original", "label": "Selected original"}],
-    }]
-
-
-@pytest.mark.parametrize("mutation", ["forged_requirement", "cross_project", "stale_snapshot", "wrong_evidence"])
-def test_doc281_general_activation_rejects_forged_server_boundary_inputs(tmp_path, mutation: str) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    candidate, receipt, registry = _general_server_held_match(
-        handlers, project, snapshot, asset_id=asset_ids[0], kind="object_rear_structure",
-        affordance="object_back_or_structure", view_kind="rear", subject_kind="object_or_product",
-    )
-    hostile = deepcopy(receipt)
-    if mutation == "forged_requirement":
-        hostile["requirement_digest"] = "f" * 64
-    elif mutation == "cross_project":
-        hostile["project_id"] = "project-other"
-    elif mutation == "stale_snapshot":
-        hostile["source_library_snapshot_digest"] = "e" * 64
-    else:
-        hostile["matched_references"][0]["content_sha256"] = "d" * 64
-    hostile["receipt_digest"] = source_library.canonical_digest(
-        {key: value for key, value in hostile.items() if key != "receipt_digest"}
-    )
-    registry.receipt = hostile
-
-    created = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None
-    assert record.request.metadata.get("doc270_general_source_activation_receipts") == [
-        {"state": "receipt_invalid"}
-    ]
-    assert record.request.uploaded_asset_ids == []
-    assert "doc270_general_original_source_projection" not in record.request.metadata
-    assert candidate["asset_id"] not in str(handlers.get_job(created["job_id"]))
-
-
-@pytest.mark.parametrize(
-    ("html_path", "script_path", "mobile"),
-    [(DESKTOP_HTML, DESKTOP_JS, False), (MOBILE_HTML, MOBILE_JS, True)],
-)
-def test_doc281_terminal_ui_clears_stale_progress_and_discloses_only_safe_used_sources(
-    html_path: Path,
-    script_path: Path,
-    mobile: bool,
-) -> None:
-    project = _public_library_project(ecommerce=True)
-    project["metadata"]["current_operation"] = {
-        "state": "needs_input",
-        "terminal": True,
-        "pending": False,
-        "next_actions": [{"id": "review_product_inputs"}],
-    }
-    project["metadata"]["doc281_used_source_disclosures"] = [{
-        "output_label": "Output 1",
-        "sources": [{"category": "project_original", "label": "Selected original"}],
-    }]
-    created = {"job_id": "", "status": "blocked", "metadata": {"current_operation": project["metadata"]["current_operation"]}}
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        try:
-            page = _browser_page(browser, html_path=html_path, script_path=script_path)
-            if mobile:
-                page.evaluate(
-                    """({ project, created }) => {
-                      ensureMobileLayers(); setupMobileV3Adapter();
-                      mobileV3State.currentProject = project; mobileV3State.currentJob = created;
-                      mobileV3State.projects = [project]; mobileV3State.selectedTemplate = 'ecommerce_template';
-                      mobileV3State.busy = true; mobileV3State.progressStageKey = 'planning';
-                      mobileV3State.progressTimer = window.setTimeout(() => {}, 1000);
-                      renderMobileV3ProjectCurrentOperation(project); renderMobileV3ReferenceBoard(project);
-                    }""",
-                    {"project": project, "created": created},
-                )
-                terminal = page.locator("#mobileV3ProjectCurrentOperation")
-                board = page.locator("#mobileV3ReferenceBoard")
-                action = "[data-mobile-v3-project-action='review_product_inputs']"
-                cleared = "mobileV3State.busy === false && mobileV3State.progressTimer === null"
-            else:
-                page.evaluate(
-                    """({ project, created }) => {
-                      v3State.currentProject = project; v3State.currentJob = created;
-                      v3State.loading = true; v3State.progressStageKey = 'planning';
-                      v3State.progressTimer = window.setTimeout(() => {}, 1000);
-                      renderV3ProjectDetail(); renderV3UsefulReferences();
-                    }""",
-                    {"project": project, "created": created},
-                )
-                terminal = page.locator("#v3ProjectNextActions")
-                board = page.locator("#v3UsefulReferenceBoard")
-                action = "[data-v3-project-action='review_product_inputs']"
-                cleared = "v3State.loading === false && v3State.progressTimer === null"
-            assert page.locator(action).count() == 1
-            assert "准备" not in terminal.inner_text()
-            assert page.evaluate(cleared) is True
-            text = board.inner_text()
-            assert "项目原始素材" in text and "人物视觉资产" in text
-            assert "已选延续方向" in text and "生成与复核历史" in text
-            assert "Selected original" in text
-            assert all(token not in text.lower() for token in ("asset_id", "digest", "path", "prompt", "provider"))
-        finally:
-            browser.close()
-
-
-@pytest.mark.parametrize(
-    ("html_path", "script_path", "mobile"),
-    [(DESKTOP_HTML, DESKTOP_JS, False), (MOBILE_HTML, MOBILE_JS, True)],
-)
-def test_doc281_general_reference_board_renders_only_allowlisted_used_source_disclosure(
-    html_path: Path,
-    script_path: Path,
-    mobile: bool,
-) -> None:
-    project = _public_library_project(ecommerce=False)
-    project["metadata"]["doc281_used_source_disclosures"] = [
-        {"output_label": "Output 2", "sources": [{"category": "project_original", "label": "Selected original"}]},
-        {"output_label": "Output 3", "sources": [{"category": "history", "label": "unsafe-history"}]},
-    ]
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        try:
-            page = _browser_page(browser, html_path=html_path, script_path=script_path)
-            if mobile:
-                page.evaluate(
-                    """(project) => { ensureMobileLayers(); setupMobileV3Adapter();
-                      mobileV3State.currentProject = project; renderMobileV3ReferenceBoard(project); }""",
-                    project,
-                )
-                board = page.locator("#mobileV3ReferenceBoard")
-            else:
-                page.evaluate(
-                    """(project) => { v3State.currentProject = project; renderV3UsefulReferences(); }""",
-                    project,
-                )
-                board = page.locator("#v3UsefulReferenceBoard")
-            text = board.inner_text()
-            assert "Output 2: Selected original" in text
-            assert "unsafe-history" not in text
-            assert all(token not in text.lower() for token in ("asset_id", "digest", "path", "prompt", "provider"))
-        finally:
-            browser.close()
-
-
-@pytest.mark.parametrize("fault", ["not_ready", "role_drift", "upload_missing", "file_missing", "digest_drift"])
-def test_doc281_active_historical_product_drift_closes_once_with_sanitized_terminal_operation(
-    tmp_path,
-    fault: str,
-    monkeypatch,
-) -> None:
-    handlers, _catalog = _handlers(tmp_path)
-    store_root = tmp_path / "doc281-terminal-project-store"
-    _persistent_project_mode_for_doc281(handlers, store_root)
-    project = _project(handlers)
-    product_id = _ready_product_upload(
-        handlers,
-        filename=f"doc281-product-{fault}.png",
-        color=(95, 125, 165),
-    )
-    _add_product_references(handlers, project["project_id"], [product_id])
-    upload = handlers.service.get_uploaded_asset(product_id)
-    assert upload is not None
-    original_bytes = Path(str(upload.file_path)).read_bytes()
-    if fault == "not_ready":
-        handlers.service.asset_store._save_record(  # noqa: SLF001
-            upload.model_copy(update={"status": V3AssetUploadStatusValue.STORED})
-        )
-    elif fault == "role_drift":
-        handlers.service.asset_store._save_record(  # noqa: SLF001
-            upload.model_copy(update={"role": "face_reference"})
-        )
-    if fault == "upload_missing":
-        assert handlers.service.asset_store.delete_upload(product_id) is True
-    elif fault == "file_missing":
-        Path(str(upload.file_path)).unlink()
-    elif fault == "digest_drift":
-        Path(str(upload.file_path)).write_bytes(b"doc281-current-sha-drift")
-
-    before_job_ids = list(handlers.project_service._require_project(project["project_id"]).job_ids)  # noqa: SLF001
-    calls = _count_planning_and_dispatch(monkeypatch, handlers)
-    brain_and_review_calls = _count_brain_and_review(monkeypatch, handlers)
-    first = handlers.post_project_job(
-        project["project_id"],
-        _job_payload(uploaded_asset_ids=[], key=f"doc281-drift-{fault}"),
-    )
-    second = handlers.post_project_job(
-        project["project_id"],
-        _job_payload(uploaded_asset_ids=[], key=f"doc281-drift-{fault}"),
-    )
-    assert first.get("job_id") in (None, "")
-    assert second.get("job_id") in (None, "")
-    assert first["status"] == "blocked"
-    assert handlers.project_service._require_project(project["project_id"]).job_ids == before_job_ids  # noqa: SLF001
-    assert calls == {"plan": 0, "dispatch": 0}
-    assert brain_and_review_calls == {"brain": 0, "review": 0}
-    operation = first["metadata"]["current_operation"]
-    assert operation["state"] == "needs_input"
-    assert operation["terminal"] is True
-    assert operation == second["metadata"]["current_operation"]
-    _public_safe(operation)
-    fresh_reader = V3ProjectModeService(
-        product_service=handlers.service,
-        project_store=PersistentProjectStore(store_root),
-        project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
-        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
-    )
-    reloaded = fresh_reader.get_project(project["project_id"]).model_dump(mode="json")
-    assert reloaded["metadata"]["current_operation"] == operation
-    durable_receipts = fresh_reader.project_store.list_private_records(
-        project["project_id"],
-        "doc281_source_association_terminal_receipts_v1",
-    )
-    assert len(durable_receipts) == 1
-    assert durable_receipts[0]["schema_version"] == "doc281_source_association_terminal_receipt_v1"
-    assert durable_receipts[0]["command_identity"]["project_id"] == project["project_id"]
-    assert durable_receipts[0]["public_operation"] == operation
-
-    # A repaired original alone never resurrects an old command. A new explicit
-    # command owns the only permitted recovery path and clears the old closure.
-    handlers.service.asset_store._save_record(upload)  # noqa: SLF001
-    if fault in {"upload_missing", "file_missing", "digest_drift"}:
-        Path(str(upload.file_path)).write_bytes(original_bytes)
-    repaired = handlers.post_project_job(
-        project["project_id"],
-        _job_payload(uploaded_asset_ids=[], key=f"doc281-repaired-{fault}"),
-    )
-    assert repaired["job_id"]
-    assert repaired["status"] == "planned"
-    assert repaired["metadata"].get("current_operation") is None
-
-
-def test_doc281_drift_terminal_overrides_an_older_planning_operation_without_erasing_it(tmp_path) -> None:
-    handlers, _catalog = _handlers(tmp_path)
-    project = _project(handlers)
-    product_id = _ready_product_upload(
-        handlers, filename="doc281-stale-planning-product.png", color=(90, 120, 160),
-    )
-    _add_product_references(handlers, project["project_id"], [product_id])
-    old_operation = handlers.project_service.begin_project_planning_operation(
-        project["project_id"], _job_payload(uploaded_asset_ids=[], key="doc281-old-planning"),
-    )
-    upload = handlers.service.get_uploaded_asset(product_id)
-    assert upload is not None
-    handlers.service.asset_store._save_record(upload.model_copy(update={"status": V3AssetUploadStatusValue.STORED}))  # noqa: SLF001
-    closed = handlers.post_project_job(
-        project["project_id"], _job_payload(uploaded_asset_ids=[], key="doc281-drift-after-planning"),
-    )
-    assert closed["job_id"] in (None, "") and closed["status"] == "blocked"
-    response = handlers.get_project(project["project_id"])
-    assert response["metadata"]["current_operation"] == closed["metadata"]["current_operation"]
-    assert response["metadata"]["current_operation"]["state"] == "needs_input"
-    durable = handlers.project_service._require_project(project["project_id"])  # noqa: SLF001
-    assert durable.metadata["doc277_planning_current_operation"]["operation_id"] == old_operation["operation_id"]
-
-
-def test_doc281_explicit_continuation_and_history_never_enter_general_original_match_projection(tmp_path) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    _general_server_held_match(
-        handlers, project, snapshot, asset_id=asset_ids[1], kind="object_rear_structure",
-        affordance="object_back_or_structure", view_kind="rear", subject_kind="object_or_product",
-    )
-    history = _save_history_output(handlers, job_id="doc281-history", index=281)
-    handlers.post_project_reference(
-        project["project_id"],
-        {
-            "asset_ref_id": history.output_id,
-            "source_type": "generated_selected",
-            "created_from_job_id": "doc281-history",
-            "created_from_output_id": history.output_id,
-            "use_policy": "style",
-        },
-    )
-
-    created = handlers.post_project_job(project["project_id"], _general_payload())
-    record = handlers.service.get_job_record(created["job_id"])
-    assert record is not None
-    projection = record.request.metadata["doc270_general_original_source_projection"]
-    selected = [item["asset_id"] for item in projection["sources"]]
-    assert set(selected).issubset(set(asset_ids))
-    assert history.output_id not in selected
-    assert all(
-        reference.source_type != ProjectReferenceSourceType.GENERATED_SELECTED
-        or reference.asset_ref_id != history.output_id
-        or reference.use_policy == ProjectReferenceUsePolicy.STYLE
-        for reference in handlers.project_service._require_project(project["project_id"]).reference_assets  # noqa: SLF001
-    )
-
-
-def test_doc281_new_general_command_replaces_old_terminal_presentation_without_history_reselection(tmp_path) -> None:
-    handlers, project, asset_ids, snapshot = _general_project(tmp_path)
-    _general_server_held_match(
-        handlers, project, snapshot, asset_id=asset_ids[0], kind="object_rear_structure",
-        affordance="object_back_or_structure", view_kind="rear", subject_kind="object_or_product",
-    )
-    first = handlers.post_project_job(project["project_id"], _general_payload())
-    first_record = handlers.service.get_job_record(first["job_id"])
-    assert first_record is not None
-    first_projection = deepcopy(first_record.request.metadata["doc270_general_original_source_projection"])
-
-    second = handlers.post_project_job(
-        project["project_id"],
-        {
-            **_general_payload(),
-            "user_input": "Create a distinct new image from the current request only.",
-        },
-    )
-    second_record = handlers.service.get_job_record(second["job_id"])
-    assert second_record is not None
-    assert second["job_id"] != first["job_id"]
-    assert handlers.get_project(project["project_id"])["metadata"].get("current_operation") is None
-    second_projection = second_record.request.metadata["doc270_general_original_source_projection"]
-    assert first_projection["state"] == "activated_resolved"
-    assert second_projection["state"] == "activated_resolved"
-    assert set(item["asset_id"] for item in second_projection["sources"]).issubset(set(asset_ids))
-
-
-@pytest.mark.parametrize(
-    ("html_path", "script_path", "mobile"),
-    [(DESKTOP_HTML, DESKTOP_JS, False), (MOBILE_HTML, MOBILE_JS, True)],
-)
-def test_doc281_old_terminal_response_cannot_overwrite_a_newer_explicit_command_dom_session(
-    html_path: Path,
-    script_path: Path,
-    mobile: bool,
-) -> None:
-    """Release a held old terminal response only after the new command owns UI state."""
-
-    old_project = _public_library_project(ecommerce=True)
-    old_project["metadata"]["current_operation"] = {
-        "state": "needs_input",
-        "terminal": True,
-        "pending": False,
-        "next_actions": [{"id": "review_product_inputs"}],
-    }
-    new_project = deepcopy(old_project)
-    new_project["metadata"]["current_operation"] = {
-        "state": "planning",
-        "terminal": False,
-        "pending": True,
-        "next_actions": [],
-    }
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        try:
-            page = _browser_page(browser, html_path=html_path, script_path=script_path)
-            result = page.evaluate(
-                """
-                async ({ oldProject, newProject, mobile }) => {
-                  const response = (payload) => new Response(JSON.stringify(payload), {
-                    status: 200, headers: { "Content-Type": "application/json" },
-                  });
-                  if (!mobile) {
-                    v3State.currentProject = oldProject;
-                    v3State.loading = true;
-                    v3State.progressTimer = window.setTimeout(() => {}, 10000);
-                    const oldReceipt = v3StartEcommerceGenerationSession(oldProject.project_id);
-                    const pending = [];
-                    const originalFetch = window.fetch;
-                    window.fetch = (input, init = {}) => {
-                      const url = String(input);
-                      if (String(init.method || "GET").toUpperCase() === "GET" && url.endsWith(`/projects/${oldProject.project_id}`)) {
-                        return new Promise((resolve) => pending.push(resolve));
-                      }
-                      return originalFetch(input, init);
-                    };
-                    const oldRefresh = refreshV3CurrentProject({
-                      silent: true,
-                      shouldContinue: () => v3EcommerceGenerationSessionOwns(oldReceipt),
-                      sessionReceipt: oldReceipt,
-                    });
-                    await new Promise((resolve) => window.setTimeout(resolve, 0));
-                    v3State.currentProject = newProject;
-                    v3StartEcommerceGenerationSession(newProject.project_id);
-                    renderV3ProjectDetail();
-                    pending.shift()(response({ project: oldProject }));
-                    await oldRefresh;
-                    return {
-                      operation: v3State.currentProject?.metadata?.current_operation?.state || "",
-                      oldActionCount: document.querySelectorAll("[data-v3-project-action='review_product_inputs']").length,
-                      busy: v3State.loading,
-                      progress: v3State.progressTimer === null,
-                    };
-                  }
-                  ensureMobileLayers();
-                  setupMobileV3Adapter();
-                  mobileV3State.currentProject = oldProject;
-                  mobileV3State.projects = [oldProject];
-                  mobileV3State.busy = true;
-                  mobileV3State.progressTimer = window.setTimeout(() => {}, 10000);
-                  const oldReceipt = mobileV3StartEcommerceGenerationSession(oldProject.project_id);
-                  const pending = [];
-                  mobileV3Request = (path) => new Promise((resolve) => pending.push({ path, resolve }));
-                  const oldRefresh = refreshMobileV3ProjectDetail(oldProject.project_id, {
-                    shouldContinue: () => mobileV3EcommerceGenerationSessionOwns(oldReceipt),
-                  });
-                  await new Promise((resolve) => window.setTimeout(resolve, 0));
-                  mobileV3State.currentProject = newProject;
-                  mobileV3State.projects = [newProject];
-                  mobileV3StartEcommerceGenerationSession(newProject.project_id);
-                  renderMobileV3ProjectCurrentOperation(mobileV3State.currentProject);
-                  pending.forEach(({ path, resolve }) => {
-                    if (path.endsWith(`/projects/${oldProject.project_id}`)) resolve({ project: oldProject });
-                    else if (path.includes("/timeline")) resolve({ items: [] });
-                    else resolve({ items: [], review_items: [] });
-                  });
-                  await oldRefresh;
-                  return {
-                    operation: mobileV3State.currentProject?.metadata?.current_operation?.state || "",
-                    oldActionCount: document.querySelectorAll("[data-mobile-v3-project-action='review_product_inputs']").length,
-                    busy: mobileV3State.busy,
-                    progress: mobileV3State.progressTimer === null,
-                  };
-                }
-                """,
-                {"oldProject": old_project, "newProject": new_project, "mobile": mobile},
-            )
-            assert result == {
-                "operation": "planning",
-                "oldActionCount": 0,
-                "busy": False,
-                "progress": True,
-            }
-        finally:
-            browser.close()
-
-
-def test_doc281_phase0_contract_keeps_runtime_and_provider_code_unchanged() -> None:
-    """Guard the Phase 0 scope: this test module must not imply a provider call."""
-
-    assert Path(__file__).name == "test_v3_doc281_unified_source_library_smart_matching_phase0.py"
+    public = handlers.get_project(project["project_id"])["project"]
+    assert "doc281_used_source_disclosures" not in public["metadata"]
+    _public_safe(public["metadata"].get("doc270_general_source_activation", {}))
+    assert created["status"] == "planned"

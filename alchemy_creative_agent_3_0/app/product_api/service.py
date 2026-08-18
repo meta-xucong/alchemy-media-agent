@@ -9467,6 +9467,29 @@ class V3ProductApiService:
             return None
         nav = get_navigation_entry()
         scenario = self._scenario_summary(record)
+        request_metadata = dict(record.request.metadata or {})
+        public_variation_keys = {
+            "variation_mode",
+            "effective_variation_mode",
+            "continuation_mode",
+            "inferred_variation_mode",
+            "variation_mode_source",
+            "variation_mode_label",
+        }
+        public_variation = {
+            key: request_metadata[key]
+            for key in public_variation_keys
+            if key in request_metadata
+        }
+        scenario_parameters = request_metadata.get("scenario_parameters")
+        if isinstance(scenario_parameters, dict):
+            public_variation.update(
+                {
+                    key: scenario_parameters[key]
+                    for key in public_variation_keys
+                    if key not in public_variation and key in scenario_parameters
+                }
+            )
         return ProductJobStatus(
             job_id=record.job_id,
             status=record.status,
@@ -9486,6 +9509,7 @@ class V3ProductApiService:
                 "exposes_product_concepts_only": True,
                 "lifecycle": self._lifecycle_summary(record),
                 "doc270_general_source_activation": activation,
+                **public_variation,
             },
         )
 

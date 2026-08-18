@@ -1,8 +1,8 @@
 # Doc281 - V3 Unified Source Library Smart Matching And Drift Recovery Contract
 
-Status: Phase 0 contract and deterministic red-test authority. This document
-does not activate runtime behavior, dispatch a Provider, call MCP/ImageGen,
-create a real job, or deploy a service.
+Status: General source-selection and drift-recovery implementation authority.
+This document does not authorize a real Provider/MCP/ImageGen call, create a
+real validation job, or deploy a service.
 
 ## 1. Objective And Correction Model
 
@@ -14,24 +14,21 @@ originals for the requested output. A browser, file name, upload order, Brain
 prose, generated thumbnail, review result, or historical Job must never choose
 that set.
 
-The current design is incomplete in two connected ways:
-
-1. General's Doc270 activation capability, command identity, and receipt
-   registry seams are disabled `return None` placeholders, so it cannot use a
-   production server-owned analyzer/matcher path.
-2. An active historical E-Commerce product association can drift after upload
-   readiness or role changes. On the next command, reference persistence
-   re-enters `_require_ready_uploaded_reference` and leaks a raw `ValueError`
-   before the established Doc263/264 admission closure can project one safe
-   terminal operation.
+The implementation has two authorities. General uses a server-composed
+source-selection Brain over reverified original images and binds only its
+opaque handles. Professional E-Commerce retains its typed E31 product-truth
+and physical-reference authority. Independently, an active historical
+E-Commerce product association can drift after upload readiness or role
+changes; Doc281 closes that association before persistence/planning and emits
+one safe terminal operation.
 
 The authoritative Phase 6 flow is:
 
 ```text
 active project-upload association + actual readable bytes
-  -> SHA/project-bound SourceEvidenceProfile
-  -> server-issued typed ReferenceRequirement for a new explicit command
-  -> shared source matcher and immutable private resolution receipt
+  -> SHA/project-bound verified original candidates
+  -> Brain sees the explicit command and reverified original images
+  -> opaque-handle selection and immutable private server binding
   -> template-owned activation and frozen source projection
   -> existing template final plan, provider-cap negotiation, and review
 ```
@@ -50,30 +47,40 @@ rewritten by either flow.
 
 ## 2. Authority And Non-Authorities
 
-### 2.1 Shared foundation owns evidence and matching
+### 2.1 Shared foundation owns verified evidence and binding
 
-The V3 shared foundation owns an image-backed `SourceEvidenceProfile`, a
-profile analyzer, candidate eligibility, ranking, receipt integrity, and the
-source matcher. Every profile and receipt must bind all of these facts:
+The V3 shared foundation owns the project-scoped original pool, readable-byte
+verification, candidate eligibility, receipt integrity, and server binding.
+General source selection is a Brain decision over the verified images; the
+server never infers semantic meaning from filenames, order, browser fields, or
+regular-expression branches. Every private receipt must bind all of these
+facts:
 
 - project ID and active association/reference ID;
 - upload asset ID, source type, and current active state;
 - actual current SHA-256 and readable-byte check;
-- analyzer authority, schema/version, profile digest, and analysis receipt;
-- typed requirement issuer, command/plan/output binding, and receipt digest.
+- Brain authority, schema/version, command identity, output-plan binding, and
+  receipt digest.
 
 Matching bytes in another project, a self-digested browser object, or copied
 metadata do not confer authority. The shared matcher is restricted to active,
 project-scoped `uploaded` originals. It has no adapter for People/Visual
 Assets, generated/review/history outputs, or implicit continuations.
 
-`ReferenceRequirement` is server-issued and typed. A template/Brain boundary
-may declare semantic output needs, but it cannot select an asset ID. The
-requirement contains bounded source count, hard/preferred/optional strength,
-required evidence, output binding, and Doc93 prompt-owned exclusions. The
-server matcher is the one selector; it ranks image-backed facts and only uses a
-recorded deterministic tie-break after semantic equivalence. Filename, upload
-position, browser labels, and Brain prose are not ranking inputs.
+For ordinary General V3, a named source-selection Brain receives only the
+explicit command, the requested output count, and current reverified original
+images represented by opaque candidate handles. It returns either prompt-only
+or bounded opaque-handle selections. The server maps those handles to the
+current project association and SHA, validates them, and freezes the private
+output binding. The Brain's image analysis is the semantic authority; the
+server performs integrity and scope checks only. There is no finite semantic
+taxonomy, filename matcher, order heuristic, browser selector, or regex-based
+fallback in the General path.
+
+Professional E-Commerce remains the deliberate specialization: E31 may use
+its existing typed product-truth and physical-reference evidence contracts,
+and Doc263/Doc269 remain authoritative for the final product projection and
+renderer plan. That specialized authority is not copied into General.
 
 There is one production image-evidence/analyzer and matcher authority in the
 shared foundation. General and E-Commerce consume its verified receipts; E31
@@ -85,10 +92,10 @@ binding, stale snapshot, and self-digested wrong evidence are invalid before a
 source can be frozen.
 
 The private General consumption protocol is
-`doc281_general_source_registry_v1`, implemented through the named internal
+`doc281_general_source_registry_v2`, implemented through the named internal
 `Doc281GeneralSourceRegistry` dependency. Its only operations issue one
-`doc281_general_command_identity_v1` and read one
-`doc281_general_registered_receipt_v1`; neither accepts browser metadata nor an
+`doc281_general_command_identity_v2` and read one
+`doc281_general_registered_receipt_v2`; neither accepts browser metadata nor an
 arbitrary Project Mode attribute. Registry lookup requires exact private
 project/template/command/plan/output/nonce identity equality and returns the
 immutable SHA-bound requirement/evidence receipt only for that identity. The
@@ -100,33 +107,26 @@ General activation uses the versioned packaged
 override is set. An explicit unreadable, malformed, or schema-open override
 fails closed to ordinary prompt-only operation; it never falls back silently.
 The policy is selector-free and declares only enabled state, authority/version,
-the closed requirement-kind vocabulary, and a bounded maximum source count.
-
-The server's text-only requirement classifier receives exactly the current
-command and that policy-owned vocabulary. It returns only `required` with one
-allowed kind or `optional_uncertain`; it cannot receive source entries,
-filenames, browser labels, asset/reference IDs, hashes, snapshots, history, or
-Brain prose. A successful classification is stored privately as
-`doc281_general_requirement_classification_receipt_v1`, bound to command,
-canonical source snapshot, policy version, and requested output-plan facts.
-An unchanged fresh service reuses that receipt before either the text classifier
-or image analyzer. Malformed, partial, unavailable, or unknown classifier
-responses are prompt-only and create neither a terminal operation nor a source
+and a bounded maximum source count. The General source-selection Brain receives
+the command and reverified original images, not source IDs, filenames, browser
+fields, SHA values, history, or hidden server metadata. It may return only
+`prompt_only` or `selected` with opaque candidate handles. Malformed, partial,
+unavailable, or unknown Brain responses are prompt-only and create no source
 selection.
 
-A persisted classification receipt is authoritative only when its exact schema,
-identity/binding digest, facts, policy-bound requirement shape, requirement
-digest, and receipt digest all validate. A present but invalid, stale, or
-tampered receipt fails closed to prompt-only without classifier retry, image
-analysis, or selected-original projection. A valid `optional_uncertain`
-receipt is also persisted and replayed as prompt-only, rather than repeatedly
-calling the classifier.
+A persisted selection receipt is authoritative only when its exact schema,
+identity/binding digest, command/snapshot/policy/count facts, selected-handle
+resolution, output-plan binding, and receipt digest all validate. A present but
+invalid, stale, or tampered receipt fails closed to prompt-only without Brain
+retry or selected-original projection. A valid prompt-only receipt is replayed
+as prompt-only rather than repeatedly calling the Brain.
 
 ### 2.2 Template authority remains narrow
 
-General, E-Commerce, Photography, Brand, and future templates can only issue
-their typed requirement and consume a verified server receipt. They neither
-own profiles nor supply a candidate snapshot. A selected original can support
+General consumes a verified Brain selection receipt. E-Commerce, Photography,
+Brand, and future templates retain their own typed requirements where their
+specialized contracts require them. Templates neither own source bytes nor
+accept browser-authored candidate facts. A selected original can support
 only the channel contribution already permitted by Doc93. In particular,
 selecting an uploaded portrait does not enlarge same-person identity, hair,
 makeup, wardrobe, lighting, scene, camera, mood, or style inheritance. Those

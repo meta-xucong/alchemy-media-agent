@@ -5517,18 +5517,17 @@ class ScenarioRuntime:
         )
 
     def _capability_activation_mode(self, request: ScenarioRuntimeRequest | None = None) -> str:
-        # New jobs must use the frozen, selective runtime by default.  The
-        # explicit legacy/shadow values remain available for a controlled
-        # rollback, and an existing job keeps the mode recorded in its frozen
-        # plan so that retries cannot silently change execution semantics.
-        mode = os.getenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced").strip().lower()
-        mode = mode if mode in {"legacy", "shadow", "enforced"} else "legacy"
+        # A historical trusted plan must preserve its own execution semantics
+        # for a retry. New work is Brain-owned enforced mode only: deployment
+        # configuration cannot silently reactivate legacy keyword/regex
+        # inference or shadow-only local semantics.
         frozen = request.metadata.get("capability_activation_plan") if request is not None else None
         if isinstance(frozen, dict):
             frozen_mode = str(frozen.get("activation_mode") or "").lower()
             if frozen_mode in {"legacy", "shadow", "enforced"}:
                 return frozen_mode
-        return mode
+        configured = os.getenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced").strip().lower()
+        return "enforced" if configured != "enforced" else configured
 
     def _require_trusted_frozen_capability_plan_boundary(
         self,

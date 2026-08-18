@@ -1,7 +1,10 @@
-"""Scenario-neutral server source-image observation foundation.
+"""Server-owned source-image transports.
 
-Only verified image bytes exist at this boundary.  The adapter emits a closed
-semantic observation; callers bind project/reference/asset/SHA separately.
+Only verified image bytes exist at this boundary. E-Commerce may consume the
+typed single-image observation transport for its specialized product policy.
+General uses the separate source-selection Brain below: it receives the
+current command and complete verified candidates, then returns only opaque
+candidate handles. Project Mode binds project/reference/SHA facts itself.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 
 
 SOURCE_EVIDENCE_OUTPUT_TOKEN_BUDGET = 640
-REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET = 120
+GENERAL_SOURCE_SELECTION_OUTPUT_TOKEN_BUDGET = 360
 SEMANTIC_PROFILE_KEYS = frozenset({"evidence_state", "subject_kind", "view_kind", "affordances"})
 SEMANTIC_SUBJECT_KINDS = ("object_or_product", "person", "brand_or_graphic")
 SEMANTIC_VIEW_KINDS = ("front", "rear", "detail_or_macro", "environment_wide", "packaging")
@@ -44,71 +47,228 @@ class CallableSourceEvidenceAnalyzer:
         return self._callback(project_id=project_id, entries=entries)
 
 
-class OpenAICompatibleTextRequirementIssuer:
-    """Strict text-only Doc281 requirement classifier.
+@runtime_checkable
+class GeneralSourceSelectionBrain(Protocol):
+    """Brain-owned General original selection for one explicit command.
 
-    It deliberately has no source-library argument: candidate evidence remains
-    exclusively with the server matcher after this bounded intent decision.
+    The caller supplies all current, verified candidates at once. The Brain
+    can make a visual decision but may return only opaque candidate handles.
+    It never receives project, reference, asset, SHA, browser, history, or
+    persistence identifiers.
     """
 
-    def __init__(self, *, api_key: str | None, base_url: str | None, model: str | None,
-                 allowed_kinds: tuple[str, ...], maximum_sources: int, timeout_seconds: float = 30.0) -> None:
-        self.api_key, self.base_url, self.model = (str(value or "").strip() for value in (api_key, base_url, model))
-        self.allowed_kinds = tuple(item for item in allowed_kinds if isinstance(item, str) and item)
-        self.maximum_sources = maximum_sources
+    def select(
+        self,
+        *,
+        command_direction: str,
+        entries: list[dict[str, Any]],
+        requested_output_count: int,
+        maximum_sources: int,
+    ) -> dict[str, Any] | None: ...
+
+
+class CallableGeneralSourceSelectionBrain:
+    """Explicit adapter for deterministic Brain test/composition doubles."""
+
+    def __init__(self, callback: Any) -> None:
+        self._callback = callback
+
+    def select(
+        self,
+        *,
+        command_direction: str,
+        entries: list[dict[str, Any]],
+        requested_output_count: int,
+        maximum_sources: int,
+    ) -> dict[str, Any] | None:
+        return self._callback(
+            command_direction=command_direction,
+            entries=entries,
+            requested_output_count=requested_output_count,
+            maximum_sources=maximum_sources,
+        )
+
+
+class OpenAICompatibleGeneralSourceSelectionBrain:
+    """Visual General-source decision through the configured V3 Brain route.
+
+    This path has no source taxonomy, filename heuristic, or local semantic
+    matcher. The model sees the command and complete current original set in
+    one request. The server validates opaque handles before using a source.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None,
+        base_url: str | None,
+        model: str | None,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        self.api_key, self.base_url, self.model = (
+            str(value or "").strip() for value in (api_key, base_url, model)
+        )
         self.timeout_seconds = max(0.5, min(float(timeout_seconds), 90.0))
 
     def available(self) -> bool:
-        return bool(
-            self.api_key
-            and self.base_url
-            and self.model
-            and self.allowed_kinds
-            and len(self.allowed_kinds) == len(set(self.allowed_kinds))
-            and isinstance(self.maximum_sources, int)
-            and not isinstance(self.maximum_sources, bool)
-            and 1 <= self.maximum_sources <= 4
-        )
+        return bool(self.api_key and self.base_url and self.model)
 
-    def __call__(self, *, command_direction: str) -> dict[str, Any] | None:
-        if not self.available() or not isinstance(command_direction, str) or not command_direction.strip():
+    def select(
+        self,
+        *,
+        command_direction: str,
+        entries: list[dict[str, Any]],
+        requested_output_count: int,
+        maximum_sources: int,
+    ) -> dict[str, Any] | None:
+        if (
+            not self.available()
+            or not isinstance(command_direction, str)
+            or not command_direction.strip()
+            or not isinstance(requested_output_count, int)
+            or isinstance(requested_output_count, bool)
+            or not 1 <= requested_output_count <= 8
+            or not isinstance(maximum_sources, int)
+            or isinstance(maximum_sources, bool)
+            or not 1 <= maximum_sources <= 4
+        ):
             return None
+        normalized = _selection_entries(entries)
+        if not normalized:
+            return {"state": "prompt_only", "output_selections": []}
         try:
             from openai import OpenAI
+
             client = OpenAI(api_key=self.api_key, base_url=self.base_url, max_retries=0)
-            response = client.chat.completions.create(model=self.model, messages=[{"role":"user","content":(
-                requirement_classification_instruction(self.allowed_kinds) + "\nCommand: " + command_direction)}],
-                response_format={"type":"json_object"}, timeout=self.timeout_seconds,
-                max_tokens=REQUIREMENT_ISSUER_OUTPUT_TOKEN_BUDGET)
-            value = json.loads(str(response.choices[0].message.content or ""))
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[{
+                    "role": "user",
+                    "content": _general_source_selection_content(
+                        command_direction=command_direction,
+                        entries=normalized,
+                        requested_output_count=requested_output_count,
+                        maximum_sources=maximum_sources,
+                    ),
+                }],
+                response_format={"type": "json_object"},
+                temperature=0,
+                timeout=self.timeout_seconds,
+                max_tokens=GENERAL_SOURCE_SELECTION_OUTPUT_TOKEN_BUDGET,
+            )
+            raw = str(response.choices[0].message.content or "")
         except Exception:
             return None
-        if not isinstance(value, dict) or set(value) != {"state", "kind"}:
-            return None
-        state, kind = value.get("state"), value.get("kind")
-        if state == "optional_uncertain" and kind == "none":
-            return {"state": state}
-        if state != "required" or kind not in self.allowed_kinds:
-            return None
-        return {"state": "required", "kind": kind, "maximum_sources": self.maximum_sources}
+        return general_source_selection_response_from_text(
+            raw,
+            candidate_handles={str(item["candidate_handle"]) for item in normalized},
+            requested_output_count=requested_output_count,
+            maximum_sources=maximum_sources,
+        )
 
 
-def requirement_classification_instruction(allowed_kinds: tuple[str, ...]) -> str:
-    """Return the complete policy-owned, text-only classifier contract.
+def _selection_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        handle = str(entry.get("candidate_handle") or "").strip()
+        content = entry.get("analysis_bytes") if isinstance(entry, dict) else None
+        mime_type = str(entry.get("mime_type") or "").strip().lower() if isinstance(entry, dict) else ""
+        if (
+            len(handle) != 64
+            or handle in seen
+            or not isinstance(content, bytes)
+            or not content
+            or mime_type not in {"image/png", "image/jpeg", "image/webp"}
+        ):
+            return []
+        seen.add(handle)
+        normalized.append({
+            "candidate_handle": handle,
+            "analysis_bytes": content,
+            "mime_type": mime_type,
+        })
+    return sorted(normalized, key=lambda item: str(item["candidate_handle"]))
 
-    The vocabulary is deliberately rendered by the server from the validated
-    packaged policy.  The command is appended by the caller only after this
-    invariant contract, so no candidate-library value can become a selector.
-    """
 
-    vocabulary = json.dumps(list(allowed_kinds), ensure_ascii=True, separators=(",", ":"))
-    return (
-        "Classify only the command text into this closed requirement vocabulary: " + vocabulary + ". "
-        "Return exactly one JSON object with exactly the keys state and kind. "
-        "For state required, kind must be exactly one vocabulary value. "
-        "For state optional_uncertain, kind must be exactly none. "
-        "Do not add keys, explanations, selections, or assumptions about uploaded material."
+def _general_source_selection_content(
+    *,
+    command_direction: str,
+    entries: list[dict[str, Any]],
+    requested_output_count: int,
+    maximum_sources: int,
+) -> list[dict[str, Any]]:
+    instruction = (
+        "You are the V3 creative Brain deciding whether current uploaded originals should be used for this command. "
+        "Inspect the command and every candidate image together. Make the decision from their actual visual content. "
+        "Return plain JSON only, with exactly keys state and output_selections. "
+        "For prompt_only, output_selections must be []. For selected, output_selections must contain exactly one object "
+        "for every output index from 1 through " + str(requested_output_count) + ". Each object must have exactly "
+        "output_index and candidate_handles. Each candidate_handles list must contain one through " + str(maximum_sources) +
+        " opaque handles from the supplied candidates, with no duplicates. Use prompt_only when no original is materially "
+        "needed. Do not return explanations, semantic labels, filenames, IDs, hashes, or any text beyond that JSON schema. "
+        "Opaque handles are address tokens only and have no visual meaning.\n"
+        "Requested output count: " + str(requested_output_count) + "\nCommand: " + command_direction
     )
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": instruction},
+        {"type": "text", "text": "Requested output count: " + str(requested_output_count)},
+    ]
+    for entry in entries:
+        data_url = (
+            "data:" + str(entry["mime_type"]) + ";base64," +
+            base64.b64encode(entry["analysis_bytes"]).decode("ascii")
+        )
+        content.extend([
+            {"type": "text", "text": "Candidate handle: " + str(entry["candidate_handle"])},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ])
+    return content
+
+
+def general_source_selection_response_from_text(
+    raw: Any,
+    *,
+    candidate_handles: set[str],
+    requested_output_count: int,
+    maximum_sources: int,
+) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(str(raw or ""))
+    except (TypeError, ValueError, JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {"state", "output_selections"}:
+        return None
+    state = payload.get("state")
+    selections = payload.get("output_selections")
+    if state == "prompt_only":
+        return {"state": state, "output_selections": []} if selections == [] else None
+    if state != "selected" or not isinstance(selections, list) or len(selections) != requested_output_count:
+        return None
+    normalized: list[dict[str, Any]] = []
+    indexes: set[int] = set()
+    for item in selections:
+        if not isinstance(item, dict) or set(item) != {"output_index", "candidate_handles"}:
+            return None
+        index = item.get("output_index")
+        handles = item.get("candidate_handles")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index < 1
+            or index > requested_output_count
+            or index in indexes
+            or not isinstance(handles, list)
+            or not 1 <= len(handles) <= maximum_sources
+            or len(handles) != len(set(handles))
+            or any(not isinstance(handle, str) or handle not in candidate_handles for handle in handles)
+        ):
+            return None
+        indexes.add(index)
+        normalized.append({"output_index": index, "candidate_handles": list(handles)})
+    if indexes != set(range(1, requested_output_count + 1)):
+        return None
+    return {"state": "selected", "output_selections": sorted(normalized, key=lambda item: item["output_index"])}
 
 
 class OpenAICompatibleSourceEvidenceAnalyzer:

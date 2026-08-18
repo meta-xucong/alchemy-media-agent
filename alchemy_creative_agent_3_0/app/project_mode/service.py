@@ -116,10 +116,9 @@ from .source_library import (
     resolve_doc270_shadow_reference_requirements,
 )
 from .source_evidence import (
-    CallableSourceEvidenceAnalyzer,
-    OpenAICompatibleSourceEvidenceAnalyzer,
-    SourceEvidenceAnalyzer,
-    semantic_response_is_valid,
+    CallableGeneralSourceSelectionBrain,
+    GeneralSourceSelectionBrain,
+    OpenAICompatibleGeneralSourceSelectionBrain,
 )
 from .ecommerce_view_activation import (
     DisabledEcommerceViewActivationIssuer,
@@ -280,21 +279,12 @@ _DOC270_PHASE4_PRIVATE_DECISION_NAMESPACE = "doc270_phase4_resolution_decisions"
 _DOC281_TERMINAL_RECEIPT_NAMESPACE = "doc281_source_association_terminal_receipts_v1"
 _DOC281_TERMINAL_RECEIPT_SCHEMA = "doc281_source_association_terminal_receipt_v1"
 _DOC281_GENERAL_COMMAND_NAMESPACE = "doc281_general_commands_v1"
-_DOC281_GENERAL_REQUIREMENT_NAMESPACE = "doc281_general_requirements_v1"
-_DOC281_GENERAL_OBSERVATION_NAMESPACE = "doc281_source_evidence_observations_v1"
+_DOC281_GENERAL_SELECTION_NAMESPACE = "doc281_general_selection_receipts_v2"
 _DOC281_GENERAL_RECEIPT_NAMESPACE = "doc281_general_resolution_receipts_v1"
-_DOC281_ALLOWED_REQUIREMENT_KINDS = frozenset({
-    "object_front_presentation",
-    "object_rear_structure",
-    "object_detail",
-    "person_environment_context",
-    "brand_scene_material",
-})
 _DOC281_GENERAL_SOURCE_POLICY_FIELDS = frozenset({
     "enabled",
     "policy_authority",
     "policy_version",
-    "allowed_requirement_kinds",
     "maximum_sources",
 })
 _DOC270_PHASE4_REQUIREMENT_ISSUER = {
@@ -334,42 +324,56 @@ class PhotographyRoleContinuationError(ValueError):
 
 
 class Doc281GeneralSourceRegistry:
-    """Named server authority for General original-source activation.
+    """Brain-owned General original selection with server-only integrity binding.
 
-    The registry is intentionally a constructor dependency.  A deployment may
-    compose it with an image-backed analyzer and typed requirement issuer;
-    browser requests can neither install an analyzer nor author a selection.
+    General receives no semantic taxonomy. A source-selection Brain sees the
+    explicit command and all reverified current originals at once, then emits
+    only opaque handles. This registry maps those handles back to the exact
+    reference/asset/SHA snapshot, freezes the receipt, and never admits history
+    or browser-authored selection facts.
     """
 
-    protocol = "doc281_general_source_registry_v1"
+    protocol = "doc281_general_source_registry_v2"
     _CACHE_MISS = "miss"
-    _CACHE_REQUIRED = "required"
-    _CACHE_OPTIONAL = "optional_uncertain"
+    _CACHE_SELECTED = "selected"
+    _CACHE_PROMPT_ONLY = "prompt_only"
     _CACHE_INVALID = "invalid"
 
-    def __init__(self, *, evidence_analyzer: SourceEvidenceAnalyzer | Any | None = None, requirement_issuer: Any | None = None,
-                 analysis_entry_loader: Any | None = None, requirement_policy_version: str = "doc281_general_requirement_policy_v1",
-                 requirement_receipt_lookup: Any | None = None, requirement_receipt_append: Any | None = None) -> None:
-        self.evidence_analyzer = self._coerce_evidence_analyzer(evidence_analyzer)
-        self.requirement_issuer = requirement_issuer
+    def __init__(
+        self,
+        *,
+        selection_brain: GeneralSourceSelectionBrain | Any | None = None,
+        analysis_entry_loader: Any | None = None,
+        selection_policy_version: str = "doc281_general_source_selection_policy_v2",
+        maximum_sources: int = 2,
+        selection_receipt_lookup: Any | None = None,
+        selection_receipt_append: Any | None = None,
+    ) -> None:
+        self.selection_brain = self._coerce_selection_brain(selection_brain)
         self.analysis_entry_loader = analysis_entry_loader
-        self.requirement_policy_version = str(requirement_policy_version or "").strip()
-        self.requirement_receipt_lookup = requirement_receipt_lookup
-        self.requirement_receipt_append = requirement_receipt_append
+        self.selection_policy_version = str(selection_policy_version or "").strip()
+        self.maximum_sources = maximum_sources
+        self.selection_receipt_lookup = selection_receipt_lookup
+        self.selection_receipt_append = selection_receipt_append
         self._identities: dict[str, dict[str, Any]] = {}
         self._receipts: dict[str, dict[str, Any]] = {}
-        self._observations: dict[str, list[dict[str, Any]]] = {}
 
     @property
     def enabled(self) -> bool:
-        return self.evidence_analyzer is not None and callable(self.requirement_issuer)
+        return bool(
+            self.selection_brain is not None
+            and self.selection_policy_version
+            and isinstance(self.maximum_sources, int)
+            and not isinstance(self.maximum_sources, bool)
+            and 1 <= self.maximum_sources <= 4
+        )
 
     @staticmethod
-    def _coerce_evidence_analyzer(value: SourceEvidenceAnalyzer | Any | None) -> SourceEvidenceAnalyzer | None:
-        if isinstance(value, SourceEvidenceAnalyzer):
+    def _coerce_selection_brain(value: GeneralSourceSelectionBrain | Any | None) -> GeneralSourceSelectionBrain | None:
+        if isinstance(value, GeneralSourceSelectionBrain):
             return value
         if callable(value):
-            return CallableSourceEvidenceAnalyzer(value)
+            return CallableGeneralSourceSelectionBrain(value)
         return None
 
     def issue_command_identity(self, **kwargs: Any) -> dict[str, Any] | None:
@@ -381,71 +385,60 @@ class Doc281GeneralSourceRegistry:
         command_direction = str(kwargs.get("command_direction") or "").strip()
         requested_output_count = kwargs.get("requested_output_count")
         if (
-            not project_id or template_id != GENERAL_TEMPLATE_ID or not isinstance(snapshot, dict)
-            or not isinstance(requested_output_count, int) or isinstance(requested_output_count, bool)
+            not project_id
+            or template_id != GENERAL_TEMPLATE_ID
+            or not isinstance(snapshot, dict)
+            or not command_direction
+            or not isinstance(requested_output_count, int)
+            or isinstance(requested_output_count, bool)
             or not 1 <= requested_output_count <= 8
         ):
             return None
         snapshot_digest = str(snapshot.get("snapshot_digest") or "").strip().lower()
-        if len(snapshot_digest) != 64 or not self.requirement_policy_version:
+        if len(snapshot_digest) != 64:
             return None
-        classification_facts = {
-            "schema_version": "doc281_general_requirement_classification_v1",
+        selection_facts = {
+            "schema_version": "doc281_general_source_selection_v2",
             "project_id": project_id,
             "template_id": template_id,
             "command_direction": command_direction,
             "source_library_snapshot_digest": snapshot_digest,
-            "policy_version": self.requirement_policy_version,
+            "policy_version": self.selection_policy_version,
             "requested_output_count": requested_output_count,
+            "maximum_sources": self.maximum_sources,
         }
-        classification_binding_digest = doc270_canonical_digest(classification_facts)
-        cache_state, requirement = self._cached_requirement(
+        binding_digest = doc270_canonical_digest(selection_facts)
+        cache_state, selection = self._cached_selection(
             project_id=project_id,
-            classification_facts=classification_facts,
-            classification_binding_digest=classification_binding_digest,
+            selection_facts=selection_facts,
+            selection_binding_digest=binding_digest,
         )
-        if cache_state in {self._CACHE_INVALID, self._CACHE_OPTIONAL}:
-            # A malformed persisted decision is never an authorization to
-            # classify again or to select a different source on replay.
+        if cache_state == self._CACHE_INVALID:
             return None
         if cache_state == self._CACHE_MISS:
-            # This is the only classifier call boundary.  In particular, do
-            # not pass snapshot entries, IDs, SHA values, or browser facts.
-            issued = self.requirement_issuer(command_direction=command_direction)
-            if isinstance(issued, dict) and issued.get("state") == self._CACHE_OPTIONAL:
-                if set(issued) != {"state"}:
-                    return None
-                if callable(self.requirement_receipt_append):
-                    try:
-                        self.requirement_receipt_append(
-                            project_id=project_id,
-                            classification_facts=dict(classification_facts),
-                            classification_binding_digest=classification_binding_digest,
-                            state=self._CACHE_OPTIONAL,
-                            requirement=None,
-                        )
-                    except Exception:
-                        return None
-                return None
-            requirement = self._bound_requirement(
-                issued,
-                classification_binding_digest=classification_binding_digest,
+            selection = self._select_current_sources(
+                project_id=project_id,
+                snapshot=snapshot,
+                command_direction=command_direction,
+                requested_output_count=requested_output_count,
+                selection_binding_digest=binding_digest,
             )
-            if requirement is not None and callable(self.requirement_receipt_append):
+            if selection is None:
+                return None
+            if callable(self.selection_receipt_append):
                 try:
-                    self.requirement_receipt_append(
+                    self.selection_receipt_append(
                         project_id=project_id,
-                        classification_facts=dict(classification_facts),
-                        classification_binding_digest=classification_binding_digest,
-                        state=self._CACHE_REQUIRED,
-                        requirement=dict(requirement),
+                        selection_facts=dict(selection_facts),
+                        selection_binding_digest=binding_digest,
+                        selection=dict(selection),
                     )
                 except Exception:
                     return None
-        if not isinstance(requirement, dict):
+        if not isinstance(selection, dict):
             return None
-        requirement_digest = str(requirement.get("requirement_digest") or "").strip().lower()
-        if len(requirement_digest) != 64:
+        selection_digest = str(selection.get("selection_digest") or "").strip().lower()
+        if len(selection_digest) != 64:
             return None
         output_plan = [
             {
@@ -455,7 +448,7 @@ class Doc281GeneralSourceRegistry:
                     "template_id": template_id,
                     "command_direction": command_direction,
                     "source_library_snapshot_digest": snapshot_digest,
-                    "requirement_digest": requirement_digest,
+                    "selection_digest": selection_digest,
                     "output_index": output_index,
                 }),
             }
@@ -467,14 +460,14 @@ class Doc281GeneralSourceRegistry:
             "template_id": template_id,
             "command_direction": command_direction,
             "source_library_snapshot_digest": snapshot_digest,
-            "requirement_digest": requirement_digest,
+            "selection_digest": selection_digest,
             "requested_output_count": requested_output_count,
             "output_plan_digest": output_plan_digest,
         }
         command_facts_digest = doc270_canonical_digest(command_facts)
         identity = {
-            "schema_version": "doc281_general_command_identity_v1",
-            "issuer": "v3_doc281_general_command_registry",
+            "schema_version": "doc281_general_command_identity_v2",
+            "issuer": "v3_doc281_general_source_selection_brain",
             "protocol": self.protocol,
             "project_id": project_id,
             "template_id": template_id,
@@ -487,98 +480,273 @@ class Doc281GeneralSourceRegistry:
         identity["identity_digest"] = doc270_canonical_digest(identity)
         self._identities[identity["identity_digest"]] = {
             "identity": dict(identity),
-            "requirement": dict(requirement),
+            "selection": dict(selection),
             "snapshot": dict(snapshot),
             "output_plan": output_plan,
         }
         return dict(identity)
 
-    def _cached_requirement(
+    def _select_current_sources(
         self,
         *,
         project_id: str,
-        classification_facts: dict[str, Any],
-        classification_binding_digest: str,
+        snapshot: dict[str, Any],
+        command_direction: str,
+        requested_output_count: int,
+        selection_binding_digest: str,
+    ) -> dict[str, Any] | None:
+        original_entries = [
+            dict(item)
+            for item in snapshot.get("entries", [])
+            if isinstance(item, dict)
+            and item.get("automatic_use_eligible") is True
+            and item.get("availability_state") == "ready_verified"
+        ]
+        if not original_entries:
+            return self._bound_selection(
+                {"state": "prompt_only", "output_selections": []},
+                candidates={},
+                requested_output_count=requested_output_count,
+                selection_binding_digest=selection_binding_digest,
+            )
+        if not callable(self.analysis_entry_loader):
+            return None
+        try:
+            loaded = self.analysis_entry_loader(project_id=project_id, entries=original_entries)
+        except Exception:
+            return None
+        if not isinstance(loaded, list) or len(loaded) != len(original_entries):
+            return None
+        original_by_reference = {
+            str(item.get("reference_id") or ""): item
+            for item in original_entries
+            if str(item.get("reference_id") or "")
+        }
+        candidates: dict[str, dict[str, Any]] = {}
+        for item in loaded:
+            if not isinstance(item, dict):
+                return None
+            reference_id = str(item.get("reference_id") or "")
+            original = original_by_reference.get(reference_id)
+            if (
+                not isinstance(original, dict)
+                or item.get("asset_id") != original.get("asset_id")
+                or item.get("content_sha256") != original.get("content_sha256")
+            ):
+                return None
+            handle = doc270_canonical_digest({
+                "schema_version": "doc281_general_source_candidate_handle_v1",
+                "reference_id": reference_id,
+                "asset_id": str(original.get("asset_id") or ""),
+                "content_sha256": str(original.get("content_sha256") or ""),
+            })
+            if handle in candidates:
+                return None
+            candidates[handle] = {
+                "reference_id": reference_id,
+                "asset_id": str(original.get("asset_id") or ""),
+                "content_sha256": str(original.get("content_sha256") or ""),
+                "candidate_handle": handle,
+                "analysis_bytes": item.get("analysis_bytes"),
+                "mime_type": item.get("mime_type"),
+            }
+        try:
+            issued = self.selection_brain.select(
+                command_direction=command_direction,
+                entries=[
+                    {
+                        "candidate_handle": handle,
+                        "analysis_bytes": candidate["analysis_bytes"],
+                        "mime_type": candidate["mime_type"],
+                    }
+                    for handle, candidate in sorted(candidates.items())
+                ],
+                requested_output_count=requested_output_count,
+                maximum_sources=self.maximum_sources,
+            )
+        except Exception:
+            return None
+        return self._bound_selection(
+            issued,
+            candidates=candidates,
+            requested_output_count=requested_output_count,
+            selection_binding_digest=selection_binding_digest,
+        )
+
+    def _bound_selection(
+        self,
+        issued: Any,
+        *,
+        candidates: dict[str, dict[str, Any]],
+        requested_output_count: int,
+        selection_binding_digest: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(issued, dict) or set(issued) != {"state", "output_selections"}:
+            return None
+        state = issued.get("state")
+        output_selections = issued.get("output_selections")
+        if state == "prompt_only":
+            if output_selections != []:
+                return None
+            selection = {
+                "schema_version": "doc281_general_source_selection_v2",
+                "state": "prompt_only",
+                "maximum_sources": self.maximum_sources,
+                "policy_version": self.selection_policy_version,
+                "selection_binding_digest": selection_binding_digest,
+                "output_selections": [],
+            }
+            selection["selection_digest"] = doc270_canonical_digest(selection)
+            return selection
+        if state != "selected" or not isinstance(output_selections, list) or len(output_selections) != requested_output_count:
+            return None
+        indexes: set[int] = set()
+        bound_outputs: list[dict[str, Any]] = []
+        for output in output_selections:
+            if not isinstance(output, dict) or set(output) != {"output_index", "candidate_handles"}:
+                return None
+            index = output.get("output_index")
+            handles = output.get("candidate_handles")
+            if (
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or index < 1
+                or index > requested_output_count
+                or index in indexes
+                or not isinstance(handles, list)
+                or not 1 <= len(handles) <= self.maximum_sources
+                or len(handles) != len(set(handles))
+                or any(not isinstance(handle, str) or handle not in candidates for handle in handles)
+            ):
+                return None
+            indexes.add(index)
+            selected_sources = [
+                {
+                    "reference_id": str(candidates[handle]["reference_id"]),
+                    "asset_id": str(candidates[handle]["asset_id"]),
+                    "content_sha256": str(candidates[handle]["content_sha256"]),
+                }
+                for handle in handles
+            ]
+            bound_outputs.append({
+                "output_index": index,
+                "selected_sources": sorted(selected_sources, key=doc270_canonical_digest),
+            })
+        if indexes != set(range(1, requested_output_count + 1)):
+            return None
+        selection = {
+            "schema_version": "doc281_general_source_selection_v2",
+            "state": "selected",
+            "maximum_sources": self.maximum_sources,
+            "policy_version": self.selection_policy_version,
+            "selection_binding_digest": selection_binding_digest,
+            "output_selections": sorted(bound_outputs, key=lambda item: item["output_index"]),
+        }
+        selection["selection_digest"] = doc270_canonical_digest(selection)
+        return selection
+
+    def _cached_selection(
+        self,
+        *,
+        project_id: str,
+        selection_facts: dict[str, Any],
+        selection_binding_digest: str,
     ) -> tuple[str, dict[str, Any] | None]:
-        if not callable(self.requirement_receipt_lookup):
+        if not callable(self.selection_receipt_lookup):
             return self._CACHE_MISS, None
         try:
-            record = self.requirement_receipt_lookup(
+            record = self.selection_receipt_lookup(
                 project_id=project_id,
-                classification_binding_digest=classification_binding_digest,
+                selection_binding_digest=selection_binding_digest,
             )
         except Exception:
             return self._CACHE_INVALID, None
         if record is None:
             return self._CACHE_MISS, None
-        if not self._valid_classification_receipt(
-            record,
-            classification_facts=classification_facts,
-            classification_binding_digest=classification_binding_digest,
-        ):
-            return self._CACHE_INVALID, None
-        if record["state"] == self._CACHE_OPTIONAL:
-            return self._CACHE_OPTIONAL, None
-        requirement = self._bound_requirement(
-            record["requirement"], classification_binding_digest=classification_binding_digest,
-        )
-        return (self._CACHE_REQUIRED, requirement) if requirement is not None else (self._CACHE_INVALID, None)
-
-    def _valid_classification_receipt(
-        self,
-        record: Any,
-        *,
-        classification_facts: dict[str, Any],
-        classification_binding_digest: str,
-    ) -> bool:
         if not isinstance(record, dict) or set(record) != {
-            "schema_version", "identity_digest", "classification_binding_digest",
-            "classification_facts", "state", "requirement", "receipt_digest",
+            "schema_version", "identity_digest", "selection_binding_digest",
+            "selection_facts", "selection", "receipt_digest",
         }:
-            return False
+            return self._CACHE_INVALID, None
         if (
-            record.get("schema_version") != "doc281_general_requirement_classification_receipt_v1"
-            or record.get("identity_digest") != classification_binding_digest
-            or record.get("classification_binding_digest") != classification_binding_digest
-            or record.get("classification_facts") != classification_facts
-            or record.get("state") not in {self._CACHE_REQUIRED, self._CACHE_OPTIONAL}
+            record.get("schema_version") != "doc281_general_source_selection_receipt_v2"
+            or record.get("identity_digest") != selection_binding_digest
+            or record.get("selection_binding_digest") != selection_binding_digest
+            or record.get("selection_facts") != selection_facts
             or not self._same_digest_record(record, "receipt_digest")
         ):
-            return False
-        if record["state"] == self._CACHE_OPTIONAL:
-            return record.get("requirement") is None
-        requirement = record.get("requirement")
-        if not isinstance(requirement, dict) or set(requirement) != {
-            "schema_version", "kind", "maximum_sources", "policy_version",
-            "classification_binding_digest", "requirement_digest",
-        }:
-            return False
-        expected = self._bound_requirement(
-            requirement, classification_binding_digest=classification_binding_digest,
+            return self._CACHE_INVALID, None
+        selection = self._selection_from_record(
+            record.get("selection"),
+            requested_output_count=int(selection_facts["requested_output_count"]),
+            selection_binding_digest=selection_binding_digest,
         )
-        return expected == requirement
+        if selection is None:
+            return self._CACHE_INVALID, None
+        return (
+            self._CACHE_SELECTED if selection["state"] == "selected" else self._CACHE_PROMPT_ONLY,
+            selection,
+        )
 
-    def _bound_requirement(self, issued: Any, *, classification_binding_digest: str) -> dict[str, Any] | None:
-        if not isinstance(issued, dict):
+    def _selection_from_record(
+        self,
+        value: Any,
+        *,
+        requested_output_count: int,
+        selection_binding_digest: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(value, dict) or set(value) != {
+            "schema_version", "state", "maximum_sources", "policy_version",
+            "selection_binding_digest", "output_selections", "selection_digest",
+        }:
             return None
-        kind = issued.get("kind")
-        maximum_sources = issued.get("maximum_sources")
         if (
-            kind not in _DOC281_ALLOWED_REQUIREMENT_KINDS
-            or not isinstance(maximum_sources, int)
-            or isinstance(maximum_sources, bool)
-            or not 1 <= maximum_sources <= 4
+            value.get("schema_version") != "doc281_general_source_selection_v2"
+            or value.get("maximum_sources") != self.maximum_sources
+            or value.get("policy_version") != self.selection_policy_version
+            or value.get("selection_binding_digest") != selection_binding_digest
+            or not self._same_digest_record(value, "selection_digest")
         ):
             return None
-        requirement = {
-            "schema_version": "doc281_general_reference_requirement_v1",
-            "kind": kind,
-            "maximum_sources": maximum_sources,
-            "policy_version": self.requirement_policy_version,
-            "classification_binding_digest": classification_binding_digest,
-        }
-        requirement["requirement_digest"] = doc270_canonical_digest(requirement)
-        return requirement
+        state = value.get("state")
+        outputs = value.get("output_selections")
+        if state == "prompt_only":
+            return dict(value) if outputs == [] else None
+        if state != "selected" or not isinstance(outputs, list) or len(outputs) != requested_output_count:
+            return None
+        indexes: set[int] = set()
+        for output in outputs:
+            if not isinstance(output, dict) or set(output) != {"output_index", "selected_sources"}:
+                return None
+            index = output.get("output_index")
+            sources = output.get("selected_sources")
+            if (
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or index < 1
+                or index > requested_output_count
+                or index in indexes
+                or not isinstance(sources, list)
+                or not 1 <= len(sources) <= self.maximum_sources
+            ):
+                return None
+            identities: set[tuple[str, str]] = set()
+            for source in sources:
+                if not isinstance(source, dict) or set(source) != {"reference_id", "asset_id", "content_sha256"}:
+                    return None
+                reference_id = str(source.get("reference_id") or "")
+                asset_id = str(source.get("asset_id") or "")
+                content_sha256 = str(source.get("content_sha256") or "").lower()
+                if (
+                    not reference_id
+                    or not asset_id
+                    or len(content_sha256) != 64
+                    or (reference_id, asset_id) in identities
+                ):
+                    return None
+                identities.add((reference_id, asset_id))
+            indexes.add(index)
+        return dict(value) if indexes == set(range(1, requested_output_count + 1)) else None
 
     @staticmethod
     def _same_digest_record(value: dict[str, Any], field: str) -> bool:
@@ -597,122 +765,68 @@ class Doc281GeneralSourceRegistry:
             return None
         receipt = self._receipts.get(str(identity["identity_digest"]))
         if receipt is None:
-            snapshot = stored["snapshot"]
-            requirement = stored["requirement"]
-            entries = [dict(item) for item in snapshot.get("entries", []) if isinstance(item, dict)]
-            if callable(self.analysis_entry_loader):
-                entries = self.analysis_entry_loader(project_id=project_id, entries=entries) or []
-            expected = {
-                "object_front_presentation": ("object_or_product", "front", "object_front_presentation"),
-                "object_rear_structure": ("object_or_product", "rear", "object_back_or_structure"),
-                "object_detail": ("object_or_product", "detail_or_macro", "object_detail"),
-                "person_environment_context": ("person", "environment_wide", "environment"),
-                "brand_scene_material": ("brand_or_graphic", "packaging", "logo_or_mark"),
-            }.get(str(requirement.get("kind") or ""))
-            matches: list[dict[str, str]] = []
-            profiles: dict[str, dict[str, Any]] = {}
-            analysis_complete = bool(entries)
-            for entry in entries:
-                reference_id = str(entry.get("reference_id") or "")
-                try:
-                    analyzed = self.evidence_analyzer.analyze(project_id=project_id, entries=[dict(entry)])
-                except Exception:
-                    analysis_complete = False
-                    continue
-                if (
-                    not isinstance(analyzed, list)
-                    or len(analyzed) != 1
-                    or not isinstance(analyzed[0], dict)
-                    or not semantic_response_is_valid(analyzed[0])
-                ):
-                    analysis_complete = False
-                    continue
-                profiles[reference_id] = dict(analyzed[0])
-            observations: list[dict[str, Any]] = []
-            for entry in snapshot.get("entries", []):
-                if not isinstance(entry, dict):
-                    continue
-                semantic = profiles.get(str(entry.get("reference_id") or ""))
-                if not isinstance(semantic, dict):
-                    continue
-                profile = {
-                    "schema_version": "doc281_source_evidence_observation_v1",
-                    "project_id": project_id,
-                    "reference_id": str(entry.get("reference_id") or ""),
-                    "asset_id": str(entry.get("asset_id") or ""),
-                    "content_sha256": str(entry.get("content_sha256") or ""),
-                    "semantic": {
-                        key: semantic.get(key)
-                        for key in ("subject_kind", "view_kind", "affordances")
-                    },
-                }
-                if not profile["reference_id"] or not profile["asset_id"] or len(profile["content_sha256"]) != 64:
-                    continue
-                profile["observation_digest"] = doc270_canonical_digest(profile)
-                observations.append(profile)
-            self._observations[str(identity["identity_digest"])] = observations
-            if expected and analysis_complete:
-                for entry in snapshot.get("entries", []):
-                    if not isinstance(entry, dict) or entry.get("automatic_use_eligible") is not True:
-                        continue
-                    profile = profiles.get(str(entry.get("reference_id") or ""))
-                    if not isinstance(profile, dict):
-                        continue
-                    if (
-                        profile.get("subject_kind") == expected[0]
-                        and profile.get("view_kind") == expected[1]
-                        and expected[2] in list(profile.get("affordances") or [])
-                    ):
-                        matches.append({
-                            "reference_id": str(entry["reference_id"]),
-                            "asset_id": str(entry["asset_id"]),
-                            "content_sha256": str(entry["content_sha256"]),
-                        })
-            maximum = min(4, max(1, int(requirement.get("maximum_sources") or 1)))
-            output_bindings = []
+            selection = dict(stored["selection"])
+            snapshot = dict(stored["snapshot"])
+            selected_by_output = {
+                int(item["output_index"]): [dict(source) for source in item["selected_sources"]]
+                for item in selection.get("output_selections", [])
+                if isinstance(item, dict)
+                and isinstance(item.get("output_index"), int)
+                and isinstance(item.get("selected_sources"), list)
+            }
+            output_bindings: list[dict[str, Any]] = []
             for plan_item in stored["output_plan"]:
+                output_index = int(plan_item["output_index"])
                 binding = {
-                    "output_index": plan_item["output_index"],
-                    "output_nonce": plan_item["output_nonce"],
-                    "matched_references": matches[:maximum],
+                    "output_index": output_index,
+                    "output_nonce": str(plan_item["output_nonce"]),
+                    "matched_references": selected_by_output.get(output_index, []),
                 }
                 binding["output_binding_digest"] = doc270_canonical_digest({
                     "project_id": project_id,
                     "command_plan_binding_digest": identity["plan_binding_digest"],
-                    "requirement_digest": requirement["requirement_digest"],
+                    "selection_digest": selection["selection_digest"],
                     "source_library_snapshot_digest": snapshot["snapshot_digest"],
                     **binding,
                 })
                 output_bindings.append(binding)
+            all_selected: list[dict[str, Any]] = []
+            seen: set[tuple[str, str]] = set()
+            for binding in output_bindings:
+                for source in binding["matched_references"]:
+                    key = (str(source["reference_id"]), str(source["asset_id"]))
+                    if key not in seen:
+                        seen.add(key)
+                        all_selected.append(dict(source))
             receipt = {
                 "project_id": project_id,
                 "command_plan_binding_digest": identity["plan_binding_digest"],
-                "requirement_digest": requirement["requirement_digest"],
+                "selection_digest": selection["selection_digest"],
                 "source_library_snapshot_digest": snapshot["snapshot_digest"],
-                "state": "resolved" if analysis_complete and matches else "optional_uncertain",
-                "matched_references": matches[:maximum],
-                "output_bindings": output_bindings,
+                "state": "resolved" if selection["state"] == "selected" else "prompt_only",
+                "matched_references": sorted(all_selected, key=doc270_canonical_digest),
+                "output_bindings": output_bindings if selection["state"] == "selected" else [],
             }
             receipt["receipt_digest"] = doc270_canonical_digest(receipt)
             self._receipts[str(identity["identity_digest"])] = receipt
         return {
             "protocol": self.protocol,
-            "schema_version": "doc281_general_registered_receipt_v1",
+            "schema_version": "doc281_general_registered_receipt_v2",
             "command_identity": dict(identity),
             "receipt": dict(receipt),
         }
 
-    def requirement_for_identity(self, identity: dict[str, Any]) -> dict[str, Any] | None:
+    def selection_for_identity(self, identity: dict[str, Any]) -> dict[str, Any] | None:
         stored = self._identities.get(str(identity.get("identity_digest") or ""))
-        requirement = stored.get("requirement") if isinstance(stored, dict) else None
-        return dict(requirement) if isinstance(requirement, dict) else None
+        selection = stored.get("selection") if isinstance(stored, dict) else None
+        return dict(selection) if isinstance(selection, dict) else None
 
-    def observations_for_identity(self, identity: dict[str, Any]) -> list[dict[str, Any]]:
-        return [dict(item) for item in self._observations.get(str(identity.get("identity_digest") or ""), [])]
+    def observations_for_identity(self, _identity: dict[str, Any]) -> list[dict[str, Any]]:
+        return []
 
 
 def doc281_general_source_registry_from_environment() -> Doc281GeneralSourceRegistry:
-    """Compose General evidence only from private policy plus V3 vision route."""
+    """Compose the General source-selection Brain from private server config."""
 
     configured = str(os.getenv("ALCHEMY_DOC281_GENERAL_SOURCE_POLICY_PATH") or "").strip()
     policy_path = Path(configured) if configured else Path(__file__).with_name("policies") / "doc281_general_source_policy_v1.json"
@@ -730,14 +844,9 @@ def doc281_general_source_registry_from_environment() -> Doc281GeneralSourceRegi
         or not str(policy["policy_version"]).strip()
     ):
         return Doc281GeneralSourceRegistry()
-    kinds = policy.get("allowed_requirement_kinds")
     maximum_sources = policy.get("maximum_sources")
     if (
-        not isinstance(kinds, list)
-        or not kinds
-        or not all(isinstance(item, str) and item in _DOC281_ALLOWED_REQUIREMENT_KINDS for item in kinds)
-        or len(kinds) != len(set(kinds))
-        or not isinstance(maximum_sources, int)
+        not isinstance(maximum_sources, int)
         or isinstance(maximum_sources, bool)
         or not 1 <= maximum_sources <= 4
     ):
@@ -747,40 +856,22 @@ def doc281_general_source_registry_from_environment() -> Doc281GeneralSourceRegi
         if not _lab_vision_enabled():
             return Doc281GeneralSourceRegistry()
         api_key, base_url, model = (_lab_vision_setting(field) for field in ("api_key", "base_url", "model"))
-        analyzer = OpenAICompatibleSourceEvidenceAnalyzer(
+        brain = OpenAICompatibleGeneralSourceSelectionBrain(
             api_key=api_key, base_url=base_url, model=model,
-            timeout_seconds=float(os.getenv("ALCHEMY_DOC281_GENERAL_SOURCE_ANALYSIS_TIMEOUT_SECONDS", "30")),
-            preferred_protocol="chat",
+            timeout_seconds=float(os.getenv(
+                "ALCHEMY_DOC281_GENERAL_SOURCE_SELECTION_TIMEOUT_SECONDS",
+                os.getenv("ALCHEMY_DOC281_GENERAL_SOURCE_ANALYSIS_TIMEOUT_SECONDS", "30"),
+            )),
         )
     except (ImportError, ValueError, TypeError):
         return Doc281GeneralSourceRegistry()
-    if not analyzer.available():
+    if not brain.available():
         return Doc281GeneralSourceRegistry()
-
-    from .source_evidence import OpenAICompatibleTextRequirementIssuer
-    classifier = OpenAICompatibleTextRequirementIssuer(
-        api_key=api_key, base_url=base_url, model=model, allowed_kinds=tuple(kinds),
-        maximum_sources=maximum_sources,
-        timeout_seconds=float(os.getenv("ALCHEMY_DOC281_GENERAL_SOURCE_ANALYSIS_TIMEOUT_SECONDS", "30")),
-    )
-    if not classifier.available():
-        return Doc281GeneralSourceRegistry()
-
-    def issue_requirement(*, command_direction: str) -> dict[str, Any] | None:
-        value = classifier(command_direction=command_direction)
-        if not isinstance(value, dict):
-            return None
-        if value.get("state") == "optional_uncertain":
-            return {"state": "optional_uncertain"}
-        if value.get("state") != "required":
-            return None
-        requirement = {"schema_version": "doc281_general_reference_requirement_v1", "kind": value["kind"], "maximum_sources": value["maximum_sources"]}
-        return {**requirement, "requirement_digest": doc270_canonical_digest(requirement)}
 
     return Doc281GeneralSourceRegistry(
-        evidence_analyzer=analyzer,
-        requirement_issuer=issue_requirement,
-        requirement_policy_version=str(policy["policy_version"]),
+        selection_brain=brain,
+        selection_policy_version=str(policy["policy_version"]),
+        maximum_sources=maximum_sources,
     )
 
 
@@ -813,13 +904,13 @@ class V3ProjectModeService:
         ):
             self.doc281_general_source_registry.analysis_entry_loader = self._doc281_general_analysis_entries
         if isinstance(self.doc281_general_source_registry, Doc281GeneralSourceRegistry):
-            if self.doc281_general_source_registry.requirement_receipt_lookup is None:
-                self.doc281_general_source_registry.requirement_receipt_lookup = (
-                    self._doc281_general_requirement_receipt_lookup
+            if self.doc281_general_source_registry.selection_receipt_lookup is None:
+                self.doc281_general_source_registry.selection_receipt_lookup = (
+                    self._doc281_general_selection_receipt_lookup
                 )
-            if self.doc281_general_source_registry.requirement_receipt_append is None:
-                self.doc281_general_source_registry.requirement_receipt_append = (
-                    self._doc281_general_requirement_receipt_append
+            if self.doc281_general_source_registry.selection_receipt_append is None:
+                self.doc281_general_source_registry.selection_receipt_append = (
+                    self._doc281_general_selection_receipt_append
                 )
         self._doc277_planning_lock = threading.RLock()
         # Product API uses this narrow readback only while authenticating a
@@ -859,50 +950,48 @@ class V3ProjectModeService:
 
         return None
 
-    def _doc281_general_requirement_receipt_lookup(
+    def _doc281_general_selection_receipt_lookup(
         self,
         *,
         project_id: str,
-        classification_binding_digest: str,
+        selection_binding_digest: str,
     ) -> dict[str, Any] | None:
-        """Read one private, exact General intent receipt for replay only."""
+        """Read one exact private Brain-selection receipt for replay only."""
 
-        if not isinstance(project_id, str) or not isinstance(classification_binding_digest, str):
+        if not isinstance(project_id, str) or not isinstance(selection_binding_digest, str):
             return None
         try:
             records = self.project_store.list_private_records(
-                project_id, _DOC281_GENERAL_REQUIREMENT_NAMESPACE,
+                project_id, _DOC281_GENERAL_SELECTION_NAMESPACE,
             )
         except Exception:
             return None
         for record in reversed(records):
             if (
                 isinstance(record, dict)
-                and record.get("classification_binding_digest") == classification_binding_digest
+                and record.get("selection_binding_digest") == selection_binding_digest
             ):
                 return dict(record)
         return None
 
-    def _doc281_general_requirement_receipt_append(
+    def _doc281_general_selection_receipt_append(
         self,
         *,
         project_id: str,
-        classification_facts: dict[str, Any],
-        classification_binding_digest: str,
-        state: str,
-        requirement: dict[str, Any] | None,
+        selection_facts: dict[str, Any],
+        selection_binding_digest: str,
+        selection: dict[str, Any],
     ) -> dict[str, object]:
         receipt = {
-            "schema_version": "doc281_general_requirement_classification_receipt_v1",
-            "identity_digest": classification_binding_digest,
-            "classification_binding_digest": classification_binding_digest,
-            "classification_facts": dict(classification_facts),
-            "state": state,
-            "requirement": dict(requirement) if isinstance(requirement, dict) else None,
+            "schema_version": "doc281_general_source_selection_receipt_v2",
+            "identity_digest": selection_binding_digest,
+            "selection_binding_digest": selection_binding_digest,
+            "selection_facts": dict(selection_facts),
+            "selection": dict(selection),
         }
         receipt["receipt_digest"] = self._doc270_digest(receipt)
         return self.project_store.append_private_record(
-            project_id, _DOC281_GENERAL_REQUIREMENT_NAMESPACE, receipt,
+            project_id, _DOC281_GENERAL_SELECTION_NAMESPACE, receipt,
         )
 
     def _doc270_ecommerce_view_activation_capability_lookup(
@@ -1712,16 +1801,16 @@ class V3ProjectModeService:
     ) -> dict[str, Any]:
         """Consume only the named Doc281 private registry response.
 
-        The registry owns requirement/evidence issuance.  This boundary merely
-        re-reads the current project snapshot and freezes a bounded provider
+        The registry owns the Brain selection receipt. This boundary only
+        re-reads the current project snapshot and freezes the provider
         projection; it never accepts browser selection metadata.
         """
 
         if not isinstance(entry, dict) or set(entry) != {"protocol", "schema_version", "command_identity", "receipt"}:
             return {"state": "receipt_invalid"}
         if (
-            entry.get("protocol") != "doc281_general_source_registry_v1"
-            or entry.get("schema_version") != "doc281_general_registered_receipt_v1"
+            entry.get("protocol") != "doc281_general_source_registry_v2"
+            or entry.get("schema_version") != "doc281_general_registered_receipt_v2"
             or entry.get("command_identity") != identity
             or not isinstance(entry.get("receipt"), dict)
         ):
@@ -1729,13 +1818,13 @@ class V3ProjectModeService:
         receipt = dict(entry["receipt"])
         if not self._doc270_same_digest_record(receipt, "receipt_digest"):
             return {"state": "receipt_invalid"}
-        requirement_digest = str(receipt.get("requirement_digest") or "").lower()
-        # A digest-shaped placeholder is not a server-issued requirement
+        selection_digest = str(receipt.get("selection_digest") or "").lower()
+        # A digest-shaped placeholder is not a Brain-issued source-selection
         # binding. The registry never emits a degenerate digest.
-        if len(requirement_digest) != 64 or len(set(requirement_digest)) == 1:
+        if len(selection_digest) != 64 or len(set(selection_digest)) == 1:
             return {"state": "receipt_invalid"}
         state = str(receipt.get("state") or "").strip()
-        if state in {"not_applicable", "optional_uncertain", "insufficient_evidence", "no_reference"}:
+        if state == "prompt_only":
             return {"state": "prompt_only"}
         if state != "resolved":
             return {"state": "receipt_invalid"}
@@ -1785,6 +1874,7 @@ class V3ProjectModeService:
         requested_output_count = identity.get("requested_output_count")
         output_plan_digest = str(identity.get("output_plan_digest") or "")
         frozen_output_bindings: list[dict[str, Any]] = []
+        output_selected_keys: set[tuple[str, str]] = set()
         if requested_output_count is not None or output_plan_digest:
             if (
                 not isinstance(requested_output_count, int) or isinstance(requested_output_count, bool)
@@ -1800,25 +1890,49 @@ class V3ProjectModeService:
                     return {"state": "receipt_invalid"}
                 output_index = binding.get("output_index")
                 output_nonce = str(binding.get("output_nonce") or "")
+                binding_matches = binding.get("matched_references")
                 if (
                     not isinstance(output_index, int) or output_index < 1 or output_index > requested_output_count
                     or output_index in indexes or len(output_nonce) != 64
-                    or binding.get("matched_references") != raw_matches
+                    or not isinstance(binding_matches, list)
+                    or not binding_matches
+                    or len(binding_matches) > 4
                     or not self._doc270_same_digest_record(
                         {
                             "project_id": project.project_id,
                             "command_plan_binding_digest": identity["plan_binding_digest"],
-                            "requirement_digest": receipt["requirement_digest"],
+                            "selection_digest": receipt["selection_digest"],
                             "source_library_snapshot_digest": receipt["source_library_snapshot_digest"],
                             "output_index": output_index,
                             "output_nonce": output_nonce,
-                            "matched_references": raw_matches,
+                            "matched_references": binding_matches,
                             "output_binding_digest": binding.get("output_binding_digest"),
                         },
                         "output_binding_digest",
                     )
                 ):
                     return {"state": "receipt_invalid"}
+                binding_keys: set[tuple[str, str]] = set()
+                for source in binding_matches:
+                    if not isinstance(source, dict):
+                        return {"state": "receipt_invalid"}
+                    source_reference_id = str(source.get("reference_id") or "")
+                    source_asset_id = str(source.get("asset_id") or "")
+                    source_sha = str(source.get("content_sha256") or "").lower()
+                    source_entry = entries.get(source_reference_id)
+                    source_key = (source_reference_id, source_asset_id)
+                    if (
+                        not source_reference_id
+                        or source_key in binding_keys
+                        or not isinstance(source_entry, dict)
+                        or source_entry.get("asset_id") != source_asset_id
+                        or source_entry.get("content_sha256") != source_sha
+                        or source_entry.get("automatic_use_eligible") is not True
+                        or source_entry.get("availability_state") != "ready_verified"
+                    ):
+                        return {"state": "receipt_invalid"}
+                    binding_keys.add(source_key)
+                    output_selected_keys.add(source_key)
                 indexes.add(output_index)
                 frozen_output_bindings.append({
                     "output_index": output_index,
@@ -1826,6 +1940,8 @@ class V3ProjectModeService:
                     "output_binding_digest": str(binding["output_binding_digest"]),
                 })
             if indexes != set(range(1, requested_output_count + 1)):
+                return {"state": "receipt_invalid"}
+            if output_selected_keys != {(item["reference_id"], item["asset_id"]) for item in selected}:
                 return {"state": "receipt_invalid"}
         return {
             "state": "activated_resolved",
@@ -3162,16 +3278,10 @@ class V3ProjectModeService:
                         ) or 1,
                     )
                     if isinstance(identity, dict):
-                        requirement = doc281_registry.requirement_for_identity(identity)
                         self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_COMMAND_NAMESPACE, {
-                            "schema_version": "doc281_general_command_v1", "identity": dict(identity),
+                            "schema_version": "doc281_general_command_v2", "identity": dict(identity),
                             "identity_digest": str(identity.get("identity_digest") or ""),
                         })
-                        if isinstance(requirement, dict):
-                            self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_REQUIREMENT_NAMESPACE, {
-                                "schema_version": "doc281_general_requirement_v1", "identity_digest": str(identity.get("identity_digest") or ""),
-                                "requirement": dict(requirement),
-                            })
                     existing_general = (
                         self._doc270_general_existing_command(project, identity)
                         if isinstance(identity, dict)
@@ -3186,20 +3296,9 @@ class V3ProjectModeService:
                         project_id=project.project_id,
                         command_identity=dict(identity) if isinstance(identity, dict) else None,
                     )
-                    if isinstance(identity, dict):
-                        for observation in doc281_registry.observations_for_identity(identity):
-                            self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_OBSERVATION_NAMESPACE, {
-                                "schema_version": "doc281_source_evidence_observation_record_v1",
-                                "identity_digest": self._doc270_digest({
-                                    "command_identity_digest": str(identity.get("identity_digest") or ""),
-                                    "observation_digest": str(observation.get("observation_digest") or ""),
-                                }),
-                                "command_identity_digest": str(identity.get("identity_digest") or ""),
-                                "observation": observation,
-                            })
                     if isinstance(identity, dict) and isinstance(entry, dict):
                         self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_RECEIPT_NAMESPACE, {
-                            "schema_version": "doc281_general_resolution_receipt_v1", "identity_digest": str(identity.get("identity_digest") or ""),
+                            "schema_version": "doc281_general_resolution_receipt_v2", "identity_digest": str(identity.get("identity_digest") or ""),
                             "entry": dict(entry),
                         })
                 except Exception:
@@ -3568,6 +3667,13 @@ class V3ProjectModeService:
             advanced_reference_controls=advanced_reference_controls,
         )
         scenario_parameters = dict(scenario_selection.get("parameters") or {})
+        general_variation_contract = (
+            self._general_variation_contract(job_request.metadata)
+            if template_manifest.template_id == GENERAL_TEMPLATE_ID
+            else {}
+        )
+        if general_variation_contract:
+            scenario_parameters = {**scenario_parameters, **general_variation_contract}
         project_job_sequence = len(project.job_ids) + 1
         create_payload = {
             "user_input": user_input,
@@ -3585,6 +3691,10 @@ class V3ProjectModeService:
                 "project_job_sequence": project_job_sequence,
                 "scenario_pack_id": template_manifest.scenario_pack_id,
                 "scenario_parameters": scenario_parameters,
+                # Desktop and H5 consume this canonical General contract at
+                # the Job metadata root. Keep that stable projection in sync
+                # with the Scenario Pack diagnostic snapshot.
+                **general_variation_contract,
                 # Central Brain consumes these normalized values from the job
                 # metadata, not from the nested Scenario Pack diagnostic
                 # snapshot.  Preserve the explicit General canvas/count there

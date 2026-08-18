@@ -73,8 +73,10 @@ def test_doc270_phase3_legacy_fixture_ignores_an_enabled_doc281_environment_regi
     """Legacy Doc270 seams are deterministic even when normal General is enabled."""
 
     environment_registry = Doc281GeneralSourceRegistry(
-        evidence_analyzer=lambda **_kwargs: None,
-        requirement_issuer=lambda **_kwargs: None,
+        selection_brain=lambda **_kwargs: {
+            "state": "prompt_only",
+            "output_selections": [],
+        }
     )
     assert environment_registry.enabled is True
     monkeypatch.setattr(

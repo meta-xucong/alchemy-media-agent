@@ -171,6 +171,7 @@ def test_real_general_image_job_blocks_when_remote_brain_times_out_but_draft_gen
         "remote_provider_available": None,
         "remote_contract_rejected_sections": [],
         "remote_error_class": "timeout",
+        "remote_brain_stage": "plan",
     }
     assert draft.status == ScenarioRuntimeStatus.PLANNED
     assert draft.metadata["llm_brain"]["llm_used"] is False

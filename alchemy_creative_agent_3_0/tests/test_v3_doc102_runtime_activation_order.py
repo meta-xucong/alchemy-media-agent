@@ -36,6 +36,22 @@ def test_new_jobs_default_to_enforced_activation(monkeypatch) -> None:
     assert result.metadata["capability_activation_plan"]["activation_mode"] == "enforced"
 
 
+def test_new_jobs_ignore_legacy_or_invalid_activation_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
+    for configured in ("legacy", "shadow", "not-a-mode"):
+        monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", configured)
+        result = ScenarioRuntime().plan_job(
+            {
+                "user_input": "Create a simple editorial illustration",
+                "scenario_selection": {"scenario_id": "general_creative"},
+                "metadata": {"requested_image_count": 1},
+            }
+        )
+        assert result.status == ScenarioRuntimeStatus.PLANNED
+        assert result.metadata["capability_activation_mode"] == "enforced"
+        assert result.metadata["capability_activation_plan"]["activation_mode"] == "enforced"
+
+
 def test_product_only_job_excludes_human_and_portrait(monkeypatch) -> None:
     result = _plan(monkeypatch, {"user_input": "Create a premium product hero for a desk lamp with a brass handle", "scenario_selection": {"scenario_id": "general_creative"}, "uploaded_assets": [{"asset_id": "product", "role": "product_reference"}], "metadata": {"requested_image_count": 1}})
     active = set(result.metadata["capability_activation_plan"]["dependency_order"])

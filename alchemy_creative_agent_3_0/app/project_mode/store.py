@@ -22,6 +22,7 @@ _DOC270_PHASE4_PRIVATE_NAMESPACES = frozenset(
         "doc279_ecommerce_transparent_predecessor_receipts",
         "doc281_source_association_terminal_receipts_v1",
         "doc281_general_commands_v1",
+        "doc281_general_selection_receipts_v2",
         "doc281_general_requirements_v1",
         "doc281_source_evidence_observations_v1",
         "doc281_general_resolution_receipts_v1",

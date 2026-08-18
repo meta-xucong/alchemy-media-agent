@@ -1,7 +1,7 @@
 # Doc270 - V3 Project Source Library And Reference Matching Contract
 
-Status: Phase 0 shared design and deterministic test-contract authority. It
-does not change runtime behavior, provider inputs, historical projects, or
+Status: Shared source-library and Brain-selection implementation authority.
+It does not authorize provider calls, historical-project rewrites, or
 production deployment by itself.
 
 ## 1. Objective And Observed Gap
@@ -48,9 +48,9 @@ The authoritative path after implementation is:
 ```text
 durable upload bytes and project association
   -> Project Source Library entry
-  -> image-backed Source Evidence Profile
-  -> Brain/template output Reference Requirements
-  -> server-side Reference Matcher
+  -> current reverified original candidates
+  -> Brain-owned semantic selection over the images
+  -> server integrity binding and private selection receipt
   -> template-specific frozen reference projection
   -> existing provider-capacity and final physical-plan validation
   -> renderer and shared review
@@ -120,13 +120,13 @@ One layer must not own every decision. The stable split is:
 
 ```text
 Current prompt and selected template
-  -> Brain: output intent and reference requirements
+  -> Brain: output intent and semantic source selection over images
 
 Project Source Library
-  -> server analysis: image-backed evidence claims and uncertainty
+  -> server: verified project-scoped originals and immutable snapshot
 
-Reference Matcher
-  -> server: eligible candidates, ranking, insufficiency, and match receipt
+General source registry
+  -> Brain result: opaque candidate handles; server verifies scope, SHA, and output binding
 
 Specialized template / Product API / Project Mode
   -> server: truth policy, final source binding, cap reservation, and terminal state
@@ -150,14 +150,13 @@ independent final ID choices would create two competing authorities.
 
 Doc270 therefore adopts this migration rule:
 
-1. The Brain remains owner of output intent and declares typed
-   `reference_requirements`; it does not become the durable owner of source
-   bytes.
-2. The server matcher resolves only active project-upload original source IDs
-   from image-backed evidence and emits a server-issued
-   `ReferenceResolutionReceipt`. It never selects, ranks, or emits bound
-   Visual Assets or selected continuations.
-3. The specialized owner freezes final source IDs from that receipt. For
+1. For ordinary General V3, the Brain owns output intent and image semantics;
+   it returns only opaque candidate handles, never private source IDs or
+   durable source bytes.
+2. The server resolves only those handles against active project-upload
+   originals and emits a server-issued selection receipt. It never infers
+   meaning from filenames, order, browser fields, or regex branches.
+3. The specialized owner freezes final source bindings from that receipt. For
    Professional E-Commerce it then derives the existing Doc263
    `PhysicalProductReferenceProjection`, followed by the existing Doc269
    physical renderer plan.
@@ -179,6 +178,25 @@ Doc270 therefore adopts this migration rule:
 This is more coherent than making the matcher a weak after-the-fact override,
 or forcing the renderer to accept every original. It retains creative intent
 at the Brain and factual source binding at the server boundary.
+
+### 3.4 Current General implementation amendment
+
+The implementation authority in this document supersedes any earlier General
+V3 wording below that describes a server-side typed `ReferenceRequirement`,
+filename/order matcher, deterministic ranking, finite semantic taxonomy, or a
+text-only General classifier. Those descriptions remain historical design and
+rollout context, not an active General decision path. Current General V3 sends
+the explicit command and reverified original images to the configured
+source-selection Brain, accepts only its strict prompt-only or opaque-handle
+selection response, and performs only server-side scope, SHA, output-plan,
+replay, and receipt-integrity validation. Invalid or unavailable Brain output
+fails closed to prompt-only behavior.
+
+This amendment does not remove specialized typed contracts. Professional
+E-Commerce continues to use its E31 product-truth and physical-reference
+requirements, with Doc263/Doc269 retaining final admission and renderer-plan
+authority. Future specialized templates may define typed requirements in
+their own contracts; those requirements must not be loaded into General V3.
 
 ## 4. Shared Typed Contracts
 
