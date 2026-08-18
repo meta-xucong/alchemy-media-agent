@@ -914,11 +914,24 @@ class ProductionImageGenerationProvider(GenerationProvider):
     # module-owned guidance into a concise provider transport contract.
     provider_prompt_target_chars = 15000
     max_provider_prompt_chars: int | None = None
-    # V3's sole final-pixel renderer currently accepts at most five image
-    # inputs.  Keep the limit beside the V3 admission boundary rather than
-    # silently slicing a caller's reference evidence and discovering the
-    # mismatch only after a provider request is assembled.
+    # Keep the historical five-image value as a framework-only fallback. The
+    # live V3 route reads the active app Provider's certified capacity rather
+    # than silently slicing caller-owned reference evidence.
     max_provider_reference_images = 5
+
+    @classmethod
+    def configured_reference_image_capacity(cls) -> int:
+        """Read the active app Provider's certified edit cardinality."""
+
+        try:
+            from app.providers.openai_image import OpenAIGPTImageProvider
+
+            return max(0, int(OpenAIGPTImageProvider(model="gpt-image-2").reference_image_capacity()))
+        except (ImportError, TypeError, ValueError):
+            # Framework-only tests can construct the V3 service without the
+            # V1 provider package. Preserve the historical standard route in
+            # that isolated composition; the live app always resolves above.
+            return cls.max_provider_reference_images
 
     def __init__(self, output_store: Any | None = None) -> None:
         if output_store is None:
@@ -2880,7 +2893,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
     ) -> int | None:
         """Return the route-specific input limit without changing the base cap."""
 
-        return self.max_provider_reference_images
+        return self.configured_reference_image_capacity()
 
     @staticmethod
     def _reference_technical_admission(file_path: Path) -> tuple[bool, str]:
@@ -3813,7 +3826,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 plan.job_id != projection.job_id
                 or plan.output_index != projection.output_index
                 or plan.projection_digest != projection.projection_digest
-                or plan.maximum_reference_images > self.max_provider_reference_images
+                or plan.maximum_reference_images > self.configured_reference_image_capacity()
             ):
                 raise ValueError("lineage_mismatch")
             product_entries = [entry for entry in plan.references if entry.channel == "product_truth"]

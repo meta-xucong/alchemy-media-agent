@@ -619,8 +619,60 @@ def test_openai_image_provider_square_b64_reference_edit_transport_is_explicit(m
     capabilities = asyncio.run(provider.capabilities())
     assert capabilities.operations == ["generate", "edit", "image_reference", "image_edit"]
     assert capabilities.limits["sizes"] == ["1024x1024"]
+    assert capabilities.limits["max_reference_images"] == 1
+    assert capabilities.limits["reference_capacity_source"] == "profile_default"
     provider._assert_reference_transport_supported(1)  # noqa: SLF001
+    with pytest.raises(ProviderCapabilityMismatchError, match="cannot carry every required reference"):
+        provider._assert_reference_transport_supported(2)  # noqa: SLF001
     assert provider._supports_input_fidelity() is False  # noqa: SLF001
+
+
+def test_openai_image_provider_reference_capacity_override_is_explicit_and_invalid_values_fail_closed(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "square_b64_reference_edit")
+    monkeypatch.setattr(settings, "openai_image_edit_max_reference_images", 4)
+
+    capabilities = asyncio.run(provider.capabilities())
+
+    assert capabilities.limits["max_reference_images"] == 4
+    assert capabilities.limits["reference_capacity_source"] == "operator_override"
+    provider._assert_reference_transport_supported(4)  # noqa: SLF001
+
+    monkeypatch.setattr(settings, "openai_image_edit_max_reference_images", -1)
+    capabilities = asyncio.run(provider.capabilities())
+
+    assert capabilities.limits["max_reference_images"] == 0
+    assert capabilities.limits["reference_capacity_source"] == "invalid_override"
+    with pytest.raises(ProviderCapabilityMismatchError, match="cannot carry every required reference"):
+        provider._assert_reference_transport_supported(1)  # noqa: SLF001
+
+
+def test_openai_image_provider_preserves_safe_gateway_error_evidence_from_response_json():
+    provider = registry.image("openai_gpt_image")
+
+    class Response:
+        status_code = 400
+        headers = {"x-request-id": "req_gateway_123"}
+
+        @staticmethod
+        def json():
+            return {
+                "error": {
+                    "code": "too_many_reference_images",
+                    "type": "invalid_request_error",
+                }
+            }
+
+    class GatewayFailure(Exception):
+        status_code = 400
+        response = Response()
+
+    assert provider._upstream_error_evidence(GatewayFailure()) == {  # noqa: SLF001
+        "status_code": 400,
+        "upstream_code": "too_many_reference_images",
+        "upstream_error_type": "invalid_request_error",
+        "upstream_request_id": "req_gateway_123",
+    }
 
 
 def test_openai_image_provider_can_use_restricted_edit_transport_without_changing_generation(tmp_path, monkeypatch):

@@ -10829,6 +10829,67 @@ class V3ProjectModeService:
             "next_actions": [{"id": "review_project_request"}],
         }
 
+    def _doc277_planning_has_terminal_job_after(self, project: ProjectRecord) -> bool:
+        """Detect a terminal Job created after a still-open planning operation."""
+
+        pointer = dict(project.metadata or {}).get(_DOC277_CURRENT_OPERATION_KEY)
+        if not isinstance(pointer, dict) or pointer.get("state") != "planning":
+            return False
+        operation_created_at = str(pointer.get("created_at") or "").strip()
+        if not operation_created_at:
+            return False
+        try:
+            operation_time = datetime.fromisoformat(operation_created_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        for job_id in reversed(project.job_ids):
+            record = self.product_service.get_job_record(str(job_id or "").strip())
+            if record is None:
+                continue
+            record_created_at = str(getattr(record, "created_at", "") or "").strip()
+            try:
+                record_time = datetime.fromisoformat(record_created_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if record_time < operation_time:
+                continue
+            try:
+                status = self.product_service.get_job(record.job_id)
+            except Exception:
+                continue
+            raw_status = getattr(status, "status", None)
+            normalized = str(
+                getattr(raw_status, "value", raw_status) or ""
+            ).strip().lower()
+            return normalized in {
+                ProductJobStatusValue.BLOCKED.value,
+                ProductJobStatusValue.FAILED.value,
+            }
+        return False
+
+    def _doc277_terminal_job_operation(self, project: ProjectRecord) -> dict[str, Any] | None:
+        """Project a generic no-delivery terminal state for a failed Job."""
+
+        if not self._doc277_planning_has_terminal_job_after(project):
+            return None
+        for job_id in reversed(project.job_ids):
+            status = self.product_service.get_job(str(job_id or "").strip())
+            status_metadata = getattr(status, "metadata", None) if status is not None else None
+            raw_operation = (
+                status_metadata.get("current_operation")
+                if isinstance(status_metadata, dict)
+                else None
+            )
+            if isinstance(raw_operation, dict) and raw_operation.get("terminal") is True:
+                return dict(raw_operation)
+            return {
+                "state": "failed_no_delivery",
+                "terminal": True,
+                "pending": False,
+                "next_actions": [{"id": "continue"}],
+            }
+        return None
+
     @staticmethod
     def _doc277_digest(value: dict[str, Any]) -> str:
         serialized = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -10922,6 +10983,20 @@ class V3ProjectModeService:
         operation = self._doc281_current_terminal_operation(project)
         if operation is None:
             operation = self._doc277_current_planning_operation(project)
+        if operation is not None and operation.get("state") == "planning":
+            if project.primary_template_id == ECOMMERCE_TEMPLATE_ID:
+                terminal_job_operation = (
+                    self._ecommerce_current_operation(project)
+                    or self._doc277_terminal_job_operation(project)
+                )
+            else:
+                terminal_job_operation = self._doc277_terminal_job_operation(project)
+            if (
+                terminal_job_operation is not None
+                and terminal_job_operation.get("terminal") is True
+                and self._doc277_planning_has_terminal_job_after(project)
+            ):
+                operation = terminal_job_operation
         ecommerce_operation: dict[str, Any] | None = None
         ecommerce_transparent_successor = False
         ecommerce_no_job_e32_projection = False

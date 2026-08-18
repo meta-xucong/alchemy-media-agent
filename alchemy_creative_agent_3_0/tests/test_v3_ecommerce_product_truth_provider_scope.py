@@ -18,6 +18,9 @@ from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutput
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projection import (
     ProductTruthSource,
     build_physical_product_projection,
@@ -63,6 +66,17 @@ from alchemy_creative_agent_3_0.app.shared_capabilities import (
     UploadedAssetInfo,
 )
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import ecommerce_test_service
+
+
+@pytest.fixture(autouse=True)
+def _standard_reference_capacity_for_product_scope_tests(monkeypatch):
+    """Keep truth-admission tests independent from the active gateway profile."""
+
+    monkeypatch.setattr(
+        ProductionImageGenerationProvider,
+        "configured_reference_image_capacity",
+        classmethod(lambda cls: cls.max_provider_reference_images),
+    )
 
 
 def _png_bytes(color: tuple[int, int, int]) -> bytes:
@@ -420,7 +434,7 @@ def test_product_truth_scope_keeps_five_image_cap_after_selection(tmp_path) -> N
     }
 
 
-def test_product_api_issues_product_truth_pool_only_for_trusted_professional_binding(tmp_path) -> None:
+def test_product_api_issues_product_truth_pool_only_for_trusted_professional_binding(tmp_path, monkeypatch) -> None:
     service = V3ProductApiService()
     service.asset_store.storage_root = tmp_path / "uploads"
     asset_ids = []
@@ -459,7 +473,29 @@ def test_product_api_issues_product_truth_pool_only_for_trusted_professional_bin
     assert request.metadata["professional_product_truth_required"] is True
     assert request.metadata["professional_ecommerce_product_truth_pool_asset_ids"] == asset_ids
     assert request.metadata["ecommerce_creative_context"]["provider_reference_budget"] == {
-        "max_product_truth_source_refs_per_output": 2
+        "max_product_truth_source_refs_per_output": 2,
+        "max_total_reference_images": 5,
+    }
+
+    monkeypatch.setattr(
+        ProductionImageGenerationProvider,
+        "configured_reference_image_capacity",
+        classmethod(lambda cls: 1),
+    )
+    constrained_request = CreateCreativeJobRequest(
+        user_input="Create a professional ecommerce product image.",
+        scenario_selection=ScenarioSelection(scenario_id="ecommerce"),
+        uploaded_asset_ids=asset_ids,
+        metadata={
+            "template_id": "ecommerce_template",
+            "frozen_visual_asset_binding_set": {"state": "empty"},
+        },
+    )
+    service._prepare_ecommerce_creative_context(constrained_request)  # noqa: SLF001
+
+    assert constrained_request.metadata["ecommerce_creative_context"]["provider_reference_budget"] == {
+        "max_product_truth_source_refs_per_output": 1,
+        "max_total_reference_images": 1,
     }
 
 
@@ -474,6 +510,7 @@ def test_project_mode_bound_visual_asset_freezes_before_ecommerce_truth_prefligh
         project_store=InMemoryProjectStore(),
         visual_asset_library_catalog=catalog,
         project_visual_asset_binding_service=binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
     )
 
     product_ids = []
@@ -573,6 +610,7 @@ def test_project_mode_receipt_bound_visual_asset_resolves_its_active_face_winner
         project_store=InMemoryProjectStore(),
         visual_asset_library_catalog=catalog,
         project_visual_asset_binding_service=binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
     )
 
     product_ids = []
@@ -719,6 +757,7 @@ def test_project_mode_receipt_bound_visual_asset_fails_closed_without_active_fac
         project_store=InMemoryProjectStore(),
         visual_asset_library_catalog=catalog,
         project_visual_asset_binding_service=binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
     )
     upload = handlers.post_uploads(
         {

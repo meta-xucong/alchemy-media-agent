@@ -695,6 +695,55 @@ def test_reference_capacity_mismatch_blocks_before_gateway_without_silent_trunca
     }
 
 
+def test_constrained_edit_profile_blocks_multi_reference_request_before_gateway(tmp_path, monkeypatch) -> None:
+    """A constrained route must expose its certified cardinality before dispatch."""
+
+    calls: list[str] = []
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001, ARG001
+        calls.append(provider_name)
+        raise AssertionError("constrained capacity must stop before a gateway request")
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "default_image_provider", "openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "square_b64_reference_edit")
+    monkeypatch.setattr(settings, "openai_image_edit_max_reference_images", None)
+
+    request = _generation_request()
+    references = []
+    for index in range(4):
+        path = tmp_path / f"constrained_reference_{index}.png"
+        path.write_bytes(base64.b64decode(_png_base64(width=96 + index, height=72 + index)))
+        references.append(
+            {
+                "asset_id": f"constrained_reference_{index}",
+                "role": "product_reference",
+                "filename": path.name,
+                "mime_type": "image/png",
+                "file_path": str(path),
+                "provider_input_required": True,
+            }
+        )
+    request.metadata["uploaded_assets"] = references
+
+    provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+    with pytest.raises(ProviderRuntimeError) as exc_info:
+        provider.generate(request)
+
+    assert calls == []
+    summary = exc_info.value.provider_failure_retry
+    assert summary["fresh_upstream_requests"] == 0
+    assert summary["final_failure_code"] == "reference_input_capability_mismatch"
+    assert request.metadata["provider_reference_resolution_audit"]["capacity_exceeded"] == {
+        "reference_count": 4,
+        "maximum_reference_images": 1,
+    }
+
+
 def test_explicit_provider_content_policy_signal_is_not_misreported_as_generic_400(tmp_path, monkeypatch) -> None:
     from app.config import settings
 

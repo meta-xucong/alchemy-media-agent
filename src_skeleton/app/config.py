@@ -122,6 +122,18 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _optional_int_env(name: str) -> int | None:
+    """Read an optional numeric capability override without hiding invalid input."""
+
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return -1
+
+
 def _float_env(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, str(default)))
@@ -223,6 +235,12 @@ class Settings(BaseModel):
     # Empty inherits the generation transport. Set only when an operator has
     # certified that image editing supports a different request envelope.
     openai_image_edit_transport_profile: str = os.getenv("OPENAI_IMAGE_EDIT_TRANSPORT_PROFILE", "").strip().lower()
+    # A constrained edit envelope is only certified for the cardinality its
+    # operator has explicitly verified.  ``None`` uses the profile default;
+    # invalid values remain visible to the provider and fail closed.
+    openai_image_edit_max_reference_images: int | None = _optional_int_env(
+        "OPENAI_IMAGE_EDIT_MAX_REFERENCE_IMAGES"
+    )
     # Zero keeps the V3 provider's normal prompt budget.  A constrained gateway
     # can lower this cap; user-authored direction stays lossless while repeated
     # framework guidance is compacted for transport.

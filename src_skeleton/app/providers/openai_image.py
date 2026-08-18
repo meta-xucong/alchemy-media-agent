@@ -211,6 +211,7 @@ class OpenAIGPTImageProvider:
         square_b64_transport = self._uses_square_b64_transport()
         image_edit_generation_only_square = self._uses_generation_only_square_b64_transport(image_edit=True)
         image_edit_square_b64_transport = self._uses_square_b64_transport(image_edit=True)
+        reference_capacity = self.reference_image_capacity()
         return ProviderCapabilities(
             provider=self.name,
             configured=configured,
@@ -240,7 +241,8 @@ class OpenAIGPTImageProvider:
             ],
             limits={
                 "max_batch": 10,
-                "max_reference_images": 5,
+                "max_reference_images": reference_capacity,
+                "reference_capacity_source": self.reference_image_capacity_source(),
                 "formats": ["png"] if square_b64_transport else ["png", "jpeg", "webp"],
                 "sizes": ["1024x1024"] if square_b64_transport else ["auto", "1024x1024", "1024x1536", "1536x1024", "custom_dimensions"],
                 "custom_size": {
@@ -810,6 +812,36 @@ class OpenAIGPTImageProvider:
             return configured
         return self._STANDARD_TRANSPORT_PROFILE
 
+    def reference_image_capacity(self) -> int:
+        """Return the certified input cardinality for the active edit route."""
+
+        profile = self._transport_profile(image_edit=True)
+        if profile == self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE:
+            return 0
+        override = getattr(settings, "openai_image_edit_max_reference_images", None)
+        if override is not None:
+            try:
+                value = int(override)
+            except (TypeError, ValueError):
+                return 0
+            maximum_configured_inputs = max(1, int(getattr(settings, "max_asset_upload_count", 6) or 6))
+            return value if 1 <= value <= maximum_configured_inputs else 0
+        if profile == self._SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE:
+            # This constrained envelope is certified by the singular-file
+            # request contract. Operators must explicitly certify a larger
+            # cardinality for a gateway before widening this claim.
+            return 1
+        return 5
+
+    def reference_image_capacity_source(self) -> str:
+        profile = self._transport_profile(image_edit=True)
+        override = getattr(settings, "openai_image_edit_max_reference_images", None)
+        if profile == self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE:
+            return "generation_only"
+        if override is not None:
+            return "invalid_override" if self.reference_image_capacity() == 0 else "operator_override"
+        return "profile_default"
+
     def _uses_square_b64_transport(self, *, image_edit: bool = False) -> bool:
         return self._transport_profile(image_edit=image_edit) in {
             self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE,
@@ -830,6 +862,18 @@ class OpenAIGPTImageProvider:
                 detail={
                     "transport_profile": self._transport_profile(image_edit=True),
                     "reference_image_count": reference_image_count,
+                    "unsupported_operation": "image_reference",
+                },
+            )
+        maximum_reference_images = self.reference_image_capacity()
+        if reference_image_count > maximum_reference_images:
+            raise ProviderCapabilityMismatchError(
+                "Configured OpenAI image transport cannot carry every required reference image.",
+                provider=self.name,
+                detail={
+                    "transport_profile": self._transport_profile(image_edit=True),
+                    "reference_image_count": reference_image_count,
+                    "maximum_reference_images": maximum_reference_images,
                     "unsupported_operation": "image_reference",
                 },
             )
@@ -1078,13 +1122,30 @@ class OpenAIGPTImageProvider:
         body = getattr(exc, "body", None)
         if isinstance(body, dict):
             return dict(body)
-        if not isinstance(body, str):
-            return {}
-        try:
-            parsed = json.loads(body)
-        except (TypeError, ValueError):
-            return {}
-        return dict(parsed) if isinstance(parsed, dict) else {}
+        for candidate in (body, getattr(getattr(exc, "response", None), "body", None)):
+            if isinstance(candidate, (bytes, bytearray)):
+                try:
+                    candidate = bytes(candidate).decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+            if not isinstance(candidate, str):
+                continue
+            try:
+                parsed = json.loads(candidate)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                return dict(parsed)
+        response = getattr(exc, "response", None)
+        response_json = getattr(response, "json", None)
+        if callable(response_json):
+            try:
+                parsed = response_json()
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                return dict(parsed)
+        return {}
 
     @staticmethod
     def _safe_upstream_error_token(value: object) -> str:

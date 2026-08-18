@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore, V3ProjectModeService
+from alchemy_creative_agent_3_0.app.product_api.contracts import (
+    CreateCreativeJobRequest,
+    ProductJobStatusValue,
+)
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
-from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api.service import ProductJobRecord, V3ProductApiService
 from alchemy_creative_agent_3_0.tests.test_v3_doc263_ecommerce_ui_recovery_browser import (
     DESKTOP_HTML,
     DESKTOP_JS,
@@ -101,6 +107,51 @@ def test_doc277_planning_completion_binds_one_job_and_failure_is_safe_terminal()
         "next_actions": [{"id": "review_project_request"}],
     }
     assert service.get_project(project.project_id).metadata["current_operation"] == failed
+
+
+def test_doc277_terminal_job_overrides_stale_planning_projection() -> None:
+    """A terminal Job must not leave the project UI stuck in planning."""
+
+    service = _service()
+    project = service.create_project(
+        {
+            "user_goal": "Create one clean commercial portrait.",
+            "primary_template_id": "general_template",
+        }
+    ).project
+    operation = service.begin_project_planning_operation(
+        project.project_id,
+        {
+            "user_input": "Create one clean commercial portrait.",
+            "template_id": "general_template",
+        },
+    )
+    job_id = "job_doc277_terminal_projection"
+    current_project = service.project_store.get_project(project.project_id)
+    job_created_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+    service.product_service.job_store.save(
+        ProductJobRecord(
+            request=CreateCreativeJobRequest(
+                user_input="Create one clean commercial portrait.",
+                metadata={"project_id": project.project_id},
+            ),
+            status=ProductJobStatusValue.BLOCKED,
+            job_id_value=job_id,
+            created_at=job_created_at.astimezone(timezone.utc).isoformat(),
+        )
+    )
+    current_project.job_ids.append(job_id)
+    service.project_store.save_project(current_project)
+
+    response = service.get_project(project.project_id)
+
+    assert response.project.job_ids == [job_id]
+    assert response.metadata["current_operation"] == {
+        "state": "failed_no_delivery",
+        "terminal": True,
+        "pending": False,
+        "next_actions": [{"id": "continue"}],
+    }
 
 
 def test_doc277_restart_closes_pending_operation_without_replaying_or_creating_a_job() -> None:

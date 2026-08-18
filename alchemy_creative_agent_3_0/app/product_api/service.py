@@ -971,6 +971,12 @@ def _default_product_job_storage_root() -> Path:
 class V3ProductApiService:
     """V3-owned product API facade over the Creative Core."""
 
+    @staticmethod
+    def _configured_provider_reference_capacity() -> int:
+        """Use the same certified image-edit capacity as final rendering."""
+
+        return ProductionImageGenerationProvider.configured_reference_image_capacity()
+
     def __init__(
         self,
         brand_profile_service: BrandProfileService | None = None,
@@ -13059,7 +13065,7 @@ class V3ProductApiService:
         controls["preserve_person_identity"] = True
         provider_reference_budget = dict(context.get("provider_reference_budget") or {})
         provider_reference_budget["max_identity_sources"] = len(references)
-        provider_reference_budget["max_total_reference_images"] = 5
+        provider_reference_budget["max_total_reference_images"] = self._configured_provider_reference_capacity()
         metadata.update(
             {
                 "advanced_reference_controls": controls,
@@ -13462,14 +13468,17 @@ class V3ProductApiService:
             if isinstance(locked_identity_references, list)
             else 0
         )
+        provider_reference_capacity = self._configured_provider_reference_capacity()
         provider_reference_budget = (
-            {"max_product_truth_source_refs_per_output": 2}
+            {
+                "max_product_truth_source_refs_per_output": min(2, provider_reference_capacity),
+                "max_total_reference_images": provider_reference_capacity,
+            }
             if product_truth_pool_asset_ids
-            else {}
+            else {"max_total_reference_images": provider_reference_capacity}
         )
         if locked_identity_count:
             provider_reference_budget["max_identity_sources"] = locked_identity_count
-            provider_reference_budget["max_total_reference_images"] = 5
         context = self.ecommerce_planner.build_creative_context(
             user_input=request.user_input,
             product_profile=dict(request.product_profile),
@@ -14245,7 +14254,12 @@ class V3ProductApiService:
         budget = context.get("provider_reference_budget") if isinstance(context, dict) else {}
         try:
             maximum_reference_images = int(
-                budget.get("max_total_reference_images", 5) if isinstance(budget, dict) else 5
+                budget.get(
+                    "max_total_reference_images",
+                    self._configured_provider_reference_capacity(),
+                )
+                if isinstance(budget, dict)
+                else self._configured_provider_reference_capacity()
             )
         except (TypeError, ValueError) as exc:
             raise ValueError("doc269_reference_capacity_invalid") from exc
