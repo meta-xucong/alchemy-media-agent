@@ -10,6 +10,11 @@ from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import InMemoryProductJobStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
+from alchemy_creative_agent_3_0.app.project_mode.service import Doc281GeneralSourceRegistry
+from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
     EcommerceRemoteBrainTestProvider,
     ecommerce_test_service,
@@ -55,6 +60,11 @@ def _install_isolated_v3_handlers(
     *,
     brain_provider: EcommerceRemoteBrainTestProvider | None = None,
 ) -> V3ProductRouteHandlers:
+    monkeypatch.setattr(
+        project_mode_service,
+        "doc281_general_source_registry_from_environment",
+        lambda: Doc281GeneralSourceRegistry(),
+    )
     brain = brain_provider if brain_provider is not None else EcommerceRemoteBrainTestProvider()
     service = ecommerce_test_service(
         brain_provider=brain,
@@ -62,7 +72,11 @@ def _install_isolated_v3_handlers(
         job_store=InMemoryProductJobStore(),
         output_store=V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs"),
     )
-    handlers = V3ProductRouteHandlers(service=service, project_store=InMemoryProjectStore())
+    handlers = V3ProductRouteHandlers(
+        service=service,
+        project_store=InMemoryProjectStore(),
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+    )
     monkeypatch.setattr(app_main, "v3_route_handlers", handlers)
     return handlers
 
@@ -654,6 +668,11 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
 
 
 def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        project_mode_service,
+        "doc281_general_source_registry_from_environment",
+        lambda: Doc281GeneralSourceRegistry(),
+    )
     brain = EcommerceRemoteBrainTestProvider()
     service = ecommerce_test_service(
         brain_provider=brain,
@@ -664,7 +683,11 @@ def test_v3_product_api_routes_are_mounted_for_frontend_shell(tmp_path, monkeypa
     monkeypatch.setattr(
         app_main,
         "v3_route_handlers",
-        V3ProductRouteHandlers(service=service, project_store=InMemoryProjectStore()),
+        V3ProductRouteHandlers(
+            service=service,
+            project_store=InMemoryProjectStore(),
+            ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+        ),
     )
     client = TestClient(app)
 

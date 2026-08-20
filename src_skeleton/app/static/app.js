@@ -3487,22 +3487,33 @@ function renderV3ProjectDetail() {
   const terminalOperation = project?.metadata?.current_operation;
   if (terminalOperation?.terminal === true && terminalOperation?.pending === false) {
     v3State.loading = false;
-    clearV3Progress();
-    const terminalState = String(terminalOperation.state || "").trim().toLowerCase();
-    if (terminalState === "delivery_route_unavailable") {
-      setV3Progress(
-        "failed",
-        "当前交付路线不可用。项目和原始参考已保留，请查看交付选项。",
-        "warning",
-        { forceNotice: true },
-      );
-    } else if (terminalState === "ambiguous_provider_request_hold") {
-      setV3Progress(
-        "failed",
-        "本次请求未进入交付。项目原图和人物绑定已保留，请查看生成条件。",
-        "warning",
-        { forceNotice: true },
-      );
+    if (v3IsActiveEcommerceTerminalReceipt()) {
+      // The exact submission receipt is newer and narrower than a project-level
+      // terminal operation, which may describe an earlier attempt.
+      clearV3RecoverPolling();
+      clearV3ProgressTimer();
+      v3State.progressStartedAt = null;
+      v3State.progressStageKey = "failed";
+      v3State.progressDetail = v3EcommerceTerminalReceiptMessage(v3State.currentJob);
+      v3State.progressType = "warning";
+    } else {
+      clearV3Progress();
+      const terminalState = String(terminalOperation.state || "").trim().toLowerCase();
+      if (terminalState === "delivery_route_unavailable") {
+        setV3Progress(
+          "failed",
+          "当前交付路线不可用。项目和原始参考已保留，请查看交付选项。",
+          "warning",
+          { forceNotice: true },
+        );
+      } else if (terminalState === "ambiguous_provider_request_hold") {
+        setV3Progress(
+          "failed",
+          "本次请求未进入交付。项目原图和人物绑定已保留，请查看生成条件。",
+          "warning",
+          { forceNotice: true },
+        );
+      }
     }
   }
   if (project?.primary_template_id && v3State.view === "workspace") {

@@ -4414,7 +4414,9 @@ function mobileV3StartEcommerceRecovery(projectId, jobId) {
       ? existing
       : mobileV3StartEcommerceGenerationSession(projectId)
   );
-  return { ...receipt, jobId: String(jobId || "") };
+  const normalizedJobId = String(jobId || "").trim();
+  if (normalizedJobId) mobileV3SetEcommerceSubmissionReceipt(receipt.projectId, normalizedJobId);
+  return { ...receipt, jobId: normalizedJobId };
 }
 
 function mobileV3RecoveryOwns(receipt) {
@@ -4967,6 +4969,9 @@ function setMobileV3Progress(stageKey, detail = "") {
   const panel = document.querySelector("#mobileV3ProgressPanel");
   if (!panel) return;
   const stage = mobileV3ProgressStages.find((item) => item.key === stageKey) || mobileV3ProgressStages[0];
+  mobileV3State.progressStage = stage.key;
+  mobileV3State.progressStageKey = stage.key;
+  mobileV3State.progressDetail = detail || stage.label;
   panel.hidden = false;
   setText("#mobileV3ProgressTitle", stage.label);
   setText("#mobileV3ProgressElapsed", ["completed", "review_blocked", "failed"].includes(stage.key) ? "已结束" : "进行中");

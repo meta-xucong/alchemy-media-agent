@@ -9496,6 +9496,18 @@ class V3ProductApiService:
                     if key not in public_variation and key in scenario_parameters
                 }
             )
+        lifecycle_metadata = self._project_mode_status_metadata(record)
+        public_lifecycle = {
+            key: lifecycle_metadata[key]
+            for key in (
+                "provider_failure_retry",
+                "provider_failure_retry_exhausted",
+                "generation_lifecycle_timeout",
+                "generation_lifecycle_failure",
+                "background_generation_watchdog",
+            )
+            if key in lifecycle_metadata
+        }
         return ProductJobStatus(
             job_id=record.job_id,
             status=record.status,
@@ -9516,6 +9528,7 @@ class V3ProductApiService:
                 "lifecycle": self._lifecycle_summary(record),
                 "doc270_general_source_activation": activation,
                 **public_variation,
+                **public_lifecycle,
             },
         )
 
@@ -9989,7 +10002,6 @@ class V3ProductApiService:
                 continue
             review_items.append(
                 {
-                    "output_id": output_id,
                     "mode": str(item.get("mode") or "metadata_only"),
                     "status": str(item.get("status") or "unverified"),
                     "verification_state": str(item.get("verification_state") or "unverified"),
