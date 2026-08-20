@@ -766,6 +766,13 @@ class V3LLMBrainAdapter:
             request_metadata["professional_product_truth_required"] = bool(
                 metadata.get("professional_product_truth_required")
             )
+        if metadata.get("doc270_ecommerce_view_activation_enabled") is True and isinstance(
+            metadata.get("doc270_ecommerce_view_activation_selection"), list
+        ):
+            # E31 owns the already-verified per-output original binding. The
+            # Brain still owns image intent, but must not be asked to repeat
+            # the same opaque source choice as a second authority.
+            request_metadata["doc270_ecommerce_view_activation_authoritative"] = True
         if metadata.get("professional_product_model_planning") is not None:
             request_metadata["professional_product_model_planning"] = bool(
                 metadata.get("professional_product_model_planning")
@@ -1281,6 +1288,7 @@ def _ecommerce_creative_context(
         "context_id",
         "source_version",
         "product_truth",
+        "product_truth_reference_pool",
         "platform_constraints",
         "product_set_style",
         "role_specific_creative_intent",
@@ -1766,7 +1774,10 @@ def _image_set_cardinality_audit(candidate: Any, *, expected_count: int) -> dict
 
 def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
-    return metadata.get("professional_product_truth_required") is True
+    return (
+        metadata.get("professional_product_truth_required") is True
+        and metadata.get("doc270_ecommerce_view_activation_authoritative") is not True
+    )
 
 
 def _product_truth_selection_contract_valid(candidate: Any, *, expected_count: int) -> bool:

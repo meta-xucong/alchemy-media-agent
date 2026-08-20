@@ -4297,6 +4297,48 @@ class ScenarioRuntime:
         ]
         if not product_truth_ids:
             raise CapabilityActivationError("ecommerce_product_truth_selection_pool_missing")
+        # Doc270/E31 may already have issued a server-owned, per-output
+        # original binding after source analysis. That binding is the
+        # authoritative product-truth choice for this command; requiring the
+        # Brain to repeat the same opaque asset IDs creates two competing
+        # selectors and turns a valid plan into a fallback placeholder.
+        if metadata.get("doc270_ecommerce_view_activation_enabled") is True:
+            raw_selection = metadata.get("doc270_ecommerce_view_activation_selection")
+            if not isinstance(raw_selection, list):
+                raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+            resolved: dict[int, dict[str, Any]] = {}
+            for item in raw_selection:
+                if not isinstance(item, dict) or set(item) != {
+                    "output_index",
+                    "selected_product_asset_id",
+                    "source_receipt_digest",
+                    "source_library_snapshot_digest",
+                }:
+                    raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+                index = item.get("output_index")
+                asset_id = str(item.get("selected_product_asset_id") or "").strip()
+                if (
+                    not isinstance(index, int)
+                    or isinstance(index, bool)
+                    or index < 1
+                    or index > expected_count
+                    or index in resolved
+                    or asset_id not in product_truth_ids
+                    or any(
+                        not isinstance(item.get(key), str)
+                        or len(str(item.get(key)).strip()) != 64
+                        for key in ("source_receipt_digest", "source_library_snapshot_digest")
+                    )
+                ):
+                    raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+                resolved[index] = {
+                    "product_truth_selection_role": "doc270_view_aware_product_original",
+                    "selected_product_truth_asset_ids": [asset_id],
+                    "max_product_truth_source_refs_per_output": 1,
+                }
+            if sorted(resolved) != list(range(1, expected_count + 1)):
+                raise CapabilityActivationError("ecommerce_product_truth_selection_invalid")
+            return resolved
         ecommerce_context = metadata.get("ecommerce_creative_context")
         ecommerce_context = ecommerce_context if isinstance(ecommerce_context, dict) else {}
         provider_budget = ecommerce_context.get("provider_reference_budget")

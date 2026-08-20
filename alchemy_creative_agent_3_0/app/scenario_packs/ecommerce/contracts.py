@@ -644,6 +644,9 @@ class EcommerceCreativeContext(V3BaseModel):
     context_id: str
     source_version: str = "ecommerce_creative_context_v2"
     product_truth: ProductTruthLock
+    # Server-owned opaque choices for the Brain's per-output product-truth
+    # selection. These are typed facts, not semantic labels or recipes.
+    product_truth_reference_pool: list[dict[str, str]] = Field(default_factory=list)
     provider_reference_budget: dict[str, int] = Field(default_factory=dict)
     platform_constraints: dict[str, Any] = Field(default_factory=dict)
     category_evidence_questions: list[str] = Field(default_factory=list)

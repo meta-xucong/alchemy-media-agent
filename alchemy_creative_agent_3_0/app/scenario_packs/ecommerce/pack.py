@@ -54,6 +54,7 @@ class EcommerceScenarioPackPlanner:
         platform_profile: str | None,
         job_key: str,
         provider_reference_budget: dict[str, int] | None = None,
+        product_truth_reference_pool: list[dict[str, str]] | None = None,
     ) -> EcommerceCreativeContext:
         """Build factual input for the remote Brain without a visual answer."""
 
@@ -107,6 +108,11 @@ class EcommerceScenarioPackPlanner:
                 scenario_parameters,
             ),
             product_truth=truth,
+            product_truth_reference_pool=[
+                dict(item)
+                for item in (product_truth_reference_pool or [])
+                if isinstance(item, dict)
+            ],
             provider_reference_budget=dict(provider_reference_budget or {}),
             platform_constraints=platform_constraints,
             category_evidence_questions=category_questions,

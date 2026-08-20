@@ -102,9 +102,10 @@ lifestyle_primary_product_view, playful_environment_interaction_view,
 walking_or_lookback_view, back_or_structure_view, product_detail_or_print_view.
 This role is the structured E-Commerce output purpose for choosing product truth
 references; do not put it into evidence_dimensions. The field
-selected_product_truth_asset_ids must be a list of one or two uploaded
-product_truth asset_id strings from the
-frozen product truth pool for that output; do not choose identity asset IDs,
+selected_product_truth_asset_ids must be a list of one or two exact asset_id
+strings from the server-owned ecommerce_creative_context.product_truth_reference_pool;
+choose only from that typed pool and do not invent, normalize, or copy an ID from
+any other field. Do not choose identity asset IDs,
 filenames, paths, or natural-language aliases. Select one product truth for
 ordinary lifestyle, walking/look-back, playful interaction, front, or back/structure
 outputs. If ecommerce_creative_context.provider_reference_budget is present,
@@ -248,7 +249,10 @@ def _compact_required_remote_creative_schema() -> dict:
 
 def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
-    return bool(metadata.get("professional_product_truth_required"))
+    return bool(
+        metadata.get("professional_product_truth_required")
+        and metadata.get("doc270_ecommerce_view_activation_authoritative") is not True
+    )
 
 
 def _professional_ecommerce_pose_contract(ecommerce_context: dict[str, object] | None) -> dict[str, object] | None:

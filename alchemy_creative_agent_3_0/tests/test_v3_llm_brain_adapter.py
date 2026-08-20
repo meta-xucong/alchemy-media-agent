@@ -301,6 +301,10 @@ def test_ecommerce_adapter_preserves_role_specific_lifestyle_context_for_both_br
         "professional_product_model_planning": True,
         "ecommerce_creative_context": {
             "product_truth": {"pool_asset_ids": ["product_front", "product_detail"]},
+            "product_truth_reference_pool": [
+                {"asset_id": "product_front", "reference_channel": "product_truth", "source_type": "uploaded"},
+                {"asset_id": "product_detail", "reference_channel": "product_truth", "source_type": "uploaded"},
+            ],
             "product_set_style": "kidswear_beach_lifestyle_product_on_model",
             "role_specific_creative_intent": role_intent,
             "unsafe_internal_note": "must_not_cross_adapter_boundary",
@@ -331,7 +335,11 @@ def test_ecommerce_adapter_preserves_role_specific_lifestyle_context_for_both_br
         assert "unsafe_internal_note" not in context
         payload = json.loads(build_remote_payload(request))
         assert payload["ecommerce_creative_context"]["role_specific_creative_intent"] == role_intent
-        assert "preserve that user-owned creative" in payload["ecommerce_context_instructions"]
+        assert payload["ecommerce_creative_context"]["product_truth_reference_pool"] == [
+            {"asset_id": "product_front", "reference_channel": "product_truth", "source_type": "uploaded"},
+            {"asset_id": "product_detail", "reference_channel": "product_truth", "source_type": "uploaded"},
+        ]
+        assert "preserving product truth" in payload["ecommerce_context_instructions"]
         serialized_payload = json.dumps(payload, ensure_ascii=False)
         assert "Avoid unsafe or playful action framing" not in serialized_payload
         assert "must_not_cross_adapter_boundary" not in serialized_payload
@@ -354,6 +362,46 @@ def test_ecommerce_adapter_preserves_role_specific_lifestyle_context_for_both_br
 
     assert "ecommerce_creative_context" not in general_request.metadata
     assert "ecommerce_creative_context" not in photography_request.metadata
+
+
+def test_ecommerce_adapter_keeps_brain_intent_separate_from_doc270_source_binding() -> None:
+    adapter = V3LLMBrainAdapter()
+    metadata = {
+        "requested_image_count": 1,
+        "professional_product_truth_required": True,
+        "doc270_ecommerce_view_activation_enabled": True,
+        "doc270_ecommerce_view_activation_selection": [
+            {
+                "output_index": 1,
+                "selected_product_asset_id": "asset_product_front",
+                "source_receipt_digest": "a" * 64,
+                "source_library_snapshot_digest": "b" * 64,
+            }
+        ],
+        "ecommerce_creative_context": {
+            "product_truth_reference_pool": [
+                {
+                    "asset_id": "asset_product_front",
+                    "reference_channel": "product_truth",
+                    "source_type": "uploaded",
+                }
+            ],
+        },
+    }
+
+    request = adapter.build_request(
+        user_input="Create a product-on-model image.",
+        stage="plan",
+        scenario_id="ecommerce",
+        template_id="ecommerce_template",
+        metadata=metadata,
+    )
+
+    assert request.metadata["doc270_ecommerce_view_activation_authoritative"] is True
+    payload = json.loads(build_remote_payload(request))
+    evidence_schema = payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"][0]
+    assert "selected_product_truth_asset_ids" not in evidence_schema
+    assert "selected_product_truth_asset_ids" not in payload["ecommerce_context_instructions"]
 
 
 def test_ecommerce_adapter_preserves_creative_risk_preflight_for_both_brain_stages() -> None:
@@ -1434,27 +1482,16 @@ def test_remote_brain_does_not_reuse_unrelated_anthropic_credential_for_deepseek
 
 
 def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypatch) -> None:
-    """DeepSeek remains a remote Brain without depending on Responses support."""
+    """DeepSeek uses the direct streamed Chat Completions transport."""
 
     from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
 
     calls: dict[str, object] = {}
 
-    class FakeCompletions:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls["chat_kwargs"] = kwargs
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content='{"remote": true}'))]
-            )
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            calls["client_kwargs"] = kwargs
-            self.chat = SimpleNamespace(completions=FakeCompletions())
-
-        @property
-        def responses(self):
-            raise AssertionError("DeepSeek Brain must not use the Responses transport")
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls.update(kwargs)
+        return '{"remote": true}'
 
     monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
@@ -1464,7 +1501,7 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
     monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
 
     provider = V3LLMBrainProvider()
     result = provider._run_openai_compatible(  # noqa: SLF001 - provider transport contract
@@ -1472,16 +1509,13 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     )
 
     assert result == {"remote": True}
-    assert calls["client_kwargs"] == {
-        "api_key": "deepseek-test-key",
-        "base_url": "https://brain.example.test/v1",
-        "max_retries": 0,
-    }
-    chat_kwargs = calls["chat_kwargs"]
-    assert isinstance(chat_kwargs, dict)
-    assert chat_kwargs["model"] == "deepseek-primary"
-    assert chat_kwargs["response_format"] == {"type": "json_object"}
-    assert chat_kwargs["temperature"] == 0
+    assert calls["url"] == "https://brain.example.test/v1/chat/completions"
+    assert calls["api_key"] == "deepseek-test-key"
+    payload = calls["payload"]
+    assert isinstance(payload, dict)
+    assert payload["model"] == "deepseek-primary"
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["temperature"] == 0
 
 
 @pytest.mark.parametrize("first_content", ['{"remote": ', ""])
@@ -1489,18 +1523,13 @@ def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monk
     """The same remote Brain may redo serialization once, never a local plan."""
 
     from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
 
     calls: list[dict[str, object]] = []
 
-    class FakeCompletions:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append(kwargs)
-            content = first_content if len(calls) == 1 else '{"remote": true}'
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.chat = SimpleNamespace(completions=FakeCompletions())
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls.append(kwargs)
+        return first_content if len(calls) == 1 else '{"remote": true}'
 
     monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
@@ -1510,7 +1539,7 @@ def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monk
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
     monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
 
     result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
 
@@ -1521,10 +1550,10 @@ def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monk
         "json_serialization_recovery_succeeded": True,
     }
     assert len(calls) == 2
-    assert calls[0]["messages"][1] == calls[1]["messages"][1]
-    assert "TRANSPORT RECOVERY" not in calls[0]["messages"][0]["content"]
-    assert "TRANSPORT RECOVERY" in calls[1]["messages"][0]["content"]
-    assert all(call["temperature"] == 0 for call in calls)
+    assert calls[0]["payload"]["messages"][1] == calls[1]["payload"]["messages"][1]
+    assert "TRANSPORT RECOVERY" not in calls[0]["payload"]["messages"][0]["content"]
+    assert "TRANSPORT RECOVERY" in calls[1]["payload"]["messages"][0]["content"]
+    assert all(call["payload"]["temperature"] == 0 for call in calls)
 
 
 def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None:
@@ -1576,33 +1605,15 @@ def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(
     """A transport length finish may recover once through the same frozen request."""
 
     from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
 
     calls: list[dict[str, object]] = []
 
-    class FakeCompletions:
-        def create(self, **kwargs):  # noqa: ANN003
-            calls.append(kwargs)
-            if len(calls) == 1:
-                return SimpleNamespace(
-                    choices=[
-                        SimpleNamespace(
-                            message=SimpleNamespace(content='{"remote":'),
-                            finish_reason="length",
-                        )
-                    ]
-                )
-            return SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        message=SimpleNamespace(content='{"remote": true}'),
-                        finish_reason="stop",
-                    )
-                ]
-            )
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.chat = SimpleNamespace(completions=FakeCompletions())
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise BrainOutputTruncated("test output limit")
+        return '{"remote": true}'
 
     monkeypatch.delenv("V3_LLM_BRAIN_PROVIDER", raising=False)
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
@@ -1613,15 +1624,15 @@ def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(
     monkeypatch.setattr(settings, "deepseek_llm_model", "deepseek-primary")
     monkeypatch.setattr(settings, "deepseek_llm_api_key", "deepseek-test-key")
     monkeypatch.setattr(settings, "deepseek_llm_base_url", "https://brain.example.test/v1")
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
 
     result = V3LLMBrainProvider().run(BrainRunRequest(user_input="Create one natural portrait."))
 
     assert result["remote"] is True
     assert result["_alchemy_brain_transport"]["attempts"] == 2
     assert len(calls) == 2
-    assert calls[0]["messages"][1] == calls[1]["messages"][1]
-    assert all(call["max_tokens"] == 8000 for call in calls)
+    assert calls[0]["payload"]["messages"][1] == calls[1]["payload"]["messages"][1]
+    assert all(call["payload"]["max_tokens"] == 8000 for call in calls)
 
 
 def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> None:

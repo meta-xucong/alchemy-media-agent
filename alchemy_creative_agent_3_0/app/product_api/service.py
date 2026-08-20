@@ -13533,6 +13533,14 @@ class V3ProductApiService:
             platform_profile=selection.platform_profile if selection is not None else None,
             job_key=job_key,
             provider_reference_budget=provider_reference_budget,
+            product_truth_reference_pool=[
+                {
+                    "asset_id": asset_id,
+                    "reference_channel": "product_truth",
+                    "source_type": "uploaded",
+                }
+                for asset_id in product_truth_pool_asset_ids
+            ],
         )
         if product_truth_pool_asset_ids:
             metadata["professional_product_truth_required"] = True

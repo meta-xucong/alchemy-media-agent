@@ -472,6 +472,14 @@ def test_product_api_issues_product_truth_pool_only_for_trusted_professional_bin
 
     assert request.metadata["professional_product_truth_required"] is True
     assert request.metadata["professional_ecommerce_product_truth_pool_asset_ids"] == asset_ids
+    assert request.metadata["ecommerce_creative_context"]["product_truth_reference_pool"] == [
+        {
+            "asset_id": asset_id,
+            "reference_channel": "product_truth",
+            "source_type": "uploaded",
+        }
+        for asset_id in asset_ids
+    ]
     assert request.metadata["ecommerce_creative_context"]["provider_reference_budget"] == {
         "max_product_truth_source_refs_per_output": 2,
         "max_total_reference_images": 5,
