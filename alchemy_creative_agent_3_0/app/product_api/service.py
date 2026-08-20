@@ -11445,7 +11445,11 @@ class V3ProductApiService:
                     preview_url=candidate_metadata.get("preview_url"),
                     thumbnail_url=candidate_metadata.get("thumbnail_url"),
                     overall_score=report.overall_score if report else None,
-                    recommendation=report.recommendation.value if report else None,
+                    recommendation=self._public_candidate_recommendation(
+                        report,
+                        output_id=output_id,
+                        visible_output_ids=visible_output_ids,
+                    ),
                     selected=candidate_id in selected_candidate_ids,
                     metadata={
                         "asset_pack_id": result.asset_pack.asset_pack_id,
@@ -11457,6 +11461,23 @@ class V3ProductApiService:
                 )
             )
         return candidates
+
+    @staticmethod
+    def _public_candidate_recommendation(
+        report: Any,
+        *,
+        output_id: str,
+        visible_output_ids: set[str] | None,
+    ) -> str | None:
+        """Let the canonical final-delivery review supersede stale pre-review scoring."""
+
+        if output_id and visible_output_ids is not None and output_id in visible_output_ids:
+            return "accept"
+        if report is None:
+            return None
+        recommendation = getattr(report, "recommendation", None)
+        value = getattr(recommendation, "value", recommendation)
+        return str(value) if value is not None else None
 
     def _output_preview_uri(self, fallback: str | None, metadata: dict[str, Any]) -> str | None:
         return metadata.get("thumbnail_url") or metadata.get("preview_url") or fallback

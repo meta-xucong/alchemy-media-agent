@@ -41,6 +41,21 @@ def _reference_image(path: Path) -> Path:
     return path
 
 
+def test_public_candidate_recommendation_uses_final_delivery_review() -> None:
+    report = SimpleNamespace(recommendation=SimpleNamespace(value="reject"))
+
+    assert V3ProductApiService._public_candidate_recommendation(  # noqa: SLF001
+        report,
+        output_id="v3_output_final",
+        visible_output_ids={"v3_output_final"},
+    ) == "accept"
+    assert V3ProductApiService._public_candidate_recommendation(  # noqa: SLF001
+        report,
+        output_id="v3_output_hidden",
+        visible_output_ids=set(),
+    ) == "reject"
+
+
 def _generation_request(reference_path: Path | None = None) -> GenerationRequest:
     asset = AssetSpec(
         asset_id="asset_v3_prod",
