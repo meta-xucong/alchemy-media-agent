@@ -18,6 +18,7 @@ from playwright.sync_api import sync_playwright
 
 from alchemy_creative_agent_3_0.app.project_mode import InMemoryProjectStore, PersistentProjectStore, source_library
 from alchemy_creative_agent_3_0.app.project_mode import service as project_mode_service
+from alchemy_creative_agent_3_0.app.project_mode.service import V3ProjectModeService
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
     ProjectReferenceSourceType,
 )
@@ -463,6 +464,39 @@ def test_doc270_phase4_activated_public_status_preserves_generated_review_lifecy
         "source_library_snapshot_digest",
     ]:
         assert private not in public_text
+
+
+def test_doc280_public_review_items_restore_per_output_certification_projection() -> None:
+    output_id = "v3_output_doc280_public_review"
+    job_status = SimpleNamespace(
+        metadata={
+            "post_generation_review": {
+                "review_evidence_receipt_status": "complete",
+                "real_pixel_review_attempted": True,
+                "real_pixel_review_certified": True,
+                "review_items": [
+                    {
+                        "output_id": output_id,
+                        "mode": "hybrid",
+                        "status": "pass",
+                        "verification_state": "verified",
+                    }
+                ],
+            },
+            "final_delivery": {
+                "delivery_gate_applies": True,
+                "final_delivery_status": "ready",
+            },
+        }
+    )
+    record = SimpleNamespace(output_id=output_id, metadata={})
+
+    projection = V3ProjectModeService._public_output_review_projection(job_status, record)  # noqa: SLF001
+
+    assert projection["review_status"] == "pass"
+    assert projection["verification_state"] == "verified"
+    assert projection["certification_state"] == "certified"
+    assert projection["public_delivery_state"] == "ready"
 
 
 def test_doc270_phase4_real_registry_replay_is_frozen_without_second_analysis(tmp_path) -> None:

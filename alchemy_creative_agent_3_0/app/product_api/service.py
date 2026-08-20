@@ -9980,10 +9980,35 @@ class V3ProductApiService:
         raw = dict(value or {}) if isinstance(value, dict) else {}
         receipt_status = str(raw.get("review_evidence_receipt_status") or "").strip()
         reference_comparison = raw.get("reference_comparison")
+        review_items = []
+        for item in raw.get("inspections", []):
+            if not isinstance(item, dict):
+                continue
+            output_id = str(item.get("output_id") or "").strip()
+            if not output_id:
+                continue
+            review_items.append(
+                {
+                    "output_id": output_id,
+                    "mode": str(item.get("mode") or "metadata_only"),
+                    "status": str(item.get("status") or "unverified"),
+                    "verification_state": str(item.get("verification_state") or "unverified"),
+                    "detected_issues": [
+                        {
+                            "code": str(issue.get("code") or "review_notice"),
+                            "severity": str(issue.get("severity") or "warning"),
+                            "retryable": bool(issue.get("retryable")),
+                        }
+                        for issue in item.get("detected_issues", [])
+                        if isinstance(issue, dict)
+                    ],
+                }
+            )
         return {
             "review_evidence_receipt_status": receipt_status,
             "real_pixel_review_attempted": bool(raw.get("real_pixel_review_attempted")),
             "real_pixel_review_certified": bool(raw.get("real_pixel_review_certified")),
+            "review_items": review_items,
             "reference_comparison": (
                 {
                     channel: str(state)

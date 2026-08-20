@@ -322,6 +322,11 @@ def test_production_provider_binds_only_exact_doc281_planned_output_pixels(tmp_p
             "output_id": "provider-must-not-own-this-id",
             "output_index": 999,
             "output_nonce": "forged",
+            "mcp_materialization": {
+                "expected_checkpoint": {
+                    "output_id": "v3_output_forged_mcp_checkpoint",
+                },
+            },
         },
         {
             "b64_json": _png_base64(80, 64),
@@ -386,6 +391,7 @@ def test_production_provider_binds_only_exact_doc281_planned_output_pixels(tmp_p
         assert bound["output_index"] == 2
         assert bound["output_id"] == bound_record.output_id
         assert bound_record.output_id != "provider-must-not-own-this-id"
+        assert bound_record.output_id != "v3_output_forged_mcp_checkpoint"
         assert set(bound) == {
             "schema_version", "job_id", "command_identity_digest", "output_index",
             "output_nonce", "output_binding_digest", "source_receipt_digest", "output_id",

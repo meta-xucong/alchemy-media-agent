@@ -202,6 +202,7 @@ class V3LLMBrainAdapter:
                 fallback,
                 data,
                 requires_complete_image_set=strict_remote_contract,
+                requires_product_truth_selection=_requires_product_truth_selection(request),
             )
             initial_rejected_sections = _remote_contract_rejected_sections(result)
             image_set_cardinality_audit = _remote_image_set_cardinality_audit(result)
@@ -258,6 +259,7 @@ class V3LLMBrainAdapter:
                     fallback,
                     recovery_data,
                     requires_complete_image_set=True,
+                    requires_product_truth_selection=_requires_product_truth_selection(request),
                 )
                 final_contract_validation_audit = _remote_contract_validation_audit(result)
             result.llm_used = True
@@ -900,6 +902,7 @@ class V3LLMBrainAdapter:
         data: dict[str, Any],
         *,
         requires_complete_image_set: bool = False,
+        requires_product_truth_selection: bool = False,
     ) -> BrainRunResult:
         payload = fallback.model_dump(mode="json")
         rejected_sections: list[str] = []
@@ -927,6 +930,12 @@ class V3LLMBrainAdapter:
                     expected_count=fallback.image_set_plan.image_count,
                 )
                 if not cardinality_audit["cardinality_valid"]:
+                    rejected_sections.append(key)
+                    continue
+                if requires_product_truth_selection and not _product_truth_selection_contract_valid(
+                    remote_section,
+                    expected_count=fallback.image_set_plan.image_count,
+                ):
                     rejected_sections.append(key)
                     continue
             if key == "visual_task_profile" and requires_complete_image_set:
@@ -1753,6 +1762,44 @@ def _image_set_cardinality_audit(candidate: Any, *, expected_count: int) -> dict
         "remote_shot_plan_count": shot_plan_count,
         "cardinality_valid": image_count == expected_count and shot_plan_count == expected_count,
     }
+
+
+def _requires_product_truth_selection(request: BrainRunRequest) -> bool:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    return metadata.get("professional_product_truth_required") is True
+
+
+def _product_truth_selection_contract_valid(candidate: Any, *, expected_count: int) -> bool:
+    """Require the Brain to return one typed product-truth decision per output.
+
+    This checks only contract presence and cardinality. Asset identity, role
+    values, and renderer capacity remain validated by the professional runtime
+    that owns the frozen product-truth pool.
+    """
+
+    if not isinstance(candidate, dict):
+        return False
+    entries = candidate.get("evidence_dimensions_by_output")
+    if not isinstance(entries, list) or len(entries) != expected_count:
+        return False
+    indexes: list[int] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return False
+        try:
+            index = int(entry.get("output_index"))
+        except (TypeError, ValueError):
+            return False
+        role = str(entry.get("product_truth_selection_role") or "").strip()
+        selected = entry.get("selected_product_truth_asset_ids")
+        if index < 1 or index > expected_count or not role:
+            return False
+        if not isinstance(selected, list) or not selected or any(
+            not isinstance(item, str) or not item.strip() for item in selected
+        ):
+            return False
+        indexes.append(index)
+    return indexes == list(range(1, expected_count + 1))
 
 
 def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_count: int) -> bool:

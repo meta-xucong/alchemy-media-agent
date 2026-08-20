@@ -10263,7 +10263,8 @@ class V3ProjectModeService:
         review = dict(review) if isinstance(review, dict) else {}
         output_id = str(getattr(record, "output_id", "") or "").strip()
         inspection: dict[str, Any] = {}
-        for item in review.get("inspections", []):
+        review_items = review.get("review_items", review.get("inspections", []))
+        for item in review_items:
             if not isinstance(item, dict):
                 continue
             if output_id and str(item.get("output_id") or "").strip() == output_id:

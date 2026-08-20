@@ -1144,6 +1144,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if index == 0 and type(planned_output_index) is int
                 else {}
             )
+            checkpoint_output_id = ""
+            if isinstance(self, McpMaterializationProvider):
+                checkpoint_output_id = str(
+                    (mcp_materialization.get("expected_checkpoint") or {}).get("output_id") or ""
+                ).strip()
             record = self.output_store.save_base64_output(
                 job_id=job_id,
                 candidate_id=candidate_id,
@@ -1152,9 +1157,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 model=str(getattr(result, "model", "") or ""),
                 encoded_image=str(encoded),
                 # Provider pixels never author the persisted output identity.
-                # The output store creates it, then binds the server-issued
-                # Doc281 skeleton to that immutable record.
-                output_id=None,
+                # A server-issued MCP checkpoint is the sole resume authority;
+                # ordinary transports still receive a fresh store identity.
+                output_id=checkpoint_output_id or None,
                 mime_type=output.get("mime_type"),
                 output_format=output.get("format") or app_request.prompt_plan.output_format,
                 width=output.get("width"),
@@ -7071,12 +7076,13 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             variables["provider_prompt_sha256"] = str(context.get("prompt_sha256") or "")
             variables["provider_prompt_chars"] = len(str(context.get("canonical_prompt") or ""))
             variables["provider_prompt_materialization"] = "v3_mcp_frozen_handoff_resume"
-            context["expected_checkpoint"] = self._mcp_expected_checkpoint_context(
-                request,
-                context=context,
-                reference_assets=reference_assets,
-                rendering_contract=dict(context.get("rendering_contract") or contract),
-            )
+            if not isinstance(context.get("expected_checkpoint"), dict):
+                context["expected_checkpoint"] = self._mcp_expected_checkpoint_context(
+                    request,
+                    context=context,
+                    reference_assets=reference_assets,
+                    rendering_contract=dict(context.get("rendering_contract") or contract),
+                )
             context["require_body_rendering_contract"] = require_body_rendering_contract
         variables["mcp_materialization_context"] = context
         self._assert_character_card_body_mcp_materialization_prompt_current(
@@ -7508,6 +7514,9 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
                         "handoff_id": handoff_id,
                     },
                 )
+        frozen_checkpoint = handoff.get("output_checkpoint")
+        if not isinstance(frozen_checkpoint, dict):
+            frozen_checkpoint = handoff.get("mcp_checkpoint")
         return {
             "operation_id": handoff["operation_id"],
             "canonical_prompt": handoff["canonical_prompt"],
@@ -7517,6 +7526,11 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "rendering_contract": handoff_contract,
             "handoff_id": handoff_id,
             "resume_from_handoff": True,
+            "expected_checkpoint": (
+                dict(frozen_checkpoint)
+                if isinstance(frozen_checkpoint, dict)
+                else None
+            ),
         }
 
     def _strict_body_handoff_resume_contract_compatible(
