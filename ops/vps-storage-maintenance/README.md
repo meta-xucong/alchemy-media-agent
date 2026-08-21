@@ -39,6 +39,15 @@ python3 ops/vps-storage-maintenance/v3_storage_maintenance.py \
 
 ## VPS scheduling
 
+The checked-in installer is intentionally separate from the application
+release. It copies the patch to `/opt/alchemy-media-agent-ops` and installs
+only the maintenance units; it does not rebuild or restart Alchemy:
+
+```powershell
+$env:POLYMARKET_SSH_PASSPHRASE = '...'
+pwsh -File ops/vps-storage-maintenance/install-vps.ps1
+```
+
 Install the service and timer only after reviewing one dry-run report:
 
 ```bash
