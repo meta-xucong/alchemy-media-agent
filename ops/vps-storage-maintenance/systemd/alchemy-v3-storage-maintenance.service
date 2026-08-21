@@ -1,0 +1,10 @@
+[Unit]
+Description=Alchemy V3 conservative storage maintenance
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Environment=V1_MEDIA_STORAGE_DIR=/var/lib/alchemy/v1/media_storage
+Environment=V3_STORAGE_RETENTION_DAYS=30
+ExecStart=/opt/alchemy-media-agent/ops/vps-storage-maintenance/v3-storage-maintenance.sh
