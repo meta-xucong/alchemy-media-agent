@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 
 import importlib.util
@@ -39,7 +40,6 @@ def test_only_old_unreferenced_mock_records_are_candidates(tmp_path: Path) -> No
     old = datetime.now(timezone.utc) - timedelta(days=45)
     for path in (root / "v3_jobs/job_mock.json", root / "v3_outputs/v3_output_aaaaaaaaaaaaaaaaaaaa/output.json"):
         path.touch()
-        import os
         os.utime(path, (old.timestamp(), old.timestamp()))
     items = candidates(root, inventory, retention_days=30, now=datetime.now(timezone.utc))
     assert {item.kind for item in items} == {"mock_job", "mock_output"}

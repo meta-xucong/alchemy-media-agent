@@ -28,13 +28,14 @@ python3 ops/vps-storage-maintenance/v3_storage_maintenance.py \
 
 The command is read-only by default. `--apply` moves only listed candidates to
 `.v3_maintenance_trash/<timestamp>` and writes a manifest. This is a reversible
-quarantine, not an immediate delete. After an observation period, a separate
-explicit command purges old quarantine batches:
+quarantine, not an immediate delete. The daily VPS timer purges quarantine
+batches older than 7 days; the first batch therefore remains available for
+manual recovery during that observation period.
 
 ```bash
 python3 ops/vps-storage-maintenance/v3_storage_maintenance.py \
   --root /var/lib/alchemy/v1/media_storage \
-  --retention-days 30 --purge-trash
+  --retention-days 30 --trash-retention-days 7 --purge-trash
 ```
 
 ## VPS scheduling

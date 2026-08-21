@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$Passphrase = $env:POLYMARKET_SSH_PASSPHRASE,
-    [int]$RetentionDays = 30
+    [int]$RetentionDays = 30,
+    [int]$TrashRetentionDays = 7
 )
 
 Set-StrictMode -Version Latest
@@ -26,7 +27,7 @@ $lines.Add("set -euo pipefail")
 $lines.Add("TARGET=/opt/alchemy-media-agent-ops/vps-storage-maintenance")
 $lines.Add("UNIT_DIR=/etc/systemd/system")
 $lines.Add("TMP_FILES=()")
-$lines.Add("cleanup() { if ((\${#TMP_FILES[@]})); then rm -f \"\${TMP_FILES[@]}\"; fi; }")
+$lines.Add('cleanup() { if ((${#TMP_FILES[@]})); then rm -f "${TMP_FILES[@]}"; fi; }')
 $lines.Add("trap cleanup EXIT")
 $lines.Add("printf 'PRE_HOST='; hostname")
 $lines.Add("printf 'PRE_DISK='; df -h /var/lib/alchemy/v1/media_storage | tail -1")
@@ -53,7 +54,7 @@ foreach ($file in $files) {
     $lines.Add("rm -f '$temporary'")
 }
 
-$lines.Add(('python3 "$TARGET/v3_storage_maintenance.py" --root /var/lib/alchemy/v1/media_storage --retention-days ' + $RetentionDays + ' --apply'))
+$lines.Add(('python3 "$TARGET/v3_storage_maintenance.py" --root /var/lib/alchemy/v1/media_storage --retention-days ' + $RetentionDays + ' --trash-retention-days ' + $TrashRetentionDays + ' --apply --purge-trash'))
 $lines.Add("systemctl daemon-reload")
 $lines.Add("systemctl enable --now alchemy-v3-storage-maintenance.timer")
 $lines.Add("systemctl start alchemy-v3-storage-maintenance.service")

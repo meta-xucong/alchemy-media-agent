@@ -226,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="V1 V3 media storage root")
     parser.add_argument("--retention-days", type=int, default=30)
+    parser.add_argument("--trash-retention-days", type=int, default=7)
     parser.add_argument("--apply", action="store_true", help="quarantine proven-safe candidates")
     parser.add_argument("--purge-trash", action="store_true", help="delete quarantine batches older than retention")
     args = parser.parse_args(argv)
@@ -259,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         if quarantine_path:
             print(json.dumps({"quarantined_to": str(quarantine_path)}, ensure_ascii=False))
     if args.purge_trash:
-        print(json.dumps({"purged": purge_trash(root, retention_days=args.retention_days, now=now)}))
+        print(json.dumps({"purged": purge_trash(root, retention_days=args.trash_retention_days, now=now)}))
     return 0
 
 
