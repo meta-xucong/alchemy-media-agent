@@ -163,6 +163,7 @@ class Settings:
     veyra_sub2api_base_url: str = "http://127.0.0.1:8080"
     veyra_internal_token: str | None = None
     veyra_request_timeout_seconds: float = 10.0
+    veyra_request_retry_attempts: int = 2
     veyra_session_secret: str | None = None
     veyra_session_ttl_seconds: int = 86400
     veyra_require_ui_auth: bool = False
@@ -420,6 +421,7 @@ def load_settings() -> Settings:
         veyra_sub2api_base_url=(os.getenv("VEYRA_SUB2API_BASE_URL", "http://127.0.0.1:8080") or "").rstrip("/"),
         veyra_internal_token=os.getenv("VEYRA_INTERNAL_TOKEN") or None,
         veyra_request_timeout_seconds=max(1.0, float(os.getenv("VEYRA_REQUEST_TIMEOUT_SECONDS", "10"))),
+        veyra_request_retry_attempts=max(1, min(3, int(os.getenv("VEYRA_REQUEST_RETRY_ATTEMPTS", "2")))),
         veyra_session_secret=os.getenv("VEYRA_SESSION_SECRET") or None,
         veyra_session_ttl_seconds=max(300, int(os.getenv("VEYRA_SESSION_TTL_SECONDS", "86400"))),
         veyra_require_ui_auth=os.getenv("VEYRA_REQUIRE_UI_AUTH", "false").lower() in {"1", "true", "yes", "on"},

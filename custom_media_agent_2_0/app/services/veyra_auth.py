@@ -105,20 +105,32 @@ class VeyraSub2APIClient:
         )
 
     async def _get_json(self, path: str) -> dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.get(self.base_url + path, headers=self._headers())
-        except (OSError, httpx.HTTPError) as exc:
-            raise VeyraAuthError("Veyra bridge transport failed.", reason="transport_error") from exc
-        return _checked_json(response)
+        return await self._request_json("get", path)
 
     async def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-                response = await client.post(self.base_url + path, headers=self._headers(), json=payload)
-        except (OSError, httpx.HTTPError) as exc:
-            raise VeyraAuthError("Veyra bridge transport failed.", reason="transport_error") from exc
-        return _checked_json(response)
+        return await self._request_json("post", path, payload=payload)
+
+    async def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for attempt in range(max(1, int(settings.veyra_request_retry_attempts))):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                    if method == "get":
+                        response = await client.get(self.base_url + path, headers=self._headers())
+                    else:
+                        response = await client.post(self.base_url + path, headers=self._headers(), json=payload or {})
+                return _checked_json(response)
+            except (OSError, httpx.HTTPError) as exc:
+                last_error = exc
+                if attempt + 1 >= max(1, int(settings.veyra_request_retry_attempts)):
+                    break
+        raise VeyraAuthError("Veyra bridge transport failed.", reason="transport_error") from last_error
 
     def _headers(self) -> dict[str, str]:
         return {"X-Veyra-Internal-Token": str(self.internal_token or "")}

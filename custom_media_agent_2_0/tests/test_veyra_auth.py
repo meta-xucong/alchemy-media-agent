@@ -15,6 +15,7 @@ from app.services.veyra_auth import (
     VeyraAuthDisabled,
     VeyraAuthError,
     VeyraAuthMisconfigured,
+    VeyraAuthUnauthorized,
     VeyraInsufficientBalance,
     VeyraSub2APIClient,
     VeyraInsufficientBalance,
@@ -97,6 +98,39 @@ def test_veyra_login_wraps_http_client_os_errors_without_logging_ticket_or_token
     assert "Veyra bridge failed: operation=login_ticket_exchange reason=transport_error error_type=VeyraAuthError" in caplog.messages
     assert "ticket-not-for-logs" not in caplog.text
     assert "bridge-secret-not-for-logs" not in caplog.text
+
+
+def test_veyra_client_retries_transport_once_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+    object.__setattr__(settings, "veyra_request_retry_attempts", 2)
+
+    calls = 0
+
+    class FlakyAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise httpx.ConnectError("temporary DNS failure")
+            return httpx.Response(401, json={"code": 401, "message": "Invalid or expired ticket"})
+
+    monkeypatch.setattr(veyra_auth_module.httpx, "AsyncClient", FlakyAsyncClient)
+    client = VeyraSub2APIClient(base_url="https://aiself.vip", internal_token="bridge-secret")
+
+    with pytest.raises(VeyraAuthUnauthorized):
+        asyncio.run(client.exchange_login_ticket("invalid-ticket"))
+
+    assert calls == 2
 
 
 def test_veyra_upstream_http_failure_has_a_safe_reason_code() -> None:
