@@ -54,7 +54,7 @@ foreach ($file in $files) {
     $lines.Add("rm -f '$temporary'")
 }
 
-$lines.Add(('python3 "$TARGET/v3_storage_maintenance.py" --root /var/lib/alchemy/v1/media_storage --retention-days ' + $RetentionDays + ' --trash-retention-days ' + $TrashRetentionDays + ' --apply --purge-trash'))
+$lines.Add(('python3 "$TARGET/v3_storage_maintenance.py" --root /var/lib/alchemy/v1/media_storage --retention-days ' + $RetentionDays + ' --failure-retention-days 7 --trash-retention-days ' + $TrashRetentionDays + ' --apply --purge-trash'))
 $lines.Add("systemctl daemon-reload")
 $lines.Add("systemctl enable --now alchemy-v3-storage-maintenance.timer")
 $lines.Add("systemctl start alchemy-v3-storage-maintenance.service")

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Conservative V3 storage maintenance.
+"""V3 storage maintenance.
 
 The default operation is read-only. ``--apply`` moves only proven-safe
-objects into a quarantine directory; it never deletes project, upload, or
-real-provider output records. ``--purge-trash`` is a separate explicit step.
+objects into a quarantine directory. Failed terminal jobs and their output
+records expire from the user-visible V3 store after the configured failure
+retention; successful deliveries and project/upload records are untouched.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ JOB_ID_RE = re.compile(r"^job_[A-Za-z0-9_-]+$")
 OUTPUT_ID_RE = re.compile(r"^v3_output_[a-f0-9]{20}$")
 MOCK_PROVIDERS = {"v3_mock_contract_fixture", "mock", "test"}
 CACHE_DIRS = ("provider_reference_cache", "share_cache")
+FAILURE_STATUSES = {"failed", "blocked", "not_found"}
 
 
 @dataclass
@@ -134,6 +136,23 @@ def _old_enough(path: Path, *, cutoff: timedelta, now: datetime) -> bool:
     return now - datetime.fromtimestamp(newest, tz=timezone.utc) >= cutoff
 
 
+def _record_expired(record: dict[str, Any], *, retention_days: int, now: datetime) -> bool:
+    """Expire only existing terminal failure states using their last update."""
+
+    if str(record.get("status") or "").strip().lower() not in FAILURE_STATUSES:
+        return False
+    value = str(record.get("updated_at") or record.get("created_at") or "").strip()
+    if not value:
+        return False
+    try:
+        updated_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return now - updated_at.astimezone(timezone.utc) >= timedelta(days=max(1, retention_days))
+
+
 def _size(path: Path) -> int:
     if path.is_file():
         return path.stat().st_size
@@ -150,7 +169,14 @@ def _mock_job(job: dict[str, Any]) -> bool:
     return False
 
 
-def candidates(root: Path, inventory: Inventory, *, retention_days: int, now: datetime) -> list[Candidate]:
+def candidates(
+    root: Path,
+    inventory: Inventory,
+    *,
+    retention_days: int,
+    failure_retention_days: int = 7,
+    now: datetime,
+) -> list[Candidate]:
     result: list[Candidate] = []
     cutoff = timedelta(days=max(1, retention_days))
     for name in CACHE_DIRS:
@@ -166,14 +192,23 @@ def candidates(root: Path, inventory: Inventory, *, retention_days: int, now: da
         | inventory.job_output_ids
         | inventory.mcp_output_ids
     )
+    expired_failed_jobs: set[str] = set()
     for job_id, record in inventory.job_records.items():
         path = root / "v3_jobs" / f"{job_id}.json"
-        if job_id in referenced_jobs or not _mock_job(record) or not path.exists():
+        if path.exists() and _record_expired(record, retention_days=failure_retention_days, now=now):
+            expired_failed_jobs.add(job_id)
+            result.append(Candidate("expired_failed_job", path, _size(path), "expired_terminal_failure"))
+    for job_id, record in inventory.job_records.items():
+        path = root / "v3_jobs" / f"{job_id}.json"
+        if job_id in expired_failed_jobs or job_id in referenced_jobs or not _mock_job(record) or not path.exists():
             continue
         if _old_enough(path, cutoff=cutoff, now=now):
             result.append(Candidate("mock_job", path, _size(path), "unreferenced_mock_job"))
     for output_id, record in inventory.output_records.items():
         path = root / "v3_outputs" / output_id
+        if path.exists() and str(record.get("job_id") or "") in expired_failed_jobs:
+            result.append(Candidate("expired_failed_output", path, _size(path), "expired_terminal_failure"))
+            continue
         if output_id in referenced_outputs or not path.exists():
             continue
         if str(record.get("provider") or "") not in MOCK_PROVIDERS:
@@ -181,6 +216,22 @@ def candidates(root: Path, inventory: Inventory, *, retention_days: int, now: da
         if _old_enough(path, cutoff=cutoff, now=now):
             result.append(Candidate("mock_output", path, _size(path), "unreferenced_mock_output"))
     return result
+
+
+def delete_expired_failures(root: Path, items: list[Candidate]) -> list[str]:
+    """Delete only expired failed jobs/outputs after their seven-day window."""
+
+    deleted: list[str] = []
+    for item in items:
+        if item.kind not in {"expired_failed_job", "expired_failed_output"}:
+            continue
+        _safe_child(root, item.path)
+        if item.path.is_dir():
+            shutil.rmtree(item.path)
+        elif item.path.exists():
+            item.path.unlink()
+        deleted.append(str(item.path.relative_to(root)))
+    return deleted
 
 
 def _safe_child(root: Path, path: Path) -> None:
@@ -226,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="V1 V3 media storage root")
     parser.add_argument("--retention-days", type=int, default=30)
+    parser.add_argument("--failure-retention-days", type=int, default=7)
     parser.add_argument("--trash-retention-days", type=int, default=7)
     parser.add_argument("--apply", action="store_true", help="quarantine proven-safe candidates")
     parser.add_argument("--purge-trash", action="store_true", help="delete quarantine batches older than retention")
@@ -235,7 +287,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"storage root does not exist: {root}")
     now = datetime.now(timezone.utc)
     inventory = build_inventory(root)
-    items = candidates(root, inventory, retention_days=args.retention_days, now=now)
+    items = candidates(
+        root,
+        inventory,
+        retention_days=args.retention_days,
+        failure_retention_days=args.failure_retention_days,
+        now=now,
+    )
     report = {
         "root": str(root),
         "generated_at": now.isoformat(),
@@ -256,9 +314,11 @@ def main(argv: list[str] | None = None) -> int:
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if args.apply:
-        quarantine_path = quarantine(root, items, now=now)
+        failure_items = [item for item in items if item.kind.startswith("expired_failed_")]
+        quarantine_path = quarantine(root, [item for item in items if item not in failure_items], now=now)
         if quarantine_path:
             print(json.dumps({"quarantined_to": str(quarantine_path)}, ensure_ascii=False))
+        print(json.dumps({"deleted_expired_failures": delete_expired_failures(root, failure_items)}, ensure_ascii=False))
     if args.purge_trash:
         print(json.dumps({"purged": purge_trash(root, retention_days=args.trash_retention_days, now=now)}))
     return 0

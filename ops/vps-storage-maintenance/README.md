@@ -8,15 +8,18 @@ handoff recovery, review, or audit.
 ## Safety model
 
 `ops/vps-storage-maintenance/v3_storage_maintenance.py` scans project records, history, Job records,
-output records, and MCP handoffs before proposing anything. It may propose:
+output records, and MCP handoffs before proposing anything. It may propose or expire:
 
 - expired files in `provider_reference_cache` and `share_cache`;
 - old, unreferenced Jobs explicitly produced by a mock/test provider;
 - old, unreferenced output directories explicitly produced by a mock/test provider.
+- terminal `failed`, `blocked`, or `not_found` Job records and their associated
+  output directories after seven days from their last update.
 
-It never automatically removes projects, uploads, real-provider outputs,
-history, or pending/unknown MCP handoffs. Unreadable records block related
-automatic deletion by making their references unknown.
+It never automatically removes project records, uploads, successful deliveries,
+history, or pending/unknown MCP handoffs. Failure cleanup uses the existing
+terminal status and last-update timestamp only; it does not inspect prompts,
+filenames, providers, or image contents. Unreadable records are left alone.
 
 ## Manual validation
 
@@ -27,15 +30,15 @@ python3 ops/vps-storage-maintenance/v3_storage_maintenance.py \
 ```
 
 The command is read-only by default. `--apply` moves only listed candidates to
-`.v3_maintenance_trash/<timestamp>` and writes a manifest. This is a reversible
-quarantine, not an immediate delete. The daily VPS timer purges quarantine
-batches older than 7 days; the first batch therefore remains available for
-manual recovery during that observation period.
+`.v3_maintenance_trash/<timestamp>` and writes a manifest. Expired terminal
+failures are removed directly after their seven-day user-visible window;
+cache/mock cleanup remains reversible quarantine. The VPS timer runs every
+Sunday at 04:00 and purges old quarantine batches.
 
 ```bash
 python3 ops/vps-storage-maintenance/v3_storage_maintenance.py \
   --root /var/lib/alchemy/v1/media_storage \
-  --retention-days 30 --trash-retention-days 7 --purge-trash
+  --retention-days 30 --failure-retention-days 7 --trash-retention-days 7 --purge-trash
 ```
 
 ## VPS scheduling

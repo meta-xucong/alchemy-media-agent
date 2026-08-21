@@ -1,10 +1,10 @@
 [Unit]
-Description=Run Alchemy V3 conservative storage maintenance daily
+Description=Run Alchemy V3 storage maintenance weekly
 
 [Timer]
-OnCalendar=daily
+OnCalendar=Sun *-*-* 04:00:00
 Persistent=true
-RandomizedDelaySec=30m
+RandomizedDelaySec=0
 
 [Install]
 WantedBy=timers.target

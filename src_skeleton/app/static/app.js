@@ -3338,11 +3338,11 @@ function v3ProjectGroupFromProject(project, outputGroup = null) {
 function v3ProjectImageGroups(items = v3State.imageHistory) {
   const outputGroups = v3OutputProjectGroupMap(items);
   const projects = (Array.isArray(v3State.projects) ? v3State.projects : [])
-    .filter((project) => project?.project_id && project.status !== "archived")
+    .filter((project) => project?.project_id && project.status !== "archived" && !v3ExpiredFailureOnlyProject(project))
     .sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a));
   if (!projects.length) {
     return Array.from(outputGroups.values())
-      .filter((group) => group.project?.status !== "archived")
+      .filter((group) => group.project?.status !== "archived" && !v3ExpiredFailureOnlyProject(group.project))
       .sort((a, b) => v3OutputItemTime(b.latestItem) - v3OutputItemTime(a.latestItem));
   }
   return projects.map((project) => v3ProjectGroupFromProject(project, outputGroups.get(String(project.project_id))))
@@ -3356,7 +3356,23 @@ function v3OutputItemTime(item) {
   return Date.parse(item?.created_at || item?.updated_at || item?.metadata?.created_at || "") || 0;
 }
 
+function v3FailureArtifactExpired(item) {
+  if (item?.metadata?.expired_failure_artifact === true) return true;
+  const status = String(item?.status || item?.latest_job_status || item?.metadata?.status || "").trim().toLowerCase();
+  if (!["failed", "blocked", "not_found"].includes(status)) return false;
+  const expiry = item?.failure_expires_at || item?.metadata?.failure_expires_at;
+  const updatedAt = item?.updated_at || item?.metadata?.updated_at;
+  const timestamp = Date.parse(expiry || updatedAt || "");
+  return Boolean(timestamp && (expiry ? timestamp <= Date.now() : Date.now() - timestamp >= 7 * 24 * 60 * 60 * 1000));
+}
+
+function v3ExpiredFailureOnlyProject(project) {
+  const thumbnails = Array.isArray(project?.latest_thumbnail_urls) ? project.latest_thumbnail_urls : [];
+  return v3FailureArtifactExpired(project) && !thumbnails.some(Boolean);
+}
+
 function v3HistoryOutputVisible(item) {
+  if (v3FailureArtifactExpired(item)) return false;
   const state = item?.selection_state || item?.metadata?.selection_state || "";
   if (state === "unselected" || state === "rejected") return false;
   return v3CanonicalFinalDelivery(item);
@@ -3985,7 +4001,7 @@ function v3ReferenceImageCandidates(ref) {
 }
 
 function v3CurrentJobImageItems(job = v3State.currentJob) {
-  if (!v3JobDeliverySettled(job)) return [];
+  if (v3FailureArtifactExpired(job) || !v3JobDeliverySettled(job)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
   const source = candidates.length ? candidates : assets;
@@ -4051,7 +4067,7 @@ function v3JobHasTerminalOutcome(job = v3State.currentJob) {
 }
 
 function v3ReviewOnlyJobImageItems(job = v3State.currentJob) {
-  if (!job || !v3JobDeliveryWithheld(job)) return [];
+  if (!job || v3FailureArtifactExpired(job) || !v3JobDeliveryWithheld(job)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
   const source = candidates.length ? candidates : assets;
@@ -4155,7 +4171,7 @@ function v3StoredProjectOutputItems(project = v3State.currentProject) {
   const projectId = project?.project_id || "";
   return Array.isArray(v3State.projectOutputs)
     ? v3State.projectOutputs
-        .filter((item) => !projectId || item?.project_id === projectId)
+        .filter((item) => (!projectId || item?.project_id === projectId) && !v3FailureArtifactExpired(item))
         .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "project_output" }))
     : [];
 }

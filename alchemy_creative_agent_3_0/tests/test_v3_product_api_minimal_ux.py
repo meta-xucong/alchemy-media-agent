@@ -1,5 +1,6 @@
 import base64
 from io import BytesIO
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
 from uuid import uuid4
@@ -1145,6 +1146,39 @@ def test_job_polling_closes_an_expired_background_watchdog_when_timer_delivery_i
 
     assert expired.status == ProductJobStatusValue.BLOCKED
     assert expired.metadata["generation_lifecycle_timeout"]["owner"] == "v3_background_generation_watchdog"
+
+
+def test_expired_failure_is_hidden_before_weekly_storage_cleanup() -> None:
+    service, _, _ = _service("expired_failure_projection")
+    created = service.create_job({"user_input": "Create one clean still-life image."})
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.status = ProductJobStatusValue.BLOCKED
+    record.updated_at = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    service.job_store._records[created.job_id] = record
+
+    expired = service.get_job(created.job_id)
+    assert expired.status == ProductJobStatusValue.NOT_FOUND
+    assert expired.metadata["expired_failure_artifact"] is True
+    assert all(item.job_id != created.job_id for item in service.list_history().items)
+
+
+def test_persistent_job_store_does_not_resurrect_a_removed_failure_record() -> None:
+    root = _test_store_root("expired_failure_persistent")
+    job_root = root / "jobs"
+    service = V3ProductApiService(job_store=PersistentProductJobStore(job_root))
+    created = service.create_job({"user_input": "Create one clean still-life image."})
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    record.status = ProductJobStatusValue.BLOCKED
+    record.updated_at = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    service.job_store.save(record)
+    record_path = job_root / f"{created.job_id}.json"
+    assert record_path.exists()
+    record_path.unlink()
+
+    assert service.job_store.get(created.job_id) is None
+    assert all(item.job_id != created.job_id for item in service.list_history().items)
 
 
 def test_project_timeout_handler_records_one_safe_terminal_timeline_item() -> None:

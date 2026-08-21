@@ -8,7 +8,7 @@ balance estimate instead of image-model controls.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import base64
 import hashlib
 import json
@@ -569,6 +569,40 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+V3_FAILED_ARTIFACT_RETENTION_DAYS = 7
+V3_FAILED_ARTIFACT_STATUSES = frozenset(
+    {
+        ProductJobStatusValue.FAILED,
+        ProductJobStatusValue.BLOCKED,
+        ProductJobStatusValue.NOT_FOUND,
+    }
+)
+
+
+def _failure_artifact_expiry(record: "ProductJobRecord") -> str | None:
+    if record.status not in V3_FAILED_ARTIFACT_STATUSES:
+        return None
+    try:
+        updated_at = datetime.fromisoformat(str(record.updated_at).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return (updated_at.astimezone(timezone.utc) + timedelta(days=V3_FAILED_ARTIFACT_RETENTION_DAYS)).isoformat()
+
+
+def _failed_artifact_expired(record: "ProductJobRecord", *, now: datetime | None = None) -> bool:
+    expiry = _failure_artifact_expiry(record)
+    if expiry is None:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(expiry)
+    except ValueError:
+        return False
+    current = now or datetime.now(timezone.utc)
+    return current >= expires_at
+
+
 @dataclass
 class ProductJobRecord:
     request: CreateCreativeJobRequest
@@ -702,9 +736,10 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         if restored is not None:
             self._records[restored.job_id] = restored
             return restored
-        cached = super().get(job_id)
-        if cached is not None:
-            return cached
+        # The maintenance timer may remove an expired failure while this
+        # process stays alive. A missing durable record must not resurrect its
+        # cached copy into API history or Project Mode projections.
+        self._records.pop(job_id, None)
         return None
 
     def list_recent(self, limit: int = 20) -> list[ProductJobRecord]:
@@ -756,6 +791,8 @@ class PersistentProductJobStore(InMemoryProductJobStore):
         return deleted
 
     def _load_all_records(self) -> None:
+        # Disk is the authoritative catalog after an external maintenance run.
+        self._records.clear()
         if not self.storage_root.exists():
             return
         for path in self.storage_root.glob("job_*.json"):
@@ -2502,7 +2539,14 @@ class V3ProductApiService:
     def get_job_record(self, job_id: str) -> ProductJobRecord | None:
         """Internal Project Mode lookup; no new public low-level API is exposed."""
 
-        return self.job_store.get(job_id)
+        record = self.job_store.get(job_id)
+        return None if record is not None and _failed_artifact_expired(record) else record
+
+    def is_failed_artifact_expired(self, job_id: str) -> bool:
+        """Read-only projection hook for Project Mode output visibility."""
+
+        record = self.job_store.get(job_id)
+        return record is not None and _failed_artifact_expired(record)
 
     def record_character_card_candidate_lifecycle_checkpoint(
         self,
@@ -2601,6 +2645,8 @@ class V3ProductApiService:
         if record is None:
             restored = self._status_from_output_store(job_id)
             return restored or self._not_found_status(job_id)
+        if _failed_artifact_expired(record):
+            return self._not_found_status(job_id, expired_failure_artifact=True)
         self._expire_background_generation_if_due(record)
         return self._partial_output_recovery_status(record) or self._status_from_record(record)
 
@@ -2974,11 +3020,15 @@ class V3ProductApiService:
 
     def list_history(self, limit: int = 20) -> V3JobHistoryResponse:
         bounded_limit = max(1, min(int(limit or 20), 100))
-        records = self.job_store.list_recent(bounded_limit)
+        records = self.job_store.list_recent(100)
+        expired_job_ids = {record.job_id for record in records if _failed_artifact_expired(record)}
+        records = [record for record in records if record.job_id not in expired_job_ids][:bounded_limit]
         record_items = [self._history_item_from_record(record) for record in records]
         known_job_ids = {item.job_id for item in record_items}
         restored_items = [
-            item for item in self._history_items_from_output_store(bounded_limit) if item.job_id not in known_job_ids
+            item
+            for item in self._history_items_from_output_store(bounded_limit)
+            if item.job_id not in known_job_ids and item.job_id not in expired_job_ids
         ]
         items = sorted([*record_items, *restored_items], key=lambda item: item.updated_at or item.created_at, reverse=True)[
             :bounded_limit
@@ -9329,6 +9379,11 @@ class V3ProductApiService:
                 "rules_version": RULE_VERSION,
                 "v3_independent_product_api": True,
                 "balance_adapter": self.balance_adapter.adapter_name,
+                **(
+                    {"failure_expires_at": _failure_artifact_expiry(record)}
+                    if _failure_artifact_expiry(record)
+                    else {}
+                ),
                 "selected_vertical_pack": result.metadata.get("selected_vertical_pack"),
                 "scenario_id": result.metadata.get("scenario_id"),
                 **(
@@ -10132,6 +10187,11 @@ class V3ProductApiService:
                 "rules_version": RULE_VERSION,
                 "v3_independent_product_api": True,
                 "balance_adapter": self.balance_adapter.adapter_name,
+                **(
+                    {"failure_expires_at": _failure_artifact_expiry(record)}
+                    if _failure_artifact_expiry(record)
+                    else {}
+                ),
                 "exposes_product_concepts_only": True,
                 "blocked_before_planning": record.status == ProductJobStatusValue.BLOCKED,
                 "shared_capabilities": self._doc270_general_public_capability_summary(
@@ -10944,7 +11004,7 @@ class V3ProductApiService:
             return None
         return str(value).strip().upper() or None
 
-    def _not_found_status(self, job_id: str) -> ProductJobStatus:
+    def _not_found_status(self, job_id: str, *, expired_failure_artifact: bool = False) -> ProductJobStatus:
         nav = get_navigation_entry()
         return ProductJobStatus(
             job_id=job_id,
@@ -10957,6 +11017,7 @@ class V3ProductApiService:
                 "source": "V3ProductApiService",
                 "rules_version": RULE_VERSION,
                 "v3_independent_product_api": True,
+                **({"expired_failure_artifact": True} if expired_failure_artifact else {}),
             },
         )
 
@@ -10966,6 +11027,7 @@ class V3ProductApiService:
         scenario_label = status.scenario.display_name if status.scenario else None
         selected_preset_id = status.scenario.selected_preset_id if status.scenario else None
         selected_asset_count = len(record.selected_result.selected_asset_ids) if record.selected_result else 0
+        failure_expires_at = _failure_artifact_expiry(record)
         return V3JobHistoryItem(
             job_id=record.job_id,
             status=status.status,
@@ -10986,6 +11048,7 @@ class V3ProductApiService:
                 "imports_v1_v2_runtime": False,
                 "imports_lab_runtime": False,
                 "partial_generation_recovery": status.metadata.get("partial_generation_recovery"),
+                **({"failure_expires_at": failure_expires_at} if failure_expires_at else {}),
             },
         )
 

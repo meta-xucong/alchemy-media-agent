@@ -9368,6 +9368,10 @@ class V3ProjectModeService:
                 continue
             normalized = getattr(value, "value", value)
             normalized = str(normalized or "").strip().lower()
+            if normalized == ProductJobStatusValue.NOT_FOUND.value:
+                if dict(status.metadata or {}).get("expired_failure_artifact") is True:
+                    return normalized
+                continue
             if normalized and normalized != ProductJobStatusValue.NOT_FOUND.value:
                 return normalized
         return None
@@ -10104,6 +10108,8 @@ class V3ProjectModeService:
             try:
                 job_status = self.product_service.get_job(job_id)
             except Exception:
+                continue
+            if dict(job_status.metadata or {}).get("expired_failure_artifact") is True:
                 continue
             job_record = self.product_service.get_job_record(job_id)
             has_doc267_review_closure = (

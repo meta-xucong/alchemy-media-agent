@@ -3587,6 +3587,21 @@ function mobileV3OutputTime(item) {
   return Date.parse(item?.created_at || item?.updated_at || item?.metadata?.created_at || "") || 0;
 }
 
+function mobileV3FailureArtifactExpired(item) {
+  if (item?.metadata?.expired_failure_artifact === true) return true;
+  const status = String(item?.status || item?.latest_job_status || item?.metadata?.status || "").trim().toLowerCase();
+  if (!["failed", "blocked", "not_found"].includes(status)) return false;
+  const expiry = item?.failure_expires_at || item?.metadata?.failure_expires_at;
+  const updatedAt = item?.updated_at || item?.metadata?.updated_at;
+  const timestamp = Date.parse(expiry || updatedAt || "");
+  return Boolean(timestamp && (expiry ? timestamp <= Date.now() : Date.now() - timestamp >= 7 * 24 * 60 * 60 * 1000));
+}
+
+function mobileV3ExpiredFailureOnlyProject(project) {
+  const thumbnails = Array.isArray(project?.latest_thumbnail_urls) ? project.latest_thumbnail_urls : [];
+  return mobileV3FailureArtifactExpired(project) && !thumbnails.some(Boolean);
+}
+
 function mobileV3ProjectFromOutputGroup(projectId, latestItem) {
   const existing = (mobileV3State.projects || []).find((project) => project?.project_id === projectId);
   if (existing) return existing;
@@ -3606,6 +3621,7 @@ function mobileV3ProjectFromOutputGroup(projectId, latestItem) {
 function mobileV3RecentProjectGroups() {
   const grouped = new Map();
   (mobileV3State.outputs || []).forEach((item) => {
+    if (mobileV3FailureArtifactExpired(item)) return;
     if (!mobileV3CanonicalFinalDelivery(item)) return;
     const projectId = item?.project_id || item?.metadata?.project_id;
     if (!projectId) return;
@@ -3624,7 +3640,7 @@ function mobileV3RecentProjectGroups() {
       project: mobileV3ProjectFromOutputGroup(group.projectId, group.latestItem),
       count: group.items.length,
     }))
-    .filter((group) => group.project?.status !== "archived")
+    .filter((group) => group.project?.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(group.project))
     .sort((a, b) => mobileV3OutputTime(b.latestItem) - mobileV3OutputTime(a.latestItem));
 }
 
@@ -3647,7 +3663,7 @@ function mobileV3GroupFromProject(project, outputGroup = null) {
 function mobileV3ProjectGroupsFromProjects() {
   const outputGroups = mobileV3RecentProjectGroupMap();
   const projects = (mobileV3State.projects || [])
-    .filter((project) => project?.project_id && project.status !== "archived")
+    .filter((project) => project?.project_id && project.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(project))
     .sort((a, b) => (Date.parse(b?.updated_at || b?.created_at || "") || 0) - (Date.parse(a?.updated_at || a?.created_at || "") || 0));
   if (!projects.length) return mobileV3RecentProjectGroups();
   return projects.map((project) => mobileV3GroupFromProject(project, outputGroups.get(String(project.project_id))));
@@ -6055,6 +6071,7 @@ function openMobileV3OutputLightbox(item, { promptOpen = false } = {}) {
 function mobileV3OutputsByProject() {
   const map = new Map();
   (mobileV3State.outputs || []).forEach((item) => {
+    if (mobileV3FailureArtifactExpired(item)) return;
     const projectId = item.project_id || item.metadata?.project_id;
     if (!projectId) return;
     const list = map.get(projectId) || [];
@@ -6071,7 +6088,7 @@ function mobileV3OutputsForProject(projectId) {
 
 function mobileV3ReviewOutputsForProject(projectId) {
   return (mobileV3State.reviewOutputs || [])
-    .filter((item) => String(item?.project_id || item?.metadata?.project_id || "") === String(projectId || ""));
+    .filter((item) => String(item?.project_id || item?.metadata?.project_id || "") === String(projectId || "") && !mobileV3FailureArtifactExpired(item));
 }
 
 function mobileV3OutputDeliveryState(item) {
@@ -6133,7 +6150,7 @@ function mobileV3JobHasTerminalOutcome(job = mobileV3State.currentJob) {
 }
 
 function mobileV3ReviewOnlyJobImageItems(job = mobileV3State.currentJob) {
-  if (!job || !mobileV3JobDeliveryWithheld(job)) return [];
+  if (!job || mobileV3FailureArtifactExpired(job) || !mobileV3JobDeliveryWithheld(job)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
   const source = candidates.length ? candidates : assets;
