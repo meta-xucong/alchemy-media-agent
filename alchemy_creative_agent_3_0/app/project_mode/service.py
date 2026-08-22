@@ -1654,8 +1654,67 @@ class V3ProjectModeService:
                 continue
             metadata = dict(record.request.metadata or {})
             if metadata.get("doc270_general_command_identity") == identity:
+                if self._doc270_general_existing_job_replayable(record):
+                    return self.product_service.get_job(job_id)
+                if self._doc270_general_existing_job_retryable(record):
+                    continue
                 return self.product_service.get_job(job_id)
         return None
+
+    @staticmethod
+    def _doc270_general_existing_job_replayable(record: Any) -> bool:
+        """Keep durable replay strict while allowing transient Brain recovery.
+
+        A command identity is still immutable evidence.  A blocked record is
+        only re-plannable when the remote Brain stopped before any image
+        request and its typed lifecycle evidence identifies a transport or
+        availability failure.  Product-policy closures and provider failures
+        remain immutable replays.
+        """
+
+        raw_status = getattr(record, "status", "")
+        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        if status not in {"blocked", "failed"}:
+            return True
+        return not V3ProjectModeService._doc270_general_existing_job_retryable(record)
+
+    @staticmethod
+    def _doc270_general_existing_job_retryable(record: Any) -> bool:
+        """Recognize only a transient pre-provider remote-Brain failure."""
+
+        raw_status = getattr(record, "status", "")
+        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        if status not in {"blocked", "failed"}:
+            return False
+        metadata = dict(getattr(getattr(record, "request", None), "metadata", {}) or {})
+        failure = metadata.get("generation_lifecycle_failure")
+        if not isinstance(failure, dict) or failure.get("schema_version") != "v3_generation_lifecycle_failure_v1":
+            return False
+        if failure.get("failure_family") != "remote_creative_brain" or failure.get("provider_request_started") is not False:
+            return False
+        outcome = failure.get("remote_creative_brain_outcome")
+        if not isinstance(outcome, dict) or outcome.get("state") != "blocked":
+            return False
+        transport = outcome.get("remote_brain_transport_failure")
+        return bool(
+            outcome.get("remote_provider_available") is False
+            or outcome.get("remote_error_class") in {"timeout", "unavailable"}
+            or (isinstance(transport, dict) and transport.get("transport_error_class") in {"timeout", "connect_error", "read_error"})
+        )
+
+    def _doc270_general_retryable_command_exists(
+        self,
+        project: ProjectRecord,
+        identity: dict[str, Any],
+    ) -> bool:
+        for job_id in project.job_ids:
+            record = self.product_service.get_job_record(job_id)
+            if record is None:
+                continue
+            metadata = dict(record.request.metadata or {})
+            if metadata.get("doc270_general_command_identity") == identity and self._doc270_general_existing_job_retryable(record):
+                return True
+        return False
 
     def _doc270_general_activation_decision(
         self,
@@ -3255,6 +3314,7 @@ class V3ProjectModeService:
         template_manifest = self._ensure_active_template(job_request.template_id)
         doc270_general_identity: dict[str, Any] | None = None
         doc270_general_activation: dict[str, Any] | None = None
+        doc270_general_retry_instance_id: str | None = None
         if template_manifest.template_id == GENERAL_TEMPLATE_ID:
             job_request = job_request.model_copy(
                 update={
@@ -3289,6 +3349,8 @@ class V3ProjectModeService:
                     )
                     if existing_general is not None:
                         return existing_general
+                    if isinstance(identity, dict) and self._doc270_general_retryable_command_exists(project, identity):
+                        doc270_general_retry_instance_id = uuid4().hex
                     persisted = next((record.get("entry") for record in reversed(self.project_store.list_private_records(
                         project.project_id, _DOC281_GENERAL_RECEIPT_NAMESPACE,
                     )) if record.get("identity_digest") == identity.get("identity_digest")), None) if isinstance(identity, dict) else None
@@ -3337,6 +3399,8 @@ class V3ProjectModeService:
                             existing_general = self._doc270_general_existing_command(project, identity)
                             if existing_general is not None:
                                 return existing_general
+                            if self._doc270_general_retryable_command_exists(project, identity):
+                                doc270_general_retry_instance_id = uuid4().hex
                             doc270_general_identity = dict(identity)
                             doc270_general_activation = self._doc270_general_activation_decision(
                                 project,
@@ -3751,9 +3815,13 @@ class V3ProjectModeService:
             else self.product_service.create_project_visual_asset_bound_job(
                 create_payload,
                 binding_service=self.project_visual_asset_binding_service,
+                server_job_instance_id=doc270_general_retry_instance_id,
             )
             if self.project_visual_asset_binding_service is not None
-            else self.product_service.create_job(create_payload)
+            else self.product_service.create_job(
+                create_payload,
+                server_job_instance_id=doc270_general_retry_instance_id,
+            )
         )
         if (
             template_manifest.template_id == ECOMMERCE_TEMPLATE_ID

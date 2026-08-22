@@ -408,6 +408,17 @@ class V3LLMBrainProvider:
                 request=request,
                 json_recovery=json_recovery,
             )
+        # Chat Completions is the portable OpenAI-compatible contract.  A
+        # gateway may accept the request but leave the newer Responses route
+        # hanging instead of returning a protocol error, so Responses is an
+        # explicit opt-in rather than an implicit first attempt.
+        if (_env("V3_LLM_BRAIN_TRANSPORT") or "chat").strip().lower() != "responses":
+            return self._run_openai_chat_completions(
+                api_key=api_key,
+                base_url=base_url,
+                request=request,
+                json_recovery=json_recovery,
+            )
         try:
             return self._run_openai_responses(
                 api_key=api_key,

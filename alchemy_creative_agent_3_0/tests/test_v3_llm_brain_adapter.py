@@ -1544,6 +1544,7 @@ def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch
         return '{"remote": true}'
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "openai")
@@ -1557,6 +1558,41 @@ def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch
 
     assert result == {"remote": True}
     assert calls == {"responses": 1, "chat": 1}
+
+
+def test_openai_brain_uses_portable_chat_transport_by_default(monkeypatch) -> None:
+    from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    calls = {"responses": 0, "chat": 0}
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls["responses"] += 1
+            raise AssertionError("Responses must be opt-in")
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls["chat"] += 1
+        return '{"remote": true}'
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.delenv("V3_LLM_BRAIN_TRANSPORT", raising=False)
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_provider", "openai")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
+
+    result = V3LLMBrainProvider()._run_openai_compatible(  # noqa: SLF001 - transport contract
+        BrainRunRequest(user_input="Create one remote photography direction.")
+    )
+
+    assert result == {"remote": True}
+    assert calls == {"responses": 0, "chat": 1}
 
 
 def test_openai_brain_does_not_switch_protocol_on_auth_failure(monkeypatch) -> None:
@@ -1583,6 +1619,7 @@ def test_openai_brain_does_not_switch_protocol_on_auth_failure(monkeypatch) -> N
         return '{"remote": true}'
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
     monkeypatch.setattr(settings, "default_llm_provider", "openai")
@@ -1652,6 +1689,7 @@ def test_remote_brain_stops_after_one_invalid_json_recovery(monkeypatch) -> None
             self.responses = FakeResponses()
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
@@ -1734,6 +1772,7 @@ def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> No
             self.responses = FakeResponses()
 
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_TRANSPORT", "responses")
     monkeypatch.delenv("V3_LLM_BRAIN_MODEL", raising=False)
     monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
     monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")

@@ -1168,14 +1168,20 @@ class V3ProductApiService:
 
         return default_photography_operator_catalog() if photography_production_enabled() else None
 
-    def create_creative_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
-        return self._create_creative_job(request)
+    def create_creative_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+        *,
+        server_job_instance_id: str | None = None,
+    ) -> ProductJobStatus:
+        return self._create_creative_job(request, server_job_instance_id=server_job_instance_id)
 
     def create_project_visual_asset_bound_job(
         self,
         request: CreateCreativeJobRequest | dict[str, Any],
         *,
         binding_service: ProjectVisualAssetBindingService,
+        server_job_instance_id: str | None = None,
     ) -> ProductJobStatus:
         """Internal Project Mode seam for an explicit library asset selection.
 
@@ -1187,6 +1193,7 @@ class V3ProductApiService:
         return self._create_creative_job(
             request,
             project_visual_asset_binding_service=binding_service,
+            server_job_instance_id=server_job_instance_id,
         )
 
     def create_project_ecommerce_job(
@@ -1282,6 +1289,7 @@ class V3ProductApiService:
         generation_channel: Literal["provider", "mcp"] = "provider",
         mcp_operation_id: str | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
+        server_job_instance_id: str | None = None,
         project_ecommerce_canonical_product_asset_ids: list[str] | None = None,
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
         doc270_source_library_enabled: bool = False,
@@ -1640,7 +1648,7 @@ class V3ProductApiService:
                 create_request.user_input,
                 create_request.effective_brand_id,
                 runtime_result.scenario_resolution.manifest.scenario_id,
-                create_request.metadata.get("v3_job_instance_id"),
+                create_request.metadata.get("v3_job_instance_id") or server_job_instance_id,
             )
         )
         activation_metadata = {
@@ -1860,8 +1868,13 @@ class V3ProductApiService:
             return {"state": "needs_input"}
         return {"state": "activated_resolved", "receipts": receipts, "selection": selection}
 
-    def create_job(self, request: CreateCreativeJobRequest | dict[str, Any]) -> ProductJobStatus:
-        return self.create_creative_job(request)
+    def create_job(
+        self,
+        request: CreateCreativeJobRequest | dict[str, Any],
+        *,
+        server_job_instance_id: str | None = None,
+    ) -> ProductJobStatus:
+        return self.create_creative_job(request, server_job_instance_id=server_job_instance_id)
 
     def create_professional_anchor_preparation_job(
         self,

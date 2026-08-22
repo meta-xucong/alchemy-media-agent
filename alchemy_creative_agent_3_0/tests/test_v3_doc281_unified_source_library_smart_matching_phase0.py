@@ -360,6 +360,41 @@ def test_doc281_prompt_only_receipt_replays_without_brain(tmp_path) -> None:
     assert replay["job_id"] == first["job_id"] and calls == {"brain": 1}
 
 
+def test_doc281_transient_brain_block_replans_same_command_after_recovery(tmp_path) -> None:
+    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
+    calls = {"brain": 0}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
+    first = handlers.post_project_job(project["project_id"], _general_payload())
+    record = handlers.service.get_job_record(first["job_id"])
+    assert record is not None
+    record.status = "blocked"
+    record.request.metadata["generation_lifecycle_failure"] = {
+        "schema_version": "v3_generation_lifecycle_failure_v1",
+        "status": "blocked",
+        "owner": "v3_product_api_runtime",
+        "failure_family": "remote_creative_brain",
+        "failure_code": "remote_brain_unavailable",
+        "reason_code": "remote_brain_unavailable",
+        "provider_request_started": False,
+        "remote_creative_brain_outcome": {
+            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "state": "blocked",
+            "reason_code": "remote_brain_unavailable",
+            "remote_error_class": "timeout",
+        },
+    }
+    handlers.service.job_store.save(record)
+    assert not handlers.project_service._doc270_general_existing_job_replayable(record)  # noqa: SLF001
+    assert handlers.project_service._doc270_general_retryable_command_exists(  # noqa: SLF001
+        handlers.project_service._require_project(project["project_id"]),  # noqa: SLF001
+        record.request.metadata["doc270_general_command_identity"],
+    )
+
+    retry = handlers.post_project_job(project["project_id"], _general_payload())
+    assert retry["job_id"] != first["job_id"]
+    assert calls == {"brain": 1}
+
+
 def test_doc281_public_activation_has_no_private_selection_disclosure(tmp_path) -> None:
     handlers, project, asset_ids, snapshot = _general_project(tmp_path)
     _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0]))
