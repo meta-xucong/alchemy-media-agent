@@ -9,8 +9,10 @@ or local semantic taxonomy is used to select a General original.
 from __future__ import annotations
 
 from copy import deepcopy
+import base64
 import hashlib
 import json
+from io import BytesIO
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -142,6 +144,15 @@ def _general_payload(*, user_input: str = "Create a source-aware image.", metada
         "template_id": "general_template",
         "metadata": {"requested_image_count": 1, **(metadata or {})},
     }
+
+
+def _png_base64() -> str:
+    from PIL import Image
+
+    image = Image.new("RGB", (16, 16), color=(220, 224, 230))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def _public_safe(value: Any) -> None:
@@ -393,6 +404,36 @@ def test_doc281_transient_brain_block_replans_same_command_after_recovery(tmp_pa
     retry = handlers.post_project_job(project["project_id"], _general_payload())
     assert retry["job_id"] != first["job_id"]
     assert calls == {"brain": 1}
+
+
+def test_doc281_generated_without_persisted_output_is_not_replayed(tmp_path) -> None:
+    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
+    calls = {"brain": 0}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
+    first = handlers.post_project_job(project["project_id"], _general_payload())
+    record = handlers.service.get_job_record(first["job_id"])
+    assert record is not None
+    record.status = "generated"
+    handlers.service.job_store.save(record)
+
+    rebuilt = handlers.post_project_job(project["project_id"], _general_payload())
+    assert rebuilt["job_id"] != first["job_id"]
+
+    stored = handlers.service.output_store.save_base64_output(
+        job_id=rebuilt["job_id"],
+        candidate_id="doc281-replay-candidate",
+        asset_id="doc281-replay-asset",
+        provider="fixture",
+        model="fixture",
+        encoded_image=_png_base64(),
+    )
+    rebuilt_record = handlers.service.get_job_record(rebuilt["job_id"])
+    assert rebuilt_record is not None
+    rebuilt_record.status = "generated"
+    handlers.service.job_store.save(rebuilt_record)
+    replay = handlers.post_project_job(project["project_id"], _general_payload())
+    assert replay["job_id"] == rebuilt["job_id"]
+    assert stored.file_path and Path(stored.file_path).is_file()
 
 
 def test_doc281_public_activation_has_no_private_selection_disclosure(tmp_path) -> None:

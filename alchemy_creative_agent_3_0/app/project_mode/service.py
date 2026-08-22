@@ -1658,11 +1658,31 @@ class V3ProjectModeService:
                     return self.product_service.get_job(job_id)
                 if self._doc270_general_existing_job_retryable(record):
                     continue
+                status = str(getattr(getattr(record, "status", None), "value", getattr(record, "status", "")) or "").strip().lower()
+                if status in {"generated", "selected", "ready"} and not self._doc270_general_existing_job_has_usable_output(record):
+                    # A legacy record can say generated after Brain/Provider
+                    # work while lacking a persisted V3 output. Never replay
+                    # that metadata-only success to the browser.
+                    continue
                 return self.product_service.get_job(job_id)
         return None
 
-    @staticmethod
-    def _doc270_general_existing_job_replayable(record: Any) -> bool:
+    def _doc270_general_existing_job_has_usable_output(self, record: Any) -> bool:
+        output_store = getattr(self.product_service, "output_store", None)
+        if output_store is None:
+            return False
+        try:
+            records = output_store.list_by_job(str(getattr(record, "job_id", "") or ""))
+        except Exception:
+            return False
+        return any(
+            self._output_record_has_usable_image(item)
+            and bool(str(getattr(item, "file_path", "") or "").strip())
+            and Path(str(getattr(item, "file_path", "") or "")).is_file()
+            for item in records
+        )
+
+    def _doc270_general_existing_job_replayable(self, record: Any) -> bool:
         """Keep durable replay strict while allowing transient Brain recovery.
 
         A command identity is still immutable evidence.  A blocked record is
@@ -1674,9 +1694,11 @@ class V3ProjectModeService:
 
         raw_status = getattr(record, "status", "")
         status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        if status in {"generated", "selected", "ready"}:
+            return self._doc270_general_existing_job_has_usable_output(record)
         if status not in {"blocked", "failed"}:
             return True
-        return not V3ProjectModeService._doc270_general_existing_job_retryable(record)
+        return not self._doc270_general_existing_job_retryable(record)
 
     @staticmethod
     def _doc270_general_existing_job_retryable(record: Any) -> bool:
