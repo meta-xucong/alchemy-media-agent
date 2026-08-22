@@ -24,6 +24,10 @@ class BrainProviderError(RuntimeError):
     """Raised when a configured remote brain provider fails."""
 
 
+class _BrainProtocolUnsupported(BrainProviderError):
+    """The gateway does not expose the selected OpenAI-compatible protocol."""
+
+
 class BrainTransportTimeoutError(BrainProviderError):
     """The remote Brain transport exceeded one bounded call window."""
 
@@ -405,6 +409,33 @@ class V3LLMBrainProvider:
                 json_recovery=json_recovery,
             )
         try:
+            return self._run_openai_responses(
+                api_key=api_key,
+                base_url=base_url,
+                request=request,
+                json_recovery=json_recovery,
+            )
+        except _BrainProtocolUnsupported:
+            # Some OpenAI-compatible gateways expose Chat Completions but not
+            # Responses. This is still the same remote Brain decision: only
+            # the wire protocol changes. Auth, timeout, business, and schema
+            # failures remain fail-closed and are never retried on another path.
+            return self._run_openai_chat_completions(
+                api_key=api_key,
+                base_url=base_url,
+                request=request,
+                json_recovery=json_recovery,
+            )
+
+    def _run_openai_responses(
+        self,
+        *,
+        api_key: str,
+        base_url: str | None,
+        request: BrainRunRequest,
+        json_recovery: bool = False,
+    ) -> dict[str, Any]:
+        try:
             from openai import OpenAI
 
             # Central Brain has one bounded remote attempt.  SDK-level retries
@@ -441,6 +472,8 @@ class V3LLMBrainProvider:
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
+            if _is_unsupported_brain_protocol_error(exc):
+                raise _BrainProtocolUnsupported from exc
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
     def _run_openai_chat_completions(
@@ -726,6 +759,19 @@ def _safe_transport_timeout_phase(value: str) -> str:
     }:
         return normalized
     return "unknown_transport_timeout"
+
+
+def _is_unsupported_brain_protocol_error(error: BaseException) -> bool:
+    """Recognize only gateway-level protocol absence, never general failure."""
+
+    status = getattr(error, "status_code", None)
+    if status is None:
+        response = getattr(error, "response", None)
+        status = getattr(response, "status_code", None)
+    try:
+        return int(status) in {404, 405, 426, 501}
+    except (TypeError, ValueError):
+        return False
 
 
 def _chat_completions_url(base_url: str | None) -> str:

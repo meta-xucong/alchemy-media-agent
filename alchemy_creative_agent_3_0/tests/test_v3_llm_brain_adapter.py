@@ -1518,6 +1518,84 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     assert payload["temperature"] == 0
 
 
+def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch) -> None:
+    """Protocol negotiation keeps the remote Brain contract and changes no creative fallback."""
+
+    from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    calls = {"responses": 0, "chat": 0}
+
+    class UnsupportedResponsesError(RuntimeError):
+        status_code = 426
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls["responses"] += 1
+            raise UnsupportedResponsesError("Responses is not supported")
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls["chat"] += 1
+        assert kwargs["url"] == "https://brain.example.test/v1/chat/completions"
+        return '{"remote": true}'
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_provider", "openai")
+    monkeypatch.setattr(settings, "openai_llm_model", "gpt-5.5")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
+
+    result = V3LLMBrainProvider()._run_openai_compatible(  # noqa: SLF001 - transport contract
+        BrainRunRequest(user_input="Create one remote photography direction.")
+    )
+
+    assert result == {"remote": True}
+    assert calls == {"responses": 1, "chat": 1}
+
+
+def test_openai_brain_does_not_switch_protocol_on_auth_failure(monkeypatch) -> None:
+    """Authentication failures remain a hard remote-Brain failure."""
+
+    from app.config import settings
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    calls = {"chat": 0}
+
+    class UnauthorizedError(RuntimeError):
+        status_code = 401
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            raise UnauthorizedError("unauthorized")
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+
+    def fake_stream(**kwargs):  # noqa: ANN003
+        calls["chat"] += 1
+        return '{"remote": true}'
+
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "brain-test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setattr(settings, "default_llm_provider", "openai")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
+
+    with pytest.raises(brain_providers.BrainProviderError, match="remote brain provider failed"):
+        V3LLMBrainProvider()._run_openai_compatible(  # noqa: SLF001 - transport contract
+            BrainRunRequest(user_input="Create one remote photography direction.")
+        )
+    assert calls["chat"] == 0
+
+
 @pytest.mark.parametrize("first_content", ['{"remote": ', ""])
 def test_remote_brain_recovers_one_unusable_json_reply_without_local_repair(monkeypatch, first_content) -> None:
     """The same remote Brain may redo serialization once, never a local plan."""
