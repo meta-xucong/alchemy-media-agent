@@ -395,7 +395,10 @@ def test_doc281_transient_brain_block_replans_same_command_after_recovery(tmp_pa
         },
     }
     handlers.service.job_store.save(record)
-    assert not handlers.project_service._doc270_general_existing_job_replayable(record)  # noqa: SLF001
+    assert not handlers.project_service._doc270_general_existing_job_replayable(  # noqa: SLF001
+        handlers.project_service._require_project(project["project_id"]),
+        record,
+    )
     assert handlers.project_service._doc270_general_retryable_command_exists(  # noqa: SLF001
         handlers.project_service._require_project(project["project_id"]),  # noqa: SLF001
         record.request.metadata["doc270_general_command_identity"],
@@ -415,6 +418,10 @@ def test_doc281_generated_without_persisted_output_is_not_replayed(tmp_path) -> 
     assert record is not None
     record.status = "generated"
     handlers.service.job_store.save(record)
+    assert handlers.project_service._doc270_general_retryable_command_exists(  # noqa: SLF001
+        handlers.project_service._require_project(project["project_id"]),
+        record.request.metadata["doc270_general_command_identity"],
+    )
 
     rebuilt = handlers.post_project_job(project["project_id"], _general_payload())
     assert rebuilt["job_id"] != first["job_id"]

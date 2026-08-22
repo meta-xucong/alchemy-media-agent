@@ -1654,12 +1654,12 @@ class V3ProjectModeService:
                 continue
             metadata = dict(record.request.metadata or {})
             if metadata.get("doc270_general_command_identity") == identity:
-                if self._doc270_general_existing_job_replayable(record):
+                if self._doc270_general_existing_job_replayable(project, record):
                     return self.product_service.get_job(job_id)
-                if self._doc270_general_existing_job_retryable(record):
+                if self._doc270_general_existing_job_retryable(record) or self._doc270_general_existing_job_needs_delivery_retry(project, record):
                     continue
                 status = str(getattr(getattr(record, "status", None), "value", getattr(record, "status", "")) or "").strip().lower()
-                if status in {"generated", "selected", "ready"} and not self._doc270_general_existing_job_has_usable_output(record):
+                if status in {"generated", "selected", "ready"} and not self._doc270_general_existing_job_has_usable_output(project, record):
                     # A legacy record can say generated after Brain/Provider
                     # work while lacking a persisted V3 output. Never replay
                     # that metadata-only success to the browser.
@@ -1667,7 +1667,16 @@ class V3ProjectModeService:
                 return self.product_service.get_job(job_id)
         return None
 
-    def _doc270_general_existing_job_has_usable_output(self, record: Any) -> bool:
+    def _doc270_general_existing_job_has_usable_output(self, project: ProjectRecord, record: Any) -> bool:
+        job_id = str(getattr(record, "job_id", "") or "").strip()
+        if not job_id:
+            return False
+        try:
+            visible_items = self._project_output_items(project, limit=160, include_hidden=False)
+        except Exception:
+            return False
+        if any(str(item.get("job_id") or "").strip() == job_id for item in visible_items):
+            return True
         output_store = getattr(self.product_service, "output_store", None)
         if output_store is None:
             return False
@@ -1682,7 +1691,12 @@ class V3ProjectModeService:
             for item in records
         )
 
-    def _doc270_general_existing_job_replayable(self, record: Any) -> bool:
+    def _doc270_general_existing_job_needs_delivery_retry(self, project: ProjectRecord, record: Any) -> bool:
+        raw_status = getattr(record, "status", "")
+        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        return status in {"generated", "selected", "ready"} and not self._doc270_general_existing_job_has_usable_output(project, record)
+
+    def _doc270_general_existing_job_replayable(self, project: ProjectRecord, record: Any) -> bool:
         """Keep durable replay strict while allowing transient Brain recovery.
 
         A command identity is still immutable evidence.  A blocked record is
@@ -1695,7 +1709,7 @@ class V3ProjectModeService:
         raw_status = getattr(record, "status", "")
         status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
         if status in {"generated", "selected", "ready"}:
-            return self._doc270_general_existing_job_has_usable_output(record)
+            return self._doc270_general_existing_job_has_usable_output(project, record)
         if status not in {"blocked", "failed"}:
             return True
         return not self._doc270_general_existing_job_retryable(record)
@@ -1734,7 +1748,10 @@ class V3ProjectModeService:
             if record is None:
                 continue
             metadata = dict(record.request.metadata or {})
-            if metadata.get("doc270_general_command_identity") == identity and self._doc270_general_existing_job_retryable(record):
+            if metadata.get("doc270_general_command_identity") == identity and (
+                self._doc270_general_existing_job_retryable(record)
+                or self._doc270_general_existing_job_needs_delivery_retry(project, record)
+            ):
                 return True
         return False
 
