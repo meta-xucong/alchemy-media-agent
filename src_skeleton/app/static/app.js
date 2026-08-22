@@ -8796,6 +8796,15 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       requested_image_count: generationSettings.count,
       requested_image_size: generationSettings.size || undefined,
       requested_aspect_label: generationSettings.sizeLabel,
+      v3_retry_after_terminal_job_id: (
+        v3State.currentJob?.job_id
+        && ["generated", "selected", "ready", "blocked", "failed", "not_found"].includes(
+          String(v3State.currentJob?.status || "").trim().toLowerCase(),
+        )
+        && v3JobVisibleImageCount(v3State.currentJob) === 0
+          ? v3State.currentJob.job_id
+          : undefined
+      ),
       scene_domain: scenarioId === "photography" ? v3State.selectedPhotographyScene : undefined,
       photography_reference_role: scenarioId === "photography" && hasReference ? v3State.selectedPhotographyReferenceRole : undefined,
       has_product_reference: scenarioId === "ecommerce" ? hasProductReference : undefined,

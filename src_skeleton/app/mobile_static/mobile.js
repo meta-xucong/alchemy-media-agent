@@ -4707,6 +4707,18 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
       requested_image_count: count,
       requested_image_size: size || undefined,
       requested_aspect_label: mobileV3SizeLabel(size),
+      v3_retry_after_terminal_job_id: (
+        mobileV3State.currentJob?.job_id
+        && ["generated", "selected", "ready", "blocked", "failed", "not_found"].includes(
+          String(mobileV3State.currentJob?.status || "").trim().toLowerCase(),
+        )
+        && !(
+          (Array.isArray(mobileV3State.currentJob?.candidates) && mobileV3State.currentJob.candidates.length)
+          || (Array.isArray(mobileV3State.currentJob?.asset_series) && mobileV3State.currentJob.asset_series.length)
+        )
+          ? mobileV3State.currentJob.job_id
+          : undefined
+      ),
       scene_domain: scenarioId === "photography" ? mobileV3State.selectedPhotographyScene : undefined,
       photography_reference_role: scenarioId === "photography" && uploadedAssets.length ? mobileV3State.selectedPhotographyReferenceRole : undefined,
       reference_files: uploadedAssets.map((asset) => ({

@@ -106,3 +106,13 @@ def test_terminal_replay_loads_project_outputs_before_success_notice() -> None:
     assert "await loadV3ProjectOutputs" in desktop_terminal
     assert "force: true" in desktop_terminal
     assert "await loadMobileV3ProjectOutputs" in mobile_terminal
+
+
+def test_terminal_retry_payload_includes_generated_jobs_without_visible_images() -> None:
+    desktop = (ROOT / "src_skeleton" / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    mobile = (ROOT / "src_skeleton" / "app" / "mobile_static" / "mobile.js").read_text(encoding="utf-8")
+
+    assert "v3_retry_after_terminal_job_id" in desktop
+    assert '"generated", "selected", "ready", "blocked", "failed", "not_found"' in desktop
+    assert "v3_retry_after_terminal_job_id" in mobile
+    assert '"generated", "selected", "ready", "blocked", "failed", "not_found"' in mobile

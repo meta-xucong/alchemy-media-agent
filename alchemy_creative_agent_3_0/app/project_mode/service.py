@@ -1696,6 +1696,26 @@ class V3ProjectModeService:
         status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
         return status in {"generated", "selected", "ready"} and not self._doc270_general_existing_job_has_usable_output(project, record)
 
+    def _doc270_general_retry_requested(
+        self,
+        project: ProjectRecord,
+        identity: dict[str, Any],
+        requested_job_id: Any,
+    ) -> bool:
+        """Authorize an explicit UI retry for the current terminal Job only."""
+
+        job_id = str(requested_job_id or "").strip()
+        if not job_id or job_id not in project.job_ids:
+            return False
+        record = self.product_service.get_job_record(job_id)
+        if record is None:
+            return False
+        if dict(record.request.metadata or {}).get("doc270_general_command_identity") != identity:
+            return False
+        raw_status = getattr(record, "status", "")
+        status = str(getattr(raw_status, "value", raw_status) or "").strip().lower()
+        return status in {"generated", "selected", "ready", "blocked", "failed"}
+
     def _doc270_general_existing_job_replayable(self, project: ProjectRecord, record: Any) -> bool:
         """Keep durable replay strict while allowing transient Brain recovery.
 
@@ -3381,14 +3401,28 @@ class V3ProjectModeService:
                             "schema_version": "doc281_general_command_v2", "identity": dict(identity),
                             "identity_digest": str(identity.get("identity_digest") or ""),
                         })
+                    retry_requested = (
+                        self._doc270_general_retry_requested(
+                            project,
+                            identity,
+                            job_request.metadata.get("v3_retry_after_terminal_job_id"),
+                        )
+                        if isinstance(identity, dict)
+                        else False
+                    )
                     existing_general = (
-                        self._doc270_general_existing_command(project, identity)
+                        None
+                        if retry_requested
+                        else self._doc270_general_existing_command(project, identity)
                         if isinstance(identity, dict)
                         else None
                     )
                     if existing_general is not None:
                         return existing_general
-                    if isinstance(identity, dict) and self._doc270_general_retryable_command_exists(project, identity):
+                    if (
+                        isinstance(identity, dict)
+                        and (retry_requested or self._doc270_general_retryable_command_exists(project, identity))
+                    ):
                         doc270_general_retry_instance_id = uuid4().hex
                     persisted = next((record.get("entry") for record in reversed(self.project_store.list_private_records(
                         project.project_id, _DOC281_GENERAL_RECEIPT_NAMESPACE,
