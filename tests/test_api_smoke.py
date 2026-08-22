@@ -2560,6 +2560,11 @@ def test_v2_template_catalog_is_not_blocked_by_slow_history_fallback():
         assert "模板已加载，历史记录继续读取" in resource_phase
         assert "loadV2RequestWithTimeout(v2HistoryEndpoint(\"/image/history\", options), v2HistoryFallbackTimeoutMs)" in script
         assert "const v2HistoryFallbackTimeoutMs = 8000;" in script
+        assert "const v2TemplateBootstrapTimeoutMs = 20000;" in script
+        assert "async function loadV2TemplateBootstrap(path, fallbackValue = null)" in script
+        assert 'loadV2TemplateBootstrap("/templates/index", null)' in init_body
+        assert "loadV2TemplateBootstrap(v2TemplatePageEndpoint(), null)" in init_body
+        assert "applyV2TemplatePage(templatesPageResponse || { items: [] }, { reset: true });" not in script
 
 
 def test_v1_frontend_generation_success_is_not_overridden_by_refresh_failures():

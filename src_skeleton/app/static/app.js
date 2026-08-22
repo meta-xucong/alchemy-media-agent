@@ -12640,8 +12640,8 @@ async function initV2({ silent = true, force = false } = {}) {
       loadV2OptionalResource("/health", { agents_sdk_available: false }),
       loadV2OptionalResource("/resource-providers", { providers: [] }),
       loadV2OptionalResource("/provider-capabilities", { providers: [] }),
-      loadV2OptionalResource("/templates/index", null),
-      loadV2OptionalResource(v2TemplatePageEndpoint(), { items: [] }),
+      loadV2TemplateBootstrap("/templates/index", null),
+      loadV2TemplateBootstrap(v2TemplatePageEndpoint(), null),
       loadV2OptionalResource("/orchestrator/status", null),
       loadV2OptionalResource("/runtime/model-settings", null),
     ]);
@@ -12651,7 +12651,9 @@ async function initV2({ silent = true, force = false } = {}) {
     v2State.orchestratorStatus = orchestratorStatus;
     v2State.modelSettings = modelSettings;
     if (templateIndexResponse) applyV2TemplateIndex(templateIndexResponse);
-    applyV2TemplatePage(templatesPageResponse || { items: [] }, { reset: true });
+    if (templatesPageResponse) {
+      applyV2TemplatePage(templatesPageResponse, { reset: true });
+    }
     scheduleV2TemplatePrefetch();
     v2State.loaded = true;
     renderV2Health(health);
@@ -15112,6 +15114,7 @@ async function openBillingAdmin(event) {
 const v2AccountHistoryTimeoutMs = 8000;
 const v2HistoryFallbackTimeoutMs = 8000;
 const v2OptionalResourceTimeoutMs = 3500;
+const v2TemplateBootstrapTimeoutMs = 20000;
 
 function v2HistoryEndpoint(basePath, { limit = v2HistoryFetchPageSize, offset = 0, full = false } = {}) {
   if (full) return `${basePath}?limit=160`;
@@ -15156,6 +15159,15 @@ async function loadV2OptionalResource(path, fallbackValue = null, { timeoutMs = 
     return await loadV2RequestWithTimeout(path, timeoutMs);
   } catch (error) {
     console.warn(`V2 optional resource unavailable: ${path}`, error);
+    return fallbackValue;
+  }
+}
+
+async function loadV2TemplateBootstrap(path, fallbackValue = null) {
+  try {
+    return await loadV2RequestWithTimeout(path, v2TemplateBootstrapTimeoutMs);
+  } catch (error) {
+    console.warn(`V2 template bootstrap unavailable: ${path}`, error);
     return fallbackValue;
   }
 }
