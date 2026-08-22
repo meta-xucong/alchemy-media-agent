@@ -4849,6 +4849,13 @@ async function generateMobileV3Job() {
     renderMobileV3ProjectOutputs(mobileV3State.currentProject);
     if (mobileV3IsTerminalJob(created)) {
       mobileV3SettleEcommerceTerminalReceipt(created);
+      await loadMobileV3ProjectOutputs(projectId, {
+        limit: 120,
+        shouldContinue: () => !ecommerceSession || mobileV3EcommerceGenerationSessionOwns(ecommerceSession),
+      });
+      if (ecommerceSession && !mobileV3EcommerceGenerationSessionOwns(ecommerceSession)) return;
+      mobileV3MergeProjectOutputs(projectId, created?.metadata?.project_outputs || []);
+      renderMobileV3ProjectOutputs(mobileV3State.currentProject);
       await refreshMobileV3ProjectDetail(projectId, {
         shouldContinue: () => !ecommerceSession || mobileV3EcommerceGenerationSessionOwns(ecommerceSession),
       });

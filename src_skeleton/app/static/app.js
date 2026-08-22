@@ -8945,6 +8945,15 @@ async function createV3Job() {
       return;
     }
     if (v3IsTerminalJob(created)) {
+      await loadV3ProjectOutputs({
+        silent: true,
+        force: true,
+        limit: 160,
+        projectId: v3State.currentProject?.project_id || "",
+        shouldContinue: () => !ecommerceSession || v3EcommerceGenerationSessionOwns(ecommerceSession),
+        sessionReceipt: ecommerceSession,
+      });
+      if (ecommerceSession && !v3EcommerceGenerationSessionOwns(ecommerceSession)) return;
       const recoveredFromOutputs = v3RecoveredJobFromProjectOutputs(created.job_id, created, { allowPartial: true });
       if (recoveredFromOutputs) {
         await completeV3GeneratedJob(recoveredFromOutputs, uploadedAssets, copy, {

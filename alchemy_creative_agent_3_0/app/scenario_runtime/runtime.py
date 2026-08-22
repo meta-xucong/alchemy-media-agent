@@ -124,6 +124,27 @@ ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES = {
     "back_or_structure_view",
     "product_detail_or_print_view",
 }
+
+_BRAIN_IMAGE_SIZE_ALIASES = {
+    "1024x1024": "1024x1024",
+    "1024×1024": "1024x1024",
+    "1024 by 1024": "1024x1024",
+    "1024x1536": "1024x1536",
+    "1024×1536": "1024x1536",
+    "1024 by 1536": "1024x1536",
+    "1536x1024": "1536x1024",
+    "1536×1024": "1536x1024",
+    "1536 by 1024": "1536x1024",
+    "1:1": "1024x1024",
+    "2:3": "1024x1536",
+    "3:2": "1536x1024",
+    "4:5": "1024x1536",
+    "3:4": "1024x1536",
+    "9:16": "1024x1536",
+    "4:3": "1536x1024",
+    "5:4": "1536x1024",
+    "16:9": "1536x1024",
+}
 ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE = "product_detail_or_print_view"
 
 
@@ -605,6 +626,11 @@ class ScenarioRuntime:
                 quality_mode=quality_mode,
             )
             self._require_remote_creative_brain(request, policy, brain_result)
+            normalized_intent = self._apply_brain_image_size_precedence(
+                request,
+                normalized_intent,
+                brain_result,
+            )
             deliverable_plan = self._build_template_deliverable_plan(
                 request,
                 normalized_intent,
@@ -638,6 +664,11 @@ class ScenarioRuntime:
                 template_capability_policy=policy,
             )
             self._require_remote_creative_brain(request, policy, brain_result)
+            normalized_intent = self._apply_brain_image_size_precedence(
+                request,
+                normalized_intent,
+                brain_result,
+            )
             plan = self._reuse_or_build_activation_plan(
                 request,
                 resolution,
@@ -697,6 +728,11 @@ class ScenarioRuntime:
         record_stage_event("scenario_runtime", "slot_delta_recovery_returned", stage=stage)
         record_stage_event("scenario_runtime", "remote_brain_requirement_validation_call", stage=stage)
         self._require_remote_creative_brain(request, policy, brain_result)
+        normalized_intent = self._apply_brain_image_size_precedence(
+            request,
+            normalized_intent,
+            brain_result,
+        )
         record_stage_event("scenario_runtime", "remote_brain_requirement_validation_returned", stage=stage)
         record_stage_event("scenario_runtime", "professional_task_profile_bind_call", stage=stage)
         brain_result = self._bind_professional_task_profile(
@@ -3735,6 +3771,62 @@ class ScenarioRuntime:
             return max(1, int(raw))
         except (TypeError, ValueError):
             return 2
+
+    @staticmethod
+    def _canonical_brain_image_size(value: object) -> str | None:
+        normalized = " ".join(str(value or "").strip().lower().split()).replace("×", "x")
+        return _BRAIN_IMAGE_SIZE_ALIASES.get(normalized)
+
+    def _apply_brain_image_size_precedence(
+        self,
+        request: ScenarioRuntimeRequest,
+        normalized_intent: NormalizedV3JobIntent,
+        brain_result: BrainRunResult,
+    ) -> NormalizedV3JobIntent:
+        """Let the Brain resolve explicit user canvas intent before UI fallback."""
+
+        brain_plan = brain_result.image_set_plan
+        brain_size = self._canonical_brain_image_size(getattr(brain_plan, "size", None))
+        if not brain_size:
+            return normalized_intent
+        if brain_size == normalized_intent.effective_image_size:
+            return normalized_intent
+        updated = normalized_intent.model_copy(
+            update={
+                "intent_id": stable_id(
+                    "normalized_v3_job_intent",
+                    normalized_intent.template_id,
+                    normalized_intent.scenario_id,
+                    normalized_intent.protected_user_intent,
+                    normalized_intent.requested_image_count,
+                    brain_size,
+                    normalized_intent.declared_image_count_limit,
+                    normalized_intent.text_policy,
+                    normalized_intent.visible_text_policy,
+                ),
+                "requested_image_size": brain_size,
+                "effective_image_size": brain_size,
+                "provenance": [
+                    *list(normalized_intent.provenance),
+                    {
+                        "source": "remote_brain_image_set_plan",
+                        "field": "size",
+                        "resolved_value": brain_size,
+                        "precedence": "explicit_user_prompt_over_web_selection",
+                        "web_selected_image_size": request.metadata.get("requested_image_size"),
+                    },
+                ],
+            }
+        )
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "requested_image_size": brain_size,
+            "requested_image_size_source": "remote_brain_user_intent",
+            "web_selected_image_size": request.metadata.get("requested_image_size"),
+            "normalized_v3_job_intent": updated.model_dump(mode="json"),
+            "normalized_v3_job_intent_id": updated.intent_id,
+        }
+        return updated
 
     def _normalize_v3_job_intent(
         self,

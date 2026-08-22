@@ -754,6 +754,11 @@ class V3LLMBrainAdapter:
             "quality_mode": clean_text(metadata.get("quality_mode"), 40) or None,
             "requested_image_count": requested_count,
             "requested_image_size": clean_text(metadata.get("requested_image_size"), 80) or None,
+            "web_selected_image_size": (
+                clean_text(metadata.get("web_selected_image_size"), 80)
+                or clean_text(metadata.get("requested_image_size"), 80)
+                or None
+            ),
             "variation_mode": variation_mode,
             "effective_variation_mode": variation_mode,
             "inferred_variation_mode": clean_text(metadata.get("inferred_variation_mode"), 80) or None,
