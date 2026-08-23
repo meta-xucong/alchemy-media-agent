@@ -462,6 +462,34 @@ def test_doc281_explicit_terminal_retry_opens_new_job(tmp_path) -> None:
     assert calls == {"brain": 1}
 
 
+def test_doc281_user_initiated_generation_does_not_reuse_old_output(tmp_path) -> None:
+    handlers, project, _asset_ids, snapshot = _general_project(tmp_path)
+    calls = {"brain": 0}
+    _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=None, calls=calls))
+    first = handlers.post_project_job(project["project_id"], _general_payload())
+    stored = handlers.service.output_store.save_base64_output(
+        job_id=first["job_id"],
+        candidate_id="doc281-user-click-candidate",
+        asset_id="doc281-user-click-asset",
+        provider="fixture",
+        model="fixture",
+        encoded_image=_png_base64(),
+    )
+    record = handlers.service.get_job_record(first["job_id"])
+    assert record is not None
+    record.status = "generated"
+    handlers.service.job_store.save(record)
+    assert stored.file_path and Path(stored.file_path).is_file()
+
+    fresh = handlers.post_project_job(
+        project["project_id"],
+        _general_payload(metadata={"v3_user_initiated_generation": True}),
+    )
+
+    assert fresh["job_id"] != first["job_id"]
+    assert calls == {"brain": 1}
+
+
 def test_doc281_public_activation_has_no_private_selection_disclosure(tmp_path) -> None:
     handlers, project, asset_ids, snapshot = _general_project(tmp_path)
     _replace_general_service(handlers, _selection_registry(snapshot, target_asset_id=asset_ids[0]))

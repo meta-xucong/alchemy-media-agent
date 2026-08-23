@@ -4707,6 +4707,7 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
       requested_image_count: count,
       requested_image_size: size || undefined,
       requested_aspect_label: mobileV3SizeLabel(size),
+      v3_user_initiated_generation: true,
       v3_retry_after_terminal_job_id: (
         mobileV3State.currentJob?.job_id
         && ["generated", "selected", "ready", "blocked", "failed", "not_found"].includes(

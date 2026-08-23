@@ -113,6 +113,8 @@ def test_terminal_retry_payload_includes_generated_jobs_without_visible_images()
     mobile = (ROOT / "src_skeleton" / "app" / "mobile_static" / "mobile.js").read_text(encoding="utf-8")
 
     assert "v3_retry_after_terminal_job_id" in desktop
+    assert "v3_user_initiated_generation: true" in desktop
     assert '"generated", "selected", "ready", "blocked", "failed", "not_found"' in desktop
     assert "v3_retry_after_terminal_job_id" in mobile
+    assert "v3_user_initiated_generation: true" in mobile
     assert '"generated", "selected", "ready", "blocked", "failed", "not_found"' in mobile

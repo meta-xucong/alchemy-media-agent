@@ -3410,9 +3410,13 @@ class V3ProjectModeService:
                         if isinstance(identity, dict)
                         else False
                     )
+                    fresh_generation_requested = (
+                        job_request.metadata.get("v3_user_initiated_generation") is True
+                        or retry_requested
+                    )
                     existing_general = (
                         None
-                        if retry_requested
+                        if fresh_generation_requested
                         else self._doc270_general_existing_command(project, identity)
                         if isinstance(identity, dict)
                         else None
@@ -3421,7 +3425,10 @@ class V3ProjectModeService:
                         return existing_general
                     if (
                         isinstance(identity, dict)
-                        and (retry_requested or self._doc270_general_retryable_command_exists(project, identity))
+                        and (
+                            fresh_generation_requested
+                            or self._doc270_general_retryable_command_exists(project, identity)
+                        )
                     ):
                         doc270_general_retry_instance_id = uuid4().hex
                     persisted = next((record.get("entry") for record in reversed(self.project_store.list_private_records(
