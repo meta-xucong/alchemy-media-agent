@@ -4001,11 +4001,14 @@ function v3ReferenceImageCandidates(ref) {
 }
 
 function v3CurrentJobImageItems(job = v3State.currentJob) {
-  if (v3FailureArtifactExpired(job) || !v3JobDeliverySettled(job)) return [];
+  if (v3FailureArtifactExpired(job)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
   const source = candidates.length ? candidates : assets;
-  const visible = source
+  const persisted = v3ProjectOutputsForJob(job?.job_id);
+  if (!v3JobDeliverySettled(job) && !persisted.length) return [];
+  const combined = [...source, ...persisted];
+  const visible = combined
     .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "current_job" }))
     .filter((item) => v3OutputVisibleInProject(item) && (v3OutputImageCandidates(item).length || job.status === "generated"))
     .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
@@ -4171,7 +4174,10 @@ function v3StoredProjectOutputItems(project = v3State.currentProject) {
   const projectId = project?.project_id || "";
   return Array.isArray(v3State.projectOutputs)
     ? v3State.projectOutputs
-        .filter((item) => (!projectId || item?.project_id === projectId) && !v3FailureArtifactExpired(item))
+        .filter((item) => {
+          const itemProjectId = item?.project_id || item?.metadata?.project_id || "";
+          return (!projectId || itemProjectId === projectId) && !v3FailureArtifactExpired(item);
+        })
         .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "project_output" }))
     : [];
 }
@@ -10069,6 +10075,8 @@ function renderV3ResultBoard(job) {
     `;
     return;
   }
+  const persistedItems = v3ProjectOutputsForJob(job?.job_id);
+  const hasPersistedDelivery = persistedItems.some((item) => v3OutputVisibleInProject(item));
   els.v3ResultBoard.classList.toggle("empty-v3-board", !job);
   if (!job) {
     v3State.resultItems = [];
@@ -10076,7 +10084,7 @@ function renderV3ResultBoard(job) {
     return;
   }
   const reviewCertification = v3ReviewCertification(job);
-  if (!v3JobDeliverySettled(job)) {
+  if (!v3JobDeliverySettled(job) && !hasPersistedDelivery) {
     v3State.resultItems = [];
     els.v3ResultBoard.classList.add("empty-v3-board");
     if (v3JobDeliveryWithheld(job)) {
@@ -10156,7 +10164,7 @@ function renderV3ResultBoard(job) {
   // Compatibility records may retain historical recipes, slots, or overlays,
   // but the current delivery board only accepts actual final image deliveries.
   const rawItems = candidates.length ? candidates : assets;
-  const visibleItems = rawItems
+  const visibleItems = [...rawItems, ...persistedItems]
     .filter((item) => v3OutputVisibleInProject(item))
     .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
   const items = v3DeliveryDisplayItems(visibleItems);

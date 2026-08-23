@@ -110,6 +110,19 @@ def test_e23_result_board_only_renders_final_images_without_legacy_recipe_or_slo
     assert "重新加载图片" in board
 
 
+def test_e23_result_board_hydrates_same_job_project_delivery_when_job_snapshot_has_no_items() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    board = _section(script, "function renderV3ResultBoard(job)", "function v3OutputImageCandidates(item)")
+    current_items = _section(script, "function v3CurrentJobImageItems", "function v3ReviewCertification")
+    stored_items = _section(script, "function v3StoredProjectOutputItems", "function v3StoredProjectReviewOutputItems")
+
+    assert "const persistedItems = v3ProjectOutputsForJob(job?.job_id);" in board
+    assert "const hasPersistedDelivery = persistedItems.some((item) => v3OutputVisibleInProject(item));" in board
+    assert "!v3JobDeliverySettled(job) && !hasPersistedDelivery" in board
+    assert "const persisted = v3ProjectOutputsForJob(job?.job_id);" in current_items
+    assert "item?.metadata?.project_id" in stored_items
+
+
 def test_e23_next_actions_restore_human_recovery_for_blocked_held_and_completed_work() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     actions = _section(script, "function renderV3ProjectNextActions()", "function renderV3BrandMemoryPanel()")
