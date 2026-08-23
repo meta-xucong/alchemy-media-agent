@@ -40,6 +40,9 @@ def test_doc170_brain_requires_aesthetic_and_material_to_survive_together() -> N
     assert "keep the owned color and the scene-observed, light-dependent human material together" in SYSTEM_PROMPT
     assert "Preserve the same aesthetic-material conjunction during this stage" in SYSTEM_PROMPT
     assert "never authorizes dropping explicit user-owned aesthetic appeal" in SYSTEM_PROMPT
+    assert "treat those as optical and lighting properties around the person" in SYSTEM_PROMPT
+    assert "keep local surface texture, natural tonal variation, face-plane transitions" in SYSTEM_PROMPT
+    assert "preventing the person from reading as airbrushed, waxy, or cosmetically uniform" in SYSTEM_PROMPT
 
 
 def test_doc170_uses_existing_universal_semantic_contract_without_prompt_fragments() -> None:
