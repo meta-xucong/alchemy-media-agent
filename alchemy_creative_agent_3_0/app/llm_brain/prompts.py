@@ -1649,6 +1649,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "commercially clean, polished, identity-preserving, and visually natural without adding a microscopic skin, "
             "eye, hair, ear, or defect checklist. This is a product framing and photography-quality boundary, "
             "not a static prompt recipe and not a second realism evaluator; keep the selected view and user-owned styling intact. "
+            "Require camera-observed human materiality, including credible skin, light, depth, contact, and expression response; "
+            "reject generic perfect beauty surfaces without replacing the user's mood or styling. "
             "When the current request owns an age direction, resolve the whole-person developmental stage coherently while "
             "preserving the same mature model-card photography finish."
         )

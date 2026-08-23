@@ -323,6 +323,10 @@ class CentralCreativeBrain:
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
                 "requested_image_count": len(context.series_plan.assets) if context.series_plan else None,
+                "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
+                "requested_image_aspect_ratio_source": context.metadata.get(
+                    "requested_image_aspect_ratio_source"
+                ),
                 "effective_variation_mode": context.metadata.get("effective_variation_mode")
                 or context.metadata.get("variation_mode"),
             },
@@ -411,6 +415,10 @@ class CentralCreativeBrain:
                 "capability_execution_envelope": context.metadata.get("capability_execution_envelope"),
                 "requested_image_count": _bounded_requested_image_count(context.metadata.get("requested_image_count")),
                 "requested_image_size": context.metadata.get("requested_image_size"),
+                "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
+                "requested_image_aspect_ratio_source": context.metadata.get(
+                    "requested_image_aspect_ratio_source"
+                ),
                 # A later Project Mode generate request does not repeat this
                 # immutable fact.  Carry it with every materialized asset so
                 # the Provider recognizes the frozen LLM-first real-image
@@ -719,6 +727,10 @@ class CentralCreativeBrain:
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
                 "requested_image_count": len(context.series_plan.assets) if context.series_plan else None,
+                "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
+                "requested_image_aspect_ratio_source": context.metadata.get(
+                    "requested_image_aspect_ratio_source"
+                ),
                 "effective_variation_mode": context.metadata.get("effective_variation_mode")
                 or context.metadata.get("variation_mode"),
             },
@@ -762,6 +774,8 @@ class CentralCreativeBrain:
                     "uploaded_asset_ids",
                     "requested_image_count",
                     "requested_image_size",
+                    "requested_image_aspect_ratio",
+                    "requested_image_aspect_ratio_source",
                     "project_id",
                     "template_id",
                     "veyra_user_id",

@@ -75,10 +75,21 @@ class V3GeneratedOutputStore:
         fmt = _normalise_format(output_format, mime_type)
         mime = _normalise_mime(mime_type, fmt)
         content = _decode_image(encoded_image)
-        content_sha256 = hashlib.sha256(content).hexdigest()
         actual_width, actual_height = _validate_image(content)
+        source_dimensions = (actual_width, actual_height)
+        content, normalized_dimensions = _normalize_requested_aspect_ratio(
+            content,
+            image_format=fmt,
+            metadata=metadata or {},
+            source_dimensions=(actual_width, actual_height),
+        )
+        if normalized_dimensions is not None:
+            actual_width, actual_height = normalized_dimensions
+        content_sha256 = hashlib.sha256(content).hexdigest()
         width = width or actual_width
         height = height or actual_height
+        if normalized_dimensions is not None:
+            width, height = normalized_dimensions
         output_id = str(output_id or "").strip() or f"v3_output_{uuid4().hex[:20]}"
         if not _valid_output_id(output_id):
             raise ValueError("refusing to persist an invalid V3 output id")
@@ -106,6 +117,16 @@ class V3GeneratedOutputStore:
         _write_resized_png(content, thumbnail_path, max_side=512)
 
         stored_metadata = _doc281_bind_output_record_metadata(dict(metadata or {}), output_id=output_id)
+        if normalized_dimensions is not None:
+            stored_metadata["aspect_ratio_normalization"] = "server_crop_to_explicit_user_ratio"
+            stored_metadata["aspect_ratio_source_dimensions"] = {
+                "width": int(source_dimensions[0] or 0),
+                "height": int(source_dimensions[1] or 0),
+            }
+            stored_metadata["aspect_ratio_actual_dimensions"] = {
+                "width": int(width or 0),
+                "height": int(height or 0),
+            }
         record = V3GeneratedOutputRecord(
             output_id=output_id,
             job_id=job_id,
@@ -384,6 +405,68 @@ def _safe_remove_tree(root: Path, target: Path) -> None:
         raise ValueError("Refusing to delete outside the V3 output storage root.")
     if target_resolved.exists():
         shutil.rmtree(target_resolved)
+
+
+def _requested_aspect_ratio(value: object) -> float | None:
+    raw = str(value or "").strip().lower().replace("：", ":")
+    if ":" not in raw:
+        return None
+    numerator, denominator = (part.strip() for part in raw.split(":", 1))
+    try:
+        ratio = float(numerator) / float(denominator)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return ratio if ratio > 0 else None
+
+
+def _normalize_requested_aspect_ratio(
+    content: bytes,
+    *,
+    image_format: str,
+    metadata: dict,
+    source_dimensions: tuple[int | None, int | None],
+) -> tuple[bytes, tuple[int, int] | None]:
+    """Crop only when the Brain froze an explicit user-owned aspect ratio."""
+
+    ratio = _requested_aspect_ratio(metadata.get("requested_image_aspect_ratio"))
+    source_width, source_height = source_dimensions
+    if ratio is None or not source_width or not source_height:
+        return content, None
+    current_ratio = float(source_width) / float(source_height)
+    if abs(current_ratio - ratio) < 0.005:
+        return content, None
+    if ratio >= 1:
+        target_width = int(source_width)
+        target_height = max(1, round(target_width / ratio))
+        if target_height > source_height:
+            target_height = int(source_height)
+            target_width = max(1, round(target_height * ratio))
+    else:
+        target_height = int(source_height)
+        target_width = max(1, round(target_height * ratio))
+        if target_width > source_width:
+            target_width = int(source_width)
+            target_height = max(1, round(target_width / ratio))
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(BytesIO(content)) as source:
+            image = ImageOps.fit(
+                source.convert("RGBA"),
+                (target_width, target_height),
+                method=getattr(getattr(Image, "Resampling", Image), "LANCZOS"),
+                centering=(0.5, 0.5),
+            )
+        output = BytesIO()
+        if image_format == "jpeg":
+            image.convert("RGB").save(output, format="JPEG", quality=95)
+        elif image_format == "webp":
+            image.save(output, format="WEBP", quality=95)
+        else:
+            image.save(output, format="PNG", optimize=True)
+        return output.getvalue(), (target_width, target_height)
+    except Exception as exc:
+        raise ValueError("V3 output could not be normalized to the explicit aspect ratio") from exc
 
 
 def _decode_image(encoded_image: str) -> bytes:

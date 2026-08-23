@@ -1662,6 +1662,8 @@ class V3ProductApiService:
                 "capability_activation_mode",
                 "normalized_v3_job_intent",
                 "normalized_v3_job_intent_id",
+                "requested_image_aspect_ratio",
+                "requested_image_aspect_ratio_source",
                 "template_deliverable_plan",
                 "template_deliverable_plan_id",
                 "resolved_constraint_ledger",

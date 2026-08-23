@@ -480,7 +480,7 @@ class ScenarioRuntime:
             generation_router=self.generation_router,
         )
         planning_result = self._enrich_result(planning_result, runtime_request, resolution, capability_run)
-        planning_result = self._enrich_activation_result(planning_result, preparation)
+        planning_result = self._enrich_activation_result(planning_result, preparation, runtime_request)
         return ScenarioRuntimeResult(
             status=ScenarioRuntimeStatus.PLANNED,
             scenario_resolution=resolution,
@@ -493,6 +493,7 @@ class ScenarioRuntime:
                 "llm_brain": brain_result.safe_metadata(),
                 **self._activation_metadata(preparation),
                 **self._specialized_metadata(preparation),
+                **self._resolved_aspect_metadata(planning_result),
             },
         )
 
@@ -547,6 +548,19 @@ class ScenarioRuntime:
         generation_metadata["visual_cluster"] = capability_metadata.get("visual_cluster", {})
         generation_metadata.update(self._activation_metadata(preparation))
         generation_metadata.update(self._renderer_channel_metadata(runtime_request))
+        explicit_aspect_ratio = str(
+            runtime_request.metadata.get("requested_image_aspect_ratio") or ""
+        ).strip()
+        if explicit_aspect_ratio:
+            generation_metadata.update(
+                {
+                    "requested_image_aspect_ratio": explicit_aspect_ratio,
+                    "requested_image_aspect_ratio_source": str(
+                        runtime_request.metadata.get("requested_image_aspect_ratio_source")
+                        or "remote_brain_user_intent"
+                    ),
+                }
+            )
         # ``run_generation_loop`` materializes the Provider request before
         # ``_enrich_activation_result`` returns the public result.  Therefore
         # the immutable Professional stage selectors must be present here,
@@ -565,7 +579,7 @@ class ScenarioRuntime:
             body_refresh_analysis_context=runtime_request.body_refresh_analysis_context,
         )
         generation_result = self._enrich_result(generation_result, runtime_request, resolution, capability_run)
-        generation_result = self._enrich_activation_result(generation_result, preparation)
+        generation_result = self._enrich_activation_result(generation_result, preparation, runtime_request)
         return ScenarioRuntimeResult(
             status=ScenarioRuntimeStatus.GENERATED,
             scenario_resolution=resolution,
@@ -578,8 +592,25 @@ class ScenarioRuntime:
                 "llm_brain": brain_result.safe_metadata(),
                 **self._activation_metadata(preparation),
                 **self._specialized_metadata(preparation),
+                **self._resolved_aspect_metadata(generation_result),
             },
         )
+
+    @staticmethod
+    def _resolved_aspect_metadata(result: PlanningResult | None) -> dict[str, str]:
+        if result is None:
+            return {}
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        ratio = str(metadata.get("requested_image_aspect_ratio") or "").strip()
+        if not ratio:
+            return {}
+        return {
+            "requested_image_aspect_ratio": ratio,
+            "requested_image_aspect_ratio_source": str(
+                metadata.get("requested_image_aspect_ratio_source")
+                or "remote_brain_user_intent"
+            ),
+        }
 
     def _prepare_capability_execution(
         self,
@@ -6039,6 +6070,7 @@ class ScenarioRuntime:
         self,
         result: PlanningResult,
         preparation: CapabilityPreparationResult,
+        request: ScenarioRuntimeRequest,
     ) -> PlanningResult:
         activation_metadata = self._activation_metadata(preparation)
         specialized_metadata = self._specialized_metadata(preparation)
@@ -6083,9 +6115,27 @@ class ScenarioRuntime:
                 "requested_image_size": preparation.normalized_job_intent.effective_image_size,
             }
         )
+        explicit_aspect_ratio = str(
+            request.metadata.get("requested_image_aspect_ratio") or ""
+        ).strip()
+        if explicit_aspect_ratio:
+            frozen_provider_metadata["requested_image_aspect_ratio"] = explicit_aspect_ratio
+            frozen_provider_metadata["requested_image_aspect_ratio_source"] = str(
+                request.metadata.get("requested_image_aspect_ratio_source")
+                or "remote_brain_user_intent"
+            )
         frozen_provider_metadata.update(
             self._frozen_professional_provider_metadata(preparation)
         )
+        resolved_aspect_metadata = {}
+        if explicit_aspect_ratio:
+            resolved_aspect_metadata = {
+                "requested_image_aspect_ratio": explicit_aspect_ratio,
+                "requested_image_aspect_ratio_source": str(
+                    request.metadata.get("requested_image_aspect_ratio_source")
+                    or "remote_brain_user_intent"
+                ),
+            }
         generation_plans = [
             generation_plan.model_copy(
                 update={
@@ -6105,6 +6155,7 @@ class ScenarioRuntime:
                     **dict(result.metadata),
                     **activation_metadata,
                     **public_specialized_metadata,
+                    **resolved_aspect_metadata,
                 },
             }
         )

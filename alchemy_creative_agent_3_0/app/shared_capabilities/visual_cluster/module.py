@@ -824,6 +824,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         ) if subject_continuity_active else None
         requested_count = self._requested_image_count(capability_input, project_context)
         variation_mode = self._effective_variation_mode(capability_input, project_context)
+        human_subject_type = self._human_subject_type_from_brain_profile(
+            capability_input,
+            fallback_subject_type=subject_type,
+        )
         human_photorealism = (
             self.human_photorealism_layer.build(
                 project_id=str(project_context.get("project_id") or "") or None,
@@ -831,14 +835,14 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 scenario_id=capability_input.scenario_id,
                 template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
                 user_input=capability_input.user_input,
-                subject_type=subject_type,
+                subject_type=human_subject_type,
                 variation_mode=variation_mode,
                 has_identity_reference=bool(project_identity_anchors or strong_bindings),
                 metadata=self._human_realism_plugin_metadata(
                     capability_input=capability_input,
                     project_context=project_context,
                     template_policy=template_policy,
-                    subject_type=subject_type,
+                    subject_type=human_subject_type,
                     variation_mode=variation_mode,
                 ),
             )
@@ -1708,6 +1712,31 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if lock_default == "character":
             return "character"
         return "generic"
+
+    @staticmethod
+    def _human_subject_type_from_brain_profile(
+        capability_input: CapabilityInput,
+        *,
+        fallback_subject_type: str,
+    ) -> str:
+        """Give Human Realism the Brain's visible subject entity type.
+
+        Product truth may remain the owning policy for the rest of the
+        capability cluster while the same frame contains visible people.
+        The remote Brain is the only source allowed to make that semantic
+        distinction; this helper only transports its already-typed profile.
+        """
+
+        profile = capability_input.metadata.get("visual_task_profile")
+        entities = profile.get("subject_entities") if isinstance(profile, dict) else None
+        if isinstance(entities, list):
+            for entity in entities:
+                if not isinstance(entity, dict) or entity.get("visible_in_target") is False:
+                    continue
+                entity_type = str(entity.get("entity_type") or "").strip().casefold()
+                if entity_type in {"person", "human", "character"}:
+                    return "character"
+        return str(fallback_subject_type or "generic")
 
     def _human_realism_plugin_metadata(
         self,

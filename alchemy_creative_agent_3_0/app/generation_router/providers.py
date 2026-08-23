@@ -250,6 +250,8 @@ def build_provider_generation_request(
             "llm_brain": metadata.get("llm_brain", {}),
             "requested_image_count": metadata.get("requested_image_count"),
             "requested_image_size": metadata.get("requested_image_size"),
+            "requested_image_aspect_ratio": metadata.get("requested_image_aspect_ratio"),
+            "requested_image_aspect_ratio_source": metadata.get("requested_image_aspect_ratio_source"),
             "require_real_images": bool(metadata.get("require_real_images")),
             "real_image_generation": bool(metadata.get("real_image_generation")),
             "normalized_v3_job_intent": metadata.get("normalized_v3_job_intent"),
@@ -1215,6 +1217,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "request_index": output.get("request_index"),
                     "requested_image_count": requested_group_count,
                     "requested_image_size": app_request.prompt_plan.size,
+                    "requested_image_aspect_ratio": request.metadata.get(
+                        "requested_image_aspect_ratio"
+                    ) or request.generation_plan.metadata.get("requested_image_aspect_ratio"),
+                    "requested_image_aspect_ratio_source": request.metadata.get(
+                        "requested_image_aspect_ratio_source"
+                    ) or request.generation_plan.metadata.get("requested_image_aspect_ratio_source"),
                     "project_id": request.metadata.get("project_id"),
                     "template_id": request.metadata.get("template_id"),
                     "veyra_user_id": request.metadata.get("veyra_user_id"),
@@ -2073,6 +2081,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "v3_provider_strategy": request.generation_plan.provider_strategy.value,
                 "requested_image_count": self._group_count_for_request(request),
                 "requested_image_size": materialization.size,
+                "requested_image_aspect_ratio": request.metadata.get(
+                    "requested_image_aspect_ratio"
+                ) or request.generation_plan.metadata.get("requested_image_aspect_ratio"),
+                "requested_image_aspect_ratio_source": request.metadata.get(
+                    "requested_image_aspect_ratio_source"
+                ) or request.generation_plan.metadata.get("requested_image_aspect_ratio_source"),
                 "input_fidelity": materialization.input_fidelity,
                 "input_fidelity_required": self._input_fidelity_is_required(materialization.asset_plan),
                 "generation_channel": metadata.get("generation_channel", "provider"),
