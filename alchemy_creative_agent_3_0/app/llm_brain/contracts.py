@@ -78,6 +78,7 @@ class BrainImageSetPlan(V3BaseModel):
     set_goal: str
     image_count: int = Field(default=2, ge=1)
     size: str | None = None
+    aspect_ratio: str | None = None
     shot_plan: list[str] = Field(default_factory=list)
     evidence_dimensions_by_output: list[BrainOutputEvidenceContract] = Field(default_factory=list)
     composition_rules: list[str] = Field(default_factory=list)

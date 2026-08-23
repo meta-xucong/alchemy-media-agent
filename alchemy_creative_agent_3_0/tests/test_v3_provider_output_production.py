@@ -1631,15 +1631,30 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                     and presence_requirement.get("required") is True
                     else {}
                 )
+                integrity_receipt = (
+                    {
+                        "user_direction_integrity": {
+                            "contract_version": "v3_user_direction_integrity_v1",
+                            "status": "preserved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if request.metadata.get("require_lossless_user_direction") is True
+                    else {}
+                )
                 return {
                     "canonical_provider_prompts": [
                         {
                             "output_index": index,
-                            "prompt": "Create one clean summer portrait social cover with natural light and coherent photographic detail.",
+                            "prompt": (
+                                f"{request.user_input} Create one clean summer portrait social cover with natural light "
+                                "and coherent photographic detail."
+                            ),
                             "review_status": "approved",
                             **receipt,
                             **decision_receipt,
                             **presence_receipt,
+                            **integrity_receipt,
                         }
                         for index in range(1, request.requested_image_count + 1)
                     ]
@@ -1851,15 +1866,30 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                     and presence_requirement.get("required") is True
                     else {}
                 )
+                integrity_receipt = (
+                    {
+                        "user_direction_integrity": {
+                            "contract_version": "v3_user_direction_integrity_v1",
+                            "status": "preserved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if request.metadata.get("require_lossless_user_direction") is True
+                    else {}
+                )
                 return {
                     "canonical_provider_prompts": [
                         {
                             "output_index": index,
-                            "prompt": "Create one clean summer portrait social cover with natural light and coherent photographic detail.",
+                            "prompt": (
+                                f"{request.user_input} Create one clean summer portrait social cover with natural light "
+                                "and coherent photographic detail."
+                            ),
                             "review_status": "approved",
                             **receipt,
                             **decision_receipt,
                             **presence_receipt,
+                            **integrity_receipt,
                         }
                         for index in range(1, request.requested_image_count + 1)
                     ]

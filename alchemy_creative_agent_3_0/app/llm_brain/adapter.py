@@ -478,6 +478,19 @@ class V3LLMBrainAdapter:
         )
         if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
             raise BrainPromptContractInvalid("Remote Brain returned an invalid canonical provider-prompt contract.")
+        if request.metadata.get("require_lossless_user_direction") is True:
+            if any(
+                not isinstance(item.get("user_direction_integrity"), dict)
+                or item["user_direction_integrity"].get("contract_version")
+                != "v3_user_direction_integrity_v1"
+                or item["user_direction_integrity"].get("owner") != "remote_v3_llm_brain"
+                or item["user_direction_integrity"].get("status") not in {"preserved", "rewritten"}
+                for item in prompts_raw
+                if isinstance(item, dict)
+            ):
+                raise BrainPromptContractInvalid(
+                    "Remote Brain did not return the required user-direction integrity decision."
+                )
         semantic_preflight_required = _requires_human_semantic_preflight(request)
         if semantic_preflight_required and not _matches_human_semantic_preflight_receipts(
             prompts_raw,

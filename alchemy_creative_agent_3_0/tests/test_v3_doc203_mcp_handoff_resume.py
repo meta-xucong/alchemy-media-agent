@@ -171,7 +171,7 @@ class _LocalBrainProvider:
             {
                 "output_index": index,
                 "prompt": (
-                    "Complete approved renderer prompt for the requested MCP materialization path, "
+                    f"{request.user_input} Complete approved renderer prompt for the requested MCP materialization path, "
                     "preserving the submitted handoff identity and reference contract."
                 ),
                 "review_status": "approved",
@@ -186,6 +186,11 @@ class _LocalBrainProvider:
                     "developmental_presence": "integrated_stage_coherent_face_attention_and_affect",
                     "resolution_mode": "holistic_person_and_situation_resolution",
                     "status": "approved",
+                    "owner": "remote_v3_llm_brain",
+                },
+                "user_direction_integrity": {
+                    "contract_version": "v3_user_direction_integrity_v1",
+                    "status": "preserved",
                     "owner": "remote_v3_llm_brain",
                 },
             }

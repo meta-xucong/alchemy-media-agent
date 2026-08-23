@@ -217,7 +217,17 @@ class OpenAIVisionInspectionProvider:
             )
             text = getattr(response, "output_text", None) or _response_text_from_openai(response)
             if text:
-                return text
+                try:
+                    _loads_json_object(text)
+                except VisionInspectionProviderError:
+                    # Some OpenAI-compatible gateways honor the Responses
+                    # route but ignore its JSON mode.  Use the existing Chat
+                    # compatibility route once for the same review contract;
+                    # never repair malformed text locally and never retry a
+                    # timed-out request here.
+                    pass
+                else:
+                    return text
         except Exception as exc:
             # A protocol fallback is useful for gateways that reject Responses,
             # but retrying the same timed-out request through Chat doubles the

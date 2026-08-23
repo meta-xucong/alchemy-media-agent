@@ -145,6 +145,20 @@ _BRAIN_IMAGE_SIZE_ALIASES = {
     "5:4": "1536x1024",
     "16:9": "1536x1024",
 }
+_BRAIN_ASPECT_RATIO_ALIASES = {
+    "1:1": "1024x1024",
+    "2:3": "1024x1536",
+    "3:2": "1536x1024",
+    "4:5": "1024x1536",
+    "3:4": "1024x1536",
+    "9:16": "1024x1536",
+    "4:3": "1536x1024",
+    "5:4": "1536x1024",
+    "16:9": "1536x1024",
+    "2.35:1": "1536x1024",
+    "2.39:1": "1536x1024",
+    "2.40:1": "1536x1024",
+}
 ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE = "product_detail_or_print_view"
 
 
@@ -2546,6 +2560,10 @@ class ScenarioRuntime:
                 }
 
         signing_metadata: dict[str, Any] = {"canonical_prompt_context": canonical_prompt_context}
+        # The complete renderer prompt must preserve the user's full direction.
+        # Character Card slot deltas intentionally own a narrower prompt scope.
+        if not canonical_prompt_context.get("character_card_slot_delta_target"):
+            signing_metadata["require_lossless_user_direction"] = True
         if self._canonical_context_has_professional_body_contract(canonical_prompt_context):
             signing_metadata["professional_body_proportion_receipt_required"] = True
         if request.trusted_professional_anchor_view_decision_reuse:
@@ -3777,6 +3795,12 @@ class ScenarioRuntime:
         normalized = " ".join(str(value or "").strip().lower().split()).replace("×", "x")
         return _BRAIN_IMAGE_SIZE_ALIASES.get(normalized)
 
+    @staticmethod
+    def _canonical_brain_aspect_ratio(value: object) -> tuple[str, str] | None:
+        normalized = " ".join(str(value or "").strip().lower().split()).replace("：", ":")
+        size = _BRAIN_ASPECT_RATIO_ALIASES.get(normalized)
+        return (normalized, size) if size else None
+
     def _apply_brain_image_size_precedence(
         self,
         request: ScenarioRuntimeRequest,
@@ -3787,9 +3811,18 @@ class ScenarioRuntime:
 
         brain_plan = brain_result.image_set_plan
         brain_size = self._canonical_brain_image_size(getattr(brain_plan, "size", None))
+        ratio_resolution = self._canonical_brain_aspect_ratio(getattr(brain_plan, "aspect_ratio", None))
+        # The Brain may echo the browser canvas while also resolving an
+        # explicit ratio from the user's prompt.  The ratio is the stronger
+        # user-owned signal; the browser value is only a fallback.
+        if ratio_resolution is not None:
+            _, brain_size = ratio_resolution
         if not brain_size:
             return normalized_intent
         if brain_size == normalized_intent.effective_image_size:
+            if ratio_resolution is not None:
+                request.metadata["requested_image_aspect_ratio"] = ratio_resolution[0]
+                request.metadata["requested_image_aspect_ratio_source"] = "remote_brain_user_intent"
             return normalized_intent
         updated = normalized_intent.model_copy(
             update={
@@ -3826,6 +3859,9 @@ class ScenarioRuntime:
             "normalized_v3_job_intent": updated.model_dump(mode="json"),
             "normalized_v3_job_intent_id": updated.intent_id,
         }
+        if ratio_resolution is not None:
+            request.metadata["requested_image_aspect_ratio"] = ratio_resolution[0]
+            request.metadata["requested_image_aspect_ratio_source"] = "remote_brain_user_intent"
         return updated
 
     def _normalize_v3_job_intent(

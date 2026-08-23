@@ -127,10 +127,21 @@ class PhotographyRemoteBrainTestProvider:
             {
                 "output_index": index,
                 "prompt": (
-                    f"Remote Brain approved complete photography image {index}: create one coherent photographic "
+                    f"{request.user_input} Remote Brain approved complete photography image {index}: create one coherent photographic "
                     "rendering that respects the user's request and frozen reference truth."
                 ),
                 "review_status": "approved",
+                **(
+                    {
+                        "user_direction_integrity": {
+                            "contract_version": "v3_user_direction_integrity_v1",
+                            "status": "preserved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if request.metadata.get("require_lossless_user_direction") is True
+                    else {}
+                ),
                 **({"semantic_preflight_status": "approved"} if requires_human_preflight else {}),
                 **(
                     {

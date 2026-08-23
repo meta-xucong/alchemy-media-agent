@@ -133,6 +133,39 @@ def test_vision_provider_transport_disables_sdk_level_retries(tmp_path, monkeypa
     assert captured["max_retries"] == 0
 
 
+def test_vision_provider_uses_one_compatibility_route_for_invalid_json(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeResponses:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("responses")
+            return SimpleNamespace(output_text='{"status":"pass"')
+
+    class FakeChatCompletions:
+        def create(self, **kwargs):  # noqa: ANN003
+            calls.append("chat")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content='{"status":"pass","confidence":0.9}'))]
+            )
+
+    class FakeChat:
+        completions = FakeChatCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.responses = FakeResponses()
+            self.chat = FakeChat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+    monkeypatch.setenv("V3_VISION_INSPECTION_ENABLED", "true")
+    monkeypatch.setenv("V3_VISION_INSPECTION_API_KEY", "test-key")
+
+    payload = OpenAIVisionInspectionProvider().inspect(_ready_resolution(tmp_path))
+
+    assert payload["status"] == "pass"
+    assert calls == ["responses", "chat"]
+
+
 def test_vision_provider_prefers_configured_lab_vision_route_over_general_llm(
     tmp_path,
     monkeypatch,

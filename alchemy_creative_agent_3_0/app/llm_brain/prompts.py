@@ -234,6 +234,7 @@ def _compact_required_remote_creative_schema() -> dict:
             "set_goal": "string",
             "image_count": "integer exactly equal to requested_image_count",
             "size": "canonical provider size 1024x1024|1024x1536|1536x1024, only when explicit in user_input; otherwise null",
+            "aspect_ratio": "explicit user aspect ratio such as 2.35:1 or 16:9 when present in user_input; otherwise null",
             "shot_plan": ["one original whole-image natural-language direction per requested output"],
             "composition_rules": ["string"],
             "quality_bar": ["string"],
@@ -441,6 +442,52 @@ def _compact_remote_creative_product_profile(product_profile: dict[str, object])
     return compact
 
 
+def _compact_human_realism_execution_contract(shared_capabilities: dict[str, object]) -> dict[str, object]:
+    """Project the active Human Realism semantics into the Brain request."""
+
+    cluster = shared_capabilities.get("visual_cluster") if isinstance(shared_capabilities, dict) else None
+    cluster = cluster if isinstance(cluster, dict) else {}
+    guidance = cluster.get("human_photorealism_guidance")
+    guidance = guidance if isinstance(guidance, dict) else {}
+    if guidance.get("applies") is not True:
+        return {"applies": False}
+    semantic = guidance.get("semantic_contract")
+    semantic = semantic if isinstance(semantic, dict) else {}
+    profile = guidance.get("metadata", {}).get("universal_rendering_profile")
+    profile = profile if isinstance(profile, dict) else {}
+    return {
+        "applies": True,
+        "subject_type": str(guidance.get("subject_type") or ""),
+        "realism_level": str(guidance.get("realism_level") or ""),
+        "human_subject_kind": str(guidance.get("metadata", {}).get("human_subject_kind") or "person"),
+        "semantic_contract": {
+            key: semantic.get(key)
+            for key in (
+                "rendering_goal",
+                "physical_coherence",
+                "natural_presence_priority",
+                "complexion_rendering_requirement",
+                "photographic_material_requirement",
+                "expression_ownership_requirement",
+                "expression_resolution_requirement",
+            )
+            if semantic.get(key) is not None
+        },
+        "universal_rendering_profile": {
+            key: profile.get(key)
+            for key in (
+                "exposure_key",
+                "contrast_direction",
+                "color_temperature",
+                "skin_specularity",
+                "skin_texture",
+                "scene_photographic_coherence",
+            )
+            if profile.get(key) is not None
+        },
+    }
+
+
 def _compact_declared_fact_map(value: object) -> dict[str, object]:
     """Compact explicit structured facts without inventing or renaming them."""
 
@@ -592,6 +639,9 @@ def _compact_remote_creative_payload(
         "requested_image_count": request.requested_image_count,
         "requested_image_size": request.requested_image_size,
         "web_selected_image_size": request.metadata.get("web_selected_image_size") or request.requested_image_size,
+        "human_realism_execution_contract": _compact_human_realism_execution_contract(
+            request.shared_capabilities
+        ),
         "canvas_resolution_instructions": (
             "Treat user_input as the only authority for an explicit canvas size or aspect ratio. "
             "When user_input clearly specifies one, resolve image_set_plan.size to the closest supported "
@@ -819,6 +869,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
                 "set_goal": "string",
                 "image_count": "integer exactly equal to requested_image_count",
                 "size": "canonical provider size 1024x1024|1024x1536|1536x1024, only when explicit in user_input; otherwise null",
+                "aspect_ratio": "explicit user aspect ratio such as 2.35:1 or 16:9 when present in user_input; otherwise null",
                 "shot_plan": ["string"],
                 "evidence_dimensions_by_output": [
                     {"output_index": "integer", "evidence_dimensions": ["string"]}
@@ -1178,6 +1229,12 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         "prompt": "one complete final natural-language image-rendering prompt for this exact output",
         "review_status": "approved",
     }
+    if request.metadata.get("require_lossless_user_direction") is True:
+        prompt_schema["user_direction_integrity"] = {
+            "contract_version": "v3_user_direction_integrity_v1",
+            "status": "preserved|rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
     if preflight_required:
         # This is an auditable Brain receipt, not renderer wording and not a
         # local quality-recipe field.  Its explicit presence is required by
@@ -1609,6 +1666,22 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         },
         "remote_response_contract": response_contract,
     }
+    if request.metadata.get("require_lossless_user_direction") is True:
+        payload["protected_user_direction"] = request.user_input
+        payload["user_direction_contract"] = (
+            "The protected_user_direction is the complete user-owned semantic source. Reconcile it with the frozen "
+            "contracts as one complete renderer direction. Do not summarize it into a short generic description, "
+            "omit a material user-owned scene, subject, styling, composition, camera, mood, or format choice, or "
+            "replace it with a different direction. Return one complete natural-language prompt and the required "
+            "user_direction_integrity receipt; do not return a diff or local repair suffix. The receipt is a Brain "
+            "semantic decision, not a keyword or phrase-matching claim."
+        )
+        payload["remote_response_contract"] = (
+            f"{payload['remote_response_contract']} The protected_user_direction is an immutable user-owned "
+            "semantic source. Every canonical prompt must preserve its complete meaning, and every item must include "
+            "user_direction_integrity with contract_version v3_user_direction_integrity_v1, owner "
+            "remote_v3_llm_brain, and status preserved or rewritten."
+        )
     if body_slot_delta_finalization:
         payload["professional_body_silhouette_source_contract"] = body_source_contract or {
             "contract_version": "professional_body_silhouette_source_contract_v1",
