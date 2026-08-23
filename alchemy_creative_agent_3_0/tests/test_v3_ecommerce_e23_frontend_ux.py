@@ -123,6 +123,13 @@ def test_e23_result_board_hydrates_same_job_project_delivery_when_job_snapshot_h
     assert "item?.metadata?.project_id" in stored_items
 
 
+def test_v3_project_opening_without_current_job_keeps_result_board_renderable() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    current_items = _section(script, "function v3CurrentJobImageItems", "function v3ReviewCertification")
+
+    assert "if (!job) return [];" in current_items
+
+
 def test_e23_next_actions_restore_human_recovery_for_blocked_held_and_completed_work() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     actions = _section(script, "function renderV3ProjectNextActions()", "function renderV3BrandMemoryPanel()")

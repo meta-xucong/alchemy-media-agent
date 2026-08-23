@@ -4001,6 +4001,7 @@ function v3ReferenceImageCandidates(ref) {
 }
 
 function v3CurrentJobImageItems(job = v3State.currentJob) {
+  if (!job) return [];
   if (v3FailureArtifactExpired(job)) return [];
   const candidates = Array.isArray(job.candidates) ? job.candidates : [];
   const assets = Array.isArray(job.asset_series) ? job.asset_series : [];
