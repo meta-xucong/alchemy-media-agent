@@ -1290,6 +1290,12 @@ function bindControls() {
   if (els.v3ProjectList) els.v3ProjectList.addEventListener("click", handleV3ProjectClick);
   if (els.v3StepCards) els.v3StepCards.addEventListener("click", handleV3StepCardClick);
   if (els.v3ProjectOutputBoard) els.v3ProjectOutputBoard.addEventListener("click", handleV3ProjectOutputBoardClick);
+  if (els.v3ResultBoard) els.v3ResultBoard.addEventListener("click", (event) => {
+    const downloadButton = event.target.closest("[data-v3-download-url]");
+    if (!downloadButton) return;
+    event.preventDefault();
+    void downloadV3Output(downloadButton.dataset.v3DownloadUrl, downloadButton);
+  });
   if (els.v3ProjectNextActions) els.v3ProjectNextActions.addEventListener("click", handleV3ProjectActionClick);
   if (els.v3CloseSubpageBtn) els.v3CloseSubpageBtn.addEventListener("click", closeV3ProjectSubpage);
   if (els.v3UsefulReferenceBoard) els.v3UsefulReferenceBoard.addEventListener("click", handleV3ReferenceBoardClick);
@@ -4453,7 +4459,7 @@ function renderV3ProjectOutputBoard() {
       <div class="v3-result-meta">
         <span>${isSelected ? "已用于延续方向" : "可设为延续方向"}</span>
         ${reviewNotice ? `<span>${escapeHtml(reviewNotice)}</span>` : ""}
-        ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
+        ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载</button>` : ""}
       </div>
       <div class="v3-output-actions">
         ${ecommerceProject ? "" : `<button type="button" data-v3-output-action="prompt" data-v3-output-index="${index}">提示词</button>`}
@@ -4510,6 +4516,12 @@ function renderV3ProjectOutputBoard() {
 }
 
 async function handleV3ProjectOutputBoardClick(event) {
+  const downloadButton = event.target.closest("[data-v3-download-url]");
+  if (downloadButton) {
+    event.preventDefault();
+    await downloadV3Output(downloadButton.dataset.v3DownloadUrl, downloadButton);
+    return;
+  }
   const actionButton = event.target.closest("[data-v3-output-action]");
   if (!actionButton) return;
   const item = v3State.projectOutputItems[Number(actionButton.dataset.v3OutputIndex || 0)];
@@ -10117,7 +10129,7 @@ function renderV3ResultBoard(job) {
           </div>
           <p>这张图已生成，但没有进入正式交付，也不会自动设为后续参考。</p>
           <div class="v3-result-meta">
-            ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载复核图</a>` : ""}
+            ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载复核图</button>` : ""}
           </div>
         `;
         const image = card.querySelector(".v3-result-preview img");
@@ -10225,7 +10237,7 @@ function renderV3ResultBoard(job) {
       ${purpose && purpose !== cardPurpose ? `<p class="v3-result-scene">${escapeHtml(purpose)}</p>` : ""}
       <div class="v3-result-meta">
         ${item.overall_score ? `<span>${Math.round(Number(item.overall_score) * 100)}%</span>` : ""}
-        ${downloadUrl ? `<a class="v3-result-download" href="${escapeHtml(v3MediaUrl(downloadUrl))}" target="_blank" rel="noopener">下载</a>` : ""}
+        ${downloadUrl ? `<button class="v3-result-download" type="button" data-v3-download-url="${escapeHtml(v3MediaUrl(downloadUrl))}">下载</button>` : ""}
       </div>
       <div class="v3-output-actions">
         <button type="button" data-v3-result-action="select" data-v3-result-index="${index}" ${isSelected ? "disabled" : ""}>设为后续参考</button>
@@ -15191,6 +15203,10 @@ async function loadV2OptionalResource(path, fallbackValue = null, { timeoutMs = 
   }
 }
 
+async function downloadV3Output(url, button) {
+  return downloadImageFile(url, "", button);
+}
+
 async function loadV2TemplateBootstrap(path, fallbackValue = null) {
   try {
     return await loadV2RequestWithTimeout(path, v2TemplateBootstrapTimeoutMs);
@@ -17500,7 +17516,7 @@ async function handleDownloadLinkClick(event) {
   const url = normalizeOriginalDownloadUrl(link?.dataset?.downloadUrl || link?.href);
   const filename = link?.dataset?.downloadFilename || link?.download || "image.png";
   if (!url || url === "#") return;
-  downloadImageFile(url, filename, link);
+  await downloadImageFile(url, filename, link);
 }
 
 function normalizeOriginalDownloadUrl(url = "") {
@@ -17512,7 +17528,7 @@ function normalizeOriginalDownloadUrl(url = "") {
     .replace(/\/image\/history\/([^/?#]+)\/(?:thumbnail|preview)(?=([?#]|$))/, "/outputs/$1/download");
 }
 
-function downloadImageFile(url, filename, link) {
+async function downloadImageFile(url, filename, link) {
   url = normalizeOriginalDownloadUrl(url);
   const originalText = link?.textContent;
   if (link?.dataset.downloading === "true") return;
@@ -17520,19 +17536,63 @@ function downloadImageFile(url, filename, link) {
     link.dataset.downloading = "true";
     link.textContent = "已开始";
   }
+  if (!url.includes("/api/v3/creative-agent/outputs/")) {
+    try {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename || "image.png";
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      showGlobalToast("图片下载已开始。");
+    } catch (error) {
+      const fallbackUrl = url.startsWith("http") || url.startsWith("/") ? url : link?.href;
+      if (fallbackUrl) window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+      showGlobalToast("下载受浏览器限制，已在新标签打开原图。");
+    } finally {
+      if (link) {
+        window.setTimeout(() => {
+          link.dataset.downloading = "false";
+          link.textContent = originalText || "下载原图";
+        }, 900);
+      }
+    }
+    return;
+  }
   try {
+    const token = getVeyraToken();
+    const response = await fetch(url, {
+      credentials: "include",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      if (response.status === 401) await handleVeyraUnauthorized();
+      const error = new Error(detail || `Download failed (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
+    const blob = await response.blob();
+    if (!blob.size) throw new Error("Downloaded image is empty.");
+    const disposition = response.headers.get("content-disposition") || "";
+    const filenameMatch = disposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i);
+    const resolvedFilename = filenameMatch?.[1]
+      ? decodeURIComponent(filenameMatch[1].replace(/^\"|\"$/g, ""))
+      : filename || "image.png";
+    const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename || "image.png";
+    anchor.href = objectUrl;
+    anchor.download = resolvedFilename;
     anchor.rel = "noopener";
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     showGlobalToast("图片下载已开始。");
   } catch (error) {
-    const fallbackUrl = url.startsWith("http") || url.startsWith("/") ? url : link?.href;
-    if (fallbackUrl) window.open(fallbackUrl, "_blank", "noopener,noreferrer");
-    showGlobalToast("下载受浏览器限制，已在新标签打开原图。");
+    console.error("V3 image download failed", error);
+    showGlobalToast(error?.status === 401 ? "登录状态已失效，请重新登录。" : "图片下载失败，请稍后重试。", "error");
   } finally {
     if (link) {
       window.setTimeout(() => {

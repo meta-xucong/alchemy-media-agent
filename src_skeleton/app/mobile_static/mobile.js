@@ -13061,8 +13061,8 @@ function handleDownloadLinkClick(event) {
     event.preventDefault();
     return;
   }
-  prepareNativeDownloadLink(link, url, filename);
-  showDownloadStartHint(link);
+  event.preventDefault();
+  downloadImageFile(url, filename, link);
 }
 
 function normalizeOriginalDownloadUrl(url = "") {
@@ -13074,7 +13074,7 @@ function normalizeOriginalDownloadUrl(url = "") {
     .replace(/\/image\/history\/([^/?#]+)\/(?:thumbnail|preview)(?=([?#]|$))/, "/outputs/$1/download");
 }
 
-function downloadImageFile(url, filename, link) {
+async function downloadImageFile(url, filename, link) {
   url = normalizeOriginalDownloadUrl(url);
   if (link) prepareNativeDownloadLink(link, url, filename);
   const originalText = link?.textContent;
@@ -13083,19 +13083,63 @@ function downloadImageFile(url, filename, link) {
     link.dataset.downloading = "true";
     link.textContent = "已开始";
   }
+  if (!url.includes("/api/v3/creative-agent/outputs/")) {
+    try {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename || "image.png";
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      showGlobalToast("图片下载已开始。");
+    } catch (error) {
+      const fallbackUrl = url.startsWith("http") || url.startsWith("/") ? url : link?.href;
+      if (fallbackUrl) window.open(fallbackUrl, "_blank", "noopener,noreferrer");
+      showGlobalToast("下载受浏览器限制，已在新标签打开原图。");
+    } finally {
+      if (link) {
+        window.setTimeout(() => {
+          link.dataset.downloading = "false";
+          link.textContent = originalText || "下载原图";
+        }, 900);
+      }
+    }
+    return;
+  }
   try {
+    const token = getVeyraToken();
+    const response = await fetch(url, {
+      credentials: "include",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      if (response.status === 401) await handleVeyraUnauthorized();
+      const error = new Error(detail || `Download failed (${response.status})`);
+      error.status = response.status;
+      throw error;
+    }
+    const blob = await response.blob();
+    if (!blob.size) throw new Error("Downloaded image is empty.");
+    const disposition = response.headers.get("content-disposition") || "";
+    const filenameMatch = disposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i);
+    const resolvedFilename = filenameMatch?.[1]
+      ? decodeURIComponent(filenameMatch[1].replace(/^\"|\"$/g, ""))
+      : filename || "image.png";
+    const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename || "image.png";
+    anchor.href = objectUrl;
+    anchor.download = resolvedFilename;
     anchor.rel = "noopener";
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     showGlobalToast("图片下载已开始。");
   } catch (error) {
-    const fallbackUrl = url.startsWith("http") || url.startsWith("/") ? url : link?.href;
-    if (fallbackUrl) window.open(fallbackUrl, "_blank", "noopener,noreferrer");
-    showGlobalToast("下载受浏览器限制，已在新标签打开原图。");
+    console.error("V3 image download failed", error);
+    showGlobalToast(error?.status === 401 ? "登录状态已失效，请重新登录。" : "图片下载失败，请稍后重试。", "error");
   } finally {
     if (link) {
       window.setTimeout(() => {

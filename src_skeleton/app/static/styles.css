@@ -10520,6 +10520,9 @@ body.v3-page-loading-active {
 }
 
 .v3-result-download {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
   padding: 4px 8px;
   border-radius: 999px;
   color: #426d86;

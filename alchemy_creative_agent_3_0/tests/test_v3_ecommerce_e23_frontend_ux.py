@@ -130,6 +130,22 @@ def test_v3_project_opening_without_current_job_keeps_result_board_renderable() 
     assert "if (!job) return [];" in current_items
 
 
+def test_v3_output_download_uses_authenticated_binary_fetch_instead_of_bare_link() -> None:
+    desktop = APP_JS.read_text(encoding="utf-8")
+    mobile = MOBILE_JS.read_text(encoding="utf-8")
+    desktop_download = _section(desktop, "async function downloadV3Output", "async function loadV2TemplateBootstrap")
+    desktop_result_board = _section(desktop, "function renderV3ResultBoard(job)", "function v3OutputImageCandidates(item)")
+    mobile_download = _section(mobile, "async function downloadImageFile", "function showDownloadStartHint")
+
+    assert "data-v3-download-url" in desktop_result_board
+    assert "target=\"_blank\"" not in desktop_result_board
+    assert "return downloadImageFile(url, \"\", button);" in desktop_download
+    assert 'credentials: "include"' in mobile_download
+    assert "getVeyraToken()" in mobile_download
+    assert "URL.createObjectURL(blob)" in mobile_download
+    assert "handleVeyraUnauthorized()" in mobile_download
+
+
 def test_e23_next_actions_restore_human_recovery_for_blocked_held_and_completed_work() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     actions = _section(script, "function renderV3ProjectNextActions()", "function renderV3BrandMemoryPanel()")
