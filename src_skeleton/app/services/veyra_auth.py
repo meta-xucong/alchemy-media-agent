@@ -86,7 +86,10 @@ async def load_billing_rule(rule_key: str | None = None) -> VeyraBillingRule:
     if not url:
         return VeyraBillingRule(key=rule_key, enabled=False, charge_amount=0.0, source=rule_key)
     try:
-        async with httpx.AsyncClient(timeout=settings.veyra_request_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.veyra_request_timeout_seconds,
+            transport=_bridge_transport(),
+        ) as client:
             response = await client.get(url, params={"rule_key": rule_key})
     except httpx.HTTPError as exc:
         raise VeyraAuthError(str(exc)) from exc
@@ -110,7 +113,10 @@ async def load_account(user_id: int) -> VeyraAccount:
     _ensure_bridge_enabled()
     base_url = settings.veyra_sub2api_base_url.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=settings.veyra_request_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.veyra_request_timeout_seconds,
+            transport=_bridge_transport(),
+        ) as client:
             response = await client.get(
                 base_url + f"/api/veyra/internal/users/{int(user_id)}/account",
                 headers={"X-Veyra-Internal-Token": str(settings.veyra_internal_token or "")},
@@ -146,7 +152,10 @@ async def debit_balance(*, user_id: int, amount: float, idempotency_key: str, so
     }
     base_url = settings.veyra_sub2api_base_url.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=settings.veyra_request_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.veyra_request_timeout_seconds,
+            transport=_bridge_transport(),
+        ) as client:
             response = await client.post(
                 base_url + "/api/veyra/internal/billing/debit",
                 headers={"X-Veyra-Internal-Token": str(settings.veyra_internal_token or "")},
@@ -163,6 +172,11 @@ async def debit_balance(*, user_id: int, amount: float, idempotency_key: str, so
         source=str(data.get("source") or source or "alchemy:v1"),
         replayed=bool(data.get("replayed")),
     )
+
+
+def _bridge_transport() -> httpx.AsyncHTTPTransport:
+    """Prefer IPv4 for Alchemy's bridge egress while preserving TLS host verification."""
+    return httpx.AsyncHTTPTransport(local_address="0.0.0.0")
 
 
 def _billing_rule_from_payload(payload: dict[str, Any], *, fallback_key: str) -> VeyraBillingRule:

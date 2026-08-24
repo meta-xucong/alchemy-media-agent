@@ -120,7 +120,10 @@ class VeyraSub2APIClient:
         last_error: Exception | None = None
         for attempt in range(max(1, int(settings.veyra_request_retry_attempts))):
             try:
-                async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                async with httpx.AsyncClient(
+                    timeout=self.timeout_seconds,
+                    transport=_bridge_transport_for_attempt(attempt),
+                ) as client:
                     if method == "get":
                         response = await client.get(self.base_url + path, headers=self._headers())
                     else:
@@ -134,6 +137,13 @@ class VeyraSub2APIClient:
 
     def _headers(self) -> dict[str, str]:
         return {"X-Veyra-Internal-Token": str(self.internal_token or "")}
+
+
+def _bridge_transport_for_attempt(attempt: int) -> httpx.AsyncHTTPTransport:
+    """Prefer IPv4 for the first bridge attempt, then retain the normal resolver fallback."""
+    if int(attempt) == 0:
+        return httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+    return httpx.AsyncHTTPTransport()
 
 
 def issue_session_token(user_id: int) -> str:

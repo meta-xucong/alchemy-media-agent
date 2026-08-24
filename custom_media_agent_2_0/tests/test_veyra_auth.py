@@ -133,6 +133,38 @@ def test_veyra_client_retries_transport_once_then_succeeds(monkeypatch: pytest.M
     assert calls == 2
 
 
+def test_veyra_bridge_prefers_ipv4_on_first_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    object.__setattr__(settings, "veyra_auth_enabled", True)
+    object.__setattr__(settings, "veyra_internal_token", "bridge-secret")
+
+    sentinel = object()
+    transport_calls: list[dict[str, object]] = []
+
+    def fake_transport(**kwargs):
+        transport_calls.append(kwargs)
+        return sentinel
+
+    class CapturingAsyncClient:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["transport"] is sentinel
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return httpx.Response(200, json={"data": {"user_id": 42}})
+
+    monkeypatch.setattr(veyra_auth_module.httpx, "AsyncHTTPTransport", fake_transport)
+    monkeypatch.setattr(veyra_auth_module.httpx, "AsyncClient", CapturingAsyncClient)
+
+    client = VeyraSub2APIClient(base_url="https://aiself.vip", internal_token="bridge-secret")
+    assert asyncio.run(client.exchange_login_ticket("ticket-1")) == {"user_id": 42}
+    assert transport_calls == [{"local_address": "0.0.0.0"}]
+
+
 def test_veyra_upstream_http_failure_has_a_safe_reason_code() -> None:
     from app.services.veyra_auth import _checked_json
 
