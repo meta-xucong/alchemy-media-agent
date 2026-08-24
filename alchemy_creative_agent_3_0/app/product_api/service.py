@@ -6896,6 +6896,8 @@ class V3ProductApiService:
         generate_request: GenerateJobRequest,
     ) -> int:
         limit = self._visual_auto_retry_max_attempts(generate_request)
+        if self._record_has_active_capability(record, "human_realism"):
+            return 0
         return min(limit, 1) if self._record_has_active_capability(record, "nonhuman_subject_identity") else limit
 
     def _visual_retry_execution_plan(

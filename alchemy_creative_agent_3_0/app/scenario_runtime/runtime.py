@@ -2934,6 +2934,7 @@ class ScenarioRuntime:
             "capability_id",
             "rendering_goal",
             "quality_axes",
+            "final_direction_requirement",
             "identity_age_fidelity",
             "developmental_age_coherence_requirement",
             "developmental_presence_requirement",
@@ -2963,6 +2964,11 @@ class ScenarioRuntime:
             contract.get("contract_version") != "v3_human_realism_semantic_v8"
             or contract.get("capability_id") != "human_realism"
             or contract.get("rendering_goal") not in {"photographic_real_person", "photographic_human_detail"}
+            or contract.get("final_direction_requirement")
+            not in {
+                "brain_authored_complete_scene_aware_human_photographic_direction",
+                "not_applicable",
+            }
             or contract.get("identity_age_fidelity") not in {"explicit_or_reference_backed", "not_applicable"}
             or contract.get("developmental_age_coherence_requirement")
             not in {"whole_person_requested_stage", "not_applicable"}

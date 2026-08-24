@@ -466,6 +466,7 @@ def _compact_human_realism_execution_contract(shared_capabilities: dict[str, obj
             key: semantic.get(key)
             for key in (
                 "rendering_goal",
+                "final_direction_requirement",
                 "physical_coherence",
                 "natural_presence_priority",
                 "complexion_rendering_requirement",
@@ -1370,6 +1371,26 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "meanings semantically and rewrite the whole prompt when restoration is needed."
         )
     if preflight_required:
+        response_contract += (
+            " Before writing each canonical prompt, author one complete scene-aware human photographic direction "
+            "yourself. Resolve the person's individual presence, natural camera-observed skin and surface response, "
+            "situation-owned attention and expression, and physically coherent light, depth, contact, clothing and "
+            "surrounding materials within the user's requested mood and style. A generic photorealistic, natural, "
+            "beautiful, or cinematic label is not a resolved direction. Do not emit a checklist, local repair phrase, "
+            "facial-part recipe, or separate framework wording; express the integrated decision in the one complete "
+            "canonical prompt sent to the renderer. Do not return a verbatim copy of the user's raw request when "
+            "Human Realism is active; preserve its meaning and explicit constraints, but rewrite the complete "
+            "direction into one coherent camera-observed photographic instruction."
+        )
+        response_contract += (
+            " When more than one visible person is part of the complete image, author the shared moment as one "
+            "real camera observation rather than a coordinated row of attractive portraits: give each person a "
+            "distinct situation-grounded relationship to the action or to another person, with coherent differences "
+            "in attention, posture, timing, and presence. Keep those differences subordinate to the user's scene and "
+            "mood, and never turn them into a checklist or fixed pose recipe. Let the same scene light reveal each "
+            "person's own camera-observed surface response and small tonal variation; do not apply one uniform "
+            "beauty-filter finish, identical skin treatment, or identical polished facial presentation to the group."
+        )
         response_contract += (
             " For every output, silently complete the required whole-image "
             "semantic preflight before writing the prompt and explicitly set "

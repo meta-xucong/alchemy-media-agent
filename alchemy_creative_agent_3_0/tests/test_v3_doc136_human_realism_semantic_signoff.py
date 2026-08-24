@@ -56,6 +56,9 @@ def test_doc136_enforced_human_guidance_is_typed_and_has_no_local_prompt_or_retr
         "whole_person_requested_stage"
     )
     assert guidance.semantic_contract["rendering_goal"] == "photographic_real_person"
+    assert guidance.semantic_contract["final_direction_requirement"] == (
+        "brain_authored_complete_scene_aware_human_photographic_direction"
+    )
     assert guidance.semantic_contract["ordinary_age_appropriate_context"] is True
     assert guidance.semantic_contract["natural_presence_priority"] == "individual_human_presence"
     assert guidance.semantic_contract["aesthetic_boundary"] == "preserve_user_style_without_generic_beauty_substitution"
@@ -111,18 +114,29 @@ def test_doc136_general_runtime_delivers_human_contract_to_remote_finalizer(monk
     assert len(contracts) == 1
     assert contracts[0]["capability_id"] == "human_realism"
     assert contracts[0]["rendering_goal"] == "photographic_real_person"
+    assert contracts[0]["final_direction_requirement"] == (
+        "brain_authored_complete_scene_aware_human_photographic_direction"
+    )
     assert contracts[0]["natural_presence_priority"] == "individual_human_presence"
     assert contracts[0]["aesthetic_boundary"] == "preserve_user_style_without_generic_beauty_substitution"
     assert set(contracts[0]["quality_axes"]) == set(HUMAN_REALISM_REVIEW_DIMENSIONS)
     assert "prompt_additions" not in json.dumps(context, ensure_ascii=False)
     assert "negative_additions" not in json.dumps(context, ensure_ascii=False)
-
     payload = json.loads(build_remote_payload(
         # The runtime sends this same shape to the adapter; using the recorded
         # request makes the assertion independent of the test double response.
         BrainRunRequest.model_validate(finalizer_requests[0])
     ))
     assert payload["frozen_render_context"]["active_semantic_capability_contracts"] == contracts
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    assert "scene-aware human photographic direction" in payload_text
+    assert "generic photorealistic" in payload_text
+    assert "Do not return a verbatim copy" in payload_text
+    assert "coherent camera-observed photographic instruction" in payload_text
+    assert "coordinated row of attractive portraits" in payload_text
+    assert "situation-grounded relationship" in payload_text
+    assert "uniform beauty-filter finish" in payload_text
+    assert "camera-observed surface response" in payload_text
 
 
 def test_doc136_enforced_reviewer_is_built_from_frozen_contract_not_legacy_catalog(monkeypatch) -> None:

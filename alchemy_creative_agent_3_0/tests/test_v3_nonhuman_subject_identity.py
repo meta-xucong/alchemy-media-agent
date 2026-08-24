@@ -211,3 +211,12 @@ def test_nonhuman_review_ownership_uses_one_bounded_shared_retry_and_never_face_
         job_id_value="job_nonhuman_retry",
     )
     assert service._visual_auto_retry_limit_for_record(record, GenerateJobRequest(quality_mode="strict")) == 1  # noqa: SLF001
+    human_record = ProductJobRecord(
+        request=CreateCreativeJobRequest(
+            user_input="A real-camera photograph of several people in a natural scene.",
+            metadata={"capability_activation_plan": {"dependency_order": ["human_realism"]}},
+        ),
+        status=ProductJobStatusValue.PLANNED,
+        job_id_value="job_human_no_auto_retry",
+    )
+    assert service._visual_auto_retry_limit_for_record(human_record, GenerateJobRequest(quality_mode="strict")) == 0  # noqa: SLF001

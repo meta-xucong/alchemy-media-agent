@@ -898,6 +898,11 @@ class HumanPhotorealismLayer:
             "contract_version": "v3_human_realism_semantic_v8",
             "capability_id": "human_realism",
             "rendering_goal": "photographic_human_detail" if is_detail else "photographic_real_person",
+            "final_direction_requirement": (
+                "not_applicable"
+                if is_detail
+                else "brain_authored_complete_scene_aware_human_photographic_direction"
+            ),
             "quality_axes": list(dict.fromkeys(str(item) for item in review_targets if str(item))),
             "identity_age_fidelity": "explicit_or_reference_backed" if not is_detail else "not_applicable",
             "developmental_age_coherence_requirement": (
