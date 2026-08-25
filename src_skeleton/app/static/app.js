@@ -1882,6 +1882,13 @@ async function initV3Shell({ force = false } = {}) {
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
     updateV3Notice("V3 项目工作台已就绪。", "success");
+    await loadV3ProjectOutputs({ silent: true, force: true, limit: 1 });
+    renderV3History();
+    renderV3HeroHistory();
+    renderV3ProjectDetail();
+    renderV3Job(v3State.currentJob);
+    await waitForV3FirstHomePreviewImage();
+    setV3PageLoading(false);
     // Project/template data is enough to make the V3 shell interactive. Keep
     // output reconciliation and thumbnail loading out of the first-paint gate.
     void loadV3ProjectOutputs({ silent: true, force: true, limit: v3ProjectHomePageSize })
@@ -9587,6 +9594,46 @@ function markV3HomePreviewImageFailed(image) {
 
 function v3ImageSettled(image) {
   return v3ImageLoaded(image) || image?.dataset?.v3HomeThumbFailed === "true";
+}
+
+function waitForV3FirstHomePreviewImage({ timeoutMs = 12000 } = {}) {
+  const images = v3HomePreviewImages();
+  if (!images.length || images.some(v3ImageLoaded)) return Promise.resolve(true);
+  images.forEach((image) => {
+    if (image.complete && image.naturalWidth === 0) markV3HomePreviewImageFailed(image);
+  });
+  if (images.every(v3ImageSettled)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const cleanup = [];
+    const finish = (loaded) => {
+      cleanup.forEach((release) => release());
+      window.clearTimeout(timeout);
+      resolve(loaded);
+    };
+    const check = () => {
+      if (images.some(v3ImageLoaded)) return finish(true);
+      if (images.every(v3ImageSettled)) return finish(false);
+    };
+    const timeout = window.setTimeout(() => {
+      images.forEach((image) => {
+        if (!v3ImageLoaded(image)) markV3HomePreviewImageFailed(image);
+      });
+      finish(false);
+    }, timeoutMs);
+    images.forEach((image) => {
+      if (v3ImageSettled(image)) return;
+      const onLoad = () => check();
+      const onError = () => {
+        markV3HomePreviewImageFailed(image);
+        check();
+      };
+      image.addEventListener("load", onLoad);
+      image.addEventListener("error", onError);
+      cleanup.push(() => image.removeEventListener("load", onLoad));
+      cleanup.push(() => image.removeEventListener("error", onError));
+    });
+    check();
+  });
 }
 
 function waitForV3HomePreviewImages({ blockPage = true } = {}) {

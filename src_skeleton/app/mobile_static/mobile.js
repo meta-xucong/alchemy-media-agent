@@ -3431,25 +3431,22 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
     mobileV3State.loaded = true;
     persistMobileV3Caches();
     renderMobileV3ProjectCards({ deferImages: true });
+    let initialOutputs = { items: [], review_items: [] };
+    try {
+      initialOutputs = await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`);
+    } catch (_error) {
+    }
+    mobileV3State.outputs = Array.isArray(initialOutputs.items) ? initialOutputs.items : [];
+    mobileV3State.reviewOutputs = Array.isArray(initialOutputs.review_items) ? initialOutputs.review_items : [];
+    mobileV3State.outputsLoaded = true;
+    persistMobileV3Caches();
+    renderMobileV3ProjectCards();
+    await waitForMobileV3FirstHomePreviewImage();
     setMobileV3LoadingLayer(false);
     updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
-    void mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)
-      .then((outputsPayload) => {
-        mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
-        mobileV3State.reviewOutputs = Array.isArray(outputsPayload.review_items) ? outputsPayload.review_items : [];
-      })
-      .catch(() => {
-        mobileV3State.outputs = [];
-        mobileV3State.reviewOutputs = [];
-      })
-      .then(() => {
-        mobileV3State.outputsLoaded = true;
-        persistMobileV3Caches();
-        renderMobileV3ProjectCards();
-        updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目 · 图片已更新`);
-        if (!silent) updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
-        return waitForMobileV3HomePreviewImages({ blockPage: false });
-      });
+    updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目 · 图片已更新`);
+    if (!silent) updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
+    void waitForMobileV3HomePreviewImages({ blockPage: false });
   } catch (error) {
     setMobileV3LoadingLayer(false);
     mobileV3State.loaded = true;
@@ -3504,6 +3501,46 @@ function markMobileV3HomePreviewImageFailed(image) {
 
 function mobileV3ImageSettled(image) {
   return mobileV3ImageLoaded(image) || image?.dataset?.mobileV3HomeThumbFailed === "true";
+}
+
+function waitForMobileV3FirstHomePreviewImage({ timeoutMs = 12000 } = {}) {
+  const images = mobileV3HomePreviewImages();
+  if (!images.length || images.some(mobileV3ImageLoaded)) return Promise.resolve(true);
+  images.forEach((image) => {
+    if (image.complete && image.naturalWidth === 0) markMobileV3HomePreviewImageFailed(image);
+  });
+  if (images.every(mobileV3ImageSettled)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const cleanup = [];
+    const finish = (loaded) => {
+      cleanup.forEach((release) => release());
+      window.clearTimeout(timeout);
+      resolve(loaded);
+    };
+    const check = () => {
+      if (images.some(mobileV3ImageLoaded)) return finish(true);
+      if (images.every(mobileV3ImageSettled)) return finish(false);
+    };
+    const timeout = window.setTimeout(() => {
+      images.forEach((image) => {
+        if (!mobileV3ImageLoaded(image)) markMobileV3HomePreviewImageFailed(image);
+      });
+      finish(false);
+    }, timeoutMs);
+    images.forEach((image) => {
+      if (mobileV3ImageSettled(image)) return;
+      const onLoad = () => check();
+      const onError = () => {
+        markMobileV3HomePreviewImageFailed(image);
+        check();
+      };
+      image.addEventListener("load", onLoad);
+      image.addEventListener("error", onError);
+      cleanup.push(() => image.removeEventListener("load", onLoad));
+      cleanup.push(() => image.removeEventListener("error", onError));
+    });
+    check();
+  });
 }
 
 function waitForMobileV3HomePreviewImages({ blockPage = true } = {}) {
