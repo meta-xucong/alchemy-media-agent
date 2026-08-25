@@ -3414,7 +3414,7 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
   setMobileV3LoadingLayer(true, "正在同步项目", "先显示项目框架，再分批加载图片预览。");
   updateMobileV3Status("同步中");
   try {
-    const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectFetchLimit}`);
+    const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectPageSize}`);
     if (!Array.isArray(projectsPayload?.templates)) {
       throw new Error("template_catalog_unavailable");
     }
@@ -3430,22 +3430,26 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
     mobileV3State.outputs = [];
     mobileV3State.loaded = true;
     persistMobileV3Caches();
-    updateMobileV3Status("正在补图片");
     renderMobileV3ProjectCards({ deferImages: true });
-    try {
-      const outputsPayload = await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`);
-      mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
-      mobileV3State.reviewOutputs = Array.isArray(outputsPayload.review_items) ? outputsPayload.review_items : [];
-    } catch (_error) {
-      mobileV3State.outputs = [];
-      mobileV3State.reviewOutputs = [];
-    }
-    mobileV3State.outputsLoaded = true;
-    persistMobileV3Caches();
-    renderMobileV3ProjectCards();
-    await waitForMobileV3HomePreviewImages();
-    updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目 · 图片已更新`);
-    if (!silent) updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
+    setMobileV3LoadingLayer(false);
+    updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
+    void mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)
+      .then((outputsPayload) => {
+        mobileV3State.outputs = Array.isArray(outputsPayload.items) ? outputsPayload.items : [];
+        mobileV3State.reviewOutputs = Array.isArray(outputsPayload.review_items) ? outputsPayload.review_items : [];
+      })
+      .catch(() => {
+        mobileV3State.outputs = [];
+        mobileV3State.reviewOutputs = [];
+      })
+      .then(() => {
+        mobileV3State.outputsLoaded = true;
+        persistMobileV3Caches();
+        renderMobileV3ProjectCards();
+        updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目 · 图片已更新`);
+        if (!silent) updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
+        return waitForMobileV3HomePreviewImages({ blockPage: false });
+      });
   } catch (error) {
     setMobileV3LoadingLayer(false);
     mobileV3State.loaded = true;
@@ -3502,14 +3506,14 @@ function mobileV3ImageSettled(image) {
   return mobileV3ImageLoaded(image) || image?.dataset?.mobileV3HomeThumbFailed === "true";
 }
 
-function waitForMobileV3HomePreviewImages() {
+function waitForMobileV3HomePreviewImages({ blockPage = true } = {}) {
   const images = mobileV3HomePreviewImages();
   if (!images.length) return Promise.resolve();
   images.forEach((image) => {
     if (image.complete && image.naturalWidth === 0) markMobileV3HomePreviewImageFailed(image);
   });
   if (images.every(mobileV3ImageSettled)) return Promise.resolve();
-  setMobileV3LoadingLayer(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
+  if (blockPage) setMobileV3LoadingLayer(true, "正在加载图片预览", "图片出来前会保持锁定，避免空图误判。");
   return new Promise((resolve) => {
     const cleanup = [];
     const timeout = window.setTimeout(() => {

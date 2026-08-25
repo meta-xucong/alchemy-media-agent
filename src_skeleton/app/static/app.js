@@ -1866,7 +1866,7 @@ async function initV3Shell({ force = false } = {}) {
   updateV3Notice("正在读取 V3 项目。", "info");
   try {
     await waitForV3Paint();
-    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`);
+    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectHomePageSize}`);
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
     v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
     v3State.projects = Array.isArray(payload.projects) ? payload.projects : [];
@@ -1879,10 +1879,19 @@ async function initV3Shell({ force = false } = {}) {
     renderV3Projects();
     renderV3History();
     renderV3HeroHistory();
-    await loadV3ProjectOutputs({ silent: true, force: true, limit: v3ProjectHomePageSize }).catch(() => {});
     renderV3ProjectDetail();
     renderV3Job(v3State.currentJob);
     updateV3Notice("V3 项目工作台已就绪。", "success");
+    // Project/template data is enough to make the V3 shell interactive. Keep
+    // output reconciliation and thumbnail loading out of the first-paint gate.
+    void loadV3ProjectOutputs({ silent: true, force: true, limit: v3ProjectHomePageSize })
+      .then(() => {
+        renderV3History();
+        renderV3HeroHistory();
+        renderV3ProjectDetail();
+        renderV3Job(v3State.currentJob);
+      })
+      .catch(() => {});
   } catch (error) {
     v3State.templates = [];
     v3State.templateCatalogStatus = "failed";
@@ -1903,8 +1912,8 @@ async function initV3Shell({ force = false } = {}) {
     // Re-render after the request settles so a refresh cannot leave the
     // available template catalog permanently hidden behind that placeholder.
     renderV3HomeTemplateChooser();
-    await waitForV3HomePreviewImages();
     setV3PageLoading(false);
+    void waitForV3HomePreviewImages({ blockPage: false });
     renderV3ScenarioState();
   }
 }
