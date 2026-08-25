@@ -116,7 +116,7 @@ def test_doc139_malformed_combined_signoff_blocks_before_a_plan_can_materialize(
 
     assert result.status.value == "blocked"
     assert result.planning_result is None
-    assert result.metadata["remote_creative_brain_outcome"]["reason_code"] == "remote_creative_brain_prompt_signoff_unavailable"
+    assert result.metadata["remote_creative_brain_outcome"]["reason_code"] == "remote_creative_brain_prompt_signoff_invalid"
 
 
 def test_doc139_local_mcp_relays_the_combined_signed_string_without_a_second_prompt_path(monkeypatch) -> None:
@@ -149,4 +149,6 @@ def test_doc139_local_mcp_relays_the_combined_signed_string_without_a_second_pro
         "stages": ["provider_prompt_finalize"],
         "human_realism_natural_presence_resigned": True,
         "human_realism_natural_presence_decision_statuses": ["rewritten"],
+        "provider_admission_decision_required": False,
+        "provider_admission_decision_signed": False,
     }

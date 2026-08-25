@@ -85,15 +85,16 @@ def test_doc137_product_only_plan_does_not_require_a_human_preflight() -> None:
     assert "semantic_preflight_status" not in prompt_schema
 
 
-def test_doc137_receipt_does_not_modify_the_brain_signed_renderer_prompt() -> None:
+def test_doc137_receipt_preserves_brain_owned_human_realism_direction() -> None:
     provider = EcommerceRemoteBrainTestProvider()
     result = _human_runtime(provider).plan_job(_human_request())
 
     assert result.status.value == "planned"
     prompt = result.metadata["llm_brain"]["canonical_provider_prompts"][0]
     assert prompt["semantic_preflight_status"] == "approved"
-    assert prompt["prompt"] == (
-        "Remote Brain approved complete product image 1: preserve the supplied product facts, "
-        "reference truth, and explicit user constraints in one coherent photographic image."
+    assert prompt["prompt"].startswith(
+        "Create one natural real-camera photograph of an adult person"
     )
+    assert "Remote Brain approved complete product image 1" in prompt["prompt"]
+    assert "natural real-camera photograph" in prompt["prompt"]
     assert "semantic_preflight" not in prompt["prompt"]

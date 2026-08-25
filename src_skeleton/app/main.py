@@ -463,8 +463,91 @@ def _v3_project_job_payload_with_auto_generate_intent(
         return planning_payload
     metadata = dict(planning_payload.get("metadata") or {})
     metadata["require_real_images"] = True
+    auto_metadata = {
+        key: value
+        for key, value in auto_metadata.items()
+        if key in {
+            "frontend_surface",
+            "require_real_images",
+            "requested_image_count",
+            "requested_image_size",
+            "advanced_reference_controls",
+            "variation_mode",
+            "inferred_variation_mode",
+            "effective_variation_mode",
+            "continuation_mode",
+            "variation_mode_source",
+            "has_product_reference",
+            "ecommerce_text_to_image_fallback",
+            "disable_visual_auto_retry",
+        }
+    }
+    auto_metadata["require_real_images"] = True
+    metadata["_v3_auto_generation_intent"] = {
+        "quality_mode": str((auto_generate_payload or {}).get("quality_mode") or "standard"),
+        "metadata": auto_metadata,
+    }
     planning_payload["metadata"] = metadata
     return planning_payload
+
+
+def _v3_auto_generation_payload_from_status(status: object) -> dict | None:
+    """Recover only an explicit browser real-render request from a Job."""
+
+    if not isinstance(status, dict) or str(status.get("status") or "").strip().lower() != "planned":
+        return None
+    metadata = status.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    intent = metadata.get("_v3_auto_generation_intent")
+    if not isinstance(intent, dict):
+        return None
+    intent_metadata = intent.get("metadata")
+    if not isinstance(intent_metadata, dict) or intent_metadata.get("require_real_images") is not True:
+        return None
+    return {
+        "quality_mode": str(intent.get("quality_mode") or "standard"),
+        "metadata": dict(intent_metadata),
+    }
+
+
+def _recover_v3_planned_auto_generation(project_id: str, status: dict) -> dict:
+    """Make a lost planning-to-generation handoff observable and recoverable."""
+
+    payload = _v3_auto_generation_payload_from_status(status)
+    job_id = str(status.get("job_id") or "").strip()
+    if not job_id:
+        return status
+    if payload is None:
+        # Public status projections intentionally omit some private request
+        # facts. Read the same server-owned record for the recovery decision;
+        # never infer a generation request from a generic planned Job.
+        service = getattr(v3_route_handlers, "service", None)
+        job_store = getattr(service, "job_store", None)
+        record = job_store.get(job_id) if job_store is not None else None
+        request = getattr(record, "request", None)
+        private_status = {
+            "job_id": job_id,
+            "status": getattr(getattr(record, "status", None), "value", getattr(record, "status", "")),
+            "metadata": dict(getattr(request, "metadata", {}) or {}),
+        }
+        payload = _v3_auto_generation_payload_from_status(private_status)
+    if payload is None:
+        return status
+    try:
+        started = _start_v3_project_generation_background(project_id, job_id, payload)
+        refreshed = _run_v3_handler(v3_route_handlers.get_job, job_id)
+        if isinstance(refreshed, dict):
+            metadata = dict(refreshed.get("metadata") or {})
+            metadata["background_generation_recovered"] = bool(started)
+            refreshed["metadata"] = metadata
+            return refreshed
+    except Exception:
+        logger.exception(
+            "V3 planned job generation handoff could not be recovered for project=%s job=%s",
+            project_id,
+            job_id,
+        )
+    return status
 
 
 def _run_v3_handler(handler, *args, **kwargs):
@@ -1047,7 +1130,14 @@ async def v3_create_project_endpoint(request: Request, authorization: str = Head
 @app.get("/api/v3/creative-agent/projects/{project_id}")
 def v3_get_project_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     _require_v3_project_visible(request, project_id, authorization)
-    return _run_v3_handler(v3_route_handlers.get_project, project_id)
+    response = _run_v3_handler(v3_route_handlers.get_project, project_id)
+    project = response.get("project") if isinstance(response, dict) else None
+    job_ids = project.get("job_ids") if isinstance(project, dict) else None
+    job_id = str(job_ids[-1] or "").strip() if isinstance(job_ids, list) and job_ids else ""
+    if job_id:
+        status = _run_v3_handler(v3_route_handlers.get_job, job_id)
+        _recover_v3_planned_auto_generation(project_id, status)
+    return response
 
 
 @app.post("/api/v3/creative-agent/projects/{project_id}/archive")
@@ -1608,7 +1698,12 @@ async def v3_create_job_endpoint(request: Request, authorization: str = Header(d
 @app.get("/api/v3/creative-agent/jobs/{job_id}")
 def v3_get_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
     _require_veyra_user_if_enabled(request, authorization)
-    return _run_v3_handler(v3_route_handlers.get_job, job_id)
+    status = _run_v3_handler(v3_route_handlers.get_job, job_id)
+    metadata = status.get("metadata") if isinstance(status, dict) else None
+    project_id = str(metadata.get("project_id") or "").strip() if isinstance(metadata, dict) else ""
+    if project_id:
+        return _recover_v3_planned_auto_generation(project_id, status)
+    return status
 
 
 @app.get("/api/v3/creative-agent/jobs/{job_id}/export")

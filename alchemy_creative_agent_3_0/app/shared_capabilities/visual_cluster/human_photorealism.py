@@ -1478,6 +1478,24 @@ def _universal_rendering_profile(text: str, *, metadata: dict[str, Any]) -> dict
             or metadata.get("scene_photographic_coherence")
             or "preserve_physical_light_depth_contact"
         ),
+        # Shared, scene-neutral material variables for the Brain's final
+        # semantic sign-off. They do not prescribe a lighting style or prompt.
+        "facial_light_priority": str(
+            explicit.get("facial_light_priority")
+            or "flattering_readable_facial_planes"
+        ),
+        "facial_shadow_detail": str(
+            explicit.get("facial_shadow_detail")
+            or "open_shadow_detail_without_crushed_blacks"
+        ),
+        "surface_materiality": str(
+            explicit.get("surface_materiality")
+            or "real_skin_material_with_restrained_local_highlights"
+        ),
+        "individual_surface_variation": str(
+            explicit.get("individual_surface_variation")
+            or "nonuniform_microtexture_and_tonal_variation_across_people"
+        ),
         "doc": "94",
     }
 

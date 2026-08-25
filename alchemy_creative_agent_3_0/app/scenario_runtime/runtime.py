@@ -2686,6 +2686,33 @@ class ScenarioRuntime:
                         "professional_anchor_view_contract_recovery_attempted": True,
                         "professional_anchor_view_contract_recovery_succeeded": True,
                     }
+            elif isinstance(first_exc, BrainPromptContractInvalid):
+                recovery_request = signing_request.model_copy(
+                    update={
+                        "metadata": {
+                            **dict(signing_request.metadata or {}),
+                            "canonical_prompt_signoff_recovery": {
+                                "contract_version": "v3_canonical_prompt_signoff_recovery_v1",
+                                "attempt": 1,
+                                "same_frozen_context": True,
+                            },
+                        }
+                    },
+                    deep=True,
+                )
+                try:
+                    prompts, audit = self.llm_brain_adapter.finalize_canonical_provider_prompts(
+                        recovery_request
+                    )
+                except Exception as recovery_exc:
+                    failure = recovery_exc
+                else:
+                    failure = None
+                    audit = {
+                        **audit,
+                        "canonical_prompt_signoff_recovery_attempted": True,
+                        "canonical_prompt_signoff_recovery_succeeded": True,
+                    }
             if failure is not None:
                 recovered_brain_result = self._recover_character_card_slot_delta_brain_result(
                     request,
@@ -3047,6 +3074,7 @@ class ScenarioRuntime:
 
         projection = dict(ledger.provider_projection or {})
         semantic_contracts = ScenarioRuntime._active_semantic_capability_contracts(plan, ledger)
+        human_realism_execution_contract = ScenarioRuntime._human_realism_execution_contract(projection)
         age_resolution = ScenarioRuntime._human_realism_age_resolution(projection)
         retry_provenance = request.metadata.get("resolved_retry_provenance")
         retry_evidence = {
@@ -3142,6 +3170,10 @@ class ScenarioRuntime:
                 "execution_fingerprint": envelope.execution_fingerprint,
             },
         }
+        if human_realism_execution_contract:
+            # Keep the final Brain sign-off aware of the shared camera/material
+            # profile. This is typed capability context, not renderer prose.
+            context["human_realism_execution_contract"] = human_realism_execution_contract
         raw_ecommerce_context = request.metadata.get("ecommerce_creative_context")
         if request.metadata.get("ecommerce_creative_context_server_owned") is True:
             try:
@@ -3436,6 +3468,63 @@ class ScenarioRuntime:
             "explicit_user_locked_channels": list(dict.fromkeys(explicit_locks)),
             "blocked_reference_inheritance_channels": list(dict.fromkeys(blocked_inheritance)),
             "resolution_mode": "rewrite_complete_canonical_prompt",
+        }
+
+    @staticmethod
+    def _human_realism_execution_contract(provider_projection: dict[str, Any]) -> dict[str, Any]:
+        """Expose shared Human Realism rendering semantics at final sign-off."""
+
+        capabilities = provider_projection.get("capability_projection")
+        guidance = capabilities.get("human_photorealism_guidance") if isinstance(capabilities, dict) else None
+        if not isinstance(guidance, dict) or guidance.get("applies") is not True:
+            return {}
+        metadata = guidance.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        plugin = metadata.get("human_realism_plugin")
+        plugin = plugin if isinstance(plugin, dict) else {}
+        profile = plugin.get("universal_rendering_profile")
+        if not isinstance(profile, dict):
+            profile = metadata.get("universal_rendering_profile")
+        profile = profile if isinstance(profile, dict) else {}
+        semantic = guidance.get("semantic_contract")
+        semantic = semantic if isinstance(semantic, dict) else {}
+        semantic_keys = (
+            "rendering_goal",
+            "final_direction_requirement",
+            "physical_coherence",
+            "natural_presence_priority",
+            "complexion_rendering_requirement",
+            "photographic_material_requirement",
+            "expression_ownership_requirement",
+            "expression_resolution_requirement",
+        )
+        profile_keys = (
+            "exposure_key",
+            "contrast_direction",
+            "color_temperature",
+            "skin_specularity",
+            "skin_texture",
+            "complexion_policy",
+            "scene_photographic_coherence",
+            "facial_light_priority",
+            "facial_shadow_detail",
+            "surface_materiality",
+            "individual_surface_variation",
+        )
+        return {
+            "applies": True,
+            "subject_type": str(guidance.get("subject_type") or ""),
+            "human_subject_kind": str(metadata.get("human_subject_kind") or "person"),
+            "semantic_contract": {
+                key: semantic.get(key)
+                for key in semantic_keys
+                if semantic.get(key) is not None
+            },
+            "universal_rendering_profile": {
+                key: profile.get(key)
+                for key in profile_keys
+                if profile.get(key) is not None
+            },
         }
 
     @staticmethod

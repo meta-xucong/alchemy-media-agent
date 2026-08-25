@@ -421,7 +421,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "recovered_without_exact_job_match" in script.text
     assert "function v3JobHasExpectedVisibleImages" in script.text
     assert "function v3JobDeliverySettled" in script.text
-    assert "if (!v3JobDeliverySettled(job)) return [];" in script.text
+    assert "if (!v3JobDeliverySettled(job) && !persisted.length) return [];" in script.text
     assert "if (baseJob && !v3JobDeliverySettled(baseJob)) return null;" in script.text
     assert "function v3ReviewCertification" in script.text
     assert "function v3JobDeliveryWithheld" in script.text
@@ -1044,12 +1044,20 @@ def test_v3_auto_generate_real_render_intent_reaches_project_planning(tmp_path, 
 
     assert created.status_code == 200
     assert created.json()["status"] == "planning"
-    job_id = client.get(
-        f"/api/v3/creative-agent/projects/{project['project_id']}"
-    ).json()["project"]["job_ids"][-1]
+    persisted_project = handlers.project_service.project_store.get_project(project["project_id"])
+    assert persisted_project is not None
+    job_id = persisted_project.job_ids[-1]
     record = handlers.service.job_store.get(job_id)
     assert record is not None
     assert record.request.metadata["require_real_images"] is True
+    assert record.request.metadata["_v3_auto_generation_intent"] == {
+        "quality_mode": "standard",
+        "metadata": {
+            "require_real_images": True,
+            "requested_image_count": 1,
+            "disable_visual_auto_retry": True,
+        },
+    }
     assert brain.requests
     assert brain.requests[0]["metadata"]["require_real_images"] is True
     assert starts == [
@@ -1064,6 +1072,43 @@ def test_v3_auto_generate_real_render_intent_reaches_project_planning(tmp_path, 
                     "disable_visual_auto_retry": True,
                 },
             },
+        )
+    ]
+
+
+def test_v3_planned_auto_generation_handoff_recovers_on_project_poll(tmp_path, monkeypatch) -> None:
+    handlers = _install_isolated_v3_handlers(tmp_path, monkeypatch)
+    client = TestClient(app)
+    project = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create one neutral real-camera image."},
+    ).json()["project"]
+    job = client.post(
+        f"/api/v3/creative-agent/projects/{project['project_id']}/jobs",
+        json={"template_id": "general_template", "user_input": "Create one neutral real-camera image."},
+    ).json()
+    record = handlers.service.job_store.get(job["job_id"])
+    assert record is not None
+    record.request.metadata["_v3_auto_generation_intent"] = {
+        "quality_mode": "standard",
+        "metadata": {"require_real_images": True, "requested_image_count": 1},
+    }
+    handlers.service.job_store.save(record)
+    recovered: list[tuple[str, str, dict]] = []
+
+    def fake_start(project_id: str, job_id: str, payload: dict) -> bool:
+        recovered.append((project_id, job_id, payload))
+        return True
+
+    monkeypatch.setattr(app_main, "_start_v3_project_generation_background", fake_start)
+    response = client.get(f"/api/v3/creative-agent/projects/{project['project_id']}")
+
+    assert response.status_code == 200
+    assert recovered == [
+        (
+            project["project_id"],
+            job["job_id"],
+            {"quality_mode": "standard", "metadata": {"require_real_images": True, "requested_image_count": 1}},
         )
     ]
 

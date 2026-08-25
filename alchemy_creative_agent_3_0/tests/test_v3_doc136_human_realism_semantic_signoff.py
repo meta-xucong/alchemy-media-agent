@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.providers import BrainPromptContractInvalid
 from alchemy_creative_agent_3_0.app.llm_brain.prompts import build_remote_payload
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import CapabilityActivationError
@@ -17,6 +18,19 @@ from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.human_pho
 )
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_provider import _inspection_prompt
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
+
+
+class _OneShotMalformedFinalizer(EcommerceRemoteBrainTestProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._malformed = True
+
+    def run(self, request):
+        if request.stage == "provider_prompt_finalize" and self._malformed:
+            self._malformed = False
+            self.requests.append(request.model_dump(mode="json"))
+            return {"canonical_provider_prompts": []}
+        return super().run(request)
 
 
 def _enforced_guidance():
@@ -120,6 +134,15 @@ def test_doc136_general_runtime_delivers_human_contract_to_remote_finalizer(monk
     assert contracts[0]["natural_presence_priority"] == "individual_human_presence"
     assert contracts[0]["aesthetic_boundary"] == "preserve_user_style_without_generic_beauty_substitution"
     assert set(contracts[0]["quality_axes"]) == set(HUMAN_REALISM_REVIEW_DIMENSIONS)
+    execution_contract = context["human_realism_execution_contract"]
+    assert execution_contract["applies"] is True
+    profile = execution_contract["universal_rendering_profile"]
+    assert profile["facial_light_priority"] == "flattering_readable_facial_planes"
+    assert profile["facial_shadow_detail"] == "open_shadow_detail_without_crushed_blacks"
+    assert profile["surface_materiality"] == "real_skin_material_with_restrained_local_highlights"
+    assert profile["individual_surface_variation"] == (
+        "nonuniform_microtexture_and_tonal_variation_across_people"
+    )
     assert "prompt_additions" not in json.dumps(context, ensure_ascii=False)
     assert "negative_additions" not in json.dumps(context, ensure_ascii=False)
     payload = json.loads(build_remote_payload(
@@ -133,10 +156,46 @@ def test_doc136_general_runtime_delivers_human_contract_to_remote_finalizer(monk
     assert "generic photorealistic" in payload_text
     assert "Do not return a verbatim copy" in payload_text
     assert "coherent camera-observed photographic instruction" in payload_text
-    assert "coordinated row of attractive portraits" in payload_text
+    assert "preserving flattering beauty" in payload_text
     assert "situation-grounded relationship" in payload_text
-    assert "uniform beauty-filter finish" in payload_text
+    assert "avoid interchangeable faces" in payload_text
     assert "camera-observed surface response" in payload_text
+    assert "distinct individuals observed in one real moment" in payload_text
+    assert "local face and material contrast at the focal plane" in payload_text
+    assert "real camera-observed skin material" in payload_text
+    assert "fine nonuniform microtexture" in payload_text
+    assert "soft highlight rolloff" in payload_text
+    assert "facial shadow detail open" in payload_text
+    assert "neutral skin color" in payload_text
+    assert "open shadow detail" in payload_text
+    assert "human_realism_execution_contract" in payload_text
+    assert "flattering_readable_facial_planes" in payload_text
+    assert "surface_materiality" in payload_text
+
+
+def test_doc136_one_shot_malformed_finalizer_uses_same_frozen_context_recovery(monkeypatch) -> None:
+    monkeypatch.setenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced")
+    provider = _OneShotMalformedFinalizer()
+    result = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider)).plan_job(
+        {
+            "user_input": "Create a natural real-camera photograph of four people in a garden.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "metadata": {"requested_image_count": 1, "require_real_images": True},
+        }
+    )
+
+    assert result.status.value == "planned"
+    finalizer_requests = [request for request in provider.requests if request["stage"] == "provider_prompt_finalize"]
+    assert len(finalizer_requests) == 2
+    assert finalizer_requests[1]["metadata"]["canonical_prompt_signoff_recovery"] == {
+        "contract_version": "v3_canonical_prompt_signoff_recovery_v1",
+        "attempt": 1,
+        "same_frozen_context": True,
+    }
+    audit = result.metadata["llm_brain"]["audit"]
+    assert audit["canonical_prompt_signoff_recovery_attempted"] is True
+    assert audit["canonical_prompt_signoff_recovery_succeeded"] is True
+    assert result.metadata["llm_brain"]["canonical_provider_prompts"]
 
 
 def test_doc136_enforced_reviewer_is_built_from_frozen_contract_not_legacy_catalog(monkeypatch) -> None:

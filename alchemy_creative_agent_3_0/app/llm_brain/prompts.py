@@ -53,7 +53,10 @@ SYSTEM_PROMPT = (
 CANONICAL_FINALIZER_SYSTEM_PROMPT = """You are the V3 Creative OS final prompt-signing brain. Return JSON only and never reveal hidden reasoning.
 Author the exact complete natural-language renderer prompt requested by the schema. The frozen render context is authoritative for protected user intent, reference-channel ownership, template/cardinality, capability obligations, and normalized review evidence. Reconcile all of it as one whole image; do not emit IDs, diagnostics, prompt fragments, checklists, local recipes, or markdown.
 The Remote Brain is the sole final prompt author. Do not replace an explicit current-request choice with an inherited reference style, age, camera, hair, wardrobe, expression, complexion, or scene unless the frozen ownership context explicitly assigns it to the reference.
+Treat every explicit current-request choice of atmosphere, palette, time of day, lighting color or direction, lens, film finish, environment, composition, and mood as protected user-owned intent. Human Realism may improve the camera-observed rendering of people and materials inside that direction, but it must not replace, brighten, cool, warm, modernize, soften, or otherwise redesign those channels. When a channel is not defined by the request, resolve it conservatively from the complete meaning; do not invent a new location, palette, lighting setup, or cinematic mood merely to demonstrate realism.
 For a visible real person, resolve identity, current developmental stage, expression, photographic material, and scene together. Keep the person age-appropriate and non-sexual. Do not turn age, expression, complexion, skin, anatomy, or beauty into a feature formula or word stack. Preserve an explicitly user-owned commercial aesthetic while keeping the person materially camera-observed and individual; a pleasant or commercial frame alone does not justify a generic presenter expression.
+When multiple visible people share the frame, preserve the user's desired beauty, appeal, facial harmony, styling, and mood as the first visual priority while authoring them as distinct individuals observed in one real moment. Let their attention, timing, posture, expression, facial character, and light-dependent surface response differ naturally with the situation, without making faces interchangeable, retouching uniform, or skin artificially plastic. Keep the beauty direction flattering and coherent across the group; realism should add camera-observed material detail and presence, not make the people less attractive. Do not equate realism with dullness, harshness, fatigue, roughness, or deliberately imperfect facial features: preserve balanced attractive features, healthy complexion, and expressive eyes. If realism and texture compete with beauty, reduce the texture intervention before reducing facial appeal. Resolve skin as natural human material with restrained local highlights and soft highlight rolloff, preserving fine nonuniform texture without oily sheen or waxy gloss. Keep each face readable through scene-consistent reflected or ambient fill from the existing light, without replacing directional light with flat frontal studio fill. Preserve the prompt's light direction, color, mood, and contrast; keep facial shadow detail open without lifting the whole scene, and keep highlight rolloff physically coherent with the background and hair rim light. If warm backlight, retro color, soft focus, diffusion, or halation is requested, balance those effects against neutral skin color, gentle highlight transitions, and open shadow detail rather than intensifying amber saturation or contrast. When soft focus, diffusion, or halation is requested, keep it an optical property of the scene and highlights while retaining local face and material contrast at the focal plane.
+When improving human rendering inside an already specified scene, do not add new environmental facts, props, background landmarks, weather, time-of-day changes, palette changes, or alternate lighting setups. Make the smallest semantic improvement needed to the people and their interaction while leaving the complete scene direction intact.
 For an age-sensitive or otherwise safety-sensitive person reference, keep the renderer direction concise, plainly age-appropriate, fully clothed, and ordinary. Preserve the requested identity, developmental stage, clothing, scene, and factual capture requirements, but express realism as a positive whole-image camera observation such as natural matte skin and an ordinary expression. Do not repeat contrastive safety wording, microscopic skin or anatomy language, body-development descriptions, or lists of forbidden adult traits in the renderer prompt. This is a provider-admission safeguard, not a refusal and not permission to omit a protected user fact.
 Return every required audit receipt in the response schema. A receipt is proof of your semantic decision, never extra renderer wording. On retry, use normalized review evidence to rewrite the whole direction yourself rather than appending a local repair phrase."""
 
@@ -485,6 +488,10 @@ def _compact_human_realism_execution_contract(shared_capabilities: dict[str, obj
                 "skin_specularity",
                 "skin_texture",
                 "scene_photographic_coherence",
+                "facial_light_priority",
+                "facial_shadow_detail",
+                "surface_materiality",
+                "individual_surface_variation",
             )
             if profile.get(key) is not None
         },
@@ -1384,12 +1391,36 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         )
         response_contract += (
             " When more than one visible person is part of the complete image, author the shared moment as one "
-            "real camera observation rather than a coordinated row of attractive portraits: give each person a "
-            "distinct situation-grounded relationship to the action or to another person, with coherent differences "
-            "in attention, posture, timing, and presence. Keep those differences subordinate to the user's scene and "
-            "mood, and never turn them into a checklist or fixed pose recipe. Let the same scene light reveal each "
-            "person's own camera-observed surface response and small tonal variation; do not apply one uniform "
-            "beauty-filter finish, identical skin treatment, or identical polished facial presentation to the group."
+            "real camera observation while preserving flattering beauty, facial harmony, coherent styling, and the "
+            "user's requested mood: make them distinct individuals observed in one real moment, giving each person a distinct situation-grounded relationship "
+            "to the action or to another person, with coherent differences in attention, posture, timing, and presence. "
+            "Keep those differences subordinate to the user's scene and mood, and never turn them into a checklist or "
+            "fixed pose recipe. Let the same scene light reveal each person's own camera-observed surface response and "
+            "small tonal variation; avoid interchangeable faces, uniform retouching, and plastic skin without reducing "
+            "attractiveness or polish. Do not trade beauty for texture: preserve balanced attractive features, healthy "
+            "complexion, expressive eyes, and an appealing presence; if realism and texture compete with beauty, reduce "
+            "the texture intervention first. Use real camera-observed skin material with fine nonuniform microtexture, subtle "
+            "tonal variation, restrained local highlights, and soft highlight rolloff; when translucency is requested, "
+            "treat it as subtle light transmission through living skin, never as glass, wax, or surface gloss. Do not let "
+            "a polished finish become a smooth painted surface or a face-wide beauty filter. Keep texture quiet and optically integrated at the "
+            "focal plane rather than sharpened, airbrushed, or repeated as a pattern. Keep each face readable through "
+            "scene-consistent reflected or ambient fill from the "
+            "existing light, without flattening the directional light or changing its color and mood. Keep facial shadow "
+            "detail open without lifting the whole scene, and keep highlight rolloff coherent with the background and hair "
+            "rim light, with bright facial planes protected from clipped white or metallic-looking sheen. Do not add new "
+            "environmental facts or an alternate lighting setup; do not create oily sheen, "
+            "waxy gloss, excessive global contrast, gray shadows, "
+            "or crushed blacks. When warm backlight, retro color, soft focus, diffusion, or halation is requested, "
+            "balance those effects against neutral skin color, gentle highlight transitions, and open shadow detail "
+            "instead of intensifying amber saturation or contrast. Keep local face and material contrast at the focal "
+            "plane when soft focus, diffusion, or halation is requested."
+        )
+        response_contract += (
+            " When frozen_render_context.human_realism_execution_contract is present and applies, use its typed "
+            "semantic contract and universal rendering profile as a binding whole-image quality decision: keep the "
+            "faces readable in the requested scene light, preserve facial shadow detail, and keep surface response "
+            "natural and restrained, with natural person-to-person variation rather than uniform retouching, while preserving the user's mood and beauty direction. Resolve that decision in "
+            "the complete prompt you author; do not copy the profile keys or turn it into a checklist."
         )
         response_contract += (
             " For every output, silently complete the required whole-image "
@@ -1706,6 +1737,18 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "semantic source. Every canonical prompt must preserve its complete meaning, and every item must include "
             "user_direction_integrity with contract_version v3_user_direction_integrity_v1, owner "
             "remote_v3_llm_brain, and status preserved or rewritten."
+        )
+    signoff_recovery = request.metadata.get("canonical_prompt_signoff_recovery")
+    if isinstance(signoff_recovery, dict):
+        payload["canonical_prompt_signoff_recovery"] = {
+            "contract_version": str(signoff_recovery.get("contract_version") or ""),
+            "attempt": int(signoff_recovery.get("attempt") or 0),
+            "same_frozen_context": bool(signoff_recovery.get("same_frozen_context")),
+        }
+        payload["remote_response_contract"] = (
+            f"{payload['remote_response_contract']} This is one bounded complete re-answer for the same frozen "
+            "context after the previous response failed schema validation. Return the exact full JSON schema again; "
+            "do not return a patch, explanation, fallback direction, or local repair text."
         )
     if body_slot_delta_finalization:
         payload["professional_body_silhouette_source_contract"] = body_source_contract or {
