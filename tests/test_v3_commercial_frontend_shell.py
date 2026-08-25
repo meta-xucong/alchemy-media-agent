@@ -364,6 +364,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "mobileV3DisplayOutputsForProject" in mobile_script.text
     assert "mobileV3ProcessOutputsForProject" in mobile_script.text
     assert "function mobileV3CanonicalFinalDelivery" in mobile_script.text
+    assert "function mobileV3DedupeOutputItems" in mobile_script.text
+    assert "return mobileV3DedupeOutputItems(outputs).filter((item) => mobileV3CanonicalFinalDelivery(item));" in mobile_script.text
     assert "function mobileV3JobDeliveryWithheld" in mobile_script.text
     assert "function mobileV3RecoveryAttemptLimitForServerWatchdog" in mobile_script.text
     assert "recoveryAttemptLimit = Math.max(" in mobile_script.text
@@ -573,8 +575,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3ProjectImageGroups" in script.text
     assert "function v3HistoryOutputVisible" in script.text
     assert "function v3OutputDeliveryState" in script.text
+    assert "function v3DedupeOutputItems" in script.text
     assert "function v3DeliveryDisplayItems" in script.text
     assert 'v3OutputDeliveryState(item) !== "final_delivery"' in script.text
+    assert "const list = v3DedupeOutputItems(items);" in script.text
     assert "const finals = list.filter((item) => v3CanonicalFinalDelivery(item));" in script.text
     assert "function openV3ProjectHistoryModal" in script.text
     assert "function renderV3ProjectHistoryGrid" in script.text

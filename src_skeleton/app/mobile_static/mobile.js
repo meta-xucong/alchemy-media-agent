@@ -6224,9 +6224,20 @@ function mobileV3ReviewOnlyJobImageItems(job = mobileV3State.currentJob) {
   });
 }
 
+function mobileV3DedupeOutputItems(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const identity = String(mobileV3OutputId(item) || "").trim();
+    if (!identity) return true;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 function mobileV3FinalOutputsForProject(projectId) {
   const outputs = mobileV3OutputsForProject(projectId);
-  return outputs.filter((item) => mobileV3CanonicalFinalDelivery(item));
+  return mobileV3DedupeOutputItems(outputs).filter((item) => mobileV3CanonicalFinalDelivery(item));
 }
 
 function mobileV3ExpectedImageCountForJob(job = mobileV3State.currentJob, explicitCount = null) {
@@ -6417,7 +6428,7 @@ function mobileV3ShortText(value, limit = 36) {
 }
 
 function mobileV3OutputId(item) {
-  return item?.output_id || item?.id || item?.asset_id || item?.candidate_id || "";
+  return item?.output_id || item?.metadata?.output_id || item?.id || item?.asset_id || item?.candidate_id || "";
 }
 
 function mobileV3ProjectOutputStateMap(project = mobileV3State.currentProject) {

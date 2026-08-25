@@ -4332,8 +4332,19 @@ function v3OutputDeliveryState(item) {
   return String(state || "final_delivery").trim() || "final_delivery";
 }
 
+function v3DedupeOutputItems(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const identity = String(v3OutputItemIdentity(item) || "").trim();
+    if (!identity) return true;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 function v3DeliveryDisplayItems(items) {
-  const list = Array.isArray(items) ? items : [];
+  const list = v3DedupeOutputItems(items);
   const finals = list.filter((item) => v3CanonicalFinalDelivery(item));
   return finals;
 }
