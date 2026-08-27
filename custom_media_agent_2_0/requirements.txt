@@ -1,9 +1,11 @@
 fastapi>=0.115,<0.116
 uvicorn[standard]>=0.30
 pydantic>=2.8
-httpx>=0.28.0
+httpx>=0.28.0,<0.29
 httpcore>=1.0.0,<2
-openai-agents>=0.17.4
+openai-agents>=0.17.4,<0.18
+openai>=2.36.0,<3
+mcp>=1.19.0,<2
 Pillow>=10.4
 opencv-python-headless>=4.10,<5
 qrcode>=7.4,<9
