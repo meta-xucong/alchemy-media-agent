@@ -102,9 +102,10 @@ cp -p "${live_env}" "${candidate}/src_skeleton/.env"
 for release in "${old_release}" "${candidate}"; do
   v2_dir="${release}/custom_media_agent_2_0"
   v2_python="${v2_dir}/.venv/bin/python"
-  [[ -f "${v2_dir}/requirements.txt" ]] || { echo "V2 requirements missing: ${release}" >&2; exit 1; }
+  runtime_requirements="${candidate}/custom_media_agent_2_0/requirements.txt"
+  [[ -f "${runtime_requirements}" ]] || { echo "V2 requirements missing: ${runtime_requirements}" >&2; exit 1; }
   [[ -x "${v2_python}" ]] || python3 -m venv "${v2_dir}/.venv"
-  "${v2_python}" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "${v2_dir}/requirements.txt"
+  "${v2_python}" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "${runtime_requirements}"
   "${v2_python}" -m pip check
   (cd "${v2_dir}" && "${v2_python}" -c 'import app.main; import httpx, httpcore')
 done
