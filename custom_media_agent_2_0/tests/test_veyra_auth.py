@@ -28,7 +28,7 @@ from app.services.veyra_auth import (
 
 def test_veyra_transport_dependency_is_declared() -> None:
     requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
-    assert "httpcore>=1.0.0,<2" in requirements
+    assert "httpcore==1.0.9" in requirements
 
 
 def test_veyra_client_fails_closed_when_disabled() -> None:

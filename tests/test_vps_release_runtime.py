@@ -97,8 +97,8 @@ def test_both_image_dependency_manifests_declare_httpcore() -> None:
     root = Path(__file__).parents[1]
     assert "httpcore>=1.0.0,<2" in (root / "src_skeleton" / "requirements.txt").read_text(encoding="utf-8")
     v2_requirements = (root / "custom_media_agent_2_0" / "requirements.txt").read_text(encoding="utf-8")
-    assert "httpcore>=1.0.0,<2" in v2_requirements
-    assert "httpx>=0.28.0,<0.29" in v2_requirements
-    assert "openai-agents>=0.17.4,<0.18" in v2_requirements
-    assert "openai>=2.36.0,<3" in v2_requirements
-    assert "mcp>=1.19.0,<2" in v2_requirements
+    assert "httpcore==1.0.9" in v2_requirements
+    assert "httpx==0.28.1" in v2_requirements
+    assert "openai-agents==0.17.4" in v2_requirements
+    assert "openai==2.41.0" in v2_requirements
+    assert "mcp==1.27.2" in v2_requirements
