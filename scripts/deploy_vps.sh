@@ -357,7 +357,7 @@ ensure_v2_runtime() {
   fi
   "${V2_DIR}/.venv/bin/python" -m pip install --upgrade pip
   "${V2_DIR}/.venv/bin/python" -m pip install -r "${V2_DIR}/requirements.txt"
-  "${V2_DIR}/.venv/bin/python" -c 'import app.main; import httpx, httpcore'
+  (cd "${V2_DIR}" && "${V2_DIR}/.venv/bin/python" -c 'import app.main; import httpx, httpcore')
   python3 "${DEPLOY_DIR}/ops/vps-release/v2_runtime_guard.py" --release "${DEPLOY_DIR}" --write-manifest
   python3 "${DEPLOY_DIR}/ops/vps-release/v2_runtime_guard.py" --release "${DEPLOY_DIR}" --verify
 

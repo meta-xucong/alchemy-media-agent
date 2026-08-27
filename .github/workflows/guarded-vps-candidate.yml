@@ -155,7 +155,7 @@ jobs:
             fi
             "$v2_python" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "$v2_dir/requirements.txt" >/dev/null || stop candidate_v2_requirements_install_failed
             "$v2_python" -m pip check >/dev/null || stop candidate_v2_pip_check_failed
-            "$v2_python" -c 'import app.main; import httpx, httpcore' || stop candidate_v2_import_failed
+            (cd "$v2_dir" && "$v2_python" -c 'import app.main; import httpx, httpcore') || stop candidate_v2_import_failed
             python3 "$guard" --release "$candidate_release" --write-manifest || stop candidate_v2_manifest_failed
             if id alchemy >/dev/null 2>&1; then
               chown -R alchemy:alchemy "$v2_dir/.venv" "$v2_dir/.alchemy-v2-runtime.json"

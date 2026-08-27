@@ -60,7 +60,7 @@ fi
 "${venv_python}" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "${v2_dir}/requirements.txt"
 "${venv_python}" -m pip check
 run_as_root chown -R "${runtime_user}:${runtime_user}" "${v2_dir}/.venv"
-"${venv_python}" -c 'import app.main; import httpx, httpcore'
+(cd "${v2_dir}" && "${venv_python}" -c 'import app.main; import httpx, httpcore')
 run_as_root python3 "${guard_source}" --release "${release}" --write-manifest
 run_as_root chown "${runtime_user}:${runtime_user}" "${v2_dir}/.alchemy-v2-runtime.json"
 run_as_root python3 "${guard_source}" --release "${release}" --verify

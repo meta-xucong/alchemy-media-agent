@@ -106,7 +106,7 @@ for release in "${old_release}" "${candidate}"; do
   [[ -x "${v2_python}" ]] || python3 -m venv "${v2_dir}/.venv"
   "${v2_python}" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "${v2_dir}/requirements.txt"
   "${v2_python}" -m pip check
-  "${v2_python}" -c 'import app.main; import httpx, httpcore'
+  (cd "${v2_dir}" && "${v2_python}" -c 'import app.main; import httpx, httpcore')
 done
 
 install -d -m 755 /usr/local/lib/alchemy

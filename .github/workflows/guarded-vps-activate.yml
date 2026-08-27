@@ -169,7 +169,7 @@ jobs:
             fi
             "$v2_python" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "$v2_dir/requirements.txt" >/dev/null || return 1
             "$v2_python" -m pip check >/dev/null || return 1
-            "$v2_python" -c 'import app.main; import httpx, httpcore' || return 1
+            (cd "$v2_dir" && "$v2_python" -c 'import app.main; import httpx, httpcore') || return 1
             python3 "$guard" --release "$release" --write-manifest || return 1
             if id alchemy >/dev/null 2>&1; then
               chown -R alchemy:alchemy "$v2_dir/.venv" "$v2_dir/.alchemy-v2-runtime.json" || return 1
