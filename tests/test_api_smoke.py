@@ -2586,7 +2586,7 @@ def test_v1_frontend_generation_success_is_not_overridden_by_refresh_failures():
         assert "finishSimpleProgress(\"v1\", \"generating\", message, \"warning\")" in text
 
 
-def test_veyra_ui_gate_enters_return_router_before_login():
+def test_veyra_ui_gate_redirects_to_login_with_return_target():
     original_auth_enabled = settings.veyra_auth_enabled
     original_require_ui_auth = settings.veyra_require_ui_auth
     original_login_base_url = settings.veyra_login_base_url
@@ -2599,11 +2599,9 @@ def test_veyra_ui_gate_enters_return_router_before_login():
         mobile = client.get("/h5", follow_redirects=False)
 
         assert desktop.status_code == 307
-        assert desktop.headers["location"] == "https://aiself.vip/_veyra/return?target=alchemy"
-        assert "/login?" not in desktop.headers["location"]
+        assert desktop.headers["location"] == "https://aiself.vip/login?redirect=%2F_veyra%2Freturn%3Ftarget%3Dalchemy"
         assert mobile.status_code == 307
-        assert mobile.headers["location"] == "https://aiself.vip/_veyra/return?target=alchemy-mobile"
-        assert "/login?" not in mobile.headers["location"]
+        assert mobile.headers["location"] == "https://aiself.vip/login?redirect=%2F_veyra%2Freturn%3Ftarget%3Dalchemy-mobile"
     finally:
         settings.veyra_auth_enabled = original_auth_enabled
         settings.veyra_require_ui_auth = original_require_ui_auth

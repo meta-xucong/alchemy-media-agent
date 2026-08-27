@@ -2,6 +2,7 @@ fastapi>=0.115,<0.116
 uvicorn[standard]>=0.30
 pydantic>=2.8
 httpx>=0.28.0
+httpcore>=1.0.0,<2
 openai-agents>=0.17.4
 Pillow>=10.4
 opencv-python-headless>=4.10,<5

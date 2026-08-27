@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import pytest
 import httpx
 from fastapi.testclient import TestClient
@@ -23,6 +24,11 @@ from app.services.veyra_auth import (
     issue_session_token,
     verify_session_token,
 )
+
+
+def test_veyra_transport_dependency_is_declared() -> None:
+    requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
+    assert "httpcore>=1.0.0,<2" in requirements
 
 
 def test_veyra_client_fails_closed_when_disabled() -> None:
