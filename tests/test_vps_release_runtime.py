@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+import sys
+
+import pytest
+
+
+_MODULE_PATH = Path(__file__).parents[1] / "ops" / "vps-release" / "v2_runtime_guard.py"
+_SPEC = importlib.util.spec_from_file_location("v2_runtime_guard", _MODULE_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+_MODULE = importlib.util.module_from_spec(_SPEC)
+sys.modules[_SPEC.name] = _MODULE
+_SPEC.loader.exec_module(_MODULE)
+RuntimeGuardError = _MODULE.RuntimeGuardError
+build_manifest = _MODULE.build_manifest
+runtime_paths = _MODULE.runtime_paths
+validate_manifest = _MODULE.validate_manifest
+
+
+def _prepared_release(tmp_path: Path) -> tuple[Path, object]:
+    release = tmp_path / "release"
+    v2_root = release / "custom_media_agent_2_0"
+    (v2_root / ".venv" / "bin").mkdir(parents=True)
+    (v2_root / ".venv" / "bin" / "python").write_bytes(b"python")
+    (v2_root / "requirements.txt").write_text("httpx>=0.28.0\nhttpcore>=1.0.0,<2\n", encoding="utf-8")
+    return release, runtime_paths(release)
+
+
+def test_v2_runtime_manifest_binds_exact_requirements(tmp_path: Path) -> None:
+    release, paths = _prepared_release(tmp_path)
+    manifest = build_manifest(paths)
+
+    validate_manifest(paths, manifest)
+    assert manifest["schema_version"] == 1
+    assert manifest["venv_python"] == str(paths.python)
+
+    paths.requirements.write_text("httpx>=0.28.0\nhttpcore>=1.0.0,<2\nPillow>=10.4\n", encoding="utf-8")
+    with pytest.raises(RuntimeGuardError, match="requirements"):
+        validate_manifest(paths, manifest)
+
+
+def test_v2_runtime_manifest_rejects_wrong_release_python(tmp_path: Path) -> None:
+    release, paths = _prepared_release(tmp_path)
+    manifest = build_manifest(paths)
+    tampered = {**manifest, "venv_python": str(release / "other" / "bin" / "python")}
+
+    with pytest.raises(RuntimeGuardError, match="different release"):
+        validate_manifest(paths, tampered)
+
+
+def test_systemd_templates_are_active_release_bound_and_guarded() -> None:
+    root = Path(__file__).parents[1] / "custom_media_agent_2_0" / "deploy" / "systemd"
+    for unit in ("alchemy-v2-api.service", "alchemy-v2-worker.service", "alchemy-v2-sync-worker.service"):
+        text = (root / unit).read_text(encoding="utf-8")
+        assert "__ALCHEMY_RELEASE_LINK__" in text
+        assert "ExecStartPre=/usr/bin/python3 /usr/local/lib/alchemy/v2_runtime_guard.py" in text
+        assert ".venv/bin/python" in text
+
+
+def test_runtime_manifest_is_ignored_inside_v2_release() -> None:
+    ignore = (Path(__file__).parents[1] / "custom_media_agent_2_0" / ".gitignore").read_text(encoding="utf-8")
+    assert ".alchemy-v2-runtime.json" in ignore
+
+
+def test_deploy_paths_prepare_release_bound_runtime() -> None:
+    root = Path(__file__).parents[1]
+    deploy = (root / "scripts" / "deploy_vps.sh").read_text(encoding="utf-8")
+    candidate = (root / ".github" / "workflows" / "guarded-vps-candidate.yml").read_text(encoding="utf-8")
+    activate = (root / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
+
+    assert "vps_prepare_v2_runtime.sh" in deploy
+    assert "prepare_v2_runtime()" in candidate
+    assert "python3 -m venv" in candidate
+    assert "--write-manifest" in candidate
+    assert "prepare_v2_runtime_for_release" in activate
+    assert "install_v2_unit_contract" in activate
+    assert "--verify" in activate
+
+
+def test_runtime_guard_requires_bridge_transport_import() -> None:
+    guard = (Path(__file__).parents[1] / "ops" / "vps-release" / "v2_runtime_guard.py").read_text(encoding="utf-8")
+    assert "import app.main; import httpx, httpcore" in guard
+
+
+def test_both_image_dependency_manifests_declare_httpcore() -> None:
+    root = Path(__file__).parents[1]
+    assert "httpcore>=1.0.0,<2" in (root / "src_skeleton" / "requirements.txt").read_text(encoding="utf-8")
+    assert "httpcore>=1.0.0,<2" in (root / "custom_media_agent_2_0" / "requirements.txt").read_text(encoding="utf-8")

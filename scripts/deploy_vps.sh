@@ -334,6 +334,15 @@ ensure_v2_runtime() {
     return
   fi
 
+  if [[ "${LOCAL_MODE}" != "1" && -f "${DEPLOY_DIR}/scripts/vps_prepare_v2_runtime.sh" ]]; then
+    bash "${DEPLOY_DIR}/scripts/vps_prepare_v2_runtime.sh" \
+      --release "${DEPLOY_DIR}" \
+      --release-link "${DEPLOY_DIR}" \
+      --runtime-user alchemy \
+      --install-systemd
+    return
+  fi
+
   if ! ensure_command python3; then
     if ! ensure_command apt-get; then
       echo "python3 is required to prepare the V2 runtime." >&2
@@ -348,6 +357,9 @@ ensure_v2_runtime() {
   fi
   "${V2_DIR}/.venv/bin/python" -m pip install --upgrade pip
   "${V2_DIR}/.venv/bin/python" -m pip install -r "${V2_DIR}/requirements.txt"
+  "${V2_DIR}/.venv/bin/python" -c 'import app.main; import httpx, httpcore'
+  python3 "${DEPLOY_DIR}/ops/vps-release/v2_runtime_guard.py" --release "${DEPLOY_DIR}" --write-manifest
+  python3 "${DEPLOY_DIR}/ops/vps-release/v2_runtime_guard.py" --release "${DEPLOY_DIR}" --verify
 
   if id alchemy >/dev/null 2>&1; then
     run_as_root chown -R alchemy:alchemy "${V2_DIR}/.venv"

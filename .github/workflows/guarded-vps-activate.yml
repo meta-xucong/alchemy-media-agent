@@ -157,6 +157,53 @@ jobs:
             )
           }
 
+          prepare_v2_runtime_for_release() {
+            local release="$1"
+            local guard="$2"
+            local v2_dir="$release/custom_media_agent_2_0"
+            local v2_python="$v2_dir/.venv/bin/python"
+            [ -f "$v2_dir/requirements.txt" ] || return 1
+            [ -f "$guard" ] || return 1
+            if [ ! -x "$v2_python" ]; then
+              python3 -m venv "$v2_dir/.venv" || return 1
+            fi
+            "$v2_python" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "$v2_dir/requirements.txt" >/dev/null || return 1
+            "$v2_python" -m pip check >/dev/null || return 1
+            "$v2_python" -c 'import app.main; import httpx, httpcore' || return 1
+            python3 "$guard" --release "$release" --write-manifest || return 1
+            if id alchemy >/dev/null 2>&1; then
+              chown -R alchemy:alchemy "$v2_dir/.venv" "$v2_dir/.alchemy-v2-runtime.json" || return 1
+            fi
+            python3 "$guard" --release "$release" --verify
+          }
+
+          install_v2_unit_contract() {
+            local guard_source="$candidate_release/ops/vps-release/v2_runtime_guard.py"
+            local install_root=/usr/local/lib/alchemy
+            [ -f "$guard_source" ] || return 1
+            install -d -m 755 "$install_root"
+            install -m 755 "$guard_source" "$install_root/v2_runtime_guard.py"
+            for unit in "${v2_units[@]}"; do
+              local template="$candidate_release/custom_media_agent_2_0/deploy/systemd/$unit"
+              local temporary_unit
+              [ -f "$template" ] || return 1
+              temporary_unit="$(mktemp)"
+              sed "s|__ALCHEMY_RELEASE_LINK__|$deploy_link|g" "$template" > "$temporary_unit" || { rm -f "$temporary_unit"; return 1; }
+              install -m 644 "$temporary_unit" "/etc/systemd/system/$unit" || { rm -f "$temporary_unit"; return 1; }
+              rm -f "$temporary_unit"
+            done
+            systemctl daemon-reload
+          }
+
+          verify_v2_unit_contract() {
+            local unit
+            for unit in "${v2_units[@]}"; do
+              systemctl cat "$unit" | grep -F "WorkingDirectory=$deploy_link/custom_media_agent_2_0" >/dev/null || return 1
+              systemctl cat "$unit" | grep -F "ExecStartPre=/usr/bin/python3 /usr/local/lib/alchemy/v2_runtime_guard.py --release $deploy_link --verify" >/dev/null || return 1
+              systemctl cat "$unit" | grep -F "ExecStart=$deploy_link/custom_media_agent_2_0/.venv/bin/python" >/dev/null || return 1
+            done
+          }
+
           atomic_repoint() {
             local target="$1"
             local label="$2"
@@ -250,11 +297,15 @@ jobs:
           [ "$old_env" = "$old_release/src_skeleton/.env" ] || stop_pre old_env_not_active_release_bind
           [ -f "$candidate_release/src_skeleton/.env" ] || stop_pre candidate_env_missing
           grep -Fxq 'V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=true' "$candidate_release/src_skeleton/.env" || stop_pre candidate_face_gate_missing
-          [ -d "$candidate_release/custom_media_agent_2_0/.venv" ] || stop_pre candidate_v2_venv_missing
           [ -d "$candidate_release/custom_media_agent_2_0/.v2_data" ] || stop_pre candidate_v2_data_missing
+          [ -f "$candidate_release/custom_media_agent_2_0/requirements.txt" ] || stop_pre candidate_v2_requirements_missing
           require_v2 || stop_pre v2_units_not_active
           before_digest="$(state_digest "$v1_media")" || stop_pre historical_state_digest_unreadable
           [ "$(pending_planning_operation_count "$v1_media")" = 0 ] || stop_pre pending_planning_operations_require_separate_recovery
+          prepare_v2_runtime_for_release "$old_release" "$candidate_release/ops/vps-release/v2_runtime_guard.py" || stop_pre old_v2_runtime_prepare_failed
+          prepare_v2_runtime_for_release "$candidate_release" "$candidate_release/ops/vps-release/v2_runtime_guard.py" || stop_pre candidate_v2_runtime_prepare_failed
+          install_v2_unit_contract || stop_pre v2_unit_contract_install_failed
+          verify_v2_unit_contract || stop_pre v2_unit_contract_invalid
 
           atomic_repoint "$candidate_release" candidate || stop_pre candidate_link_switch_failed
           remove_v1 || fail_post candidate_container_remove_failed
@@ -266,6 +317,8 @@ jobs:
           [ "$(realpath "$deploy_link")" = "$candidate_release" ] || fail_post active_release_mismatch
           [ "$(git -C "$(realpath "$deploy_link")" rev-parse HEAD)" = "$expected_sha" ] || fail_post active_head_mismatch
           [ "$(read_mount /app/.env)" = "$candidate_release/src_skeleton/.env" ] || fail_post candidate_env_not_bound
+          python3 "$candidate_release/ops/vps-release/v2_runtime_guard.py" --release "$candidate_release" --verify || fail_post active_v2_runtime_guard_failed
+          verify_v2_unit_contract || fail_post active_v2_unit_contract_invalid
           docker exec "$v1_container" grep -Fq 'review_withheld_face_integrity' /app/app/static/app.js || fail_post desktop_face_review_marker_missing
           docker exec "$v1_container" grep -Fq 'review_withheld_face_integrity' /app/app/mobile_static/mobile.js || fail_post mobile_face_review_marker_missing
           docker exec "$v1_container" python -c 'from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService; assert V3ProductApiService._doc276_face_integrity_delivery_enabled()' || fail_post face_gate_not_enabled

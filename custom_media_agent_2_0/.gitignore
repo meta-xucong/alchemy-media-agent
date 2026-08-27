@@ -2,6 +2,7 @@
 .env
 .v2_data/
 .v2_storage/
+.alchemy-v2-runtime.json
 __pycache__/
 .pytest_cache/
 *.pyc

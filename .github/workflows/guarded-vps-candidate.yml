@@ -144,6 +144,25 @@ jobs:
             [ "$(stat -c '%a:%U:%G' "$env_file")" = "$env_metadata" ] || stop candidate_env_metadata_changed
           }
 
+          prepare_v2_runtime() {
+            local v2_dir="$candidate_release/custom_media_agent_2_0"
+            local v2_python="$v2_dir/.venv/bin/python"
+            local guard="$candidate_release/ops/vps-release/v2_runtime_guard.py"
+            [ -f "$v2_dir/requirements.txt" ] || stop candidate_v2_requirements_missing
+            [ -f "$guard" ] || stop candidate_v2_runtime_guard_missing
+            if [ ! -x "$v2_python" ]; then
+              python3 -m venv "$v2_dir/.venv" || stop candidate_v2_venv_create_failed
+            fi
+            "$v2_python" -m pip install --disable-pip-version-check --no-input --upgrade-strategy only-if-needed -r "$v2_dir/requirements.txt" >/dev/null || stop candidate_v2_requirements_install_failed
+            "$v2_python" -m pip check >/dev/null || stop candidate_v2_pip_check_failed
+            "$v2_python" -c 'import app.main; import httpx, httpcore' || stop candidate_v2_import_failed
+            python3 "$guard" --release "$candidate_release" --write-manifest || stop candidate_v2_manifest_failed
+            if id alchemy >/dev/null 2>&1; then
+              chown -R alchemy:alchemy "$v2_dir/.venv" "$v2_dir/.alchemy-v2-runtime.json"
+            fi
+            python3 "$guard" --release "$candidate_release" --verify || stop candidate_v2_runtime_guard_failed
+          }
+
           [ -L "$deploy_link" ] || stop deployment_link_missing
           active_release="$(realpath "$deploy_link")"
           [ -e "$active_release/.git" ] || stop active_release_not_git_worktree
@@ -184,7 +203,7 @@ jobs:
           fi
           configure_candidate_env
 
-          for runtime_entry in .venv .v2_data; do
+          for runtime_entry in .v2_data; do
             source_path="$active_release/custom_media_agent_2_0/$runtime_entry"
             target_path="$candidate_release/custom_media_agent_2_0/$runtime_entry"
             [ -d "$source_path" ] || stop "active_v2_${runtime_entry#\.}_missing"
@@ -193,6 +212,7 @@ jobs:
             fi
             [ -d "$target_path" ] || stop "candidate_v2_${runtime_entry#\.}_missing"
           done
+          prepare_v2_runtime
 
           compose_candidate build alchemy-media-agent >/dev/null
           docker run --rm \
