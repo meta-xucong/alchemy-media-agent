@@ -85,6 +85,7 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "__ALCHEMY_RELEASE_LINK__" in migration
     assert "compose_cmd=(docker compose)" in migration
     assert "compose_cmd=(docker-compose)" in migration
+    assert 'units_installed=1' in migration
     assert "VPS_ALCHEMY_SUB2API=untouched" in migration
     assert 'runtime_requirements="${candidate}/custom_media_agent_2_0/requirements.txt"' in migration
 

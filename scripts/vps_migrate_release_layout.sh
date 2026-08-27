@@ -128,6 +128,7 @@ docker build -t alchemy-media-agent:latest -f "${candidate}/src_skeleton/Dockerf
 
 ln -sfn "${candidate}" "${DEPLOY_LINK}"
 switched=1
+units_installed=1
 for unit in "${V2_UNITS[@]}"; do
   template="${candidate}/custom_media_agent_2_0/deploy/systemd/${unit}"
   rendered="$(mktemp)"
@@ -135,7 +136,6 @@ for unit in "${V2_UNITS[@]}"; do
   install -m 644 "${rendered}" "/etc/systemd/system/${unit}"
   rm -f "${rendered}"
 done
-units_installed=1
 systemctl daemon-reload
 
 docker rm -f "${V1_CONTAINER}" >/dev/null 2>&1 || true
