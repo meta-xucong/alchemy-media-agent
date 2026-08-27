@@ -97,7 +97,12 @@ def test_runtime_guard_requires_bridge_transport_import() -> None:
 
 def test_both_image_dependency_manifests_declare_httpcore() -> None:
     root = Path(__file__).parents[1]
-    assert "httpcore>=1.0.0,<2" in (root / "src_skeleton" / "requirements.txt").read_text(encoding="utf-8")
+    v1_requirements = (root / "src_skeleton" / "requirements.txt").read_text(encoding="utf-8")
+    assert "httpcore==1.0.9" in v1_requirements
+    assert "httpx==0.28.1" in v1_requirements
+    assert "openai==2.53.0" in v1_requirements
+    assert "openai-agents==0.20.0" in v1_requirements
+    assert "mcp==2.0.0" in v1_requirements
     v2_requirements = (root / "custom_media_agent_2_0" / "requirements.txt").read_text(encoding="utf-8")
     assert "httpcore==1.0.9" in v2_requirements
     assert "httpx==0.28.1" in v2_requirements
