@@ -74,9 +74,18 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert "prepare_v2_runtime()" in candidate
     assert "python3 -m venv" in candidate
     assert "--write-manifest" in candidate
+    assert "for runtime_entry in .v2_data .v2_storage; do" in candidate
+    assert "candidate_v2_data_missing" not in activate
     assert "prepare_v2_runtime_for_release" in activate
     assert "install_v2_unit_contract" in activate
     assert "--verify" in activate
+    migration = (root / "scripts" / "vps_migrate_release_layout.sh").read_text(encoding="utf-8")
+    assert "git -C \"${REPOSITORY_ROOT}\" worktree add --detach" in migration
+    assert "v2_runtime_guard.py" in migration
+    assert "__ALCHEMY_RELEASE_LINK__" in migration
+    assert "compose_cmd=(docker compose)" in migration
+    assert "compose_cmd=(docker-compose)" in migration
+    assert "VPS_ALCHEMY_SUB2API=untouched" in migration
 
 
 def test_runtime_guard_requires_bridge_transport_import() -> None:

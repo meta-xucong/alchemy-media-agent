@@ -203,14 +203,16 @@ jobs:
           fi
           configure_candidate_env
 
-          for runtime_entry in .v2_data; do
+          for runtime_entry in .v2_data .v2_storage; do
             source_path="$active_release/custom_media_agent_2_0/$runtime_entry"
             target_path="$candidate_release/custom_media_agent_2_0/$runtime_entry"
-            [ -d "$source_path" ] || stop "active_v2_${runtime_entry#\.}_missing"
+            if [ ! -e "$source_path" ]; then
+              continue
+            fi
             if [ ! -e "$target_path" ]; then
               cp -a -- "$source_path" "$target_path"
             fi
-            [ -d "$target_path" ] || stop "candidate_v2_${runtime_entry#\.}_missing"
+            [ -e "$target_path" ] || stop "candidate_v2_${runtime_entry#\.}_copy_failed"
           done
           prepare_v2_runtime
 

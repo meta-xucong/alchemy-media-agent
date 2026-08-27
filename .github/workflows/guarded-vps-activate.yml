@@ -297,7 +297,6 @@ jobs:
           [ "$old_env" = "$old_release/src_skeleton/.env" ] || stop_pre old_env_not_active_release_bind
           [ -f "$candidate_release/src_skeleton/.env" ] || stop_pre candidate_env_missing
           grep -Fxq 'V3_DOC276_FACE_INTEGRITY_DELIVERY_ENABLED=true' "$candidate_release/src_skeleton/.env" || stop_pre candidate_face_gate_missing
-          [ -d "$candidate_release/custom_media_agent_2_0/.v2_data" ] || stop_pre candidate_v2_data_missing
           [ -f "$candidate_release/custom_media_agent_2_0/requirements.txt" ] || stop_pre candidate_v2_requirements_missing
           require_v2 || stop_pre v2_units_not_active
           before_digest="$(state_digest "$v1_media")" || stop_pre historical_state_digest_unreadable
