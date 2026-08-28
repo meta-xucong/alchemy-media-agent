@@ -3226,7 +3226,7 @@ function renderV3History() {
     return;
   }
   visibleGroups.forEach((group) => {
-    const previewUrl = v3OutputStrictThumbImageUrl(group.latestItem);
+    const previewUrl = v3OutputStrictThumbImageUrl(group.latestItem || v3ProjectThumbnailItem(group.project));
     const emptyImageLabel = v3ProjectEmptyImageLabel(group.project);
     const stackCount = Math.min(Math.max(Number(group.count || 0), 1), 5);
     const groupTitle = v3ReadableText(group.title, group.goal || "V3 项目图片");
@@ -3348,6 +3348,7 @@ function v3ProjectThumbnailItem(project) {
 
 function v3ProjectGroupFromProject(project, outputGroup = null) {
   const latestItem = outputGroup?.latestItem || null;
+  const visibleOutputCount = Number(project?.visible_output_count || project?.memory_summary?.visible_output_count || 0);
   return {
     projectId: String(project.project_id),
     title: v3ProjectDisplayTitle(project, outputGroup?.title || "V3 项目图片"),
@@ -3357,7 +3358,7 @@ function v3ProjectGroupFromProject(project, outputGroup = null) {
     items: outputGroup?.items || [],
     latestItem,
     latestAt: outputGroup?.latestAt || project.updated_at || project.created_at || "",
-    count: outputGroup ? outputGroup.count : 0,
+    count: Math.max(outputGroup?.count || 0, visibleOutputCount),
   };
 }
 

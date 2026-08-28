@@ -3691,13 +3691,14 @@ function mobileV3RecentProjectGroupMap() {
 
 function mobileV3GroupFromProject(project, outputGroup = null) {
   const latestItem = outputGroup?.latestItem || null;
+  const visibleOutputCount = Number(project?.visible_output_count || project?.memory_summary?.visible_output_count || 0);
   return {
     projectId: String(project.project_id || ""),
     project,
     items: outputGroup?.items || [],
     latestItem,
     latestAt: outputGroup?.latestAt || project.updated_at || project.created_at || "",
-    count: outputGroup ? outputGroup.count : 0,
+    count: Math.max(outputGroup?.count || 0, visibleOutputCount),
   };
 }
 
@@ -3736,7 +3737,7 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
   visibleGroups.forEach((group) => {
     const project = group.project;
     const finalOutputs = group.items;
-    const latest = group.latestItem || finalOutputs[0] || null;
+    const latest = group.latestItem || finalOutputs[0] || mobileV3SummaryThumbOutputs(project)[0] || null;
     const thumb = deferImages ? "" : mobileV3ThumbUrl(latest) || "";
     const visualCount = group.count || finalOutputs.length || 0;
     const stackCount = Math.min(Math.max(Number(visualCount || 0), 1), 5);

@@ -358,6 +358,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "await waitForMobileV3FirstHomePreviewImage()" in mobile_shell_body
     assert "waitForMobileV3HomePreviewImages({ blockPage: false })" in mobile_shell_body
     assert "project-outputs?limit=${mobileV3ProjectPageSize}&compact=true" in mobile_script.text
+    assert "project?.visible_output_count || project?.memory_summary?.visible_output_count" in mobile_script.text
+    assert "mobileV3SummaryThumbOutputs(project)[0]" in mobile_script.text
     assert "/project-outputs?limit=24&compact=true" not in mobile_script.text
     assert "project_id=${encodeURIComponent(projectId)}" in mobile_script.text
     assert "mobileV3SummaryThumbs" in mobile_script.text
@@ -534,6 +536,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert 'data-v3-project-action="delete_project"' in script.text
     assert "const v3ProjectHomePageSize = 9;" in script.text
     assert "function renderV3ProjectOutputBoard" in script.text
+    assert "project?.visible_output_count || project?.memory_summary?.visible_output_count" in script.text
+    assert "v3ProjectThumbnailItem(group.project)" in script.text
     assert "function handleV3ProjectOutputBoardClick" in script.text
     assert "async function selectV3OutputItem" in script.text
     assert "async function rejectV3OutputItem" in script.text

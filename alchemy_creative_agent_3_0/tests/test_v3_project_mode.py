@@ -980,6 +980,7 @@ def test_project_summary_restores_generated_output_thumbnail_after_restart(tmp_p
 
     assert loaded["project"]["memory_summary"]["latest_thumbnail_urls"] == [record.thumbnail_url]
     assert projects["projects"][0]["latest_thumbnail_urls"] == [record.thumbnail_url]
+    assert projects["projects"][0]["visible_output_count"] == 1
     assert restored_job["status"] == "generated"
     assert restored_job["candidates"][0]["output_id"] == record.output_id
 
@@ -1681,6 +1682,7 @@ def test_project_outputs_separate_rejected_pixels_from_formal_delivery(tmp_path)
     assert "自动精修次数已用完" in payload["review_items"][0]["review_reason"]
     summary = handlers.get_projects(limit=10)["projects"][0]
     assert summary["latest_thumbnail_urls"] == []
+    assert summary["visible_output_count"] == 0
 
 
 def test_project_outputs_keep_home_delivery_and_review_pixels_separate(tmp_path) -> None:

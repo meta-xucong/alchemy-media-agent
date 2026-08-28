@@ -9464,6 +9464,7 @@ class V3ProjectModeService:
     def _memory_summary(self, project: ProjectRecord) -> ProjectMemorySummary:
         timeline = self.project_store.list_timeline(project.project_id)
         state_map = self._selected_output_state_map(project)
+        visible_output_items = self._project_output_items(project, limit=200, compact=True)
         selected_refs = [
             ref
             for ref in project.selected_output_refs
@@ -9478,7 +9479,11 @@ class V3ProjectModeService:
                 if ref.thumbnail_url or ref.preview_url
             ][:3]
         if not latest_thumbnails:
-            latest_thumbnails = self._latest_generated_thumbnail_urls(project)
+            latest_thumbnails = [
+                item.get("thumbnail_url") or item.get("preview_url") or item.get("download_url")
+                for item in visible_output_items
+                if item.get("thumbnail_url") or item.get("preview_url") or item.get("download_url")
+            ][:3]
         last_action = timeline[-1].title if timeline else "项目已创建"
         return ProjectMemorySummary(
             project_id=project.project_id,
@@ -9488,6 +9493,7 @@ class V3ProjectModeService:
             scenario_id=self._scenario_id_for_template(project.primary_template_id),
             active_template_label=self._template_label(project.primary_template_id),
             latest_thumbnail_urls=latest_thumbnails,
+            visible_output_count=len(visible_output_items),
             confirmed_style_chips=self._style_chips(project),
             selected_asset_count=len(selected_refs),
             job_count=len(project.job_ids),
