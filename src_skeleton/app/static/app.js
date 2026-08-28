@@ -2811,7 +2811,11 @@ async function loadV3Projects({ silent = false, force = false } = {}) {
     const apiItems = Array.isArray(payload.projects) ? payload.projects : [];
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
     v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
-    v3State.projects = mergeV3ProjectItems(apiItems, localItems);
+    const serverProjectIds = new Set(apiItems.map((item) => String(item?.project_id || "")).filter(Boolean));
+    v3State.projects = mergeV3ProjectItems(
+      apiItems,
+      localItems.filter((item) => serverProjectIds.has(String(item?.project_id || ""))),
+    );
     v3State.projectsLoaded = true;
     writeV3LocalProjects(v3State.projects);
     renderV3HomeTemplateChooser();

@@ -436,6 +436,7 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "await loadV3ProjectOutputs({ silent: true, force: true, limit: 1 })" in shell_body
     assert "`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`" in shell_body
     assert "`${v3ApiBase}/projects?limit=${v3ProjectHomePageSize}`" not in shell_body
+    assert "localItems.filter((item) => serverProjectIds.has(String(item?.project_id || \"\")))" in script.text
     assert "els.v3ProjectDeleteBtn.hidden = !project?.project_id;" in script.text
     assert "waitForV3FirstHomePreviewImage" in shell_body
     assert "void waitForV3HomePreviewImages({ blockPage: false });" in shell_body
