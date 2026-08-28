@@ -3414,7 +3414,7 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
   setMobileV3LoadingLayer(true, "正在同步项目", "先显示项目框架，再分批加载图片预览。");
   updateMobileV3Status("同步中");
   try {
-    const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectPageSize}`);
+    const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectFetchLimit}`);
     if (!Array.isArray(projectsPayload?.templates)) {
       throw new Error("template_catalog_unavailable");
     }

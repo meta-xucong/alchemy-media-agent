@@ -352,8 +352,8 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "mobileV3ProjectFetchLimit = 80" in mobile_script.text
     assert "mobileV3ProjectPageSize = 4" in mobile_script.text
     mobile_shell_body = mobile_script.text.split("async function loadMobileV3Projects", 1)[1].split("function setMobileV3LoadingLayer", 1)[0]
-    assert "`/projects?limit=${mobileV3ProjectPageSize}`" in mobile_shell_body
-    assert "`/projects?limit=${mobileV3ProjectFetchLimit}`" not in mobile_shell_body
+    assert "`/projects?limit=${mobileV3ProjectFetchLimit}`" in mobile_shell_body
+    assert "`/projects?limit=${mobileV3ProjectPageSize}`" not in mobile_shell_body
     assert "await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)" in mobile_shell_body
     assert "await waitForMobileV3FirstHomePreviewImage()" in mobile_shell_body
     assert "waitForMobileV3HomePreviewImages({ blockPage: false })" in mobile_shell_body
@@ -434,8 +434,9 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     shell_body = script.text.split("async function initV3Shell", 1)[1].split("function clearV3PendingUploads", 1)[0]
     assert "void loadV3ProjectOutputs({ silent: true, force: true, limit: v3ProjectHomePageSize })" in shell_body
     assert "await loadV3ProjectOutputs({ silent: true, force: true, limit: 1 })" in shell_body
-    assert "`${v3ApiBase}/projects?limit=${v3ProjectHomePageSize}`" in shell_body
-    assert "`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`" not in shell_body
+    assert "`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`" in shell_body
+    assert "`${v3ApiBase}/projects?limit=${v3ProjectHomePageSize}`" not in shell_body
+    assert "els.v3ProjectDeleteBtn.hidden = !project?.project_id;" in script.text
     assert "waitForV3FirstHomePreviewImage" in shell_body
     assert "void waitForV3HomePreviewImages({ blockPage: false });" in shell_body
     assert "await waitForV3HomePreviewImages();" not in shell_body
@@ -1494,3 +1495,35 @@ def test_v3_project_delete_route_removes_project_scoped_files(tmp_path) -> None:
     assert not project_dir.exists()
     assert service.output_store.get_output(record.output_id) is None
     assert service.asset_store.get_upload(asset_id) is None
+
+
+def test_v3_project_delete_route_removes_empty_project(tmp_path) -> None:
+    old_handlers = app_main.v3_route_handlers
+    service = V3ProductApiService(
+        job_store=InMemoryProductJobStore(),
+        asset_store=V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads"),
+        output_store=V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs"),
+    )
+    project_store = PersistentProjectStore(storage_root=tmp_path / "v3_projects")
+    app_main.v3_route_handlers = V3ProductRouteHandlers(service=service, project_store=project_store)
+    client = TestClient(app)
+    try:
+        created_project = client.post(
+            "/api/v3/creative-agent/projects",
+            json={
+                "user_goal": "Create an empty project for deletion",
+                "primary_template_id": "general_template",
+            },
+        )
+        assert created_project.status_code == 200
+        project_id = created_project.json()["project"]["project_id"]
+        assert project_store.get_project(project_id) is not None
+
+        deleted = client.delete(f"/api/v3/creative-agent/projects/{project_id}")
+    finally:
+        app_main.v3_route_handlers = old_handlers
+
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert deleted.json()["deleted_outputs"] == 0
+    assert project_store.get_project(project_id) is None

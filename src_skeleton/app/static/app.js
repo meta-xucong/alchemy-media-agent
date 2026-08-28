@@ -1866,7 +1866,7 @@ async function initV3Shell({ force = false } = {}) {
   updateV3Notice("正在读取 V3 项目。", "info");
   try {
     await waitForV3Paint();
-    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectHomePageSize}`);
+    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`);
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
     v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
     v3State.projects = Array.isArray(payload.projects) ? payload.projects : [];
@@ -3580,7 +3580,7 @@ function renderV3ProjectDetail() {
   }
   if (els.v3ProjectDeleteBtn) {
     els.v3ProjectDeleteBtn.disabled = !project?.project_id;
-    els.v3ProjectDeleteBtn.hidden = true;
+    els.v3ProjectDeleteBtn.hidden = !project?.project_id;
   }
   renderV3ProjectOutputBoard();
   renderV3PhotographyRoleBoard(v3State.currentJob);
