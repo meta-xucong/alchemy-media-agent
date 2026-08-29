@@ -366,6 +366,22 @@ ensure_v2_runtime() {
   fi
 }
 
+verify_v2_runtime_before_v1_start() {
+  V2_DIR="${DEPLOY_DIR}/custom_media_agent_2_0"
+  if [[ ! -d "${V2_DIR}" ]]; then
+    return
+  fi
+  [[ -x "${V2_DIR}/.venv/bin/python" ]] || {
+    echo "The current Alchemy release has no usable V2 virtual environment; refusing to start V1." >&2
+    exit 1
+  }
+  [[ -f "${DEPLOY_DIR}/ops/vps-release/v2_runtime_guard.py" ]] || {
+    echo "The current Alchemy release has no V2 runtime guard; refusing to start V1." >&2
+    exit 1
+  }
+  python3 "${DEPLOY_DIR}/ops/vps-release/v2_runtime_guard.py" --release "${DEPLOY_DIR}" --verify
+}
+
 restart_v2_services_if_present() {
   local units=(alchemy-v2-api.service alchemy-v2-worker.service alchemy-v2-sync-worker.service)
   local present=()
@@ -435,6 +451,7 @@ ensure_deploy_tools
 sync_repo
 write_env_file
 ensure_v2_runtime
+verify_v2_runtime_before_v1_start
 start_stack
 restart_v2_services_if_present
 configure_nginx_if_present

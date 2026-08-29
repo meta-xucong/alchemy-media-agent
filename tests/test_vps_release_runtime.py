@@ -71,6 +71,10 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     activate = (root / ".github" / "workflows" / "guarded-vps-activate.yml").read_text(encoding="utf-8")
 
     assert "vps_prepare_v2_runtime.sh" in deploy
+    assert "verify_v2_runtime_before_v1_start()" in deploy
+    assert deploy.rindex("\nensure_v2_runtime") < deploy.rindex("\nverify_v2_runtime_before_v1_start")
+    assert deploy.rindex("\nverify_v2_runtime_before_v1_start") < deploy.rindex("\nstart_stack")
+    assert deploy.rindex("\nrestart_v2_services_if_present") > deploy.rindex("\nstart_stack")
     assert "prepare_v2_runtime()" in candidate
     assert "python3 -m venv" in candidate
     assert "--write-manifest" in candidate
@@ -88,6 +92,7 @@ def test_deploy_paths_prepare_release_bound_runtime() -> None:
     assert 'units_installed=1' in migration
     assert "VPS_ALCHEMY_SUB2API=untouched" in migration
     assert 'runtime_requirements="${candidate}/custom_media_agent_2_0/requirements.txt"' in migration
+    assert migration.index('v2_runtime_guard.py" --release "${candidate}" --verify') < migration.index('ln -sfn "${candidate}" "${DEPLOY_LINK}"')
 
 
 def test_runtime_guard_requires_bridge_transport_import() -> None:

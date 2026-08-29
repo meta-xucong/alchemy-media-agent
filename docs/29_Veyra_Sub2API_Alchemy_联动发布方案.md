@@ -47,6 +47,25 @@
 
 ## Alchemy release 发布保护
 
+### 2026-08-29 事故记录与永久规则
+
+本次桥接故障不是 Sub2API 故障，而是一次不完整的 Alchemy V1 发布造成的：
+
+- V1-only 发布切换了 `/opt/alchemy-media-agent` 到新 release；
+- 新 release 没有自己的 `custom_media_agent_2_0/.venv`；
+- V2 进程仍在运行，但 Python 的依赖搜索路径跟随稳定链接指向新目录；
+- Veyra 首次访问时懒加载 `httpcore` 失败，最终表现为 `500/502 Veyra bridge request failed`。
+
+因此“V1 容器仍 running”不能证明 Alchemy 发布完整。永久规则如下：
+
+1. 任何 Alchemy release 切换都必须先准备并验证同一 release 的 V2 `.venv`、`pip check`、`httpx/httpcore` 导入和 `.alchemy-v2-runtime.json`。
+2. 只有 `scripts/vps_migrate_release_layout.sh` 或完整的 `scripts/deploy_vps.sh` 可以用于 VPS 发布；禁止仅构建/重启 V1 后直接切换 release symlink。
+3. V2 runtime guard 验证必须发生在 V1 启动前；切换后必须同时重启三个 Alchemy V2 unit，并验证 V1/V2 health 与 Veyra 账户读取。
+4. 任何 preflight、guard 或 bridge 验证失败都必须停止发布并回滚，不能用“health 200”或“容器 running”覆盖桥接失败。
+5. `sub2api-adapted` 是独立系统。Alchemy 发布与运行时修复不得修改、重建、重启或清理 Sub2API 资源。
+
+该规则已由 `tests/test_vps_release_runtime.py` 检查发布顺序和候选 release guard；以后若 V1-only 流程绕过 V2 runtime gate，CI 会失败。
+
 Alchemy 当前线上不是单一进程：
 
 - V1 shell/API 由 Docker 容器承载，监听 `127.0.0.1:8017`。
