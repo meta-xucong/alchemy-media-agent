@@ -164,6 +164,11 @@ _REMOTE_BRAIN_LIFECYCLE_OUTCOME_CLASSES = {
     "remote_brain_unauthorized",
     "remote_contract_invalid",
     "remote_prompt_signoff_unavailable",
+    "remote_provider_error",
+    "remote_provider_unavailable",
+    "remote_output_count_mismatch",
+    "remote_brain_skipped",
+    "remote_creative_brain_required",
 }
 
 _REMOTE_BRAIN_LIFECYCLE_ERROR_CLASSES = {
@@ -1846,7 +1851,10 @@ class V3ProductApiService:
         if not project_id or not isinstance(identity, dict) or not callable(resolver):
             return {"state": "needs_input"}
         try:
-            expected_output_count = max(1, int(metadata.get("requested_image_count") or 1))
+            # Scenario Runtime's ordinary default is two outputs. Keep the
+            # pre-planning E31 resolver on that same effective count when the
+            # client omitted an optional count field.
+            expected_output_count = max(1, int(metadata.get("requested_image_count") or 2))
         except (TypeError, ValueError):
             return {"state": "needs_input"}
         try:
@@ -2636,8 +2644,13 @@ class V3ProductApiService:
             if key in runtime_result.metadata
         }
 
-    def create_uploaded_asset(self, request: V3AssetUploadCreateRequest | dict[str, Any]) -> V3UploadedAssetRecord:
-        return self.asset_store.create_upload(request)
+    def create_uploaded_asset(
+        self,
+        request: V3AssetUploadCreateRequest | dict[str, Any],
+        *,
+        owner_user_id: int | None = None,
+    ) -> V3UploadedAssetRecord:
+        return self.asset_store.create_upload(request, owner_user_id=owner_user_id)
 
     def store_uploaded_asset_content(
         self,
@@ -3033,16 +3046,47 @@ class V3ProductApiService:
         )
         return result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
 
-    def list_history(self, limit: int = 20) -> V3JobHistoryResponse:
+    @staticmethod
+    def _history_owner_matches(metadata: dict[str, Any] | None, owner_user_id: int | None) -> bool:
+        if owner_user_id is None:
+            return True
+        if not isinstance(metadata, dict):
+            return False
+        value = metadata.get("veyra_user_id")
+        if isinstance(value, bool):
+            return False
+        try:
+            persisted_owner_id = int(value)
+            requested_owner_id = int(owner_user_id)
+        except (TypeError, ValueError):
+            return False
+        return persisted_owner_id > 0 and persisted_owner_id == requested_owner_id
+
+    def list_history(
+        self,
+        limit: int = 20,
+        owner_user_id: int | None = None,
+    ) -> V3JobHistoryResponse:
         bounded_limit = max(1, min(int(limit or 20), 100))
         records = self.job_store.list_recent(100)
+        records = [
+            record
+            for record in records
+            if self._history_owner_matches(
+                dict(record.request.metadata or {}),
+                owner_user_id,
+            )
+        ]
         expired_job_ids = {record.job_id for record in records if _failed_artifact_expired(record)}
         records = [record for record in records if record.job_id not in expired_job_ids][:bounded_limit]
         record_items = [self._history_item_from_record(record) for record in records]
         known_job_ids = {item.job_id for item in record_items}
         restored_items = [
             item
-            for item in self._history_items_from_output_store(bounded_limit)
+            for item in self._history_items_from_output_store(
+                bounded_limit,
+                owner_user_id=owner_user_id,
+            )
             if item.job_id not in known_job_ids and item.job_id not in expired_job_ids
         ]
         items = sorted([*record_items, *restored_items], key=lambda item: item.updated_at or item.created_at, reverse=True)[
@@ -3688,6 +3732,7 @@ class V3ProductApiService:
                 metadata={
                     "submitted_mcp_projection": True,
                     "artifact_sha256": artifact_sha256,
+                    "veyra_user_id": record.request.metadata.get("veyra_user_id"),
                     **issue_doc281_output_plan_binding(
                         record.request.metadata,
                         job_id=record.job_id,
@@ -5108,6 +5153,7 @@ class V3ProductApiService:
                         "not_a_provider_delivery": True,
                         "project_id": record.request.metadata.get("project_id"),
                         "template_id": record.request.metadata.get("template_id"),
+                        "veyra_user_id": record.request.metadata.get("veyra_user_id"),
                         "requested_image_count": len(generation_result.asset_pack.assets),
                         **issue_doc281_output_plan_binding(
                             record.request.metadata,
@@ -6896,9 +6942,31 @@ class V3ProductApiService:
         generate_request: GenerateJobRequest,
     ) -> int:
         limit = self._visual_auto_retry_max_attempts(generate_request)
-        if self._record_has_active_capability(record, "human_realism"):
-            return 0
         return min(limit, 1) if self._record_has_active_capability(record, "nonhuman_subject_identity") else limit
+
+    def _human_realism_retry_issue_codes(
+        self,
+        record: ProductJobRecord,
+        issue_codes: list[str],
+    ) -> list[str]:
+        """Return human-specific findings that require manual confirmation.
+
+        Human Realism owns semantic human-naturalness findings, but a person
+        scene can still have an independent universal defect such as a visible
+        watermark or text artifact.  Keep the bounded shared retry available
+        for those objective defects without automatically retrying a human
+        appearance judgment.
+        """
+
+        if not self._record_has_active_capability(record, "human_realism"):
+            return []
+        return [
+            code
+            for code in self._dedupe_strings(issue_codes)
+            if HumanPhotorealismLayer.is_human_realism_issue_code(
+                self._normalize_legacy_review_issue_code(code)
+            )
+        ]
 
     def _visual_retry_execution_plan(
         self,
@@ -6921,6 +6989,27 @@ class V3ProductApiService:
         issue_codes = self._dedupe_strings(issue_codes)
         if not issue_codes:
             return {"should_retry": False}
+
+        human_realism_issue_codes = self._human_realism_retry_issue_codes(record, issue_codes)
+        if human_realism_issue_codes:
+            # A mixed report may still retry an independent universal issue,
+            # but no human-specific patch or finding may drive that retry.
+            issue_codes = [code for code in issue_codes if code not in human_realism_issue_codes]
+            retry_patch = {}
+            if not issue_codes:
+                return {
+                    "should_retry": False,
+                    "record": self._visual_retry_execution_record(
+                        record=record,
+                        status="skipped",
+                        attempt_index=attempt_index,
+                        max_attempts=max_attempts,
+                        reason_codes=human_realism_issue_codes,
+                        retry_patch={},
+                        source=source,
+                        blocked_reason="human_realism_manual_confirmation",
+                    ),
+                }
         if attempt_index > max_attempts:
             return {
                 "should_retry": False,
@@ -9546,6 +9635,60 @@ class V3ProductApiService:
         nav = get_navigation_entry()
         scenario = self._scenario_summary(record)
         request_metadata = dict(record.request.metadata or {})
+        result = record.generation_result or record.planning_result
+        final_delivery = {
+            "final_delivery_status": "not_evaluated",
+            "automatic_delivery_available": False,
+            "manual_confirmation_required": False,
+            "reviewed_output_count": 0,
+            "final_delivery_output_count": 0,
+            "delivery_gate_applies": False,
+        }
+        public_review: dict[str, Any] = {}
+        public_visual_retry: dict[str, Any] = {}
+        public_asset_series: list[AssetSeriesItem] = []
+        public_candidates: list[CandidateSummary] = []
+        if result is not None:
+            final_delivery, eligible_output_ids, _eligible_asset_ids = self._public_final_delivery_projection(result)
+            public_review = self._public_post_generation_review(
+                result.metadata.get("post_generation_review_package")
+            )
+            if final_delivery["delivery_gate_applies"]:
+                public_review["recommended_output_ids"] = (
+                    sorted(eligible_output_ids) if final_delivery["automatic_delivery_available"] else []
+                )
+                public_review["hidden_output_ids"] = []
+            public_visual_retry = self._public_visual_auto_retry_summary(
+                result.metadata.get("visual_auto_retry"),
+                manual_confirmation_required=bool(final_delivery["manual_confirmation_required"]),
+            )
+            # The source-safe Phase 3 projection must still carry the same
+            # allowlisted generated outputs as the ordinary status.  The
+            # activation receipt owns source privacy, not output visibility;
+            # dropping these rows makes a completed General job appear empty
+            # and prevents Project Mode from selecting its exact output.
+            if (
+                record.generation_result is not None
+                and getattr(result, "asset_pack", None) is not None
+                and getattr(result, "series_plan", None) is not None
+            ):
+                visible_output_ids = (
+                    eligible_output_ids if final_delivery["delivery_gate_applies"] else None
+                )
+                visible_asset_ids = (
+                    _eligible_asset_ids if final_delivery["delivery_gate_applies"] else None
+                )
+                public_asset_series = self._asset_series(
+                    result,
+                    record.status,
+                    visible_output_ids=visible_output_ids,
+                    visible_asset_ids=visible_asset_ids,
+                )
+                public_candidates = self._candidate_summaries(
+                    result,
+                    visible_output_ids=visible_output_ids,
+                    visible_asset_ids=visible_asset_ids,
+                )
         public_variation_keys = {
             "variation_mode",
             "effective_variation_mode",
@@ -9587,6 +9730,15 @@ class V3ProductApiService:
             ui_entry_route=nav["route"],
             scenario=scenario,
             general_creative=self._general_creative_summary(record),
+            planning_result_id=record.planning_result.planning_result_id if record.planning_result else None,
+            generation_result_id=getattr(record.generation_result, "planning_result_id", None)
+            if record.generation_result
+            else None,
+            asset_pack_id=getattr(getattr(result, "asset_pack", None), "asset_pack_id", None)
+            if result is not None
+            else None,
+            asset_series=public_asset_series,
+            candidates=public_candidates,
             balance_estimate=dict(record.balance_estimate),
             routes=get_route_contracts(),
             # Existing warnings may retain a source label from planning. The
@@ -9601,6 +9753,12 @@ class V3ProductApiService:
                 "doc270_general_source_activation": activation,
                 **public_variation,
                 **public_lifecycle,
+                # These are the same allowlisted projections used by the
+                # ordinary Product API status. Keep them visible while the
+                # source activation receipt itself remains private.
+                "visual_auto_retry": public_visual_retry,
+                "post_generation_review": public_review,
+                "final_delivery": final_delivery,
             },
         )
 
@@ -10510,12 +10668,19 @@ class V3ProductApiService:
     @classmethod
     def _public_remote_brain_lifecycle_outcome(cls, outcome: dict[str, Any]) -> dict[str, Any]:
         # ScenarioRuntime mints this already-sanitized envelope. Product API
-        # must preserve it as an opaque typed handoff rather than maintaining
-        # a second, inevitably incomplete list of remote Brain failure codes.
+        # preserves the typed handoff without maintaining a second list of
+        # remote Brain reason codes, but the runtime-owned class discriminator
+        # is required before any reason can become public lifecycle state.
         if (
             outcome.get("schema_version") != _REMOTE_BRAIN_LIFECYCLE_OUTCOME_SCHEMA
             or outcome.get("state") != "blocked"
         ):
+            return {}
+        outcome_class = cls._closed_string(
+            outcome.get("outcome_class"),
+            allowed=_REMOTE_BRAIN_LIFECYCLE_OUTCOME_CLASSES,
+        )
+        if not outcome_class:
             return {}
         reason_code = str(outcome.get("reason_code") or "").strip()
         if not reason_code:
@@ -10524,13 +10689,8 @@ class V3ProductApiService:
             "schema_version": _REMOTE_BRAIN_LIFECYCLE_OUTCOME_SCHEMA,
             "state": "blocked",
             "reason_code": reason_code,
+            "outcome_class": outcome_class,
         }
-        outcome_class = cls._closed_string(
-            outcome.get("outcome_class"),
-            allowed=_REMOTE_BRAIN_LIFECYCLE_OUTCOME_CLASSES,
-        )
-        if outcome_class:
-            projected["outcome_class"] = outcome_class
         remote_error_class = cls._closed_string(
             outcome.get("remote_error_class"),
             allowed=_REMOTE_BRAIN_LIFECYCLE_ERROR_CLASSES,
@@ -11161,9 +11321,16 @@ class V3ProductApiService:
                 return count
         return None
 
-    def _history_items_from_output_store(self, limit: int) -> list[V3JobHistoryItem]:
+    def _history_items_from_output_store(
+        self,
+        limit: int,
+        *,
+        owner_user_id: int | None = None,
+    ) -> list[V3JobHistoryItem]:
         by_job: dict[str, list[V3GeneratedOutputRecord]] = {}
         for record in self.output_store.list_outputs(limit=max(100, limit * 10)):
+            if not self._history_owner_matches(record.metadata, owner_user_id):
+                continue
             by_job.setdefault(record.job_id, []).append(record)
         items: list[V3JobHistoryItem] = []
         for job_id, records in by_job.items():

@@ -29,6 +29,19 @@ from .service import V3ProductApiService
 PUBLIC_VISUAL_ASSET_OWNER_SCOPE = "v3_public"
 
 
+def public_uploaded_asset_record(record: Any) -> dict[str, Any]:
+    """Return the upload contract without server paths or ownership facts."""
+
+    payload = record.model_dump(mode="json")
+    payload.pop("file_path", None)
+    payload.pop("veyra_user_id", None)
+    metadata = dict(payload.get("metadata") or {})
+    metadata.pop("veyra_user_id", None)
+    metadata.pop("owner_user_id", None)
+    payload["metadata"] = metadata
+    return payload
+
+
 class V3ProductRouteHandlers:
     """Method names mirror the reserved V3 route contract."""
 
@@ -76,26 +89,28 @@ class V3ProductRouteHandlers:
     def post_creative_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.post_jobs(payload)
 
-    def post_uploads(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.service.create_uploaded_asset(payload).model_dump(mode="json")
+    def post_uploads(self, payload: dict[str, Any], *, owner_user_id: int | None = None) -> dict[str, Any]:
+        return public_uploaded_asset_record(
+            self.service.create_uploaded_asset(payload, owner_user_id=owner_user_id)
+        )
 
     def put_upload_content(self, asset_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         record = self.service.store_uploaded_asset_content(asset_id, payload)
         if record is None:
             raise KeyError("uploaded asset not found")
-        return record.model_dump(mode="json")
+        return public_uploaded_asset_record(record)
 
     def post_upload_complete(self, asset_id: str) -> dict[str, Any]:
         record = self.service.complete_uploaded_asset(asset_id)
         if record is None:
             raise KeyError("uploaded asset not found")
-        return record.model_dump(mode="json")
+        return public_uploaded_asset_record(record)
 
     def get_upload(self, asset_id: str) -> dict[str, Any]:
         record = self.service.get_uploaded_asset(asset_id)
         if record is None:
             raise KeyError("uploaded asset not found")
-        return record.model_dump(mode="json")
+        return public_uploaded_asset_record(record)
 
     def get_scenarios(self) -> dict[str, Any]:
         return get_scenario_hub_contract()
@@ -103,11 +118,23 @@ class V3ProductRouteHandlers:
     def get_photographer_profiles(self) -> dict[str, Any]:
         return self.service.get_photographer_profiles()
 
-    def get_history(self, limit: int = 20) -> dict[str, Any]:
-        return self.service.list_history(limit=limit).model_dump(mode="json")
+    def get_history(self, limit: int = 20, owner_user_id: int | None = None) -> dict[str, Any]:
+        return self.service.list_history(
+            limit=limit,
+            owner_user_id=owner_user_id,
+        ).model_dump(mode="json")
 
-    def get_projects(self, limit: int = 20, owner_user_id: int | None = None) -> dict[str, Any]:
-        return self.project_service.list_projects(limit=limit, owner_user_id=owner_user_id).model_dump(mode="json")
+    def get_projects(
+        self,
+        limit: int = 20,
+        owner_user_id: int | None = None,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        return self.project_service.list_projects(
+            limit=limit,
+            owner_user_id=owner_user_id,
+            cursor=cursor,
+        ).model_dump(mode="json")
 
     def get_project_outputs(
         self,
@@ -126,8 +153,15 @@ class V3ProductRouteHandlers:
     def post_projects(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.project_service.create_project(payload).model_dump(mode="json")
 
-    def get_project(self, project_id: str) -> dict[str, Any]:
-        return self.project_service.get_project(project_id).model_dump(mode="json")
+    def get_project(
+        self,
+        project_id: str,
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any]:
+        return self.project_service.get_project(
+            project_id,
+            owner_user_id=owner_user_id,
+        ).model_dump(mode="json")
 
     def begin_project_planning_operation(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self.project_service.begin_project_planning_operation(project_id, payload)
@@ -171,11 +205,25 @@ class V3ProductRouteHandlers:
     def delete_project(self, project_id: str) -> dict[str, Any]:
         return self.project_service.delete_project(project_id)
 
-    def get_project_timeline(self, project_id: str) -> dict[str, Any]:
-        return self.project_service.list_timeline(project_id).model_dump(mode="json")
+    def get_project_timeline(
+        self,
+        project_id: str,
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any]:
+        return self.project_service.list_timeline(
+            project_id,
+            owner_user_id=owner_user_id,
+        ).model_dump(mode="json")
 
-    def get_project_context(self, project_id: str) -> dict[str, Any]:
-        return self.project_service.get_project_context(project_id).model_dump(mode="json")
+    def get_project_context(
+        self,
+        project_id: str,
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any]:
+        return self.project_service.get_project_context(
+            project_id,
+            owner_user_id=owner_user_id,
+        ).model_dump(mode="json")
 
     # Doc173 library-first public surface.  These methods deliberately do not
     # call the historical project-scoped People Asset lifecycle above.  Legacy

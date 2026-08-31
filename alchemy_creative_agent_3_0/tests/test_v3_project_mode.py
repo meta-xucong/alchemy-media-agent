@@ -15,13 +15,18 @@ from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiServi
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter, MockGenerationProvider, ProductionImageGenerationProvider
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import DisabledEcommerceViewActivationIssuer
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioPackRegistry
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import VisionOutputInspector
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider, ecommerce_test_service
 
 
 def _ecommerce_handlers() -> V3ProductRouteHandlers:
-    return V3ProductRouteHandlers(service=ecommerce_test_service())
+    return V3ProductRouteHandlers(
+        service=ecommerce_test_service(),
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+    )
 
 
 def _project_handlers_with_brand_store(tmp_path):
@@ -37,6 +42,46 @@ def _project_handlers_with_output_store(tmp_path) -> V3ProductRouteHandlers:
     )
     product_service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
     return V3ProductRouteHandlers(service=product_service)
+
+
+class _ProjectModeCertifiedVisionTestProvider:
+    provider_name = "project_mode_certified_review_test_double"
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def inspect(self, resolution, *, metadata=None):  # noqa: ANN001
+        return {
+            "status": "pass",
+            "confidence": 0.96,
+            "issue_codes": [],
+            "scores": {
+                "artifact_safety": 0.96,
+                "composition": 0.94,
+                "commercial_finish": 0.95,
+                "overall": 0.95,
+            },
+        }
+
+
+def _project_handlers_with_certified_review(
+    tmp_path,
+    *,
+    project_store=None,
+    output_store=None,
+) -> V3ProductRouteHandlers:
+    output_store = output_store or V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs")
+    product_service = V3ProductApiService(
+        output_store=output_store,
+        vision_inspector=VisionOutputInspector(
+            vision_provider=_ProjectModeCertifiedVisionTestProvider()
+        ),
+    )
+    product_service.asset_store = V3UploadedAssetStore(storage_root=tmp_path / "v3_uploads")
+    return V3ProductRouteHandlers(
+        service=product_service,
+        project_store=project_store or PersistentProjectStore(tmp_path / "v3_projects"),
+    )
 
 
 def _png_base64() -> str:
@@ -893,8 +938,8 @@ def test_template_job_creation_requires_project_id() -> None:
         raise AssertionError("Project Mode template jobs must be created inside an existing project")
 
 
-def test_project_selection_updates_project_context_without_brand_memory_auto_apply() -> None:
-    handlers = V3ProductRouteHandlers()
+def test_project_selection_updates_project_context_without_brand_memory_auto_apply(tmp_path) -> None:
+    handlers = _project_handlers_with_certified_review(tmp_path)
     project = handlers.post_projects({"user_goal": "帮我做一组清爽高级的活动图"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "生成第一张活动图"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
@@ -911,7 +956,12 @@ def test_project_selection_updates_project_context_without_brand_memory_auto_app
 
 def test_persistent_project_store_survives_service_restart(tmp_path) -> None:
     store_root = tmp_path / "v3_projects"
-    first = V3ProductRouteHandlers(project_store=PersistentProjectStore(store_root))
+    output_store = V3GeneratedOutputStore(storage_root=tmp_path / "v3_outputs")
+    first = _project_handlers_with_certified_review(
+        tmp_path,
+        project_store=PersistentProjectStore(store_root),
+        output_store=output_store,
+    )
     project = first.post_projects(
         {
             "user_goal": "Create a clean premium product launch visual chain",
@@ -926,7 +976,11 @@ def test_persistent_project_store_survives_service_restart(tmp_path) -> None:
     assert (store_root / project["project_id"] / "project.json").exists()
     assert (store_root / project["project_id"] / "timeline.json").exists()
 
-    second = V3ProductRouteHandlers(project_store=PersistentProjectStore(store_root))
+    second = _project_handlers_with_certified_review(
+        tmp_path,
+        project_store=PersistentProjectStore(store_root),
+        output_store=output_store,
+    )
     loaded = second.get_project(project["project_id"])
     timeline = second.get_project_timeline(project["project_id"])
     projects = second.get_projects(limit=5)
@@ -1156,8 +1210,8 @@ def test_project_generation_blocked_records_provider_retry_timeline() -> None:
     )
 
 
-def test_selected_output_creates_active_generated_reference_and_selection_state() -> None:
-    handlers = V3ProductRouteHandlers()
+def test_selected_output_creates_active_generated_reference_and_selection_state(tmp_path) -> None:
+    handlers = _project_handlers_with_certified_review(tmp_path)
     project = handlers.post_projects({"user_goal": "Create a premium social cover"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Generate first cover"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})
@@ -1226,13 +1280,17 @@ def test_portrait_selection_becomes_strong_identity_reference(tmp_path) -> None:
         continuation["job_id"],
         {"quality_mode": "standard"},
     )
-    reference_assets = continuation_status["metadata"]["project_context_snapshot"]["strong_reference_bindings"]
+    continuation_context = handlers.get_project_context(project["project_id"])
+    reference_assets = continuation_context["strong_reference_bindings"]
     assert any(item.get("use_policy") == "identity" and item.get("file_path") for item in reference_assets)
-    assert continuation_status["metadata"]["project_context_snapshot"]["project_identity_anchors"][0]["subject_type"] == "character"
-    assert continuation_status["metadata"]["project_context_snapshot"]["strong_reference_continuation_plan"]["reference_mode"] == "provider_image_reference"
+    assert continuation_context["project_identity_anchors"][0]["subject_type"] == "character"
+    assert continuation_context["strong_reference_continuation_plan"]["reference_mode"] == "provider_image_reference"
+    continuation_record = handlers.service.get_job_record(continuation["job_id"])
+    continuation_result = continuation_record.generation_result or continuation_record.planning_result
+    shared_capabilities = continuation_result.metadata["shared_capabilities"]
     cluster_results = [
         item
-        for item in continuation_status["metadata"]["shared_capabilities"]["results"]
+        for item in shared_capabilities["results"]
         if item["module_id"] == "visual_capability_cluster"
     ]
     assert cluster_results[0]["facts"]["visual_capability_cluster"]["identity_lock_profiles"][0]["subject_type"] == "character"
@@ -1426,7 +1484,7 @@ def test_unselected_candidate_does_not_enter_context() -> None:
 
 
 def test_project_job_creation_reads_enriched_project_context(tmp_path) -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _project_handlers_with_output_store(tmp_path)
     reference_asset_id = _ready_upload(handlers, tmp_path, role="style_reference", filename="mood.png")
     project = handlers.post_projects({"user_goal": "Create a bright summer campaign"})["project"]
     reference = handlers.post_project_reference(
@@ -1446,7 +1504,8 @@ def test_project_job_creation_reads_enriched_project_context(tmp_path) -> None:
     job = handlers.post_project_job(project["project_id"], {"user_input": "继续同风格做封面"})
     status = handlers.get_job(job["job_id"])
 
-    project_context = status["metadata"]["project_context_snapshot"]
+    job_record = handlers.service.get_job_record(job["job_id"])
+    project_context = job_record.request.metadata["project_context_snapshot"]
     assert project_context["uploaded_reference_assets"][0]["reference_id"] == reference["reference_id"]
     assert "避免拥挤背景" in project_context["negative_direction_notes"][0]
     assert project_context["continuation_instruction"] == "继续同风格做封面"
@@ -1900,8 +1959,18 @@ def test_project_output_history_is_scoped_by_account_owner(tmp_path) -> None:
             "metadata": {"veyra_user_id": 202},
         }
     )["project"]
-    first_job = handlers.post_project_job(first_project["project_id"], {"user_input": "Create first user image"})
+    first_job = handlers.post_project_job(
+        first_project["project_id"],
+        {
+            "user_input": "Create first user image",
+            "metadata": {"veyra_user_id": 202},
+        },
+    )
     second_job = handlers.post_project_job(second_project["project_id"], {"user_input": "Create second user image"})
+    first_job_record = handlers.service.get_job_record(first_job["job_id"])
+    second_job_record = handlers.service.get_job_record(second_job["job_id"])
+    assert first_job_record.request.metadata["veyra_user_id"] == 101
+    assert second_job_record.request.metadata["veyra_user_id"] == 202
     first_record = _save_project_output(
         handlers,
         job_id=first_job["job_id"],
@@ -2195,7 +2264,7 @@ def test_v3_terminal_failure_never_uses_successful_image_ready_copy() -> None:
     assert footnote_branch < withheld_copy < no_delivery_copy < success_copy
 
 
-def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path) -> None:
+def test_ownerless_v3_projects_and_outputs_are_hidden_from_authenticated_accounts(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     public_project = handlers.post_projects(
         {
@@ -2232,14 +2301,23 @@ def test_ownerless_v3_projects_and_outputs_are_visible_to_all_accounts(tmp_path)
     second_projects = {item["project_id"] for item in handlers.get_projects(limit=10, owner_user_id=202)["projects"]}
     second_outputs = {item["output_id"] for item in handlers.get_project_outputs(limit=10, owner_user_id=202)["items"]}
 
-    assert public_project["project_id"] in first_projects
-    assert public_project["project_id"] in second_projects
+    assert public_project["project_id"] not in first_projects
+    assert public_project["project_id"] not in second_projects
     assert private_project["project_id"] not in first_projects
     assert private_project["project_id"] in second_projects
-    assert public_record.output_id in first_outputs
-    assert public_record.output_id in second_outputs
+    assert public_record.output_id not in first_outputs
+    assert public_record.output_id not in second_outputs
     assert private_record.output_id not in first_outputs
     assert private_record.output_id in second_outputs
+
+    local_projects = {
+        item["project_id"] for item in handlers.get_projects(limit=10, owner_user_id=None)["projects"]
+    }
+    local_outputs = {
+        item["output_id"] for item in handlers.get_project_outputs(limit=10, owner_user_id=None)["items"]
+    }
+    assert public_project["project_id"] in local_projects
+    assert public_record.output_id in local_outputs
 
 
 def test_general_project_job_preserves_requested_image_count_and_size() -> None:

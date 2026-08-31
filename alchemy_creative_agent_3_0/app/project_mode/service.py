@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -130,6 +131,44 @@ from .templates import ProjectTemplateManifest, ProjectTemplateRegistry
 
 ECOMMERCE_PRODUCT_UPLOAD_ROLES = {"product_reference", "subject_reference"}
 PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
+_PROJECT_LIST_CURSOR_SCHEMA = "v3_project_list_cursor_v1"
+
+
+def _project_listing_key(project: ProjectRecord) -> tuple[str, str, str]:
+    return (
+        str(project.updated_at or ""),
+        str(project.created_at or ""),
+        str(project.project_id or ""),
+    )
+
+
+def _encode_project_list_cursor(project: ProjectRecord) -> str:
+    payload = {
+        "created_at": str(project.created_at or ""),
+        "project_id": str(project.project_id or ""),
+        "schema_version": _PROJECT_LIST_CURSOR_SCHEMA,
+        "updated_at": str(project.updated_at or ""),
+    }
+    raw = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_project_list_cursor(value: str | None) -> tuple[str, str, str] | None:
+    if value is None or not str(value).strip():
+        return None
+    token = str(value).strip()
+    try:
+        padded = token + ("=" * (-len(token) % 4))
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except (ValueError, TypeError, UnicodeError, json.JSONDecodeError, base64.binascii.Error) as exc:
+        raise ValueError("v3_project_cursor_invalid") from exc
+    if not isinstance(payload, dict) or set(payload) != {"created_at", "project_id", "schema_version", "updated_at"}:
+        raise ValueError("v3_project_cursor_invalid")
+    if payload.get("schema_version") != _PROJECT_LIST_CURSOR_SCHEMA:
+        raise ValueError("v3_project_cursor_invalid")
+    if not all(isinstance(payload.get(key), str) and payload[key] for key in ("created_at", "project_id", "updated_at")):
+        raise ValueError("v3_project_cursor_invalid")
+    return (payload["updated_at"], payload["created_at"], payload["project_id"])
 _ECOMMERCE_IGNORED_CLIENT_METADATA = frozenset(
     {
         "current_reference_binding_digest",
@@ -2348,23 +2387,46 @@ class V3ProjectModeService:
         project.updated_at = _utc_now_iso()
         self.project_store.save_project(project)
 
-    def list_projects(self, limit: int = 20, owner_user_id: int | None = None) -> ProjectListResponse:
-        projects = [
+    def list_projects(
+        self,
+        limit: int = 20,
+        owner_user_id: int | None = None,
+        cursor: str | None = None,
+    ) -> ProjectListResponse:
+        bounded_limit = max(1, min(int(limit or 20), 100))
+        list_all_projects = getattr(self.project_store, "list_all_projects", None)
+        all_projects = (
+            list(list_all_projects())
+            if callable(list_all_projects)
+            else list(self.project_store.list_projects(limit=100))
+        )
+        eligible_projects = [
             project
-            for project in self.project_store.list_projects(limit=100)
+            for project in all_projects
             if project.status != ProjectStatus.ARCHIVED and self._project_visible_to_owner(project, owner_user_id)
-        ][: max(1, min(int(limit or 20), 100))]
-        for project in projects:
-            self._reconcile_project_outputs(project)
-        summaries = [self._memory_summary(project) for project in projects]
+        ]
+        eligible_projects.sort(key=_project_listing_key, reverse=True)
+        total_count = len(eligible_projects)
+        boundary = _decode_project_list_cursor(cursor)
+        if boundary is not None:
+            eligible_projects = [project for project in eligible_projects if _project_listing_key(project) < boundary]
+        projects = eligible_projects[:bounded_limit]
+        summaries = [
+            self._memory_summary(project, owner_user_id=owner_user_id)
+            for project in projects
+        ]
+        has_more = len(eligible_projects) > len(projects)
+        next_cursor = _encode_project_list_cursor(projects[-1]) if has_more and projects else None
         return ProjectListResponse(
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects",
-            total=len(summaries),
-            limit=max(1, min(int(limit or 20), 100)),
+            total=total_count,
+            limit=bounded_limit,
             projects=summaries,
             templates=self.template_cards(),
             metadata=self._metadata(),
+            has_more=has_more,
+            next_cursor=next_cursor,
         )
 
     def list_project_outputs(
@@ -2412,7 +2474,6 @@ class V3ProjectModeService:
                 continue
             if not self._project_visible_to_owner(project, owner_user_id):
                 continue
-            self._reconcile_project_outputs(project)
             items.extend(
                 self._project_output_items(
                     project,
@@ -2499,14 +2560,30 @@ class V3ProjectModeService:
         self.project_store.save_project(project)
         return self._project_response(project)
 
-    def get_project(self, project_id: str) -> ProjectResponse:
+    def get_project(
+        self,
+        project_id: str,
+        owner_user_id: int | None = None,
+    ) -> ProjectResponse:
         project = self._require_project(project_id)
         self._reconcile_project_outputs(project)
         self._ensure_project_product_reference_integrity(project)
         project.latest_context = self._build_context(project)
-        project.memory_summary = self._memory_summary(project)
+        project.memory_summary = self._memory_summary(
+            project,
+            owner_user_id=owner_user_id,
+        )
         self.project_store.save_project(project)
-        return self._project_response(project)
+        public_context = (
+            self._build_context(project, owner_user_id=owner_user_id)
+            if owner_user_id is not None
+            else None
+        )
+        return self._project_response(
+            project,
+            owner_user_id=owner_user_id,
+            context_override=public_context,
+        )
 
     def begin_project_planning_operation(
         self,
@@ -2746,10 +2823,17 @@ class V3ProjectModeService:
             closed += 1
         return closed
 
-    def list_timeline(self, project_id: str) -> ProjectTimelineResponse:
+    def list_timeline(
+        self,
+        project_id: str,
+        owner_user_id: int | None = None,
+    ) -> ProjectTimelineResponse:
         project = self._require_project(project_id)
         self._reconcile_project_outputs(project)
-        items = self.project_store.list_timeline(project.project_id)
+        items = self._timeline_items_for_owner(
+            self.project_store.list_timeline(project.project_id),
+            owner_user_id,
+        )
         return ProjectTimelineResponse(
             api_namespace=API_NAMESPACE,
             route=f"{API_NAMESPACE}/projects/{project.project_id}/timeline",
@@ -2758,14 +2842,25 @@ class V3ProjectModeService:
             items=items,
             metadata={
                 **self._metadata(),
-                "project_outputs": self._project_output_items(project, limit=60),
+                "project_outputs": self._project_output_items(
+                    project,
+                    limit=60,
+                    owner_user_id=owner_user_id,
+                ),
             },
         )
 
-    def get_project_context(self, project_id: str) -> ProjectContextPackage:
+    def get_project_context(
+        self,
+        project_id: str,
+        owner_user_id: int | None = None,
+    ) -> ProjectContextPackage:
         project = self._require_project(project_id)
         self._ensure_project_product_reference_integrity(project)
-        return self._refresh_project_context(project)
+        context = self._refresh_project_context(project)
+        if owner_user_id is None:
+            return context
+        return self._build_context(project, owner_user_id=owner_user_id)
 
     def archive_project(self, project_id: str) -> ProjectResponse:
         project = self._require_project(project_id)
@@ -3384,6 +3479,24 @@ class V3ProjectModeService:
                     }
                 }
             )
+            # Materialize explicit upload intent before the Doc281 snapshot is
+            # issued. Otherwise a direct General job can snapshot an empty
+            # project association and lose its ready upload before the later
+            # context build sees it.
+            explicit_uploaded_asset_ids = list(
+                dict.fromkeys(
+                    str(asset_id).strip()
+                    for asset_id in job_request.uploaded_asset_ids
+                    if str(asset_id).strip()
+                )
+            )
+            if explicit_uploaded_asset_ids:
+                self._persist_job_uploaded_references(
+                    project,
+                    explicit_uploaded_asset_ids,
+                    template_id=template_manifest.template_id,
+                    user_input=str(job_request.user_input or project.user_goal or "").strip(),
+                )
             doc281_registry = self.doc281_general_source_registry
             if doc281_registry.enabled:
                 try:
@@ -3394,7 +3507,7 @@ class V3ProjectModeService:
                         source_library_snapshot=self._doc270_project_source_library(project),
                         requested_output_count=_bounded_requested_image_count(
                             job_request.metadata.get("requested_image_count")
-                        ) or 1,
+                        ) or 2,
                     )
                     if isinstance(identity, dict):
                         self.project_store.append_private_record(project.project_id, _DOC281_GENERAL_COMMAND_NAMESPACE, {
@@ -3587,7 +3700,7 @@ class V3ProjectModeService:
             doc270_ecommerce_view_activation_enabled = False
             doc270_requested_output_count = (
                 _bounded_requested_image_count(job_request.metadata.get("requested_image_count"))
-                or 1
+                or 2
             )
             try:
                 capability = self._doc270_ecommerce_view_activation_capability_lookup(
@@ -3623,7 +3736,7 @@ class V3ProjectModeService:
                 requested_output_count=_bounded_requested_image_count(
                     job_request.metadata.get("requested_image_count")
                 )
-                or 1,
+                or 2,
                 selected_continuation_admissions=doc269_selected_continuation_admissions,
                 current_source_binding=doc271_current_source_binding,
             )
@@ -3642,7 +3755,7 @@ class V3ProjectModeService:
                 requested_output_count=_bounded_requested_image_count(
                     job_request.metadata.get("requested_image_count")
                 )
-                or 1,
+                or 2,
                 selected_continuation_admissions=doc269_selected_continuation_admissions,
                 current_source_binding=doc271_current_source_binding,
                 current_reference_binding_digest=current_reference_binding_digest,
@@ -3713,7 +3826,7 @@ class V3ProjectModeService:
                                     "command_direction": str(job_request.user_input or project.user_goal or "").strip(),
                                     "requested_output_count": _bounded_requested_image_count(
                                         job_request.metadata.get("requested_image_count")
-                                    ) or 1,
+                                    ) or 2,
                                     "current_reference_binding_digest": current_reference_binding_digest,
                                 },
                             }
@@ -3819,6 +3932,17 @@ class V3ProjectModeService:
         if general_variation_contract:
             scenario_parameters = {**scenario_parameters, **general_variation_contract}
         project_job_sequence = len(project.job_ids) + 1
+        job_metadata = dict(job_request.metadata or {})
+        project_owner_id = self._positive_owner_id(project.metadata.get("veyra_user_id"))
+        if project_owner_id is None:
+            # Authenticated routes reject ownerless projects. This branch is
+            # for local/internal callers and prevents caller-owned metadata
+            # from turning an ownerless project into an owned Job.
+            job_metadata.pop("veyra_user_id", None)
+        else:
+            # The persisted project association is the server-owned source of
+            # truth. A request field cannot move a Job to another account.
+            job_metadata["veyra_user_id"] = project_owner_id
         create_payload = {
             "user_input": user_input,
             "brand_id": project.linked_brand_id,
@@ -3828,7 +3952,7 @@ class V3ProjectModeService:
             "uploaded_asset_ids": uploaded_asset_ids,
             "product_profile": product_profile,
             "metadata": {
-                **job_request.metadata,
+                **job_metadata,
                 "project_id": project.project_id,
                 "template_id": template_manifest.template_id,
                 "template_manifest_id": template_manifest.template_id,
@@ -8598,6 +8722,7 @@ class V3ProjectModeService:
         continuation_instruction: str | None = None,
         template_id: str | None = None,
         commerce_profile: ProjectCommerceProfile | None = None,
+        owner_user_id: int | None = None,
     ) -> ProjectContextPackage:
         now = _utc_now_iso()
         effective_template_id = template_id or project.primary_template_id or GENERAL_TEMPLATE_ID
@@ -8609,6 +8734,7 @@ class V3ProjectModeService:
             for ref in project.selected_output_refs
             if state_map.get(self._output_identity(ref), ProjectOutputSelectionStateValue.SELECTED)
             == ProjectOutputSelectionStateValue.SELECTED
+            and self._output_ref_visible_to_owner(ref, owner_user_id)
         ]
         selected_refs: list[OutputRef] = []
         unresolved_selected_outputs: list[dict[str, Any]] = []
@@ -8626,7 +8752,11 @@ class V3ProjectModeService:
                 )
                 continue
             selected_refs.append(canonical)
-        active_references = self._active_references(project)
+        active_references = [
+            reference
+            for reference in self._active_references(project)
+            if self._reference_visible_to_owner(reference, owner_user_id)
+        ]
         active_uploaded_references = [
             self._reference_context_dict(reference)
             for reference in active_references
@@ -8648,6 +8778,7 @@ class V3ProjectModeService:
             if str(item.get("asset_id") or "").strip() not in inactive_asset_ids
             and str(item.get("reference_id") or "").strip() not in inactive_reference_ids
             and str(item.get("status") or "").strip().lower() != ProjectReferenceStatus.INACTIVE.value
+            and self._uploaded_reference_visible_to_owner(item, owner_user_id)
         ]
         active_generated_references: list[dict[str, Any]] = []
         unresolved_generated_references: list[dict[str, Any]] = []
@@ -9461,15 +9592,30 @@ class V3ProjectModeService:
             unique.append({key: value for key, value in item.items() if value not in (None, "", [], {})})
         return unique
 
-    def _memory_summary(self, project: ProjectRecord) -> ProjectMemorySummary:
+    def _memory_summary(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+    ) -> ProjectMemorySummary:
         timeline = self.project_store.list_timeline(project.project_id)
         state_map = self._selected_output_state_map(project)
-        visible_output_items = self._project_output_items(project, limit=200, compact=True)
+        visible_output_items = self._project_output_items(
+            project,
+            limit=200,
+            owner_user_id=owner_user_id,
+            compact=True,
+        )
+        visible_output_aliases = self._visible_output_aliases(visible_output_items)
         selected_refs = [
             ref
             for ref in project.selected_output_refs
             if state_map.get(self._output_identity(ref), ProjectOutputSelectionStateValue.SELECTED)
             == ProjectOutputSelectionStateValue.SELECTED
+            and (
+                owner_user_id is None
+                or self._output_ref_aliases(ref).intersection(visible_output_aliases)
+            )
         ]
         latest_thumbnails: list[str] = []
         if project.primary_template_id != ECOMMERCE_TEMPLATE_ID:
@@ -9497,13 +9643,21 @@ class V3ProjectModeService:
             confirmed_style_chips=self._style_chips(project),
             selected_asset_count=len(selected_refs),
             job_count=len(project.job_ids),
-            latest_job_status=self._latest_project_job_status(project),
+            latest_job_status=self._latest_project_job_status(
+                project,
+                owner_user_id=owner_user_id,
+            ),
             last_action_label=last_action,
             updated_at=project.updated_at,
             next_suggested_actions=self._next_actions(project),
         )
 
-    def _latest_project_job_status(self, project: ProjectRecord) -> str | None:
+    def _latest_project_job_status(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+    ) -> str | None:
         """Return one safe lifecycle value for recent-project rendering.
 
         Project cards must not imply that a terminally blocked/failed job is
@@ -9514,6 +9668,9 @@ class V3ProjectModeService:
 
         for job_id in reversed(project.job_ids):
             try:
+                job_record = self.product_service.get_job_record(job_id)
+                if not self._job_record_visible_to_owner(job_record, owner_user_id):
+                    continue
                 status = self.product_service.get_job(job_id)
             except Exception:
                 continue
@@ -10287,6 +10444,8 @@ class V3ProjectModeService:
                 records = output_store.list_by_job(job_id)
             except Exception:
                 continue
+            if not self._job_record_visible_to_owner(job_record, owner_user_id):
+                continue
             delivery = self._delivery_annotations_for_records(records)
             for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
                 if not self._output_record_visible_to_owner(record, owner_user_id):
@@ -10588,14 +10747,130 @@ class V3ProjectModeService:
         if owner_user_id is None:
             return True
         project_owner_id = self._positive_owner_id(project.metadata.get("veyra_user_id"))
-        return project_owner_id is None or project_owner_id == owner_user_id
+        return project_owner_id == owner_user_id
 
     def _output_record_visible_to_owner(self, record: Any, owner_user_id: int | None) -> bool:
         if owner_user_id is None:
             return True
         metadata = dict(getattr(record, "metadata", None) or {})
         record_owner_id = self._positive_owner_id(metadata.get("veyra_user_id"))
-        return record_owner_id is None or record_owner_id == owner_user_id
+        return record_owner_id == owner_user_id
+
+    def _job_record_visible_to_owner(self, record: Any, owner_user_id: int | None) -> bool:
+        if owner_user_id is None or record is None:
+            return True
+        metadata = dict(getattr(getattr(record, "request", None), "metadata", None) or {})
+        record_owner_id = self._positive_owner_id(metadata.get("veyra_user_id"))
+        return record_owner_id == owner_user_id
+
+    def _uploaded_reference_visible_to_owner(
+        self,
+        reference: dict[str, Any],
+        owner_user_id: int | None,
+    ) -> bool:
+        if owner_user_id is None:
+            return True
+        asset_id = str(
+            reference.get("asset_ref_id")
+            or reference.get("asset_id")
+            or ""
+        ).strip()
+        if not asset_id:
+            return False
+        try:
+            record = self.product_service.get_uploaded_asset(asset_id)
+        except Exception:
+            return False
+        return record is not None and self._positive_owner_id(
+            getattr(record, "veyra_user_id", None)
+        ) == owner_user_id
+
+    def _output_ref_visible_to_owner(
+        self,
+        reference: OutputRef,
+        owner_user_id: int | None,
+    ) -> bool:
+        if owner_user_id is None:
+            return True
+        output_store = getattr(self.product_service, "output_store", None)
+        get_output = getattr(output_store, "get_output", None)
+        if not callable(get_output):
+            return False
+        identifiers = {
+            str(getattr(reference, field, None) or "").strip()
+            for field in ("output_id", "asset_id", "candidate_id", "output_ref_id")
+        }
+        identifiers.discard("")
+        for identifier in identifiers:
+            try:
+                record = get_output(identifier)
+            except Exception:
+                continue
+            if record is not None and self._output_record_visible_to_owner(record, owner_user_id):
+                return True
+        return False
+
+    def _reference_visible_to_owner(
+        self,
+        reference: ProjectReferenceAsset,
+        owner_user_id: int | None,
+    ) -> bool:
+        if owner_user_id is None:
+            return True
+        if reference.source_type == ProjectReferenceSourceType.UPLOADED:
+            return self._uploaded_reference_visible_to_owner(
+                {"asset_ref_id": reference.asset_ref_id},
+                owner_user_id,
+            )
+        if reference.source_type == ProjectReferenceSourceType.GENERATED_SELECTED:
+            output_store = getattr(self.product_service, "output_store", None)
+            get_output = getattr(output_store, "get_output", None)
+            if not callable(get_output):
+                return False
+            output_id = str(
+                reference.created_from_output_id or reference.asset_ref_id or ""
+            ).strip()
+            try:
+                record = get_output(output_id) if output_id else None
+            except Exception:
+                record = None
+            return record is not None and self._output_record_visible_to_owner(
+                record,
+                owner_user_id,
+            )
+        return False
+
+    def _timeline_items_for_owner(
+        self,
+        items: list[ProjectTimelineItem],
+        owner_user_id: int | None,
+    ) -> list[ProjectTimelineItem]:
+        if owner_user_id is None:
+            return items
+        visible_items: list[ProjectTimelineItem] = []
+        for item in items:
+            related_job_ids = {
+                str(value or "").strip()
+                for value in (item.job_id, item.related_job_id)
+                if str(value or "").strip()
+            }
+            if any(
+                not self._job_record_visible_to_owner(
+                    self.product_service.get_job_record(job_id),
+                    owner_user_id,
+                )
+                for job_id in related_job_ids
+            ):
+                continue
+            visible_refs = [
+                reference
+                for reference in item.selected_output_refs
+                if self._output_ref_visible_to_owner(reference, owner_user_id)
+            ]
+            visible_items.append(
+                item.model_copy(update={"selected_output_refs": visible_refs})
+            )
+        return visible_items
 
     def _positive_owner_id(self, value: Any) -> int | None:
         try:
@@ -11126,14 +11401,32 @@ class V3ProjectModeService:
             )
         return False
 
-    def _project_response(self, project: ProjectRecord) -> ProjectResponse:
-        public_project = self._public_project_record(project)
-        disclosures = self._doc281_used_source_disclosures(project)
+    def _project_response(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+        context_override: ProjectContextPackage | None = None,
+    ) -> ProjectResponse:
+        project_output_items = self._project_output_items(
+            project,
+            limit=60,
+            owner_user_id=owner_user_id,
+        )
+        public_project = self._public_project_record(
+            project,
+            owner_user_id=owner_user_id,
+            visible_output_items=project_output_items,
+        )
+        disclosures = self._doc281_used_source_disclosures(
+            project,
+            owner_user_id=owner_user_id,
+        )
         if disclosures:
             public_project.metadata["doc281_used_source_disclosures"] = disclosures
         metadata = {
             **self._metadata(),
-            "project_outputs": self._project_output_items(project, limit=60),
+            "project_outputs": project_output_items,
         }
         metadata["project_source_library"] = public_project_source_library(
             self._doc270_project_source_library(project)
@@ -11202,14 +11495,23 @@ class V3ProjectModeService:
             route=f"{API_NAMESPACE}/projects/{project.project_id}",
             project=public_project,
             templates=self.template_cards(),
-            context=project.latest_context,
+            context=context_override if context_override is not None else project.latest_context,
             metadata=metadata,
         )
 
-    def _doc281_used_source_disclosures(self, project: ProjectRecord) -> list[dict[str, Any]]:
+    def _doc281_used_source_disclosures(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Project safe source labels for exact eligible Job/output bindings only."""
 
-        delivered = self._project_output_items(project, limit=60)
+        delivered = self._project_output_items(
+            project,
+            limit=60,
+            owner_user_id=owner_user_id,
+        )
         output_by_id = {
             self._public_project_output_identity(item): item
             for item in delivered
@@ -11218,7 +11520,12 @@ class V3ProjectModeService:
         # Review history is a separate visible surface. Only its established
         # withheld-review projection may receive a source label; a failed or
         # merely materialized output is never promoted by this disclosure.
-        for item in self._project_output_items(project, limit=60, include_hidden=True):
+        for item in self._project_output_items(
+            project,
+            limit=60,
+            include_hidden=True,
+            owner_user_id=owner_user_id,
+        ):
             output_id = self._public_project_output_identity(item)
             if (
                 output_id
@@ -11350,8 +11657,13 @@ class V3ProjectModeService:
             return None
         return envelope["output_index"] if isinstance(envelope.get("output_index"), int) else None
 
-    @staticmethod
-    def _public_project_record(project: ProjectRecord) -> ProjectRecord:
+    def _public_project_record(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+        visible_output_items: list[dict[str, Any]] | None = None,
+    ) -> ProjectRecord:
         """Keep durable continuation plans out of browser project reads."""
 
         public_metadata_keys = {
@@ -11377,7 +11689,56 @@ class V3ProjectModeService:
             for key, value in dict(project.metadata or {}).items()
             if key in public_metadata_keys
         }
-        return project.model_copy(update={"metadata": public_metadata}, deep=True)
+        public_project = project.model_copy(update={"metadata": public_metadata}, deep=True)
+        if owner_user_id is None:
+            return public_project
+
+        visible_aliases = self._visible_output_aliases(visible_output_items or [])
+        public_selected_refs = [
+            self._public_output_ref(ref)
+            for ref in project.selected_output_refs
+            if self._output_ref_aliases(ref).intersection(visible_aliases)
+        ]
+        return public_project.model_copy(
+            update={"selected_output_refs": public_selected_refs},
+            deep=True,
+        )
+
+    @staticmethod
+    def _output_ref_aliases(ref: OutputRef) -> set[str]:
+        return {
+            str(getattr(ref, field, None) or "").strip()
+            for field in ("output_id", "asset_id", "candidate_id", "output_ref_id")
+            if str(getattr(ref, field, None) or "").strip()
+        }
+
+    @classmethod
+    def _visible_output_aliases(cls, items: list[dict[str, Any]]) -> set[str]:
+        aliases: set[str] = set()
+        for item in items:
+            for field in ("output_id", "asset_id", "candidate_id", "output_ref_id"):
+                value = str(item.get(field) or "").strip()
+                if value:
+                    aliases.add(value)
+        return aliases
+
+    @staticmethod
+    def _public_output_ref(ref: OutputRef) -> OutputRef:
+        private_metadata_keys = {
+            "file_path",
+            "mime_type",
+            "provider",
+            "model",
+            "source_integrity_id",
+            "canonical_output_binding",
+            "v3_owned_output",
+        }
+        metadata = {
+            key: value
+            for key, value in dict(ref.metadata or {}).items()
+            if key not in private_metadata_keys
+        }
+        return ref.model_copy(update={"metadata": metadata}, deep=True)
 
     def _metadata(self) -> dict[str, Any]:
         ecommerce_manifest = self.template_registry.get_manifest(ECOMMERCE_TEMPLATE_ID)

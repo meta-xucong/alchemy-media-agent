@@ -2278,7 +2278,8 @@ def test_mobile_h5_app_is_served_independently():
     assert mobile.status_code == 200
     assert "/mobile-static/mobile.css" in h5.text
     assert "/mobile-static/mobile.js" in h5.text
-    assert "20260710-v3-reference-channels" in h5.text
+    assert "/mobile-static/mobile.js?v=" in h5.text
+    assert "__MOBILE_APP_VERSION__" not in h5.text
     assert h5.headers["cache-control"] == "no-store"
     assert '<body data-active-module="image">' in h5.text
     assert "V1 基础" in h5.text

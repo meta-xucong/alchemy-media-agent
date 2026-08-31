@@ -1668,9 +1668,33 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
 
     @staticmethod
     def _has_product_profile_facts(product_profile: dict[str, Any]) -> bool:
-        return isinstance(product_profile, dict) and any(
-            value not in (None, "", [], {})
-            for value in product_profile.values()
+        if not isinstance(product_profile, dict):
+            return False
+        # General Project Mode transports its title, goal, context, and
+        # variation contract through this compatibility field as well. Only
+        # the typed product facts can activate product semantics here.
+        product_fact_keys = {
+            "product_name",
+            "product_category",
+            "platform",
+            "market",
+            "price_positioning",
+            "target_audience",
+            "selling_points",
+            "core_selling_points",
+            "facts",
+            "product_specs",
+            "claims",
+            "keyword_roots",
+            "keywords",
+            "competitor_notes",
+            "apparel_construction",
+            "has_product_reference",
+            "text_to_image_fallback",
+        }
+        return any(
+            key in product_fact_keys and value not in (None, "", [], {})
+            for key, value in product_profile.items()
         )
 
     @staticmethod

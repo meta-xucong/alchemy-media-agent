@@ -19,6 +19,9 @@ from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projectio
     ProductTruthAdmission,
 )
 from alchemy_creative_agent_3_0.app.product_api.contracts import V3AssetUploadStatusValue
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    ConfiguredEcommerceViewActivationIssuer,
+)
 from alchemy_creative_agent_3_0.tests.test_v3_doc264_ecommerce_legacy_reference_recovery import (
     _handlers,
     _project,
@@ -59,6 +62,7 @@ def _fixture(tmp_path):
         for index, view in enumerate(("front", "side", "rear", "detail"))
     ]
     _add_product_references(handlers, ecommerce_project["project_id"], product_ids)
+    _enable_doc270_test_registry(handlers, ecommerce_project["project_id"], product_ids)
     face_output_ids = _bind_locked_person_identity(
         handlers,
         catalog,
@@ -70,6 +74,65 @@ def _fixture(tmp_path):
         index=71,
     )
     return handlers, ecommerce_project, product_ids, face_output_ids, history_output.output_id
+
+
+class _Doc270SourceLibraryAnalyzer:
+    """Return typed evidence for the exact server-created association only."""
+
+    def __init__(self, profiles: dict[str, tuple[str, str]]) -> None:
+        self.profiles = dict(profiles)
+
+    def analyze(self, *, project_id: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+        assert project_id
+        if len(entries) != 1:
+            return None
+        profile = self.profiles.get(str(entries[0].get("reference_id") or ""))
+        if profile is None:
+            return None
+        view_kind, affordance = profile
+        return [{
+            "evidence_state": "observed",
+            "subject_kind": "object_or_product",
+            "view_kind": view_kind,
+            "affordances": [affordance],
+        }]
+
+
+def _enable_doc270_test_registry(
+    handlers: Any,
+    project_id: str,
+    product_ids: list[str],
+) -> None:
+    """Enable only the source-library contracts that this module exercises."""
+
+    project = handlers.project_service._require_project(project_id)  # noqa: SLF001
+    profiles: dict[str, tuple[str, str]] = {}
+    semantic_profiles = (
+        ("front", "object_front_presentation"),
+        ("rear", "object_back_or_structure"),
+        ("detail_or_macro", "object_detail"),
+        ("front", "object_front_presentation"),
+    )
+    for asset_id, semantic in zip(product_ids, semantic_profiles, strict=False):
+        reference = next(
+            item for item in project.reference_assets if item.asset_ref_id == asset_id
+        )
+        profiles[reference.reference_id] = semantic
+    handlers.project_service.ecommerce_view_activation_issuer = ConfiguredEcommerceViewActivationIssuer(
+        requirements_by_output_count={
+            1: ({"output_index": 1, "kind": "object_front_presentation"},),
+            2: (
+                {"output_index": 1, "kind": "object_front_presentation"},
+                {"output_index": 2, "kind": "object_rear_structure"},
+            ),
+            3: (
+                {"output_index": 1, "kind": "object_front_presentation"},
+                {"output_index": 2, "kind": "object_rear_structure"},
+                {"output_index": 3, "kind": "object_detail"},
+            ),
+        },
+        analyzer=_Doc270SourceLibraryAnalyzer(profiles),
+    )
 
 
 def _association_id(handlers, project_id: str, asset_id: str) -> str:

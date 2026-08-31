@@ -31,7 +31,7 @@ const historyPageSize = 24;
 const historyFetchPageSize = 48;
 const heroHistoryPageSize = 8;
 const v3ProjectHomePageSize = 9;
-const v3ProjectFetchLimit = 80;
+const v3ProjectFetchLimit = v3ProjectHomePageSize;
 const v3ProjectCacheLimit = 80;
 const v2TemplatePageSize = 16;
 const v2TemplateEagerImageCount = 6;
@@ -301,6 +301,10 @@ const v3State = {
   projects: [],
   projectsLoaded: false,
   projectsLoading: false,
+  projectsLoadingMore: false,
+  projectsNextCursor: null,
+  projectsHasMore: false,
+  projectsLoadError: "",
   projectRenderLimit: v3ProjectHomePageSize,
   currentProject: null,
   projectTimeline: [],
@@ -368,6 +372,7 @@ const v3State = {
   imageHistory: [],
   imageHistoryLoaded: false,
   imageHistoryLoading: false,
+  imageHistoryError: "",
   projectOutputsRequest: null,
   projectOutputsRequestOwner: null,
   activeHistoryProjectId: "",
@@ -944,7 +949,7 @@ function scheduleInitialBackgroundLoads({ hadVeyraTicket = false } = {}) {
   scheduleIdleTask(() => {
     if (getVeyraToken() && !hadVeyraTicket) {
       refreshVeyraAccount().catch(() => {
-        veyraState.account = null;
+        setVeyraAccount(null);
         updateAdminSettingsEntry();
       });
     }
@@ -1869,7 +1874,16 @@ async function initV3Shell({ force = false } = {}) {
     const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`);
     v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
     v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
-    v3State.projects = Array.isArray(payload.projects) ? payload.projects : [];
+    const apiProjects = Array.isArray(payload.projects) ? payload.projects : [];
+    const serverProjectIds = new Set(apiProjects.map((item) => String(item?.project_id || "")).filter(Boolean));
+    v3State.projects = mergeV3ProjectItems(
+      apiProjects,
+      localProjects.filter((item) => serverProjectIds.has(String(item?.project_id || ""))),
+    );
+    v3State.projectsNextCursor = payload.next_cursor || null;
+    v3State.projectsHasMore = Boolean(payload.has_more && v3State.projectsNextCursor);
+    v3State.projectsLoadError = "";
+    v3State.projectRenderLimit = v3ProjectHomePageSize;
     v3State.projectsLoaded = true;
     writeV3LocalProjects(v3State.projects);
     v3State.loaded = true;
@@ -1903,16 +1917,18 @@ async function initV3Shell({ force = false } = {}) {
     v3State.templates = [];
     v3State.templateCatalogStatus = "failed";
     v3State.templateCatalogError = "项目类型暂时无法读取";
-    v3State.projects = readV3LocalProjects();
+    v3State.projects = [];
+    v3State.projectsNextCursor = null;
+    v3State.projectsHasMore = false;
+    v3State.projectsLoadError = friendlyError(error);
+    clearV3LocalCaches();
     v3State.templates = [];
     v3State.projectsLoaded = true;
     v3State.loaded = true;
     renderV3HomeTemplateChooser();
     renderV3Projects();
     renderV3History();
-    if (!v3State.projects.length) {
-      updateV3Notice(`V3 项目加载失败：${friendlyError(error)}`, "warning");
-    }
+    updateV3Notice(`V3 项目加载失败：${friendlyError(error)}`, "warning");
   } finally {
     v3State.loading = false;
     // The initial catalog render deliberately shows a loading placeholder.
@@ -2794,28 +2810,55 @@ function v3VariationModeLabel(mode) {
   return labels[mode] || labels.auto;
 }
 
-async function loadV3Projects({ silent = false, force = false } = {}) {
-  if (v3State.projectsLoading || (v3State.projectsLoaded && !force)) {
+async function loadV3Projects({ silent = false, force = false, loadMore = false } = {}) {
+  const requestingMore = Boolean(loadMore && !force);
+  if (v3State.projectsLoading || v3State.projectsLoadingMore) {
     renderV3HomeTemplateChooser();
     renderV3Projects();
     renderV3History();
     return;
   }
-  v3State.projectsLoading = true;
-  v3State.templateCatalogStatus = "loading";
-  v3State.templateCatalogError = "";
+  if (requestingMore && (!v3State.projectsHasMore || !v3State.projectsNextCursor)) return;
+  if (!requestingMore && v3State.projectsLoaded && !force) {
+    renderV3HomeTemplateChooser();
+    renderV3Projects();
+    renderV3History();
+    return;
+  }
+  if (requestingMore) {
+    v3State.projectsLoadingMore = true;
+  } else {
+    v3State.projectsLoading = true;
+    v3State.templateCatalogStatus = "loading";
+    v3State.templateCatalogError = "";
+    v3State.projectsLoadError = "";
+    if (force) {
+      v3State.projectsNextCursor = null;
+      v3State.projectsHasMore = false;
+      v3State.projectRenderLimit = v3ProjectHomePageSize;
+    }
+  }
   if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.disabled = true;
-  const localItems = readV3LocalProjects();
+  const localItems = requestingMore ? [] : readV3LocalProjects();
   try {
-    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}`);
+    const cursor = requestingMore ? `&cursor=${encodeURIComponent(v3State.projectsNextCursor)}` : "";
+    const payload = await request(`${v3ApiBase}/projects?limit=${v3ProjectFetchLimit}${cursor}`);
     const apiItems = Array.isArray(payload.projects) ? payload.projects : [];
-    v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
-    v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
-    const serverProjectIds = new Set(apiItems.map((item) => String(item?.project_id || "")).filter(Boolean));
-    v3State.projects = mergeV3ProjectItems(
-      apiItems,
-      localItems.filter((item) => serverProjectIds.has(String(item?.project_id || ""))),
-    );
+    if (!requestingMore) {
+      v3State.templates = Array.isArray(payload.templates) ? payload.templates : [];
+      v3State.templateCatalogStatus = v3State.templates.length ? "ready" : "empty";
+      const serverProjectIds = new Set(apiItems.map((item) => String(item?.project_id || "")).filter(Boolean));
+      v3State.projects = mergeV3ProjectItems(
+        apiItems,
+        localItems.filter((item) => serverProjectIds.has(String(item?.project_id || ""))),
+      );
+    } else {
+      v3State.projects = appendV3ProjectItems(v3State.projects, apiItems);
+      v3State.projectRenderLimit = Math.max(v3State.projectRenderLimit, v3State.projects.length);
+    }
+    v3State.projectsNextCursor = payload.next_cursor || null;
+    v3State.projectsHasMore = Boolean(payload.has_more && v3State.projectsNextCursor);
+    v3State.projectsLoadError = "";
     v3State.projectsLoaded = true;
     writeV3LocalProjects(v3State.projects);
     renderV3HomeTemplateChooser();
@@ -2823,18 +2866,26 @@ async function loadV3Projects({ silent = false, force = false } = {}) {
     renderV3History();
     renderV3HeroHistory();
   } catch (error) {
-    v3State.templates = [];
-    v3State.templateCatalogStatus = "failed";
-    v3State.templateCatalogError = "项目类型暂时无法读取";
-    v3State.projects = mergeV3ProjectItems(localItems, []);
-    v3State.templates = [];
-    v3State.projectsLoaded = true;
+    if (!requestingMore) {
+      v3State.templates = [];
+      v3State.templateCatalogStatus = "failed";
+      v3State.templateCatalogError = "项目类型暂时无法读取";
+      v3State.projects = [];
+      v3State.projectsNextCursor = null;
+      v3State.projectsHasMore = false;
+      v3State.projectsLoadError = friendlyError(error);
+      v3State.projectsLoaded = true;
+      clearV3LocalCaches();
+    } else {
+      v3State.projectsLoadError = friendlyError(error);
+    }
     renderV3HomeTemplateChooser();
     renderV3Projects();
     renderV3History();
-    if (!silent) showGlobalToast(`V3 项目加载失败，已显示本地项目：${friendlyError(error)}`, "warning");
+    if (!silent) showGlobalToast(`V3 项目加载失败：${friendlyError(error)}`, "warning");
   } finally {
     v3State.projectsLoading = false;
+    v3State.projectsLoadingMore = false;
     if (els.v3RefreshProjectsBtn) els.v3RefreshProjectsBtn.disabled = false;
   }
 }
@@ -2894,6 +2945,7 @@ async function loadV3ProjectOutputs({
       v3State.imageHistory = items;
       v3State.projectReviewOutputs = reviewItems;
     }
+    v3State.imageHistoryError = "";
     v3State.imageHistoryLoaded = true;
     if (scopedProjectId) {
       syncV3ProjectOutputsFromList(items, scopedProjectId, reviewItems);
@@ -2908,9 +2960,23 @@ async function loadV3ProjectOutputs({
     return items;
   } catch (error) {
     if (!v3GenerationSessionOwns(shouldContinue)) return [];
-    v3State.imageHistoryLoaded = true;
+    v3State.imageHistoryLoaded = false;
+    v3State.imageHistoryError = friendlyError(error);
+    if (scopedProjectId) {
+      v3State.projectOutputs = [];
+      v3State.projectOutputItems = [];
+      v3State.projectReviewOutputs = [];
+    } else {
+      v3State.imageHistory = [];
+      v3State.projectOutputs = [];
+      v3State.projectOutputItems = [];
+      v3State.projectReviewOutputs = [];
+    }
+    clearV3LocalCaches();
     renderV3History();
     renderV3HeroHistory();
+    renderV3ProjectOutputBoard();
+    renderV3ProjectSnapshot();
     if (!silent) showGlobalToast(`V3 最近项目加载失败：${friendlyError(error)}`, "warning");
     return [];
   } finally {
@@ -2926,9 +2992,46 @@ async function loadV3ProjectOutputs({
   }
 }
 
+function v3CacheOwnerId(account = veyraState.account) {
+  const user = veyraAccountUser(account);
+  const value = Number(user?.user_id ?? user?.id);
+  return Number.isInteger(value) && value > 0 ? String(value) : "";
+}
+
+function v3CacheStorageKey(baseKey) {
+  const ownerId = v3CacheOwnerId();
+  if (ownerId) return `${baseKey}:account:${ownerId}`;
+  if (getVeyraToken()) return "";
+  return baseKey;
+}
+
+function clearV3LocalCaches() {
+  try {
+    const keys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key) continue;
+      if (
+        key === v3ProjectStorageKey
+        || key === v3HistoryStorageKey
+        || key.startsWith(`${v3ProjectStorageKey}:account:`)
+        || key.startsWith(`${v3HistoryStorageKey}:account:`)
+      ) {
+        keys.push(key);
+      }
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // V3 still treats the server response as authoritative when storage is unavailable.
+  }
+}
+
 function readV3LocalProjects() {
   try {
-    const raw = localStorage.getItem(v3ProjectStorageKey) || localStorage.getItem(v3HistoryStorageKey);
+    const projectKey = v3CacheStorageKey(v3ProjectStorageKey);
+    const historyKey = v3CacheStorageKey(v3HistoryStorageKey);
+    if (!projectKey && !historyKey) return [];
+    const raw = localStorage.getItem(projectKey) || localStorage.getItem(historyKey);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed.filter((item) => item && item.project_id) : [];
   } catch {
@@ -2938,7 +3041,9 @@ function readV3LocalProjects() {
 
 function writeV3LocalProjects(items) {
   try {
-    localStorage.setItem(v3ProjectStorageKey, JSON.stringify(items.slice(0, v3ProjectCacheLimit)));
+    const key = v3CacheStorageKey(v3ProjectStorageKey);
+    if (!key) return;
+    localStorage.setItem(key, JSON.stringify(items.slice(0, v3ProjectCacheLimit)));
   } catch {
     // Local project cache is only for quick reopening; V3 must still work without it.
   }
@@ -2988,7 +3093,20 @@ function mergeV3ProjectItems(primaryItems, fallbackItems) {
     const existing = byId.get(item.project_id) || {};
     byId.set(item.project_id, { ...existing, ...item });
   });
-  return Array.from(byId.values()).sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a)).slice(0, v3ProjectCacheLimit);
+  return Array.from(byId.values()).sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a));
+}
+
+function appendV3ProjectItems(existingItems, incomingItems) {
+  const seen = new Set();
+  const result = [];
+  [...(Array.isArray(existingItems) ? existingItems : []), ...(Array.isArray(incomingItems) ? incomingItems : [])]
+    .forEach((item) => {
+      const projectId = String(item?.project_id || "").trim();
+      if (!projectId || seen.has(projectId)) return;
+      seen.add(projectId);
+      result.push(item);
+    });
+  return result;
 }
 
 function v3ProjectTime(item) {
@@ -3159,8 +3277,7 @@ function renderV3Projects() {
   const professional = v3State.workspaceMode === "professional";
   const items = [...v3State.projects]
     .filter((item) => item?.status !== "archived")
-    .filter((item) => v3ProjectUsesProfessionalWorkspace(item) === professional)
-    .sort((a, b) => v3ProjectTime(b) - v3ProjectTime(a));
+    .filter((item) => v3ProjectUsesProfessionalWorkspace(item) === professional);
   if (els.v3ProjectCount) els.v3ProjectCount.textContent = String(items.length);
   els.v3ProjectList.innerHTML = "";
   els.v3ProjectList.classList.toggle("empty-v3-list", items.length === 0);
@@ -3193,12 +3310,12 @@ function renderV3Projects() {
     `;
     els.v3ProjectList.appendChild(card);
   });
-  if (items.length > v3State.projectRenderLimit) {
+  if (v3State.projectsHasMore || items.length > v3State.projectRenderLimit) {
     const loadMore = document.createElement("article");
     loadMore.className = "v3-project-card v3-project-load-more-card";
     loadMore.innerHTML = `
       <div class="v3-project-thumb-wrap v3-project-load-more-thumb">
-        <span>${items.length - v3State.projectRenderLimit}</span>
+        <span>${v3State.projectsHasMore ? "…" : Math.max(0, items.length - v3State.projectRenderLimit)}</span>
       </div>
       <div class="v3-project-goal-slot">
         <p>还有更多项目可以查看</p>
@@ -3207,7 +3324,7 @@ function renderV3Projects() {
         <span>首页先显示两排，继续加载不会一次拉大图</span>
       </div>
       <div class="v3-project-card-actions">
-        <button type="button" class="button compact secondary" data-v3-project-action="load_more_projects">加载更多项目</button>
+        <button type="button" class="button compact secondary" data-v3-project-action="load_more_projects"${v3State.projectsLoadingMore ? " disabled" : ""}>${v3State.projectsLoadingMore ? "加载中..." : "加载更多项目"}</button>
       </div>
     `;
     els.v3ProjectList.appendChild(loadMore);
@@ -3222,7 +3339,11 @@ function renderV3History() {
   els.v3HistoryList.innerHTML = "";
   els.v3HistoryList.classList.toggle("empty-v3-list", groups.length === 0);
   if (!groups.length) {
-    els.v3HistoryList.textContent = v3State.projectsLoading ? "正在读取最近项目..." : "还没有项目";
+    els.v3HistoryList.textContent = v3State.projectsLoading
+      ? "正在读取最近项目..."
+      : v3State.imageHistoryError
+        ? "项目图片暂时无法读取，请重试。"
+        : "还没有项目";
     return;
   }
   visibleGroups.forEach((group) => {
@@ -6350,10 +6471,9 @@ function handleV3ProjectClick(event) {
       return;
     }
     if (actionButton.dataset.v3ProjectAction === "load_more_projects") {
-      v3State.projectRenderLimit += v3ProjectHomePageSize;
-      renderV3Projects();
-      renderV3History();
-      renderV3HeroHistory();
+      loadV3Projects({ silent: false, loadMore: true }).catch((error) => {
+        showGlobalToast(`更多项目加载失败：${friendlyError(error)}`, "warning");
+      });
       return;
     }
     if (actionButton.dataset.v3ProjectAction === "open_project") {
@@ -6372,10 +6492,9 @@ function handleV3HistoryClick(event) {
   if (event.target.closest("[data-v3-history-load-more]")) {
     event.preventDefault();
     event.stopPropagation();
-    v3State.projectRenderLimit += v3ProjectHomePageSize;
-    renderV3Projects();
-    renderV3History();
-    renderV3HeroHistory();
+    loadV3Projects({ silent: false, loadMore: true }).catch((error) => {
+      showGlobalToast(`更多项目加载失败：${friendlyError(error)}`, "warning");
+    });
     return;
   }
   const projectButton = event.target.closest("[data-v3-history-project]");
@@ -15165,9 +15284,12 @@ function getVeyraToken() {
 }
 
 function setVeyraToken(token) {
+  const nextToken = String(token || "");
+  const previousToken = getVeyraToken();
+  if (nextToken !== previousToken) clearV3LocalCaches();
   try {
-    if (token) {
-      localStorage.setItem(veyraTokenStorageKey, token);
+    if (nextToken) {
+      localStorage.setItem(veyraTokenStorageKey, nextToken);
     } else {
       localStorage.removeItem(veyraTokenStorageKey);
       localStorage.removeItem(veyraAccountStorageKey);
@@ -15275,6 +15397,13 @@ async function loadV2OptionalResource(path, fallbackValue = null, { timeoutMs = 
   }
 }
 
+function setVeyraAccount(account) {
+  const previousOwnerId = v3CacheOwnerId();
+  veyraState.account = account;
+  const nextOwnerId = v3CacheOwnerId(account);
+  if (previousOwnerId && nextOwnerId && previousOwnerId !== nextOwnerId) clearV3LocalCaches();
+}
+
 async function downloadV3Output(url, button) {
   return downloadImageFile(url, "", button);
 }
@@ -15347,7 +15476,7 @@ async function hasValidVeyraSession() {
   if (getVeyraToken()) return true;
   try {
     const account = await v2Request("/veyra/me", { skipVeyraAuth: true });
-    veyraState.account = account;
+    setVeyraAccount(account);
     try {
       localStorage.setItem(veyraAccountStorageKey, JSON.stringify(account));
     } catch {
@@ -15425,7 +15554,7 @@ async function syncVeyraSessionCookie() {
 async function refreshVeyraAccount() {
   try {
     const account = await v2Request("/veyra/me");
-    veyraState.account = account;
+    setVeyraAccount(account);
     try {
       localStorage.setItem(veyraAccountStorageKey, JSON.stringify(account));
     } catch {
@@ -15804,7 +15933,7 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
       request("/v1/veyra/usage?limit=100"),
       v2Request("/veyra/usage?limit=100"),
     ]);
-    veyraState.account = account;
+    setVeyraAccount(account);
     veyraState.history = mergeAccountHistory(v1HistoryResponse.items || [], v2HistoryResponse.items || []);
     veyraState.usage = mergeVeyraUsage(v1UsageResponse.items || [], v2UsageResponse.items || []);
     veyraState.usedTemplates = await buildVeyraTemplateHistory(v2HistoryResponse.items || []);

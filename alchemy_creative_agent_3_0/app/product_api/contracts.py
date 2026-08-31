@@ -186,6 +186,7 @@ class V3AssetContentUploadRequest(ProductApiBase):
 
 class V3UploadedAssetRecord(V3BaseModel):
     asset_id: str
+    veyra_user_id: int | None = None
     filename: str
     mime_type: str
     size_bytes: int = 0

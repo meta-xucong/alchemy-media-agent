@@ -30,7 +30,7 @@ const historyPageSize = 24;
 const historyFetchPageSize = 48;
 const heroHistoryPageSize = 8;
 const mobileV3ProjectPageSize = 4;
-const mobileV3ProjectFetchLimit = 80;
+const mobileV3ProjectFetchLimit = mobileV3ProjectPageSize;
 const mobileV3ProjectCacheLimit = 80;
 const v2TemplatePageSize = 10;
 const v2TemplateEagerImageCount = 4;
@@ -2673,8 +2673,13 @@ const mobileV3State = {
   templatesLoaded: false,
   templatesError: "",
   projectRenderLimit: mobileV3ProjectPageSize,
+  projectsLoadingMore: false,
+  projectsNextCursor: null,
+  projectsHasMore: false,
+  projectsLoadError: "",
   outputs: [],
   reviewOutputs: [],
+  outputError: "",
   workspaceMode: "standard",
   selectedTemplate: "general_template",
   currentProject: null,
@@ -3360,10 +3365,47 @@ async function mobileV3Request(path, options = {}) {
   return await request(`${mobileV3ApiBase}${path}`, options);
 }
 
+function mobileV3CacheOwnerId(account = veyraState.account) {
+  const user = veyraAccountUser(account);
+  const value = Number(user?.user_id ?? user?.id);
+  return Number.isInteger(value) && value > 0 ? String(value) : "";
+}
+
+function mobileV3CacheStorageKey(baseKey) {
+  const ownerId = mobileV3CacheOwnerId();
+  if (ownerId) return `${baseKey}:account:${ownerId}`;
+  if (getVeyraToken()) return "";
+  return baseKey;
+}
+
+function clearMobileV3Caches() {
+  try {
+    const keys = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key) continue;
+      if (
+        key === mobileV3ProjectsCacheKey
+        || key === mobileV3OutputsCacheKey
+        || key.startsWith(`${mobileV3ProjectsCacheKey}:account:`)
+        || key.startsWith(`${mobileV3OutputsCacheKey}:account:`)
+      ) {
+        keys.push(key);
+      }
+    }
+    keys.forEach((key) => window.localStorage.removeItem(key));
+  } catch (_error) {
+    // The server response remains authoritative when browser storage is unavailable.
+  }
+}
+
 function hydrateMobileV3Caches() {
   try {
-    const projects = JSON.parse(window.localStorage.getItem(mobileV3ProjectsCacheKey) || "[]");
-    const outputs = JSON.parse(window.localStorage.getItem(mobileV3OutputsCacheKey) || "[]");
+    const projectsKey = mobileV3CacheStorageKey(mobileV3ProjectsCacheKey);
+    const outputsKey = mobileV3CacheStorageKey(mobileV3OutputsCacheKey);
+    if (!projectsKey && !outputsKey) return;
+    const projects = JSON.parse(window.localStorage.getItem(projectsKey) || "[]");
+    const outputs = JSON.parse(window.localStorage.getItem(outputsKey) || "[]");
     if (Array.isArray(projects) && projects.length) {
       mobileV3State.projects = projects;
     }
@@ -3381,10 +3423,26 @@ function hydrateMobileV3Caches() {
 
 function persistMobileV3Caches() {
   try {
-    window.localStorage.setItem(mobileV3ProjectsCacheKey, JSON.stringify((mobileV3State.projects || []).slice(0, mobileV3ProjectCacheLimit)));
-    window.localStorage.setItem(mobileV3OutputsCacheKey, JSON.stringify((mobileV3State.outputs || []).slice(0, 80)));
+    const projectsKey = mobileV3CacheStorageKey(mobileV3ProjectsCacheKey);
+    const outputsKey = mobileV3CacheStorageKey(mobileV3OutputsCacheKey);
+    if (!projectsKey || !outputsKey) return;
+    window.localStorage.setItem(projectsKey, JSON.stringify((mobileV3State.projects || []).slice(0, mobileV3ProjectCacheLimit)));
+    window.localStorage.setItem(outputsKey, JSON.stringify((mobileV3State.outputs || []).slice(0, 80)));
   } catch (_error) {
   }
+}
+
+function appendMobileV3ProjectItems(existingItems, incomingItems) {
+  const seen = new Set();
+  const result = [];
+  [...(Array.isArray(existingItems) ? existingItems : []), ...(Array.isArray(incomingItems) ? incomingItems : [])]
+    .forEach((item) => {
+      const projectId = String(item?.project_id || "").trim();
+      if (!projectId || seen.has(projectId)) return;
+      seen.add(projectId);
+      result.push(item);
+    });
+  return result;
 }
 
 function mobileV3ProjectWithResponseMetadata(project, payload) {
@@ -3403,18 +3461,31 @@ function mobileV3ProjectWithResponseMetadata(project, payload) {
   return { ...project, metadata: nextMetadata };
 }
 
-async function loadMobileV3Projects({ silent = true, force = false } = {}) {
-  if (mobileV3State.loading) return;
-  if (mobileV3State.loaded && !force) {
+async function loadMobileV3Projects({ silent = true, force = false, loadMore = false } = {}) {
+  const requestingMore = Boolean(loadMore && !force);
+  if (mobileV3State.loading || mobileV3State.projectsLoadingMore) return;
+  if (requestingMore && (!mobileV3State.projectsHasMore || !mobileV3State.projectsNextCursor)) return;
+  if (!requestingMore && mobileV3State.loaded && !force) {
     renderMobileV3ProjectCards();
     return;
   }
-  mobileV3State.loading = true;
+  if (requestingMore) {
+    mobileV3State.projectsLoadingMore = true;
+  } else {
+    mobileV3State.loading = true;
+    mobileV3State.projectsLoadError = "";
+    if (force) {
+      mobileV3State.projectsNextCursor = null;
+      mobileV3State.projectsHasMore = false;
+      mobileV3State.projectRenderLimit = mobileV3ProjectPageSize;
+    }
+  }
   if (!mobileV3State.projects.length) renderMobileV3ProjectSkeletons(6);
   setMobileV3LoadingLayer(true, "正在同步项目", "先显示项目框架，再分批加载图片预览。");
   updateMobileV3Status("同步中");
   try {
-    const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectFetchLimit}`);
+    const cursor = requestingMore ? `&cursor=${encodeURIComponent(mobileV3State.projectsNextCursor)}` : "";
+    const projectsPayload = await mobileV3Request(`/projects?limit=${mobileV3ProjectFetchLimit}${cursor}`);
     if (!Array.isArray(projectsPayload?.templates)) {
       throw new Error("template_catalog_unavailable");
     }
@@ -3425,49 +3496,83 @@ async function loadMobileV3Projects({ silent = true, force = false } = {}) {
       mobileV3State.selectedTemplate = "";
     }
     normalizeMobileV3HomeSurface();
-    mobileV3State.projects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
-    mobileV3State.outputsLoaded = false;
-    mobileV3State.outputs = [];
+    const apiProjects = Array.isArray(projectsPayload.projects) ? projectsPayload.projects : [];
+    if (requestingMore) {
+      mobileV3State.projects = appendMobileV3ProjectItems(mobileV3State.projects, apiProjects);
+      mobileV3State.projectRenderLimit = Math.max(mobileV3State.projectRenderLimit, mobileV3State.projects.length);
+    } else {
+      mobileV3State.projects = apiProjects;
+      mobileV3State.outputsLoaded = false;
+      mobileV3State.outputError = "";
+      mobileV3State.outputs = [];
+      mobileV3State.reviewOutputs = [];
+    }
+    mobileV3State.projectsNextCursor = projectsPayload.next_cursor || null;
+    mobileV3State.projectsHasMore = Boolean(projectsPayload.has_more && mobileV3State.projectsNextCursor);
+    mobileV3State.projectsLoadError = "";
     mobileV3State.loaded = true;
     persistMobileV3Caches();
     renderMobileV3ProjectCards({ deferImages: true });
-    let initialOutputs = { items: [], review_items: [] };
-    try {
-      initialOutputs = await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`);
-    } catch (_error) {
+    if (!requestingMore) {
+      let initialOutputs = null;
+      try {
+        initialOutputs = await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`);
+        mobileV3State.outputError = "";
+        mobileV3State.outputsLoaded = true;
+      } catch (error) {
+        mobileV3State.outputError = friendlyError(error);
+        mobileV3State.outputsLoaded = false;
+        mobileV3State.outputs = [];
+        mobileV3State.reviewOutputs = [];
+        clearMobileV3Caches();
+      }
+      if (initialOutputs) {
+        mobileV3State.outputs = Array.isArray(initialOutputs.items) ? initialOutputs.items : [];
+        mobileV3State.reviewOutputs = Array.isArray(initialOutputs.review_items) ? initialOutputs.review_items : [];
+      }
+      persistMobileV3Caches();
     }
-    mobileV3State.outputs = Array.isArray(initialOutputs.items) ? initialOutputs.items : [];
-    mobileV3State.reviewOutputs = Array.isArray(initialOutputs.review_items) ? initialOutputs.review_items : [];
-    mobileV3State.outputsLoaded = true;
-    persistMobileV3Caches();
     renderMobileV3ProjectCards();
     await waitForMobileV3FirstHomePreviewImage();
     setMobileV3LoadingLayer(false);
-    updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
-    updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目 · 图片已更新`);
-    if (!silent) updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
+    const projectCount = mobileV3VisibleProjects().length;
+    const projectStatus = mobileV3State.outputError
+      ? `${projectCount} 个项目 · 图片暂时无法读取`
+      : `${projectCount} 个项目 · 图片已更新`;
+    updateMobileV3Status(projectStatus);
+    if (!silent && !mobileV3State.outputError) updateMobileV3Status(`${projectCount} 个项目`);
     void waitForMobileV3HomePreviewImages({ blockPage: false });
   } catch (error) {
     setMobileV3LoadingLayer(false);
+    if (requestingMore) {
+      mobileV3State.projectsLoadError = friendlyError(error);
+      renderMobileV3ProjectCards();
+      updateMobileV3Status(`更多项目加载失败：${friendlyError(error)}`);
+      return;
+    }
     mobileV3State.loaded = true;
     mobileV3State.templates = [];
     mobileV3State.templatesLoaded = false;
     mobileV3State.templatesError = "模板目录暂时无法读取";
+    mobileV3State.projectsLoadError = friendlyError(error);
+    mobileV3State.projects = [];
+    mobileV3State.projectsNextCursor = null;
+    mobileV3State.projectsHasMore = false;
+    mobileV3State.outputs = [];
+    mobileV3State.reviewOutputs = [];
+    mobileV3State.outputsLoaded = false;
+    mobileV3State.outputError = "";
+    clearMobileV3Caches();
     normalizeMobileV3HomeSurface();
-    mobileV3State.outputsLoaded = true;
     renderMobileV3ProjectCards();
-    const fallbackCount = mobileV3VisibleProjects().length;
-    updateMobileV3Status(
-      fallbackCount
-        ? `网络有点慢，已显示本地 ${fallbackCount} 个项目`
-        : "网络有点慢，稍后点刷新项目",
-    );
-    if (!silent) updateMobileV3Status(`网络有点慢，稍后点刷新项目`);
+    updateMobileV3Status("V3 项目暂时无法读取，请重试项目列表");
+    if (!silent) updateMobileV3Status(`V3 项目加载失败：${friendlyError(error)}`);
     return;
   } finally {
     mobileV3State.loading = false;
-    if (mobileV3State.outputsLoaded) {
-      setMobileV3LoadingLayer(false);
+    mobileV3State.projectsLoadingMore = false;
+    setMobileV3LoadingLayer(false);
+    if (mobileV3State.projects.length && !mobileV3State.projectsLoadError && !mobileV3State.outputError) {
       updateMobileV3Status(`${mobileV3VisibleProjects().length} 个项目`);
     }
   }
@@ -3705,8 +3810,7 @@ function mobileV3GroupFromProject(project, outputGroup = null) {
 function mobileV3ProjectGroupsFromProjects() {
   const outputGroups = mobileV3RecentProjectGroupMap();
   const projects = (mobileV3State.projects || [])
-    .filter((project) => project?.project_id && project.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(project))
-    .sort((a, b) => (Date.parse(b?.updated_at || b?.created_at || "") || 0) - (Date.parse(a?.updated_at || a?.created_at || "") || 0));
+    .filter((project) => project?.project_id && project.status !== "archived" && !mobileV3ExpiredFailureOnlyProject(project));
   if (!projects.length) return mobileV3RecentProjectGroups();
   return projects.map((project) => mobileV3GroupFromProject(project, outputGroups.get(String(project.project_id))));
 }
@@ -3731,7 +3835,13 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
   grid.innerHTML = "";
   grid.classList.toggle("empty-v2-list", groups.length === 0);
   if (!groups.length) {
-    grid.textContent = mobileV3State.outputsLoaded ? "还没有生成过图片的项目。" : "正在整理最近项目。";
+    grid.textContent = mobileV3State.projectsLoadError
+      ? "V3 项目暂时无法读取，请重试项目列表。"
+      : mobileV3State.outputError
+        ? "项目已加载，图片暂时无法读取，请进入项目后重试。"
+        : mobileV3State.outputsLoaded
+          ? "还没有生成过图片的项目。"
+          : "正在整理最近项目。";
     return;
   }
   visibleGroups.forEach((group) => {
@@ -3758,19 +3868,19 @@ function renderMobileV3ProjectCards({ deferImages = false } = {}) {
     `;
     grid.appendChild(card);
   });
-  if (groups.length > visibleGroups.length) {
+  if (mobileV3State.projectsHasMore || groups.length > visibleGroups.length) {
     const card = document.createElement("article");
     card.className = "v3-mobile-project-card v3-mobile-project-load-more";
     card.innerHTML = `
       <button class="v3-mobile-project-preview v3-mobile-load-more-preview" type="button" data-mobile-v3-load-more-projects aria-label="加载更多项目">
-        <span>${groups.length - visibleGroups.length}</span>
+        <span>${mobileV3State.projectsHasMore ? "…" : Math.max(0, groups.length - visibleGroups.length)}</span>
       </button>
       <div class="v3-mobile-project-copy">
         <strong>查看更多项目</strong>
         <span>首页只加载项目封面缩略图</span>
         <small>点进去后再加载整组图片</small>
       </div>
-      <button class="button compact secondary" type="button" data-mobile-v3-load-more-projects>加载更多</button>
+      <button class="button compact secondary" type="button" data-mobile-v3-load-more-projects${mobileV3State.projectsLoadingMore ? " disabled" : ""}>${mobileV3State.projectsLoadingMore ? "加载中..." : "加载更多"}</button>
     `;
     grid.appendChild(card);
   }
@@ -4003,8 +4113,9 @@ function handleMobileV3Click(event) {
     return;
   }
   if (event.target.closest("[data-mobile-v3-load-more-projects]")) {
-    mobileV3State.projectRenderLimit += mobileV3ProjectPageSize;
-    renderMobileV3ProjectCards();
+    loadMobileV3Projects({ silent: false, loadMore: true }).catch((error) => {
+      updateMobileV3Status(`更多项目加载失败：${friendlyError(error)}`);
+    });
     return;
   }
   if (event.target.closest("#mobileV3RefreshBtn")) {
@@ -6311,16 +6422,31 @@ function mobileV3ProcessOutputsForProject(projectId) {
 
 async function loadMobileV3ProjectOutputs(projectId, { limit = 80, shouldContinue = null } = {}) {
   if (!projectId || !mobileV3GenerationSessionOwns(shouldContinue)) return [];
-  const payload = await mobileV3Request(`/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`);
-  if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
-  const outputs = Array.isArray(payload.items) ? payload.items : [];
-  const reviewOutputs = Array.isArray(payload.review_items) ? payload.review_items : [];
-  if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
-  mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs);
-  if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
-  persistMobileV3Caches();
-  renderMobileV3ProjectCards();
-  return outputs;
+  try {
+    const payload = await mobileV3Request(`/project-outputs?limit=${encodeURIComponent(String(limit))}&compact=true&project_id=${encodeURIComponent(projectId)}`);
+    if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
+    const outputs = Array.isArray(payload.items) ? payload.items : [];
+    const reviewOutputs = Array.isArray(payload.review_items) ? payload.review_items : [];
+    if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
+    mobileV3MergeProjectOutputs(projectId, outputs, reviewOutputs);
+    if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
+    mobileV3State.outputError = "";
+    persistMobileV3Caches();
+    renderMobileV3ProjectCards();
+    return outputs;
+  } catch (error) {
+    if (!mobileV3GenerationSessionOwns(shouldContinue)) return [];
+    mobileV3State.outputError = friendlyError(error);
+    mobileV3MergeProjectOutputs(projectId, [], []);
+    mobileV3State.outputsLoaded = false;
+    clearMobileV3Caches();
+    persistMobileV3Caches();
+    renderMobileV3ProjectCards();
+    if (mobileV3State.currentProject?.project_id === projectId) {
+      renderMobileV3ProjectGallery(mobileV3State.currentProject);
+    }
+    return [];
+  }
 }
 
 function mobileV3MergeProjectOutputs(projectId, outputs = [], reviewOutputs = null) {
@@ -10785,7 +10911,7 @@ async function hasValidVeyraSession() {
   if (getVeyraToken()) return true;
   try {
     const account = await v2Request("/veyra/me", { skipVeyraAuth: true });
-    veyraState.account = account;
+    setVeyraAccount(account);
     try {
       localStorage.setItem(veyraAccountStorageKey, JSON.stringify(account));
     } catch {
@@ -10877,9 +11003,12 @@ function getVeyraToken() {
 }
 
 function setVeyraToken(token) {
+  const nextToken = String(token || "");
+  const previousToken = getVeyraToken();
+  if (nextToken !== previousToken) clearMobileV3Caches();
   try {
-    if (token) {
-      localStorage.setItem(veyraTokenStorageKey, token);
+    if (nextToken) {
+      localStorage.setItem(veyraTokenStorageKey, nextToken);
     } else {
       localStorage.removeItem(veyraTokenStorageKey);
       localStorage.removeItem(veyraAccountStorageKey);
@@ -10892,6 +11021,13 @@ function setVeyraToken(token) {
   } catch {
     // Ignore unavailable storage; the backend remains the source of truth.
   }
+}
+
+function setVeyraAccount(account) {
+  const previousOwnerId = mobileV3CacheOwnerId();
+  veyraState.account = account;
+  const nextOwnerId = mobileV3CacheOwnerId(account);
+  if (previousOwnerId && nextOwnerId && previousOwnerId !== nextOwnerId) clearMobileV3Caches();
 }
 
 function hydrateCachedVeyraAccount() {
@@ -10911,7 +11047,7 @@ function hydrateCachedVeyraAccount() {
 async function refreshVeyraAccount() {
   try {
     const account = await v2Request("/veyra/me");
-    veyraState.account = account;
+    setVeyraAccount(account);
     try {
       localStorage.setItem(veyraAccountStorageKey, JSON.stringify(account));
     } catch {
@@ -11301,7 +11437,7 @@ async function loadVeyraAccountPanel({ silent = true, force = false } = {}) {
       request("/v1/veyra/usage?limit=100"),
       v2Request("/veyra/usage?limit=100"),
     ]);
-    veyraState.account = account;
+    setVeyraAccount(account);
     veyraState.history = mergeAccountHistory(v1HistoryResponse.items || [], v2HistoryResponse.items || []);
     veyraState.usage = mergeVeyraUsage(v1UsageResponse.items || [], v2UsageResponse.items || []);
     veyraState.usedTemplates = await buildVeyraTemplateHistory(v2HistoryResponse.items || []);

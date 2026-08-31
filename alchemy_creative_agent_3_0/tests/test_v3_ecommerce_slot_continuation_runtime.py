@@ -211,7 +211,7 @@ def test_slot_amendment_requires_new_authorized_evidence_and_is_bounded(monkeypa
 
 
 def test_general_and_legacy_jobs_cannot_call_ecommerce_slot_continuation() -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _handlers()
     project = handlers.post_projects({"user_goal": "Create a clean portrait cover"})["project"]
     general = handlers.post_project_job(project["project_id"], {"user_input": "Create a clean portrait cover"})
 

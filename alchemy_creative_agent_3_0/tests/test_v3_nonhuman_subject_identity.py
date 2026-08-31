@@ -219,4 +219,30 @@ def test_nonhuman_review_ownership_uses_one_bounded_shared_retry_and_never_face_
         status=ProductJobStatusValue.PLANNED,
         job_id_value="job_human_no_auto_retry",
     )
-    assert service._visual_auto_retry_limit_for_record(human_record, GenerateJobRequest(quality_mode="strict")) == 0  # noqa: SLF001
+    assert service._visual_auto_retry_limit_for_record(human_record, GenerateJobRequest(quality_mode="strict")) == 2  # noqa: SLF001
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(
+            service,
+            "_visual_retry_signal",
+            lambda _result, _metadata: (
+                ["plastic_skin"],
+                {"prompt_additions": ["repair human skin"]},
+                "real_review_signal_package",
+            ),
+        )
+        manual_plan = service._visual_retry_execution_plan(  # noqa: SLF001
+            record=human_record,
+            result=SimpleNamespace(metadata={}),
+            generate_request=GenerateJobRequest(quality_mode="strict"),
+            provider_strategy=ProviderStrategy.MOCK_GENERATION,
+            attempt_index=1,
+            max_attempts=2,
+            seen_issue_codes=set(),
+        )
+    finally:
+        monkeypatch.undo()
+    assert manual_plan["should_retry"] is False
+    assert manual_plan["record"]["status"] == "skipped"
+    assert manual_plan["record"]["blocked_reason"] == "human_realism_manual_confirmation"

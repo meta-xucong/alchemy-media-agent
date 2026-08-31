@@ -349,10 +349,10 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "waitForMobileV3HomePreviewImages" in mobile_script.text
     assert "markMobileV3HomePreviewImageFailed" in mobile_script.text
     assert "limit=1000" not in mobile_script.text
-    assert "mobileV3ProjectFetchLimit = 80" in mobile_script.text
+    assert "mobileV3ProjectFetchLimit = mobileV3ProjectPageSize" in mobile_script.text
     assert "mobileV3ProjectPageSize = 4" in mobile_script.text
     mobile_shell_body = mobile_script.text.split("async function loadMobileV3Projects", 1)[1].split("function setMobileV3LoadingLayer", 1)[0]
-    assert "`/projects?limit=${mobileV3ProjectFetchLimit}`" in mobile_shell_body
+    assert "`/projects?limit=${mobileV3ProjectFetchLimit}${cursor}`" in mobile_shell_body
     assert "`/projects?limit=${mobileV3ProjectPageSize}`" not in mobile_shell_body
     assert "await mobileV3Request(`/project-outputs?limit=${mobileV3ProjectPageSize}&compact=true`)" in mobile_shell_body
     assert "await waitForMobileV3FirstHomePreviewImage()" in mobile_shell_body
@@ -396,14 +396,14 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "async function deleteMobileV3Project" in mobile_script.text
     assert "mobileV3DeleteProjectBtn" in mobile_script.text
     assert "mobileV3State.uploadFingerprints = {}" in mobile_script.text
-    assert "网络有点慢，稍后点刷新项目" in mobile_script.text
+    assert "V3 项目暂时无法读取，请重试项目列表" in mobile_script.text
 
     assert script.status_code == 200
     assert "const v3ApiBase" in script.text
     assert "const v3ProjectStorageKey" in script.text
     assert "const v3HistoryStorageKey" in script.text
     assert "/api/v3/creative-agent" in script.text
-    assert "v3ProjectFetchLimit = 80" in script.text
+    assert "v3ProjectFetchLimit = v3ProjectHomePageSize" in script.text
     assert "v3ProjectHomePageSize = 9" in script.text
     assert "/history?limit=24" not in script.text
     assert "function openV3Home" in script.text

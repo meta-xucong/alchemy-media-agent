@@ -49,14 +49,37 @@ _ROLE_ALIASES = {
 }
 
 
+def _normalize_owner_user_id(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        owner_id = int(value) if value is not None else 0
+    except (TypeError, ValueError):
+        return None
+    return owner_id if owner_id > 0 else None
+
+
+def _server_owned_metadata(value: object) -> dict:
+    metadata = dict(value or {}) if isinstance(value, dict) else {}
+    metadata.pop("veyra_user_id", None)
+    metadata.pop("owner_user_id", None)
+    return metadata
+
+
 class V3UploadedAssetStore:
     """Persistent local upload store owned by the V3 Product API boundary."""
 
     def __init__(self, storage_root: str | Path | None = None) -> None:
         self.storage_root = Path(storage_root) if storage_root else _default_storage_root()
 
-    def create_upload(self, request: V3AssetUploadCreateRequest | dict) -> V3UploadedAssetRecord:
+    def create_upload(
+        self,
+        request: V3AssetUploadCreateRequest | dict,
+        *,
+        owner_user_id: int | None = None,
+    ) -> V3UploadedAssetRecord:
         create_request = self._coerce_create_request(request)
+        owner_id = _normalize_owner_user_id(owner_user_id)
         mime_type = create_request.mime_type.lower()
         self._validate_mime_type(mime_type)
         if create_request.size_bytes > MAX_V3_UPLOADED_ASSET_BYTES:
@@ -68,6 +91,7 @@ class V3UploadedAssetStore:
         now = _now_iso()
         record = V3UploadedAssetRecord(
             asset_id=asset_id,
+            veyra_user_id=owner_id,
             filename=_safe_filename(create_request.filename),
             mime_type=mime_type,
             size_bytes=create_request.size_bytes,
@@ -78,7 +102,7 @@ class V3UploadedAssetStore:
             created_at=now,
             updated_at=now,
             metadata={
-                **create_request.metadata,
+                **_server_owned_metadata(create_request.metadata),
                 "source": "V3UploadedAssetStore",
                 "v3_owned_upload": True,
                 "max_size_bytes": MAX_V3_UPLOADED_ASSET_BYTES,
@@ -126,7 +150,11 @@ class V3UploadedAssetStore:
                 "content_url": _content_route(record.asset_id),
                 "updated_at": _now_iso(),
                 "error": None,
-                "metadata": {**record.metadata, **upload_request.metadata, "content_stored": True},
+                "metadata": {
+                    **record.metadata,
+                    **_server_owned_metadata(upload_request.metadata),
+                    "content_stored": True,
+                },
             }
         )
         return self._save_record(stored)

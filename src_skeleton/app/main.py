@@ -26,7 +26,10 @@ from alchemy_creative_agent_3_0.app.app_shell.routes import API_NAMESPACE
 from alchemy_creative_agent_3_0.app.project_mode import PersistentProjectStore, TemplateActivationError
 from alchemy_creative_agent_3_0.app.product_api import GenerateJobRequest, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
-from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.product_api.route_handlers import (
+    V3ProductRouteHandlers,
+    public_uploaded_asset_record,
+)
 from alchemy_creative_agent_3_0.app.product_api.service import PersistentProductJobStore, V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.visual_assets import (
@@ -959,6 +962,7 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             "_v3_background_generation_attempt_id": background_attempt_id,
         },
     }
+    watchdog = None
     if timeout_seconds is not None:
         watchdog = threading.Timer(
             timeout_seconds,
@@ -970,13 +974,40 @@ def _start_v3_project_generation_background(project_id: str, job_id: str, payloa
             if _v3_background_generation_jobs.get(key) == background_attempt_id:
                 _v3_background_generation_watchdogs[key] = watchdog
                 watchdog.start()
-    _v3_generation_executor.submit(
-        _run_v3_project_generation_background,
-        project_id,
-        job_id,
-        worker_payload,
-        background_attempt_id,
-    )
+    try:
+        _v3_generation_executor.submit(
+            _run_v3_project_generation_background,
+            project_id,
+            job_id,
+            worker_payload,
+            background_attempt_id,
+        )
+    except Exception:
+        with _v3_background_generation_jobs_lock:
+            attempt_is_current = _v3_background_generation_jobs.get(key) == background_attempt_id
+            if attempt_is_current:
+                _v3_background_generation_jobs.pop(key, None)
+                registered_watchdog = _v3_background_generation_watchdogs.pop(key, None)
+            else:
+                registered_watchdog = None
+        if registered_watchdog is not None:
+            registered_watchdog.cancel()
+        if attempt_is_current:
+            try:
+                _run_v3_handler(
+                    v3_route_handlers.mark_project_job_generation_worker_failed,
+                    project_id,
+                    job_id,
+                    background_attempt_id=background_attempt_id,
+                    failure_code="background_generation_worker_error",
+                )
+            except Exception:
+                logger.exception(
+                    "V3 background generation submission failure could not be persisted for project=%s job=%s",
+                    project_id,
+                    job_id,
+                )
+        raise
     return True
 
 
@@ -1097,14 +1128,19 @@ def v3_photographer_profiles_endpoint(request: Request, authorization: str = Hea
 
 @app.get("/api/v3/creative-agent/history")
 def v3_history_endpoint(request: Request, limit: int = 20, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
-    return _run_v3_handler(v3_route_handlers.get_history, limit)
+    user_id = _require_veyra_user_if_enabled(request, authorization)
+    return _run_v3_handler(v3_route_handlers.get_history, limit, user_id)
 
 
 @app.get("/api/v3/creative-agent/projects")
-def v3_projects_endpoint(request: Request, limit: int = 20, authorization: str = Header(default="")):
+def v3_projects_endpoint(
+    request: Request,
+    limit: int = 20,
+    cursor: str | None = None,
+    authorization: str = Header(default=""),
+):
     user_id = _require_veyra_user_if_enabled(request, authorization)
-    return _run_v3_handler(v3_route_handlers.get_projects, limit, user_id)
+    return _run_v3_handler(v3_route_handlers.get_projects, limit, user_id, cursor)
 
 
 @app.get("/api/v3/creative-agent/project-outputs")
@@ -1123,14 +1159,15 @@ def v3_project_outputs_endpoint(
 async def v3_create_project_endpoint(request: Request, authorization: str = Header(default="")):
     user_id = _require_veyra_user_if_enabled(request, authorization)
     payload = await _v3_json_payload(request)
+    _require_v3_uploaded_assets_visible(request, payload.get("uploaded_asset_ids"), authorization)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
     return _run_v3_handler(v3_route_handlers.post_projects, payload)
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}")
 def v3_get_project_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_project_visible(request, project_id, authorization)
-    response = _run_v3_handler(v3_route_handlers.get_project, project_id)
+    user_id = _require_v3_project_visible(request, project_id, authorization)
+    response = _run_v3_handler(v3_route_handlers.get_project, project_id, user_id)
     project = response.get("project") if isinstance(response, dict) else None
     job_ids = project.get("job_ids") if isinstance(project, dict) else None
     job_id = str(job_ids[-1] or "").strip() if isinstance(job_ids, list) and job_ids else ""
@@ -1154,14 +1191,14 @@ def v3_delete_project_endpoint(project_id: str, request: Request, authorization:
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/timeline")
 def v3_project_timeline_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_project_visible(request, project_id, authorization)
-    return _run_v3_handler(v3_route_handlers.get_project_timeline, project_id)
+    user_id = _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(v3_route_handlers.get_project_timeline, project_id, user_id)
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}/context")
 def v3_project_context_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
-    _require_v3_project_visible(request, project_id, authorization)
-    return _run_v3_handler(v3_route_handlers.get_project_context, project_id)
+    user_id = _require_v3_project_visible(request, project_id, authorization)
+    return _run_v3_handler(v3_route_handlers.get_project_context, project_id, user_id)
 
 
 @app.get("/api/v3/creative-agent/visual-assets")
@@ -1384,6 +1421,8 @@ async def v3_activate_project_people_asset_endpoint(
 async def v3_project_reference_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     _require_v3_project_visible(request, project_id, authorization)
     payload = await _v3_json_payload(request)
+    if str(payload.get("source_type") or "").strip().lower() == "uploaded":
+        _require_v3_uploaded_assets_visible(request, [payload.get("asset_ref_id")], authorization)
     return _run_v3_handler(v3_route_handlers.post_project_reference, project_id, payload)
 
 
@@ -1460,6 +1499,15 @@ async def v3_project_output_reject_endpoint(
 async def v3_create_project_job_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
     user_id = _require_v3_project_visible(request, project_id, authorization)
     payload = await _v3_json_payload(request)
+    auto_generate_payload = payload.get("auto_generate") if isinstance(payload.get("auto_generate"), dict) else {}
+    _require_v3_uploaded_assets_visible(
+        request,
+        [
+            *(payload.get("uploaded_asset_ids") if isinstance(payload.get("uploaded_asset_ids"), list) else []),
+            *(auto_generate_payload.get("uploaded_asset_ids") if isinstance(auto_generate_payload.get("uploaded_asset_ids"), list) else []),
+        ],
+        authorization,
+    )
     payload = _v3_payload_with_veyra_owner(payload, user_id)
     auto_generate_payload = payload.pop("auto_generate", None)
     planning_payload = _v3_project_job_payload_with_auto_generate_intent(
@@ -1587,6 +1635,7 @@ async def v3_generate_project_job_endpoint(
 ):
     user_id = _require_v3_project_visible(request, project_id, authorization)
     payload = await _v3_json_payload(request)
+    _require_v3_uploaded_assets_visible(request, payload.get("uploaded_asset_ids"), authorization)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
     generation_payload = _v3_generation_payload_without_transport_controls(payload)
     if _should_run_v3_project_generation_background(payload):
@@ -1605,9 +1654,9 @@ async def v3_select_project_job_endpoint(project_id: str, job_id: str, request: 
 
 @app.post("/api/v3/creative-agent/uploads")
 async def v3_create_upload_endpoint(request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    user_id = _require_veyra_user_if_enabled(request, authorization)
     payload = await _v3_json_payload(request)
-    return _run_v3_handler(v3_route_handlers.post_uploads, payload)
+    return _run_v3_handler(v3_route_handlers.post_uploads, payload, owner_user_id=user_id)
 
 
 @app.get("/api/v3/creative-agent/mcp-materializations/{handoff_id}")
@@ -1625,26 +1674,26 @@ async def v3_submit_mcp_materialization_endpoint(handoff_id: str, request: Reque
 
 @app.put("/api/v3/creative-agent/uploads/{asset_id}/content")
 async def v3_put_upload_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_v3_uploaded_asset_visible(request, asset_id, authorization)
     payload = await _v3_json_payload(request)
     return _run_v3_handler(v3_route_handlers.put_upload_content, asset_id, payload)
 
 
 @app.post("/api/v3/creative-agent/uploads/{asset_id}/complete")
 def v3_complete_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_v3_uploaded_asset_visible(request, asset_id, authorization)
     return _run_v3_handler(v3_route_handlers.post_upload_complete, asset_id)
 
 
 @app.get("/api/v3/creative-agent/uploads/{asset_id}")
 def v3_get_upload_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_v3_uploaded_asset_visible(request, asset_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_upload, asset_id)
 
 
 @app.get("/api/v3/creative-agent/uploads/{asset_id}/content")
 def v3_get_upload_content_endpoint(asset_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_v3_uploaded_asset_visible(request, asset_id, authorization)
     content = v3_route_handlers.service.read_uploaded_asset_content(asset_id)
     if content is None:
         raise HTTPException(status_code=404, detail={"code": "v3_asset_content_not_found", "message": "Uploaded asset content not found."})
@@ -1691,13 +1740,14 @@ def v3_output_thumbnail_endpoint(output_id: str, request: Request, authorization
 async def v3_create_job_endpoint(request: Request, authorization: str = Header(default="")):
     user_id = _require_veyra_user_if_enabled(request, authorization)
     payload = await _v3_json_payload(request)
+    _require_v3_uploaded_assets_visible(request, payload.get("uploaded_asset_ids"), authorization)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
     return _run_v3_handler(v3_route_handlers.post_jobs, payload)
 
 
 @app.get("/api/v3/creative-agent/jobs/{job_id}")
 def v3_get_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_v3_job_visible(request, job_id, authorization)
     status = _run_v3_handler(v3_route_handlers.get_job, job_id)
     metadata = status.get("metadata") if isinstance(status, dict) else None
     project_id = str(metadata.get("project_id") or "").strip() if isinstance(metadata, dict) else ""
@@ -1708,13 +1758,13 @@ def v3_get_job_endpoint(job_id: str, request: Request, authorization: str = Head
 
 @app.get("/api/v3/creative-agent/jobs/{job_id}/export")
 def v3_export_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_v3_job_visible(request, job_id, authorization)
     return _run_v3_handler(v3_route_handlers.get_job_export, job_id)
 
 
 @app.get("/api/v3/creative-agent/jobs/{job_id}/export/download")
 def v3_export_job_download_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_v3_job_visible(request, job_id, authorization)
     payload = _run_v3_handler(v3_route_handlers.get_job_export_download, job_id)
     filename = quote(payload.get("filename") or f"v3_export_{job_id}.json")
     return Response(
@@ -1726,15 +1776,16 @@ def v3_export_job_download_endpoint(job_id: str, request: Request, authorization
 
 @app.post("/api/v3/creative-agent/jobs/{job_id}/generate")
 async def v3_generate_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
-    user_id = _require_veyra_user_if_enabled(request, authorization)
+    user_id = _require_v3_job_visible(request, job_id, authorization)
     payload = await _v3_json_payload(request)
+    _require_v3_uploaded_assets_visible(request, payload.get("uploaded_asset_ids"), authorization)
     payload = _v3_payload_with_veyra_owner(payload, user_id)
     return await _run_v3_handler_threaded(v3_route_handlers.post_generate, job_id, payload)
 
 
 @app.post("/api/v3/creative-agent/jobs/{job_id}/select")
 async def v3_select_job_endpoint(job_id: str, request: Request, authorization: str = Header(default="")):
-    _require_veyra_user_if_enabled(request, authorization)
+    _require_v3_job_visible(request, job_id, authorization)
     payload = await _v3_json_payload(request)
     return _run_v3_handler(v3_route_handlers.post_select, job_id, payload)
 
@@ -2140,9 +2191,62 @@ def _require_v3_output_visible(request: Request, output_id: str, authorization: 
         return {"authenticated": False, "user_id": None, "is_admin": False, "owner_id": _v3_output_owner_id(output_id)}
     user_id = _veyra_user_id_from_request(request, authorization)
     owner_id = _v3_output_owner_id(output_id)
-    if owner_id is None or owner_id == user_id:
+    if owner_id == user_id:
         return {"authenticated": True, "user_id": user_id, "is_admin": False, "owner_id": owner_id}
-    raise HTTPException(status_code=403, detail={"error_code": "v3_output_forbidden", "message": "Generated V3 output is not visible to this account."})
+    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+
+
+def _v3_job_owner_id(job_id: str) -> int | None:
+    record = v3_route_handlers.service.get_job_record(job_id)
+    if record is None:
+        return None
+    metadata = dict(getattr(record.request, "metadata", None) or {})
+    return _positive_int_or_none(metadata.get("veyra_user_id"))
+
+
+def _require_v3_job_visible(request: Request, job_id: str, authorization: str = "") -> int | None:
+    if not settings.veyra_auth_enabled:
+        return None
+    user_id = _veyra_user_id_from_request(request, authorization)
+    if _v3_job_owner_id(job_id) == user_id:
+        return user_id
+    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+
+
+def _v3_uploaded_asset_owner_id(asset_id: str) -> int | None:
+    record = v3_route_handlers.service.get_uploaded_asset(asset_id)
+    if record is None:
+        return None
+    return _positive_int_or_none(getattr(record, "veyra_user_id", None))
+
+
+def _require_v3_uploaded_asset_visible(request: Request, asset_id: str, authorization: str = "") -> int | None:
+    if not settings.veyra_auth_enabled:
+        return None
+    user_id = _veyra_user_id_from_request(request, authorization)
+    if _v3_uploaded_asset_owner_id(asset_id) == user_id:
+        return user_id
+    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
+
+
+def _require_v3_uploaded_assets_visible(
+    request: Request,
+    asset_ids: object,
+    authorization: str = "",
+) -> None:
+    if not isinstance(asset_ids, list):
+        return
+    seen: set[str] = set()
+    for value in asset_ids:
+        asset_id = str(value or "").strip()
+        if not asset_id or asset_id in seen:
+            continue
+        seen.add(asset_id)
+        _require_v3_uploaded_asset_visible(request, asset_id, authorization)
+
+
+def _public_uploaded_asset_record(record) -> dict:
+    return public_uploaded_asset_record(record)
 
 
 def _v3_project_owner_id(project_id: str) -> int | None:
@@ -2157,9 +2261,9 @@ def _require_v3_project_visible(request: Request, project_id: str, authorization
         return None
     user_id = _veyra_user_id_from_request(request, authorization)
     owner_id = _v3_project_owner_id(project_id)
-    if owner_id is None or owner_id == user_id:
+    if owner_id == user_id:
         return user_id
-    raise HTTPException(status_code=403, detail={"error_code": "v3_project_forbidden", "message": "V3 project is not visible to this account."})
+    raise HTTPException(status_code=404, detail={"code": "v3_resource_not_found", "message": "V3 resource not found."})
 
 
 def _v3_visual_asset_owner_scope(user_id: int | None) -> str:

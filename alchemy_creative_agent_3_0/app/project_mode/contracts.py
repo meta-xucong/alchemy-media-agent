@@ -645,6 +645,8 @@ class ProjectListResponse(V3BaseModel):
     route: str
     total: int
     limit: int
+    has_more: bool = False
+    next_cursor: str | None = None
     projects: list[ProjectMemorySummary] = Field(default_factory=list)
     templates: list[TemplateCard] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
