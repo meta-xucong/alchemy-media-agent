@@ -704,10 +704,10 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
 
         selected_output_ids = _dedupe(_identity(item, "output_id", "asset_id", "candidate_id") for item in selected_outputs)
         context_reference_ids = _dedupe(
-            _identity(item, "asset_ref_id", "asset_id", "output_id", "reference_id")
+            _reference_item_identity(item)
             for item in [*selected_references, *uploaded_references]
         )
-        binding_reference_ids = _dedupe(str(item.get("asset_id") or "") for item in bindings)
+        binding_reference_ids = _dedupe(_reference_item_identity(item) for item in bindings)
         reference_asset_ids = _dedupe([*context_reference_ids, *binding_reference_ids])
 
         style_signals = self._style_signals(
@@ -1537,11 +1537,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         profile: VisualGrammarProfile,
     ) -> ProjectVisualGrammarSnapshot:
         selected_reference_ids = _dedupe(
-            _identity(item, "asset_ref_id", "asset_id", "output_id", "reference_id")
+            _reference_item_identity(item)
             for item in selected_references
         )
         uploaded_reference_ids = _dedupe(
-            _identity(item, "asset_ref_id", "asset_id", "reference_id")
+            _reference_item_identity(item)
             for item in uploaded_references
         )
         continuity_strength = "strong" if selected_output_ids else "medium" if selected_reference_ids or uploaded_reference_ids else "weak"
@@ -3006,7 +3006,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 )
             )
         for item in [*selected_references, *uploaded_references]:
-            source_id = _identity(item, "asset_ref_id", "asset_id", "output_id", "reference_id")
+            source_id = _reference_item_identity(item)
             if not source_id:
                 continue
             role = str(item.get("role") or item.get("use_policy") or "style")
@@ -3073,15 +3073,76 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         return ["style", "composition", "palette", "lighting"]
 
     def _dedupe_strong_bindings(self, bindings: list[StrongReferenceBinding]) -> list[StrongReferenceBinding]:
-        seen: set[str] = set()
+        alias_to_index: dict[str, int] = {}
         unique: list[StrongReferenceBinding] = []
         for binding in bindings:
-            key = f"{binding.source_type}:{binding.source_id}:{binding.use_policy}"
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(binding)
+            aliases = _strong_reference_aliases(binding)
+            existing_index = next(
+                (alias_to_index[alias] for alias in sorted(aliases) if alias in alias_to_index),
+                None,
+            )
+            if existing_index is None:
+                existing_index = len(unique)
+                unique.append(binding)
+            else:
+                unique[existing_index] = self._merge_strong_bindings(
+                    unique[existing_index],
+                    binding,
+                )
+            for alias in sorted(aliases):
+                alias_to_index[alias] = existing_index
         return unique
+
+    def _merge_strong_bindings(
+        self,
+        current: StrongReferenceBinding,
+        candidate: StrongReferenceBinding,
+    ) -> StrongReferenceBinding:
+        """Merge logical aliases that point at one physical reference.
+
+        Project Mode can expose one selected output both as an output anchor
+        and as a generated-selected reference. Those are separate records,
+        but they must result in one provider input. Keep the semantically
+        strongest binding, then carry over any usable identity/file evidence
+        from its alias.
+        """
+
+        strength_rank = {"soft": 1, "medium": 2, "hard": 3}
+        current_rank = (
+            strength_rank.get(current.strength, 0),
+            int(current.provider_input_required),
+            int(bool(current.file_path)),
+            float(current.confidence),
+        )
+        candidate_rank = (
+            strength_rank.get(candidate.strength, 0),
+            int(candidate.provider_input_required),
+            int(bool(candidate.file_path)),
+            float(candidate.confidence),
+        )
+        preferred, fallback = (
+            (candidate, current)
+            if candidate_rank > current_rank
+            else (current, candidate)
+        )
+        payload = preferred.model_dump(mode="json")
+        for field in ("source_id", "asset_id", "output_id", "file_path", "preview_url", "user_visible_label"):
+            if not payload.get(field):
+                payload[field] = getattr(fallback, field)
+        payload["lock_targets"] = _dedupe([*preferred.lock_targets, *fallback.lock_targets])
+        payload["provider_input_required"] = bool(
+            current.provider_input_required or candidate.provider_input_required
+        )
+        payload["prompt_only_fallback"] = bool(
+            not payload["provider_input_required"]
+            and (current.prompt_only_fallback or candidate.prompt_only_fallback)
+        )
+        payload["confidence"] = max(current.confidence, candidate.confidence)
+        payload["metadata"] = {
+            **dict(fallback.metadata or {}),
+            **dict(preferred.metadata or {}),
+        }
+        return StrongReferenceBinding.model_validate(payload)
 
     def _identity_lock_profiles(
         self,
@@ -3501,7 +3562,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         usage_rules: list[str] = []
         strong_payloads = [binding.model_dump(mode="json") for binding in strong_bindings]
         for binding in strong_bindings:
-            asset_id = str(binding.asset_id or binding.output_id or binding.source_id or "")
+            asset_id = _strong_reference_identity(binding)
             if not asset_id:
                 continue
             if binding.strength == "hard" or binding.use_policy in {"identity", "product_identity", "brand_asset"}:
@@ -3515,7 +3576,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             if binding.lock_targets:
                 usage_rules.append("lock " + ", ".join(binding.lock_targets[:4]))
         for binding in bindings:
-            asset_id = str(binding.get("asset_id") or "")
+            asset_id = _reference_item_identity(binding)
             role = str(binding.get("role") or "")
             if not asset_id:
                 continue
@@ -3529,12 +3590,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 provider_required.append(asset_id)
             usage_rules.extend(_string_list(binding.get("review_expectations")))
         for reference in selected_references:
-            ref_id = _identity(reference, "asset_ref_id", "asset_id", "output_id", "reference_id")
+            ref_id = _reference_item_identity(reference)
             if ref_id:
                 soft.append(ref_id)
                 usage_rules.append("use selected project image only for its resolved reference channels")
         for reference in uploaded_references:
-            ref_id = _identity(reference, "asset_ref_id", "asset_id", "reference_id")
+            ref_id = _reference_item_identity(reference)
             if ref_id:
                 soft.append(ref_id)
                 usage_rules.append("use active uploaded project reference when compatible")
@@ -4677,6 +4738,43 @@ def _identity(item: dict[str, Any], *keys: str) -> str:
         if value:
             return str(value)
     return ""
+
+
+def _reference_item_identity(item: dict[str, Any]) -> str:
+    """Return the stable identity of one logical visual reference.
+
+    Output identity is authoritative when present because Project Mode may
+    expose the same persisted output through several reference records. The
+    remaining fields are typed transport fallbacks, never prompt text.
+    """
+
+    return _identity(
+        item,
+        "output_id",
+        "created_from_output_id",
+        "asset_ref_id",
+        "asset_id",
+        "source_id",
+        "reference_id",
+        "candidate_id",
+    )
+
+
+def _strong_reference_identity(binding: StrongReferenceBinding) -> str:
+    return str(binding.output_id or binding.asset_id or binding.source_id or "").strip()
+
+
+def _strong_reference_aliases(binding: StrongReferenceBinding) -> set[str]:
+    aliases: set[str] = set()
+    stable_value = binding.output_id or binding.source_id or binding.asset_id
+    if stable_value:
+        text = str(stable_value).strip()
+        if text:
+            aliases.add(f"id:{text}")
+    file_path = str(binding.file_path or "").strip()
+    if file_path:
+        aliases.add(f"path:{file_path.replace('\\', '/')}")
+    return aliases
 
 
 def _dedupe(values: Any) -> list[str]:

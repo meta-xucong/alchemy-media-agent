@@ -288,6 +288,77 @@ def test_visual_capability_cluster_collects_project_context_and_child_modules(tm
     assert guard["unselected_candidates_excluded"] is True
 
 
+def test_visual_capability_cluster_collapses_one_output_across_reference_records(tmp_path) -> None:
+    registry = SharedCapabilityRegistry.with_default_modules()
+    shared_path = str(tmp_path / "selected-output.png")
+    distinct_path = str(tmp_path / "other-output.png")
+
+    result = registry.run(
+        _input(
+            tmp_path,
+            user_input="Continue the selected portrait with a natural variation",
+            metadata={
+                "project_context_snapshot": {
+                    "project_id": "project_reference_aliases",
+                    "template_id": "general_template",
+                    "selected_output_assets": [
+                        {
+                            "source_type": "generated_output",
+                            "asset_id": "asset_selected_output",
+                            "output_id": "output_shared",
+                            "candidate_id": "candidate_shared",
+                            "file_path": shared_path,
+                        }
+                    ],
+                    "selected_reference_assets": [
+                        {
+                            "source_type": "generated_selected",
+                            "asset_id": "output_shared",
+                            "asset_ref_id": "output_shared",
+                            "output_id": "output_shared",
+                            "created_from_output_id": "output_shared",
+                            "candidate_id": "candidate_shared",
+                            "role": "identity",
+                            "use_policy": "identity",
+                        },
+                        {
+                            "source_type": "uploaded",
+                            "asset_ref_id": "uploaded_distinct",
+                            "asset_id": "uploaded_distinct",
+                            "role": "identity",
+                            "use_policy": "identity",
+                            "file_path": distinct_path,
+                        },
+                    ],
+                }
+            },
+        ),
+        module_ids=["visual_capability_cluster"],
+    )
+
+    cluster = result.results[-1].facts["visual_capability_cluster"]
+    binding_profile = cluster["reference_binding_profile"]
+    continuation_plan = cluster["strong_reference_continuation_plan"]
+
+    assert len(binding_profile["strong_bindings"]) == 2
+    assert binding_profile["reference_count"] == 2
+    assert continuation_plan["metadata"]["provider_reference_count"] == 2
+    assert continuation_plan["provider_required_reference_ids"] == [
+        "output_shared",
+        "uploaded_distinct",
+    ]
+    assert next(
+        item["file_path"]
+        for item in binding_profile["strong_bindings"]
+        if item.get("output_id") == "output_shared"
+    ) == shared_path
+    assert {
+        item["output_id"]
+        for item in binding_profile["strong_bindings"]
+        if item.get("output_id")
+    } == {"output_shared"}
+
+
 def test_visual_capability_cluster_adds_human_natural_variation_plan(tmp_path) -> None:
     registry = SharedCapabilityRegistry.with_default_modules()
 

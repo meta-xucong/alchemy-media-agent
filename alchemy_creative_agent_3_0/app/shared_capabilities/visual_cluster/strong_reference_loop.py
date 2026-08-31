@@ -23,12 +23,12 @@ class StrongReferenceLoopPlanner:
             return None
         active_anchors = [anchor for anchor in anchors if anchor.active]
         provider_required_ids = _dedupe(
-            binding.asset_id or binding.output_id or binding.source_id
+            binding.output_id or binding.asset_id or binding.source_id
             for binding in strong_bindings
             if binding.provider_input_required
         )
         prompt_only_ids = _dedupe(
-            binding.asset_id or binding.output_id or binding.source_id
+            binding.output_id or binding.asset_id or binding.source_id
             for binding in strong_bindings
             if binding.prompt_only_fallback and not binding.provider_input_required
         )
