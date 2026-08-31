@@ -765,6 +765,73 @@ def test_constrained_edit_profile_blocks_multi_reference_request_before_gateway(
     }
 
 
+def test_constrained_edit_profile_adapts_one_logical_source_to_one_input(tmp_path, monkeypatch) -> None:
+    """One selected source may use one best derivative on a singular edit route."""
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+    monkeypatch.setattr(settings, "default_image_provider", "openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "square_b64_reference_edit")
+    monkeypatch.setattr(settings, "openai_image_edit_max_reference_images", None)
+
+    async def fake_generate(self, provider_name, app_request):  # noqa: ANN001
+        assert provider_name == "openai_gpt_image"
+        assert len(app_request.asset_plan["assets"]) == 1
+        assert app_request.asset_plan["provider_input_plan"]["reference_image_count"] == 1
+        return ImageGenerationResult(
+            provider="openai_gpt_image",
+            model="test-image-model",
+            outputs=[
+                {
+                    "b64_json": _png_base64(),
+                    "mime_type": "image/png",
+                    "format": "png",
+                    "width": 96,
+                    "height": 72,
+                }
+            ],
+        )
+
+    monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
+
+    reference_path = _reference_image(tmp_path / "selected-output.png")
+    request = _human_generation_request()
+    request.metadata["uploaded_assets"] = [
+        {
+            "asset_id": "selected_portrait_ref",
+            "output_id": "selected_portrait_ref",
+            "source_type": "selected_output",
+            "role": "identity_reference",
+            "use_policy": "identity",
+            "filename": reference_path.name,
+            "mime_type": "image/png",
+            "file_path": str(reference_path),
+            "provider_input_required": True,
+            "metadata": {
+                "canonical_output_binding": True,
+                "source_integrity_id": "sha256:selected_portrait_ref",
+            },
+        }
+    ]
+
+    provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+    references = provider._reference_assets(request)  # noqa: SLF001
+    asset_plan = provider._asset_plan(request, references)  # noqa: SLF001
+    input_plan = asset_plan["provider_input_plan"]
+
+    assert input_plan["reference_image_count"] == 1
+    assert len(asset_plan["assets"]) == 1
+    assert asset_plan["assets"][0]["source_asset_id"] == "selected_portrait_ref"
+    assert asset_plan["assets"][0]["derivative_kind"] == "portrait_identity_crop"
+    assert input_plan["capacity_adaptation"]["reason"] == "one_logical_source_on_singular_transport"
+    assert input_plan["capacity_adaptation"]["suppressed_materialized_asset_ids"]
+    response = provider.generate(request)
+    assert response.candidates
+    assert Path(response.candidates[0].file_path).exists()
+
+
 def test_explicit_provider_content_policy_signal_is_not_misreported_as_generic_400(tmp_path, monkeypatch) -> None:
     from app.config import settings
 

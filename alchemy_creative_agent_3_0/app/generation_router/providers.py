@@ -3421,6 +3421,12 @@ class ProductionImageGenerationProvider(GenerationProvider):
         # duplicate source from becoming duplicate crop/original uploads and
         # therefore avoids extra model inputs, cost, and competing evidence.
         assets = self._dedupe_provider_reference_assets(assets)
+        capacity_adaptation = self._adapt_provider_reference_assets_to_capacity(
+            request,
+            reference_assets,
+            assets,
+        )
+        assets = capacity_adaptation["assets"]
         assets = self._character_card_provider_reference_order(request, assets)
         suppressed_original_ids = _dedupe(suppressed_original_ids)
         reference_sanitization_records = self._dedupe_reference_sanitization_records(reference_sanitization_records)
@@ -3433,6 +3439,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ]),
             "provider_reference_image_count": len(assets),
             "reference_sanitization": reference_sanitization_records,
+            "capacity_adaptation": capacity_adaptation["audit"],
         }
         return {
             "asset_mode": "advanced",
@@ -3445,6 +3452,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "provider_reference_total_bytes": sum(
                     int(item.get("provider_reference_bytes") or 0) for item in assets
                 ),
+                "capacity_adaptation": capacity_adaptation["audit"],
                 "identity_evidence_scopes": _dedupe(
                     [
                         str(item.get("identity_evidence_scope") or "")
@@ -3492,6 +3500,80 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "adaptive_reference_target_framing": adaptive_reference_audit.get("target_framing"),
             },
         }
+
+    def _adapt_provider_reference_assets_to_capacity(
+        self,
+        request: GenerationRequest,
+        reference_assets: list[dict[str, Any]],
+        assets: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Fit one logical source to a singular transport without hiding source truth.
+
+        Some configured image gateways accept one physical input even though
+        the shared identity policy can prepare complementary derivatives from
+        one source.  In that case, retain the highest-priority derivative for
+        that same source and record the adaptation.  Distinct source identities
+        remain untrimmed and fail closed at this boundary.
+        """
+
+        maximum = self._reference_capacity_limit(request, reference_assets)
+        if maximum is None or len(assets) <= maximum:
+            return {"assets": assets, "audit": None}
+        if maximum != 1:
+            return {
+                "assets": assets,
+                "audit": {
+                    "schema_version": "v3_provider_reference_capacity_adaptation_v1",
+                    "applied": False,
+                    "reason": "multiple_logical_sources_or_route_capability",
+                    "maximum_reference_images": maximum,
+                    "materialized_reference_count": len(assets),
+                },
+            }
+
+        source_ids = {
+            str(item.get("source_asset_id") or item.get("asset_id") or "").strip()
+            for item in assets
+        }
+        source_ids.discard("")
+        if len(source_ids) != 1:
+            raise ReferenceInputAdmissionError(
+                "The configured image route cannot accept all distinct reference sources; no source may be silently omitted.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "reference_input_capability_mismatch",
+                    "reference_count": len(assets),
+                    "maximum_reference_images": maximum,
+                    "materialized_reference_count": len(assets),
+                },
+            )
+
+        ranked = sorted(
+            enumerate(assets),
+            key=lambda pair: (
+                int(pair[1].get("priority") or 0),
+                1 if pair[1].get("derivative_kind") == "portrait_identity_crop" else 0,
+                -pair[0],
+            ),
+            reverse=True,
+        )
+        retained = dict(ranked[0][1])
+        suppressed = [
+            str(item.get("asset_id") or "").strip()
+            for _, item in ranked[1:]
+            if str(item.get("asset_id") or "").strip()
+        ]
+        audit = {
+            "schema_version": "v3_provider_reference_capacity_adaptation_v1",
+            "applied": True,
+            "reason": "one_logical_source_on_singular_transport",
+            "maximum_reference_images": maximum,
+            "original_materialized_reference_count": len(assets),
+            "retained_asset_id": retained.get("asset_id"),
+            "suppressed_materialized_asset_ids": suppressed,
+            "logical_source_asset_id": next(iter(source_ids)),
+        }
+        return {"assets": [retained], "audit": audit}
 
     def _dedupe_provider_reference_assets(self, assets: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Coalesce repeated physical provider inputs without collapsing distinct truth sources."""
