@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import math
@@ -210,6 +210,7 @@ class ProviderPromptMaterialization:
     prompt_audit: dict[str, Any]
     input_fidelity: str | None
     prompt_source: str = "legacy_local_materializer"
+    size_adaptation: dict[str, Any] = field(default_factory=dict)
 
 
 def build_provider_generation_request(
@@ -997,6 +998,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
             admission_outcome="admitted",
         )
         final_provider_prompt = str(app_request.prompt_plan.variables.get("generation_prompt") or "")
+        provider_size_adaptation = (
+            dict(app_request.prompt_plan.variables.get("provider_size_adaptation") or {})
+            if isinstance(app_request.prompt_plan.variables.get("provider_size_adaptation"), dict)
+            else {}
+        )
         negative_constraints = self._negative_constraints(request)
         llm_brain = request.metadata.get("llm_brain") if isinstance(request.metadata.get("llm_brain"), dict) else {}
         if self._activation_enforced(request):
@@ -1217,6 +1223,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "request_index": output.get("request_index"),
                     "requested_image_count": requested_group_count,
                     "requested_image_size": app_request.prompt_plan.size,
+                    "provider_size_adaptation": provider_size_adaptation,
                     "requested_image_aspect_ratio": request.metadata.get(
                         "requested_image_aspect_ratio"
                     ) or request.generation_plan.metadata.get("requested_image_aspect_ratio"),
@@ -1322,6 +1329,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "v3_owned_output": True,
                         "requested_image_count": requested_group_count,
                         "requested_image_size": app_request.prompt_plan.size,
+                        "provider_size_adaptation": provider_size_adaptation,
                         "project_id": request.metadata.get("project_id"),
                         "template_id": request.metadata.get("template_id"),
                         "veyra_user_id": request.metadata.get("veyra_user_id"),
@@ -1371,6 +1379,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "visual_capability_cluster": visual_cluster,
                 "requested_image_count": requested_group_count,
                 "requested_image_size": app_request.prompt_plan.size,
+                "provider_size_adaptation": provider_size_adaptation,
                 "project_id": request.metadata.get("project_id"),
                 "template_id": request.metadata.get("template_id"),
                 "veyra_user_id": request.metadata.get("veyra_user_id"),
@@ -2087,6 +2096,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "requested_image_aspect_ratio_source": request.metadata.get(
                     "requested_image_aspect_ratio_source"
                 ) or request.generation_plan.metadata.get("requested_image_aspect_ratio_source"),
+                "provider_size_adaptation": materialization.size_adaptation,
                 "input_fidelity": materialization.input_fidelity,
                 "input_fidelity_required": self._input_fidelity_is_required(materialization.asset_plan),
                 "generation_channel": metadata.get("generation_channel", "provider"),
@@ -2148,7 +2158,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             request.metadata.get("provider_reference_resolution_audit") or {}
         )
         self._assert_nonhuman_identity_reference_materialized(request, asset_plan)
-        size = self._size_for_request(request)
+        size, size_adaptation = self._resolve_provider_size(request, reference_assets)
         canonical_prompt = self._brain_signed_provider_prompt(request)
         if self._requires_brain_signed_provider_prompt(request) and not canonical_prompt:
             # ScenarioRuntime normally rejects this earlier. Keep the
@@ -2183,6 +2193,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             ),
             input_fidelity=self._input_fidelity_for_asset_plan(asset_plan),
             prompt_source="remote_brain_canonical" if canonical_prompt else "legacy_local_materializer",
+            size_adaptation=size_adaptation,
         )
 
     def _input_fidelity_for_asset_plan(self, asset_plan: dict[str, Any]) -> str | None:
@@ -6480,6 +6491,56 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "16:9": "1536x1024",
         }
         return mapping.get(ratio, "1024x1024")
+
+    def _resolve_provider_size(
+        self,
+        request: GenerationRequest,
+        reference_assets: list[dict[str, Any]],
+    ) -> tuple[str, dict[str, Any]]:
+        """Resolve a renderer size against the active transport capabilities.
+
+        ``AssetSpec.aspect_ratio`` is a derived planning signal.  It may not
+        be sent as an unsupported canvas size to a certified square edit
+        transport.  Explicit user-owned size/aspect metadata remains hard and
+        is left unchanged so the normal provider capability guard can close
+        the request rather than silently changing the user's canvas.
+        """
+
+        planned_size = self._size_for_request(request)
+        if not reference_assets or planned_size == "1024x1024":
+            return planned_size, {}
+
+        explicit_size = str(
+            request.metadata.get("requested_image_size")
+            or request.generation_plan.metadata.get("requested_image_size")
+            or ""
+        ).strip()
+        explicit_aspect = str(
+            request.metadata.get("requested_image_aspect_ratio")
+            or request.generation_plan.metadata.get("requested_image_aspect_ratio")
+            or ""
+        ).strip()
+        if explicit_size or explicit_aspect:
+            return planned_size, {}
+
+        try:
+            from app.providers.openai_image import OpenAIGPTImageProvider
+
+            provider = OpenAIGPTImageProvider(model="gpt-image-2")
+            if not provider._uses_square_b64_transport(image_edit=True):  # noqa: SLF001
+                return planned_size, {}
+            transport_profile = provider._transport_profile(image_edit=True)  # noqa: SLF001
+        except (ImportError, AttributeError, TypeError, ValueError):
+            return planned_size, {}
+
+        return "1024x1024", {
+            "schema_version": "v3_provider_size_adaptation_v1",
+            "applied": True,
+            "reason": "derived_aspect_on_square_edit_transport",
+            "planned_size": planned_size,
+            "transport_size": "1024x1024",
+            "transport_profile": transport_profile,
+        }
 
     def _asset_canvas_instruction(self, request: GenerationRequest, asset: AssetSpec | None) -> str:
         if asset is None:

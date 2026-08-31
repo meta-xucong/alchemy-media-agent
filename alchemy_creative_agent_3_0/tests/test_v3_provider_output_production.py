@@ -780,6 +780,15 @@ def test_constrained_edit_profile_adapts_one_logical_source_to_one_input(tmp_pat
         assert provider_name == "openai_gpt_image"
         assert len(app_request.asset_plan["assets"]) == 1
         assert app_request.asset_plan["provider_input_plan"]["reference_image_count"] == 1
+        assert app_request.prompt_plan.size == "1024x1024"
+        assert app_request.prompt_plan.variables["provider_size_adaptation"] == {
+            "schema_version": "v3_provider_size_adaptation_v1",
+            "applied": True,
+            "reason": "derived_aspect_on_square_edit_transport",
+            "planned_size": "1024x1536",
+            "transport_size": "1024x1024",
+            "transport_profile": "square_b64_reference_edit",
+        }
         return ImageGenerationResult(
             provider="openai_gpt_image",
             model="test-image-model",
@@ -830,6 +839,80 @@ def test_constrained_edit_profile_adapts_one_logical_source_to_one_input(tmp_pat
     response = provider.generate(request)
     assert response.candidates
     assert Path(response.candidates[0].file_path).exists()
+
+
+def test_square_edit_transport_does_not_rewrite_explicit_size(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "square_b64_reference_edit")
+    monkeypatch.setattr(settings, "openai_image_edit_max_reference_images", None)
+
+    reference_path = _reference_image(tmp_path / "selected-output.png")
+    request = _human_generation_request()
+    request.metadata["requested_image_size"] = "1024x1536"
+    request.metadata["requested_image_size_source"] = "remote_brain_user_intent"
+    request.metadata["requested_image_aspect_ratio"] = "2:3"
+    request.metadata["requested_image_aspect_ratio_source"] = "remote_brain_user_intent"
+    request.metadata["uploaded_assets"] = [
+        {
+            "asset_id": "selected_portrait_ref",
+            "output_id": "selected_portrait_ref",
+            "source_type": "selected_output",
+            "role": "identity_reference",
+            "use_policy": "identity",
+            "filename": reference_path.name,
+            "mime_type": "image/png",
+            "file_path": str(reference_path),
+            "provider_input_required": True,
+            "metadata": {
+                "canonical_output_binding": True,
+                "source_integrity_id": "sha256:selected_portrait_ref",
+            },
+        }
+    ]
+
+    materialization = ProductionImageGenerationProvider(
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs")
+    ).materialize_final_prompt(request)
+
+    assert materialization.size == "1024x1536"
+    assert materialization.size_adaptation == {}
+
+
+def test_standard_edit_transport_keeps_derived_aspect_size(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "openai_standard")
+    monkeypatch.setattr(settings, "openai_image_edit_max_reference_images", None)
+
+    reference_path = _reference_image(tmp_path / "selected-output.png")
+    request = _human_generation_request()
+    request.metadata["uploaded_assets"] = [
+        {
+            "asset_id": "selected_portrait_ref",
+            "output_id": "selected_portrait_ref",
+            "source_type": "selected_output",
+            "role": "identity_reference",
+            "use_policy": "identity",
+            "filename": reference_path.name,
+            "mime_type": "image/png",
+            "file_path": str(reference_path),
+            "provider_input_required": True,
+            "metadata": {
+                "canonical_output_binding": True,
+                "source_integrity_id": "sha256:selected_portrait_ref",
+            },
+        }
+    ]
+
+    materialization = ProductionImageGenerationProvider(
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs")
+    ).materialize_final_prompt(request)
+
+    assert materialization.size == "1024x1536"
+    assert materialization.size_adaptation == {}
 
 
 def test_explicit_provider_content_policy_signal_is_not_misreported_as_generic_400(tmp_path, monkeypatch) -> None:
