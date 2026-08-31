@@ -3919,7 +3919,31 @@ class ScenarioRuntime:
     @staticmethod
     def _canonical_brain_image_size(value: object) -> str | None:
         normalized = " ".join(str(value or "").strip().lower().split()).replace("×", "x")
-        return _BRAIN_IMAGE_SIZE_ALIASES.get(normalized)
+        aliased = _BRAIN_IMAGE_SIZE_ALIASES.get(normalized)
+        if aliased:
+            return aliased
+        compact = normalized.replace(" ", "")
+        if compact.count("x") != 1:
+            return None
+        width_text, height_text = compact.split("x", 1)
+        try:
+            width = int(width_text)
+            height = int(height_text)
+        except (TypeError, ValueError):
+            return None
+        if (
+            width < 16
+            or height < 16
+            or width > 3840
+            or height > 3840
+            or width % 16
+            or height % 16
+            or width * height < 655360
+            or width * height > 8294400
+            or max(width / height, height / width) > 3
+        ):
+            return None
+        return f"{width}x{height}"
 
     @staticmethod
     def _canonical_brain_aspect_ratio(value: object) -> tuple[str, str] | None:
@@ -3934,6 +3958,12 @@ class ScenarioRuntime:
         brain_result: BrainRunResult,
     ) -> NormalizedV3JobIntent:
         """Let the Brain resolve explicit user canvas intent before UI fallback."""
+
+        typed_options = request.metadata.get("provider_image_options")
+        if isinstance(typed_options, dict) and typed_options.get("size"):
+            # A typed product option is already frozen before the Brain runs;
+            # the Brain may describe the image but cannot replace its canvas.
+            return normalized_intent
 
         brain_plan = brain_result.image_set_plan
         brain_size = self._canonical_brain_image_size(getattr(brain_plan, "size", None))
@@ -6210,6 +6240,9 @@ class ScenarioRuntime:
                 "requested_image_size": preparation.normalized_job_intent.effective_image_size,
             }
         )
+        typed_options = request.metadata.get("provider_image_options")
+        if isinstance(typed_options, dict):
+            frozen_provider_metadata["provider_image_options"] = dict(typed_options)
         explicit_aspect_ratio = str(
             request.metadata.get("requested_image_aspect_ratio") or ""
         ).strip()
@@ -6579,6 +6612,9 @@ class ScenarioRuntime:
         if frozen is not None:
             return frozen
         base_metadata = self._brain_runtime_metadata(request, resolution, quality_mode=quality_mode)
+        # Output controls are server-owned renderer options. They travel with
+        # the frozen local plan but are not creative instructions for the Brain.
+        base_metadata.pop("provider_image_options", None)
         if self._is_professional_mode_selected(request):
             # The remote Brain receives only the explicit, typed creative
             # evidence. Server job/project records and raw reference-plan

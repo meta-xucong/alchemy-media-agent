@@ -25,6 +25,9 @@ async def create_image_job(prompt_plan: dict, asset_ids: list[str] | None = None
         size=prompt_plan.get("size", "1024x1024"),
         quality=prompt_plan.get("quality", "auto"),
         output_format=prompt_plan.get("output_format", "png"),
+        background=prompt_plan.get("background"),
+        moderation=prompt_plan.get("moderation"),
+        output_compression=prompt_plan.get("output_compression"),
         provider_preference=provider_preference,
     )
     return {"job_id": job.id, "provider": job.provider, "model": job.model, "output_count": len(job.outputs), "status": job.status}

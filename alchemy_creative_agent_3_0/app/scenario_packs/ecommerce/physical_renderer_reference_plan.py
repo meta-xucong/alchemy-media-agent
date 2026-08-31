@@ -14,6 +14,11 @@ from .reference_projection import PhysicalProductReferenceProjection, ProductTru
 
 
 DOC269_PHYSICAL_PLAN_SCHEMA = "doc269_physical_renderer_reference_plan_v1"
+# Doc269's professional renderer set is intentionally smaller than the
+# underlying GPT Image 2 transport capacity.  The E-Commerce module owns this
+# product-truth plan cap; the shared Provider may still accept the official
+# sixteen-image edit envelope for other V3 requests.
+DOC269_MAX_REFERENCE_IMAGES = 5
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 

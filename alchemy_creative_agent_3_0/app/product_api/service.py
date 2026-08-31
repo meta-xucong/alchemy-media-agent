@@ -47,6 +47,7 @@ from ..scenario_packs.ecommerce.reference_projection import (
     build_product_truth_admission,
 )
 from ..scenario_packs.ecommerce.physical_renderer_reference_plan import (
+    DOC269_MAX_REFERENCE_IMAGES,
     PhysicalRendererReferencePlan,
     build_physical_renderer_reference_plan,
 )
@@ -123,6 +124,7 @@ from .contracts import (
     EcommerceCapabilitySummary,
     GenerateJobRequest,
     GeneralCreativeCapabilitySummary,
+    ImageOutputOptions,
     ProductJobStatus,
     ProductJobStatusValue,
     ScenarioSummary,
@@ -1339,6 +1341,7 @@ class V3ProductApiService:
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
             trusted_doc270_ecommerce_view_activation=trusted_doc270_ecommerce_view_activation,
         )
+        self._bind_typed_image_options(create_request)
         if doc269_selected_continuation_admissions is not None:
             create_request.metadata = {
                 **dict(create_request.metadata or {}),
@@ -2626,6 +2629,7 @@ class V3ProductApiService:
             create_request,
             trusted_capability_plan_reuse=False,
         )
+        self._bind_typed_image_options(create_request)
         self._resolve_and_pin_photographer_profile(create_request)
         runtime_result = self.scenario_runtime.plan_job(self._runtime_request_payload(create_request))
         plan = runtime_result.metadata.get("capability_activation_plan")
@@ -3123,6 +3127,7 @@ class V3ProductApiService:
         ):
             raise ValueError("body_refresh_analysis_context_untrusted")
         generate_request = self._coerce_generate_request(request or {})
+        self._bind_generate_image_options(record, generate_request)
         self._assert_photographer_profile_binding_immutable(record, generate_request)
         worker_claim = bool(generate_request.metadata.pop("_v3_background_worker_claim", False))
         background_attempt_id = str(generate_request.metadata.pop("_v3_background_generation_attempt_id", "") or "")
@@ -10310,6 +10315,7 @@ class V3ProductApiService:
             "doc271_terminal_job_receipt",
             "provider_deliverability_closure_receipt",
             "ambiguous_provider_request_hold_receipt",
+            "provider_image_options",
             "doc270_project_source_library",
             "doc270_source_library_binding_receipts",
             "doc270_general_source_activation_receipts",
@@ -12928,6 +12934,7 @@ class V3ProductApiService:
             "doc270_ecommerce_view_activation_enabled",
             "doc270_ecommerce_view_activation_receipts",
             "doc270_ecommerce_view_activation_selection",
+            "provider_image_options",
         }
     )
 
@@ -13370,7 +13377,10 @@ class V3ProductApiService:
         controls["preserve_person_identity"] = True
         provider_reference_budget = dict(context.get("provider_reference_budget") or {})
         provider_reference_budget["max_identity_sources"] = len(references)
-        provider_reference_budget["max_total_reference_images"] = self._configured_provider_reference_capacity()
+        provider_reference_budget["max_total_reference_images"] = min(
+            self._configured_provider_reference_capacity(),
+            DOC269_MAX_REFERENCE_IMAGES,
+        )
         metadata.update(
             {
                 "advanced_reference_controls": controls,
@@ -13638,6 +13648,45 @@ class V3ProductApiService:
                 "runtime_metadata_server_owned: " + ", ".join(sorted(supplied))
             )
 
+    @staticmethod
+    def _bind_typed_image_options(request: CreateCreativeJobRequest) -> None:
+        """Bind public image controls into the server-owned runtime envelope."""
+
+        options = request.image_options
+        if options is None:
+            return
+        payload = options.model_dump(mode="json", exclude_none=True)
+        current = dict(request.metadata or {}).get("provider_image_options")
+        if current is not None and current != payload:
+            raise ValueError("image_options_immutable")
+        metadata = {**dict(request.metadata or {}), "provider_image_options": payload}
+        if options.size:
+            metadata["requested_image_size"] = options.size
+            metadata["requested_image_size_source"] = "public_image_options"
+        request.metadata = metadata
+
+    def _bind_generate_image_options(self, record, request: GenerateJobRequest) -> None:
+        """Apply typed generate-time controls without accepting raw metadata."""
+
+        options = request.image_options
+        if options is None:
+            return
+        payload = options.model_dump(mode="json", exclude_none=True)
+        metadata = dict(record.request.metadata or {})
+        current = metadata.get("provider_image_options")
+        if current is not None and current != payload:
+            raise ValueError("image_options_immutable")
+        if record.generation_result is not None and current != payload:
+            raise ValueError("image_options_locked_after_generation")
+        updated = {**metadata, "provider_image_options": payload}
+        if options.size:
+            updated["requested_image_size"] = options.size
+            updated["requested_image_size_source"] = "public_image_options"
+        if updated != metadata:
+            record.request.metadata = updated
+            self.job_store.save(record)
+        return None
+
     def _validate_and_bind_trusted_capability_plan_reuse(self, request: CreateCreativeJobRequest) -> None:
         """Bind a child to a persisted parent plan or its one audited amendment."""
 
@@ -13773,7 +13822,10 @@ class V3ProductApiService:
             if isinstance(locked_identity_references, list)
             else 0
         )
-        provider_reference_capacity = self._configured_provider_reference_capacity()
+        provider_reference_capacity = min(
+            self._configured_provider_reference_capacity(),
+            DOC269_MAX_REFERENCE_IMAGES,
+        )
         provider_reference_budget = (
             {
                 "max_product_truth_source_refs_per_output": min(2, provider_reference_capacity),
@@ -14566,13 +14618,16 @@ class V3ProductApiService:
         context = metadata.get("ecommerce_creative_context")
         budget = context.get("provider_reference_budget") if isinstance(context, dict) else {}
         try:
-            maximum_reference_images = int(
-                budget.get(
-                    "max_total_reference_images",
-                    self._configured_provider_reference_capacity(),
-                )
-                if isinstance(budget, dict)
-                else self._configured_provider_reference_capacity()
+            maximum_reference_images = min(
+                int(
+                    budget.get(
+                        "max_total_reference_images",
+                        self._configured_provider_reference_capacity(),
+                    )
+                    if isinstance(budget, dict)
+                    else self._configured_provider_reference_capacity()
+                ),
+                DOC269_MAX_REFERENCE_IMAGES,
             )
         except (TypeError, ValueError) as exc:
             raise ValueError("doc269_reference_capacity_invalid") from exc
@@ -14998,8 +15053,12 @@ class V3ProductApiService:
 
     def _coerce_generate_request(self, request: GenerateJobRequest | dict[str, Any]) -> GenerateJobRequest:
         if isinstance(request, GenerateJobRequest):
-            return request
-        return GenerateJobRequest.model_validate(request)
+            generated = request
+        else:
+            generated = GenerateJobRequest.model_validate(request)
+        if "provider_image_options" in dict(generated.metadata or {}):
+            raise ValueError("runtime_metadata_server_owned: provider_image_options")
+        return generated
 
     def _coerce_select_request(self, request: SelectResultRequest | dict[str, Any]) -> SelectResultRequest:
         if isinstance(request, SelectResultRequest):

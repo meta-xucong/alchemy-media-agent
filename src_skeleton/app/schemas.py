@@ -207,6 +207,9 @@ class ImagePromptPlan(BaseModel):
     size: str | None = None
     quality: Literal["low", "medium", "high", "auto"] = "auto"
     output_format: Literal["png", "jpeg", "webp"] = "png"
+    background: Literal["transparent", "opaque", "auto"] | None = None
+    moderation: Literal["auto", "low"] | None = None
+    output_compression: int | None = Field(default=None, ge=0, le=100)
     transparent_background: bool = False
     variables: dict[str, Any] = Field(default_factory=dict)
 
@@ -393,6 +396,9 @@ class CreateImageJobRequest(BaseModel):
     size: str | None = None
     quality: Literal["low", "medium", "high", "auto"] = "auto"
     output_format: Literal["png", "jpeg", "webp"] = "png"
+    background: Literal["transparent", "opaque", "auto"] | None = None
+    moderation: Literal["auto", "low"] | None = None
+    output_compression: int | None = Field(default=None, ge=0, le=100)
     work_intensity: Literal["swift", "balanced", "studio", "atelier"] | None = None
     provider_preference: str | None = None
     idempotency_key: str | None = None

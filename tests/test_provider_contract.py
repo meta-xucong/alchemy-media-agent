@@ -144,6 +144,7 @@ def test_openai_image_provider_capabilities():
     assert "custom_dimensions" in caps.limits["sizes"]
     assert caps.limits["custom_size"]["max_width"] == 3840
     assert caps.limits["qualities"] == ["auto", "low", "medium", "high"]
+    assert caps.limits["max_reference_images"] == 16
 
 
 def test_openai_image_provider_cost_uses_runtime_model():
@@ -589,6 +590,48 @@ def test_openai_image_provider_passes_quality_to_sdk_call():
     assert captured["model"] == "gpt-image-2"
 
 
+def test_openai_image_provider_passes_official_output_options_to_sdk_call(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    kwargs = provider._image_kwargs(  # noqa: SLF001
+        ImagePromptPlan(
+            main_subject="editorial image",
+            size="2048x1152",
+            quality="high",
+            output_format="webp",
+            background="transparent",
+            moderation="low",
+            output_compression=82,
+        )
+    )
+
+    assert kwargs == {
+        "quality": "high",
+        "output_format": "webp",
+        "size": "2048x1152",
+        "background": "transparent",
+        "moderation": "low",
+        "output_compression": 82,
+    }
+
+
+def test_openai_image_provider_rejects_official_option_combinations_and_bad_custom_size(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    with pytest.raises(ProviderCapabilityMismatchError, match="jpeg or webp"):
+        provider._image_kwargs(  # noqa: SLF001
+            ImagePromptPlan(main_subject="image", output_format="png", output_compression=50)
+        )
+    with pytest.raises(ProviderCapabilityMismatchError, match="Transparent backgrounds"):
+        provider._image_kwargs(  # noqa: SLF001
+            ImagePromptPlan(main_subject="image", output_format="jpeg", background="transparent")
+        )
+    with pytest.raises(ProviderCapabilityMismatchError, match="custom size limits"):
+        provider._image_kwargs(  # noqa: SLF001
+            ImagePromptPlan(main_subject="image", size="1000x1000")
+        )
+
+
 def test_openai_image_provider_generation_only_square_transport_is_explicit(monkeypatch):
     provider = registry.image("openai_gpt_image")
     monkeypatch.setattr(settings, "openai_image_transport_profile", "generation_only_square_b64")
@@ -969,14 +1012,15 @@ def test_doc96_openai_image_provider_applies_high_input_fidelity(tmp_path):
         )
     )
 
-    assert captured["input_fidelity"] == "high"
+    assert "input_fidelity" not in captured
     assert result[0]["input_fidelity_requested"] == "high"
-    assert result[0]["input_fidelity_applied"] == "high"
-    assert result[0]["input_fidelity_support_state"] == "supported"
+    assert result[0]["input_fidelity_applied"] == "native_high"
+    assert result[0]["input_fidelity_support_state"] == "native_high"
 
 
 def test_doc96_input_fidelity_specific_400_falls_back_once(tmp_path, monkeypatch):
     provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(provider, "model", "gpt-image-1")
     monkeypatch.setattr(settings, "openai_image_gateway_managed_failover", True)
     openai_image_provider._image_edit_capability_cache.reset()
     captured = []
@@ -1038,7 +1082,7 @@ def test_doc96_identity_local_repair_sends_same_size_mask(tmp_path):
         )
     )
 
-    assert captured["input_fidelity"] == "high"
+    assert "input_fidelity" not in captured
     assert captured["mask_name"].endswith("mask.png")
     assert result[0]["identity_local_repair"] is True
 

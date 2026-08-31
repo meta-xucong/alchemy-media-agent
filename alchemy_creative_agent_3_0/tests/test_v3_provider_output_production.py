@@ -676,7 +676,7 @@ def test_reference_capacity_mismatch_blocks_before_gateway_without_silent_trunca
     monkeypatch.setattr(ProductionImageGenerationProvider, "_generate_with_app_provider", fake_generate)
     request = _generation_request()
     references = []
-    for index in range(6):
+    for index in range(17):
         path = tmp_path / f"reference_{index}.png"
         path.write_bytes(base64.b64decode(_png_base64(width=96 + index, height=72 + index)))
         references.append(
@@ -708,11 +708,11 @@ def test_reference_capacity_mismatch_blocks_before_gateway_without_silent_trunca
     assert summary["fresh_upstream_requests"] == 0
     assert summary["final_failure_code"] == "reference_input_capability_mismatch"
     assert audit["admission_outcome"] == "ineligible"
-    assert audit["reference_count"] == 6
+    assert audit["reference_count"] == 17
     assert audit["outer_request_count"] == 0
     assert request.metadata["provider_reference_resolution_audit"]["capacity_exceeded"] == {
-        "reference_count": 6,
-        "maximum_reference_images": 5,
+        "reference_count": 17,
+        "maximum_reference_images": 16,
     }
 
 
@@ -763,6 +763,14 @@ def test_constrained_edit_profile_blocks_multi_reference_request_before_gateway(
         "reference_count": 4,
         "maximum_reference_images": 1,
     }
+
+
+def test_provider_official_options_default_quality_is_auto_when_omitted(tmp_path) -> None:
+    request = _generation_request()
+    request.generation_plan.metadata["provider_image_options"] = {"size": "2048x1152"}
+    provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+
+    assert provider._quality_for_request(request) == "auto"  # noqa: SLF001
 
 
 def test_constrained_edit_profile_adapts_one_logical_source_to_one_input(tmp_path, monkeypatch) -> None:
@@ -896,6 +904,40 @@ def test_provider_request_factory_preserves_size_provenance() -> None:
 
     assert request.metadata["requested_image_size"] == "1024x1536"
     assert request.metadata["requested_image_size_source"] == "remote_brain_user_intent"
+
+
+def test_provider_request_factory_carries_official_image_options_to_materialization(tmp_path) -> None:
+    base = _generation_request()
+    base.generation_plan.metadata["provider_image_options"] = {
+        "size": "2048x1152",
+        "quality": "high",
+        "background": "transparent",
+        "output_format": "webp",
+        "output_compression": 82,
+        "moderation": "low",
+    }
+
+    request = build_provider_generation_request(
+        asset_spec=base.asset_spec,
+        layout_plan=base.layout_plan,
+        prompt_compilation=base.prompt_compilation,
+        condition_plan=base.condition_plan,
+        generation_plan=base.generation_plan,
+        job_id="job_official_options",
+    )
+    provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+    materialization = provider.materialize_final_prompt(request)
+    app_request, _, _ = provider._build_app_request(request)  # noqa: SLF001
+
+    assert request.metadata["provider_image_options"]["output_compression"] == 82
+    assert materialization.size == "2048x1152"
+    assert materialization.quality == "high"
+    assert materialization.background == "transparent"
+    assert materialization.output_format == "webp"
+    assert materialization.output_compression == 82
+    assert app_request.prompt_plan.background == "transparent"
+    assert app_request.prompt_plan.moderation == "low"
+    assert app_request.prompt_plan.output_compression == 82
 
 
 def test_square_edit_transport_adapts_plan_size_without_explicit_size_provenance(tmp_path, monkeypatch) -> None:

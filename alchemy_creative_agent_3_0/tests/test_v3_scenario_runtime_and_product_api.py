@@ -2,7 +2,13 @@ import pytest
 from pydantic import ValidationError
 
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
-from alchemy_creative_agent_3_0.app.product_api import CreateCreativeJobRequest, ProductJobStatusValue, V3ProductApiService
+from alchemy_creative_agent_3_0.app.product_api import (
+    CreateCreativeJobRequest,
+    GenerateJobRequest,
+    ImageOutputOptions,
+    ProductJobStatusValue,
+    V3ProductApiService,
+)
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioSelection
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime, ScenarioRuntimeRequest, ScenarioRuntimeStatus
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
@@ -80,6 +86,40 @@ def test_product_api_accepts_general_scenario_selection_and_keeps_simple_respons
     assert created.scenario.selected_mode_id == "social_cover"
     assert created.asset_series
     assert created.metadata["scenario_id"] == "general_creative"
+
+
+def test_product_api_freezes_official_image_options_and_rejects_raw_runtime_override(tmp_path) -> None:
+    request = CreateCreativeJobRequest(
+        user_input="Create a clean social campaign cover for a tea shop.",
+        scenario_selection={"scenario_id": "general_creative", "preset_id": "social_cover"},
+        image_options={
+            "size": "2048x1152",
+            "quality": "high",
+            "background": "transparent",
+            "output_format": "webp",
+            "output_compression": 82,
+            "moderation": "low",
+        },
+    )
+    V3ProductApiService._bind_typed_image_options(request)  # noqa: SLF001
+
+    assert request.metadata["provider_image_options"] == {
+        "size": "2048x1152",
+        "quality": "high",
+        "background": "transparent",
+        "output_format": "webp",
+        "output_compression": 82,
+        "moderation": "low",
+    }
+    assert request.metadata["requested_image_size"] == "2048x1152"
+    assert request.metadata["requested_image_size_source"] == "public_image_options"
+    with pytest.raises(ValidationError):
+        ImageOutputOptions(output_format="png", output_compression=50)
+    service = object.__new__(V3ProductApiService)
+    with pytest.raises(ValueError, match="runtime_metadata_server_owned"):
+        service._coerce_generate_request(  # noqa: SLF001
+            GenerateJobRequest(metadata={"provider_image_options": {"quality": "low"}})
+        )
 
 
 def test_product_api_runs_ecommerce_scenario_and_keeps_job_retrievable(tmp_path) -> None:

@@ -111,6 +111,7 @@ class CentralCreativeBrain:
                 "job_id": job.job_id,
                 "uploaded_assets": context.metadata.get("uploaded_assets", []),
                 "reference_assets": context.metadata.get("reference_assets", []),
+                "provider_image_options": context.metadata.get("provider_image_options"),
                 # Doc269's Product API-issued E-Commerce renderer plan is a
                 # per-output transport receipt. It is not interpreted by the
                 # shared planner; it must only survive until the specialized
@@ -416,6 +417,7 @@ class CentralCreativeBrain:
                 "requested_image_count": _bounded_requested_image_count(context.metadata.get("requested_image_count")),
                 "requested_image_size": context.metadata.get("requested_image_size"),
                 "requested_image_size_source": context.metadata.get("requested_image_size_source"),
+                "provider_image_options": context.metadata.get("provider_image_options"),
                 "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
                 "requested_image_aspect_ratio_source": context.metadata.get(
                     "requested_image_aspect_ratio_source"
@@ -775,6 +777,7 @@ class CentralCreativeBrain:
                     "uploaded_asset_ids",
                     "requested_image_count",
                     "requested_image_size",
+                    "provider_image_options",
                     "requested_image_aspect_ratio",
                     "requested_image_aspect_ratio_source",
                     "project_id",

@@ -44,6 +44,33 @@ class CampaignRequest(ProductApiBase):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ImageOutputOptions(ProductApiBase):
+    """Official image output controls exposed as a typed V3 surface."""
+
+    size: str | None = None
+    quality: Literal["low", "medium", "high", "auto"] | None = None
+    background: Literal["transparent", "opaque", "auto"] | None = None
+    output_format: Literal["png", "jpeg", "webp"] | None = None
+    output_compression: int | None = Field(default=None, ge=0, le=100)
+    moderation: Literal["auto", "low"] | None = None
+
+    @field_validator("size", mode="before")
+    @classmethod
+    def normalize_size(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        cleaned = str(value).strip()
+        return cleaned or None
+
+    @model_validator(mode="after")
+    def validate_format_options(self) -> "ImageOutputOptions":
+        if self.output_compression is not None and self.output_format not in {"jpeg", "webp"}:
+            raise ValueError("output_compression requires jpeg or webp output_format")
+        if self.background == "transparent" and self.output_format == "jpeg":
+            raise ValueError("transparent background requires png or webp output_format")
+        return self
+
+
 class CreateCreativeJobRequest(ProductApiBase):
     user_input: str
     brand_id: str | None = None
@@ -60,6 +87,7 @@ class CreateCreativeJobRequest(ProductApiBase):
     professional_identity_view_ids: list[str] = Field(default_factory=list)
     uploaded_asset_ids: list[str] = Field(default_factory=list)
     product_profile: dict[str, Any] = Field(default_factory=dict)
+    image_options: ImageOutputOptions | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("user_input")
@@ -121,6 +149,7 @@ class CreateCreativeJobRequest(ProductApiBase):
 
 class GenerateJobRequest(ProductApiBase):
     quality_mode: str = "standard"
+    image_options: ImageOutputOptions | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("quality_mode")

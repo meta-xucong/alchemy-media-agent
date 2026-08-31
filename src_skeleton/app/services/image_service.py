@@ -75,6 +75,9 @@ async def submit_image_job(
     size: str | None = None,
     quality: str = "auto",
     output_format: str = "png",
+    background: str | None = None,
+    moderation: str | None = None,
+    output_compression: int | None = None,
     work_intensity: str | None = None,
     provider_preference: str | None = None,
     idempotency_key: str | None = None,
@@ -114,6 +117,9 @@ async def submit_image_job(
         size=size,
         quality=quality,
         output_format=output_format,
+        background=background,
+        moderation=moderation,
+        output_compression=output_compression,
         asset_ids=asset_ids,
     )
     variables = {
@@ -230,6 +236,9 @@ async def create_image_job(
     size: str | None = None,
     quality: str = "auto",
     output_format: str = "png",
+    background: str | None = None,
+    moderation: str | None = None,
+    output_compression: int | None = None,
     work_intensity: str | None = None,
     provider_preference: str | None = None,
     idempotency_key: str | None = None,
@@ -268,6 +277,9 @@ async def create_image_job(
         size=size,
         quality=quality,
         output_format=output_format,
+        background=background,
+        moderation=moderation,
+        output_compression=output_compression,
         asset_ids=asset_ids,
     )
     trace_id = make_id("trace")

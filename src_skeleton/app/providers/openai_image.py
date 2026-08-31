@@ -202,6 +202,7 @@ class OpenAIGPTImageProvider:
     _STANDARD_TRANSPORT_PROFILE = "openai_standard"
     _GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE = "generation_only_square_b64"
     _SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE = "square_b64_reference_edit"
+    _OFFICIAL_MAX_REFERENCE_IMAGES = 16
 
     def __init__(self, model: str | None = None):
         self.model = model
@@ -212,6 +213,27 @@ class OpenAIGPTImageProvider:
         image_edit_generation_only_square = self._uses_generation_only_square_b64_transport(image_edit=True)
         image_edit_square_b64_transport = self._uses_square_b64_transport(image_edit=True)
         reference_capacity = self.reference_image_capacity()
+        official_sizes = [
+            "auto",
+            "1024x1024",
+            "1024x1536",
+            "1536x1024",
+            "2048x2048",
+            "2048x1152",
+            "3840x2160",
+            "2160x3840",
+            "custom_dimensions",
+        ]
+        official_custom_size = {
+            "min_width": 16,
+            "min_height": 16,
+            "max_width": 3840,
+            "max_height": 3840,
+            "edge_multiple": 16,
+            "min_pixels": 655360,
+            "max_pixels": 8294400,
+            "max_aspect_ratio": 3,
+        }
         return ProviderCapabilities(
             provider=self.name,
             configured=configured,
@@ -244,13 +266,8 @@ class OpenAIGPTImageProvider:
                 "max_reference_images": reference_capacity,
                 "reference_capacity_source": self.reference_image_capacity_source(),
                 "formats": ["png"] if square_b64_transport else ["png", "jpeg", "webp"],
-                "sizes": ["1024x1024"] if square_b64_transport else ["auto", "1024x1024", "1024x1536", "1536x1024", "custom_dimensions"],
-                "custom_size": {
-                    "min_width": 1024,
-                    "min_height": 1024,
-                    "max_width": 3840,
-                    "max_height": 3840,
-                },
+                "sizes": ["1024x1024"] if square_b64_transport else official_sizes,
+                "custom_size": official_custom_size,
                 "qualities": [] if square_b64_transport else ["auto", "low", "medium", "high"],
                 "transport_profile": self._transport_profile(),
                 "image_edit_transport_profile": self._transport_profile(image_edit=True),
@@ -258,8 +275,15 @@ class OpenAIGPTImageProvider:
                 "image_edit_sizes": (
                     ["1024x1024"]
                     if image_edit_square_b64_transport
-                    else ["auto", "1024x1024", "1024x1536", "1536x1024", "custom_dimensions"]
+                    else official_sizes
                 ),
+                "backgrounds": ["auto", "opaque", "transparent"],
+                "moderation": ["auto", "low"],
+                "output_compression": {"min": 0, "max": 100, "formats": ["jpeg", "webp"]},
+                "input_fidelity": {
+                    "values": ["high", "low"],
+                    "gpt_image_2": "native_high_without_request_field",
+                },
                 "local_max_requests_per_minute": settings.openai_image_local_max_requests_per_minute,
                 "local_max_outputs_per_minute": settings.openai_image_local_max_outputs_per_minute,
                 "local_queue_timeout_seconds": settings.openai_image_local_queue_timeout_seconds,
@@ -291,7 +315,18 @@ class OpenAIGPTImageProvider:
         output_count = plan.count
         outputs = []
         asset_plan = request.asset_plan or (plan.variables.get("asset_plan") if getattr(plan, "variables", None) else None)
-        reference_paths = reference_image_paths(asset_plan, max_images=settings.max_asset_upload_count)
+        reference_capacity = self.reference_image_capacity()
+        # The standard GPT Image 2 edit contract accepts up to sixteen input
+        # images.  Read one extra standard-route item so an over-capacity
+        # request fails closed instead of being silently truncated.  Legacy
+        # constrained transports keep their larger extraction window so the
+        # capability error reports the full caller-owned reference set.
+        reference_limit = max(1, reference_capacity)
+        if self._transport_profile(image_edit=True) == self._STANDARD_TRANSPORT_PROFILE:
+            reference_limit += 1
+        else:
+            reference_limit = max(reference_limit, int(getattr(settings, "max_asset_upload_count", 6) or 6))
+        reference_paths = reference_image_paths(asset_plan, max_images=reference_limit)
         repair_canvas = self._identity_repair_canvas_path(plan)
         if repair_canvas is not None:
             reference_paths = [repair_canvas, *reference_paths]
@@ -439,13 +474,19 @@ class OpenAIGPTImageProvider:
         capability_key = self._input_fidelity_capability_key()
         support_state, cached_reason = _image_edit_capability_cache.state(capability_key)
         reference_paths = self._provider_reference_paths(reference_paths, image_edit=True)
-        applied_fidelity = (
+        native_high_fidelity = self._uses_native_high_fidelity(image_edit=True)
+        transport_fidelity = (
             requested_fidelity
-            if support_state != "unsupported" and self._supports_input_fidelity(image_edit=True)
+            if not native_high_fidelity
+            and support_state != "unsupported"
+            and self._supports_input_fidelity(image_edit=True)
             else None
         )
-        fidelity_fallback_reason = cached_reason if applied_fidelity is None and requested_fidelity else None
-        if fidelity_required and (support_state == "unsupported" or not self._supports_input_fidelity(image_edit=True)):
+        applied_fidelity = "native_high" if native_high_fidelity else transport_fidelity
+        fidelity_fallback_reason = cached_reason if transport_fidelity is None and requested_fidelity and not native_high_fidelity else None
+        if fidelity_required and not native_high_fidelity and (
+            support_state == "unsupported" or not self._supports_input_fidelity(image_edit=True)
+        ):
             raise ProviderCapabilityMismatchError(
                 "This request requires native high-fidelity reference conditioning, but the configured image transport cannot provide it.",
                 provider=self.name,
@@ -456,7 +497,7 @@ class OpenAIGPTImageProvider:
                     "input_fidelity_support_state": support_state,
                 },
             )
-        if requested_fidelity and not self._supports_input_fidelity(image_edit=True):
+        if requested_fidelity and not native_high_fidelity and not self._supports_input_fidelity(image_edit=True):
             fidelity_fallback_reason = (
                 f"Configured OpenAI image transport profile {self._transport_profile(image_edit=True)} does not accept input_fidelity."
             )
@@ -488,8 +529,8 @@ class OpenAIGPTImageProvider:
                     image_files = [stack.enter_context(path.open("rb")) for path in reference_paths]
                     image_payload = self._image_edit_payload(image_files)
                     kwargs = self._image_kwargs(plan, image_edit=True)
-                    if applied_fidelity:
-                        kwargs["input_fidelity"] = applied_fidelity
+                    if transport_fidelity:
+                        kwargs["input_fidelity"] = transport_fidelity
                     if mask_path is not None:
                         kwargs["mask"] = stack.enter_context(mask_path.open("rb"))
                     response = await self._call_with_timeout(
@@ -510,7 +551,7 @@ class OpenAIGPTImageProvider:
                 raise
             except Exception as exc:
                 last_error = exc
-                if applied_fidelity and self._is_input_fidelity_unsupported_error(exc):
+                if transport_fidelity and self._is_input_fidelity_unsupported_error(exc):
                     fidelity_fallback_reason = str(exc)[:240]
                     _image_edit_capability_cache.note(
                         capability_key,
@@ -539,6 +580,7 @@ class OpenAIGPTImageProvider:
                     if gateway_managed_failover and not fidelity_compatibility_replay_used:
                         max_attempts += 1
                         fidelity_compatibility_replay_used = True
+                    transport_fidelity = None
                     applied_fidelity = None
                     continue
                 if self._is_image_quota_limit_error(exc):
@@ -604,7 +646,11 @@ class OpenAIGPTImageProvider:
                 provider=self.name,
                 detail={"error_type": type(last_error).__name__, "message": str(last_error), "request_index": index},
             )
-        if applied_fidelity:
+        if native_high_fidelity:
+            support_state = "native_high"
+            applied_fidelity = "native_high"
+            fidelity_fallback_reason = None
+        elif transport_fidelity:
             _image_edit_capability_cache.note(capability_key, "supported")
             support_state = "supported"
         else:
@@ -770,12 +816,65 @@ class OpenAIGPTImageProvider:
 
     def _parse_size(self, size: str) -> tuple[int | None, int | None]:
         try:
-            width, height = size.lower().split("x", 1)
+            normalized = str(size).strip().lower().replace("\u00d7", "x").replace(" ", "")
+            width, height = normalized.split("x", 1)
             return int(width), int(height)
         except (AttributeError, ValueError):
             return None, None
 
-    def _image_kwargs(self, plan, *, image_edit: bool = False) -> dict[str, str]:
+    def _image_kwargs(self, plan, *, image_edit: bool = False) -> dict[str, object]:
+        requested_format = str(getattr(plan, "output_format", "png") or "png").strip().lower()
+        if requested_format not in {"png", "jpeg", "webp"}:
+            raise ProviderCapabilityMismatchError(
+                "OpenAI image output_format must be png, jpeg, or webp.",
+                provider=self.name,
+                detail={"output_format": requested_format},
+            )
+        background = str(getattr(plan, "background", "") or "").strip().lower() or None
+        transparent = bool(getattr(plan, "transparent_background", False))
+        if transparent:
+            if background is not None and background != "transparent":
+                raise ProviderCapabilityMismatchError(
+                    "transparent_background conflicts with the requested background.",
+                    provider=self.name,
+                    detail={"background": background, "transparent_background": True},
+                )
+            background = "transparent"
+        if background not in {"transparent", "opaque", "auto", None}:
+            raise ProviderCapabilityMismatchError(
+                "OpenAI image background must be auto, opaque, or transparent.",
+                provider=self.name,
+                detail={"background": background},
+            )
+        if background == "transparent" and requested_format == "jpeg":
+            raise ProviderCapabilityMismatchError(
+                "Transparent backgrounds require png or webp output.",
+                provider=self.name,
+                detail={"background": background, "output_format": requested_format},
+            )
+        moderation = str(getattr(plan, "moderation", "") or "").strip().lower() or None
+        if moderation not in {"auto", "low", None}:
+            raise ProviderCapabilityMismatchError(
+                "OpenAI image moderation must be auto or low.",
+                provider=self.name,
+                detail={"moderation": moderation},
+            )
+        compression = getattr(plan, "output_compression", None)
+        if compression is not None:
+            try:
+                compression = int(compression)
+            except (TypeError, ValueError):
+                raise ProviderCapabilityMismatchError(
+                    "OpenAI output_compression must be an integer from 0 to 100.",
+                    provider=self.name,
+                    detail={"output_compression": compression},
+                ) from None
+            if not 0 <= compression <= 100 or requested_format not in {"jpeg", "webp"}:
+                raise ProviderCapabilityMismatchError(
+                    "output_compression is supported only for jpeg or webp output from 0 to 100.",
+                    provider=self.name,
+                    detail={"output_compression": compression, "output_format": requested_format},
+                )
         if self._uses_square_b64_transport(image_edit=image_edit):
             requested_size = str(getattr(plan, "size", "") or "").strip().lower()
             if requested_size and requested_size not in {"auto", "1024x1024"}:
@@ -788,14 +887,80 @@ class OpenAIGPTImageProvider:
                         "supported_sizes": ["1024x1024"],
                     },
                 )
+            unsupported = {
+                "output_format": requested_format != "png",
+                "background": background is not None,
+                "moderation": moderation is not None,
+                "output_compression": compression is not None,
+            }
+            if any(unsupported.values()):
+                raise ProviderCapabilityMismatchError(
+                    "The configured square image transport cannot carry the requested official output options.",
+                    provider=self.name,
+                    detail={
+                        "transport_profile": self._transport_profile(image_edit=image_edit),
+                        "unsupported_options": [key for key, present in unsupported.items() if present],
+                    },
+                )
             return {"size": "1024x1024", "response_format": "b64_json"}
+        normalized_size = self._validated_official_size(getattr(plan, "size", None))
         kwargs = {
-            "quality": plan.quality,
-            "output_format": plan.output_format,
+            "quality": str(getattr(plan, "quality", "auto") or "auto").strip().lower(),
+            "output_format": requested_format,
         }
-        if plan.size:
-            kwargs["size"] = plan.size
+        if kwargs["quality"] not in {"low", "medium", "high", "auto"}:
+            raise ProviderCapabilityMismatchError(
+                "OpenAI image quality must be low, medium, high, or auto.",
+                provider=self.name,
+                detail={"quality": kwargs["quality"]},
+            )
+        if normalized_size:
+            kwargs["size"] = normalized_size
+        if background is not None:
+            kwargs["background"] = background
+        if moderation is not None:
+            kwargs["moderation"] = moderation
+        if compression is not None:
+            kwargs["output_compression"] = compression
         return kwargs
+
+    def _validated_official_size(self, value: object) -> str | None:
+        normalized = str(value or "").strip().lower().replace("\u00d7", "x").replace(" ", "")
+        if not normalized or normalized == "auto":
+            return "auto" if normalized == "auto" else None
+        width, height = self._parse_size(normalized)
+        if width is None or height is None:
+            raise ProviderCapabilityMismatchError(
+                "OpenAI image size must be auto or WIDTHxHEIGHT.",
+                provider=self.name,
+                detail={"size": value},
+            )
+        if (
+            width < 16
+            or height < 16
+            or width > 3840
+            or height > 3840
+            or width % 16
+            or height % 16
+            or width * height < 655360
+            or width * height > 8294400
+            or max(width / height, height / width) > 3
+        ):
+            raise ProviderCapabilityMismatchError(
+                "OpenAI image size is outside the gpt-image-2 custom size limits.",
+                provider=self.name,
+                detail={
+                    "size": f"{width}x{height}",
+                    "limits": {
+                        "max_edge": 3840,
+                        "edge_multiple": 16,
+                        "min_pixels": 655360,
+                        "max_pixels": 8294400,
+                        "max_aspect_ratio": 3,
+                    },
+                },
+            )
+        return f"{width}x{height}"
 
     def _transport_profile(self, *, image_edit: bool = False) -> str:
         configured = (
@@ -824,14 +989,13 @@ class OpenAIGPTImageProvider:
                 value = int(override)
             except (TypeError, ValueError):
                 return 0
-            maximum_configured_inputs = max(1, int(getattr(settings, "max_asset_upload_count", 6) or 6))
-            return value if 1 <= value <= maximum_configured_inputs else 0
+            return value if 1 <= value <= self._OFFICIAL_MAX_REFERENCE_IMAGES else 0
         if profile == self._SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE:
             # This constrained envelope is certified by the singular-file
             # request contract. Operators must explicitly certify a larger
             # cardinality for a gateway before widening this claim.
             return 1
-        return 5
+        return self._OFFICIAL_MAX_REFERENCE_IMAGES
 
     def reference_image_capacity_source(self) -> str:
         profile = self._transport_profile(image_edit=True)
@@ -852,7 +1016,15 @@ class OpenAIGPTImageProvider:
         return self._transport_profile(image_edit=image_edit) == self._GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE
 
     def _supports_input_fidelity(self, *, image_edit: bool = False) -> bool:
-        return not self._uses_square_b64_transport(image_edit=image_edit)
+        return not self._uses_square_b64_transport(image_edit=image_edit) and not self._uses_native_high_fidelity(
+            image_edit=image_edit
+        )
+
+    def _uses_native_high_fidelity(self, *, image_edit: bool = False) -> bool:
+        return (
+            self._model().strip().lower() == "gpt-image-2"
+            and not self._uses_square_b64_transport(image_edit=image_edit)
+        )
 
     def _assert_reference_transport_supported(self, reference_image_count: int) -> None:
         if reference_image_count and self._uses_generation_only_square_b64_transport(image_edit=True):

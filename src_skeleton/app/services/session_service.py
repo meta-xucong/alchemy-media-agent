@@ -28,6 +28,12 @@ async def handle_message(session_id: str, request: MessageRequest) -> MessageRes
             prompt=request.text,
             asset_ids=request.asset_ids,
             count=int(request.preferences.get("count", 1)),
+            size=request.preferences.get("size"),
+            quality=request.preferences.get("quality", "auto"),
+            output_format=request.preferences.get("output_format", "png"),
+            background=request.preferences.get("background"),
+            moderation=request.preferences.get("moderation"),
+            output_compression=request.preferences.get("output_compression"),
             provider_preference=request.preferences.get("provider_preference"),
         )
         job_ids.append(job.id)

@@ -211,6 +211,9 @@ class ProviderPromptMaterialization:
     input_fidelity: str | None
     prompt_source: str = "legacy_local_materializer"
     size_adaptation: dict[str, Any] = field(default_factory=dict)
+    background: str | None = None
+    moderation: str | None = None
+    output_compression: int | None = None
 
 
 def build_provider_generation_request(
@@ -254,6 +257,7 @@ def build_provider_generation_request(
             "requested_image_size_source": metadata.get("requested_image_size_source"),
             "requested_image_aspect_ratio": metadata.get("requested_image_aspect_ratio"),
             "requested_image_aspect_ratio_source": metadata.get("requested_image_aspect_ratio_source"),
+            "provider_image_options": metadata.get("provider_image_options"),
             "require_real_images": bool(metadata.get("require_real_images")),
             "real_image_generation": bool(metadata.get("real_image_generation")),
             "normalized_v3_job_intent": metadata.get("normalized_v3_job_intent"),
@@ -2076,6 +2080,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
             size=materialization.size,
             quality=materialization.quality,
             output_format=materialization.output_format,
+            background=materialization.background,
+            moderation=materialization.moderation,
+            output_compression=materialization.output_compression,
             variables={
                 "generation_prompt": materialization.generation_prompt,
                 "provider_prompt_sha256": materialization.prompt_sha256,
@@ -2098,6 +2105,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "requested_image_aspect_ratio_source"
                 ) or request.generation_plan.metadata.get("requested_image_aspect_ratio_source"),
                 "provider_size_adaptation": materialization.size_adaptation,
+                "provider_image_options": self._provider_image_options(request),
                 "input_fidelity": materialization.input_fidelity,
                 "input_fidelity_required": self._input_fidelity_is_required(materialization.asset_plan),
                 "generation_channel": metadata.get("generation_channel", "provider"),
@@ -2178,12 +2186,27 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if canonical_prompt:
             self._assert_canonical_prompt_fits_transport(generation_prompt)
         protected_user_direction = self._provider_user_direction(request)
+        image_options = self._provider_image_options(request)
+        output_format = str(image_options.get("output_format") or "png").strip().lower()
+        if output_format not in {"png", "jpeg", "webp"}:
+            output_format = "png"
+        background = str(image_options.get("background") or "").strip().lower() or None
+        if background not in {"transparent", "opaque", "auto", None}:
+            background = None
+        moderation = str(image_options.get("moderation") or "").strip().lower() or None
+        if moderation not in {"auto", "low", None}:
+            moderation = None
+        compression = image_options.get("output_compression")
+        try:
+            compression = int(compression) if compression is not None else None
+        except (TypeError, ValueError):
+            compression = None
         return ProviderPromptMaterialization(
             generation_prompt=generation_prompt,
             prompt_sha256=hashlib.sha256(generation_prompt.encode("utf-8")).hexdigest(),
             size=size,
             quality=self._quality_for_request(request),
-            output_format="png",
+            output_format=output_format,
             reference_assets=reference_assets,
             asset_plan=asset_plan,
             protected_user_direction=protected_user_direction,
@@ -2195,7 +2218,22 @@ class ProductionImageGenerationProvider(GenerationProvider):
             input_fidelity=self._input_fidelity_for_asset_plan(asset_plan),
             prompt_source="remote_brain_canonical" if canonical_prompt else "legacy_local_materializer",
             size_adaptation=size_adaptation,
+            background=background,
+            moderation=moderation,
+            output_compression=compression,
         )
+
+    @staticmethod
+    def _provider_image_options(request: GenerationRequest) -> dict[str, Any]:
+        """Read the frozen typed output options before mutable request metadata."""
+
+        plan_metadata = getattr(getattr(request, "generation_plan", None), "metadata", None)
+        if isinstance(plan_metadata, dict) and isinstance(plan_metadata.get("provider_image_options"), dict):
+            return dict(plan_metadata["provider_image_options"])
+        request_metadata = getattr(request, "metadata", None)
+        if isinstance(request_metadata, dict) and isinstance(request_metadata.get("provider_image_options"), dict):
+            return dict(request_metadata["provider_image_options"])
+        return {}
 
     def _input_fidelity_for_asset_plan(self, asset_plan: dict[str, Any]) -> str | None:
         input_plan = asset_plan.get("provider_input_plan") if isinstance(asset_plan, dict) else {}
@@ -6471,14 +6509,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return 2
 
     def _size_for_request(self, request: GenerationRequest) -> str:
+        image_options = self._provider_image_options(request)
         requested_size = str(
-            request.metadata.get("requested_image_size")
+            image_options.get("size")
+            or request.metadata.get("requested_image_size")
             or request.generation_plan.metadata.get("requested_image_size")
             or ""
         ).strip()
-        allowed_sizes = {"1024x1024", "1024x1536", "1536x1024"}
-        if requested_size in allowed_sizes:
-            return requested_size
+        canonical_size = self._canonical_provider_size(requested_size)
+        if canonical_size:
+            return canonical_size
         ratio = str((request.asset_spec.aspect_ratio if request.asset_spec else "") or "").strip()
         mapping = {
             "1:1": "1024x1024",
@@ -6522,7 +6562,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             or request.generation_plan.metadata.get("requested_image_aspect_ratio")
             or ""
         ).strip()
-        if explicit_size_source or explicit_aspect:
+        if self._provider_image_options(request).get("size") or explicit_size_source or explicit_aspect:
             return planned_size, {}
 
         try:
@@ -6561,8 +6601,31 @@ class ProductionImageGenerationProvider(GenerationProvider):
         return f"Platform: {asset.platform.value}; aspect ratio: {aspect_ratio}"
 
     def _quality_for_request(self, request: GenerationRequest) -> str:
+        image_options = self._provider_image_options(request)
+        requested_quality = str(image_options.get("quality") or "").strip().lower()
+        if requested_quality in {"low", "medium", "high", "auto"}:
+            return requested_quality
+        if image_options and "quality" not in image_options:
+            return "auto"
         quality_mode = str(request.metadata.get("quality_mode") or request.generation_plan.metadata.get("quality_mode") or "standard")
         return "high" if quality_mode == "strict" else "medium"
+
+    @staticmethod
+    def _canonical_provider_size(value: object) -> str | None:
+        normalized = str(value or "").strip().lower().replace("\u00d7", "x").replace(" ", "")
+        if normalized == "auto":
+            return "auto"
+        if normalized.count("x") != 1:
+            return None
+        width_text, height_text = normalized.split("x", 1)
+        try:
+            width = int(width_text)
+            height = int(height_text)
+        except (TypeError, ValueError):
+            return None
+        if width <= 0 or height <= 0:
+            return None
+        return f"{width}x{height}"
 
     def _app_provider_timeout_seconds(self, reference_assets: list[dict[str, Any]], *, app_request=None) -> float:
         try:
@@ -7112,6 +7175,9 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
             "size": app_request.prompt_plan.size,
             "quality": app_request.prompt_plan.quality,
             "output_format": app_request.prompt_plan.output_format,
+            "background": app_request.prompt_plan.background,
+            "moderation": app_request.prompt_plan.moderation,
+            "output_compression": app_request.prompt_plan.output_compression,
             "count": 1,
             "api_operation": "image_edit" if reference_assets else "image_generate",
             "input_fidelity": variables.get("input_fidelity"),

@@ -19,6 +19,9 @@ def build_prompt_plan(
     size: str | None = None,
     quality: str = "auto",
     output_format: str = "png",
+    background: str | None = None,
+    moderation: str | None = None,
+    output_compression: int | None = None,
     asset_ids: list[str] | None = None,
 ) -> ImagePromptPlan:
     inferred_size = _infer_size(prompt, size)
@@ -34,6 +37,9 @@ def build_prompt_plan(
         size=inferred_size,
         quality=quality,
         output_format=output_format,
+        background=background,
+        moderation=moderation,
+        output_compression=output_compression,
         variables={"asset_ids": asset_ids or []},
     )
 
