@@ -123,6 +123,20 @@ def test_e23_result_board_hydrates_same_job_project_delivery_when_job_snapshot_h
     assert "item?.metadata?.project_id" in stored_items
 
 
+def test_e23_continuation_selection_does_not_promote_raw_job_candidates_to_delivery() -> None:
+    script = APP_JS.read_text(encoding="utf-8")
+    helper = _section(script, "function v3AuthoritativeJobDeliveryItems", "function v3ReviewCertification")
+    board = _section(script, "function renderV3ResultBoard(job)", "function v3OutputImageCandidates(item)")
+    current_items = _section(script, "function v3CurrentJobImageItems", "function v3ReviewCertification")
+
+    assert "return persisted.length" in helper
+    assert "? persisted" in helper
+    assert "const deliveryItems = v3AuthoritativeJobDeliveryItems(source, persisted);" in current_items
+    assert "const deliveryItems = v3AuthoritativeJobDeliveryItems(rawItems, persistedItems);" in board
+    assert "const combined = [...source, ...persisted];" not in current_items
+    assert "const visibleItems = [...rawItems, ...persistedItems]" not in board
+
+
 def test_v3_project_opening_without_current_job_keeps_result_board_renderable() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     current_items = _section(script, "function v3CurrentJobImageItems", "function v3ReviewCertification")

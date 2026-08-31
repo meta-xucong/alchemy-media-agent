@@ -4156,12 +4156,19 @@ function v3CurrentJobImageItems(job = v3State.currentJob) {
   const source = candidates.length ? candidates : assets;
   const persisted = v3ProjectOutputsForJob(job?.job_id);
   if (!v3JobDeliverySettled(job) && !persisted.length) return [];
-  const combined = [...source, ...persisted];
-  const visible = combined
+  const deliveryItems = v3AuthoritativeJobDeliveryItems(source, persisted);
+  const visible = deliveryItems
     .map((item, index) => ({ ...item, _v3Index: index, _v3Source: "current_job" }))
     .filter((item) => v3OutputVisibleInProject(item) && (v3OutputImageCandidates(item).length || job.status === "generated"))
     .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
   return v3DeliveryDisplayItems(visible);
+}
+
+function v3AuthoritativeJobDeliveryItems(rawItems, persistedItems) {
+  const persisted = Array.isArray(persistedItems) ? persistedItems : [];
+  return persisted.length
+    ? persisted
+    : (Array.isArray(rawItems) ? rawItems : []);
 }
 
 function v3ReviewCertification(job = v3State.currentJob) {
@@ -10368,7 +10375,8 @@ function renderV3ResultBoard(job) {
   // Compatibility records may retain historical recipes, slots, or overlays,
   // but the current delivery board only accepts actual final image deliveries.
   const rawItems = candidates.length ? candidates : assets;
-  const visibleItems = [...rawItems, ...persistedItems]
+  const deliveryItems = v3AuthoritativeJobDeliveryItems(rawItems, persistedItems);
+  const visibleItems = deliveryItems
     .filter((item) => v3OutputVisibleInProject(item))
     .sort((a, b) => v3ReviewRank(a, job) - v3ReviewRank(b, job));
   const items = v3DeliveryDisplayItems(visibleItems);
