@@ -577,6 +577,223 @@ def test_doc260_generated_output_reference_resolves_through_output_store_channel
     assert invalid_metadata["review_evidence_plan"]["channels"]["person_identity"]["evidence_state"] == "invalid"
     assert "unknown_channel" not in invalid_metadata["review_evidence_plan"]["channels"]
 
+
+def test_doc260_general_selected_output_reference_uses_server_source_job_binding(
+    tmp_path,
+) -> None:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    reference = output_store.save_base64_output(
+        job_id="job_reference_general",
+        candidate_id="candidate_reference_general",
+        asset_id="asset_reference_general",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(),
+        mime_type="image/png",
+        output_format="png",
+    )
+    service = _service(tmp_path, output_store=output_store)
+    created = _create_general_job(service)
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+
+    def apply_context(
+        *,
+        source_job_id: str,
+        canonical: bool = True,
+        server_owned: bool = True,
+    ) -> None:
+        context = {
+            "project_id": "project_doc260_general_reference",
+            "metadata": {"source": "V3ProjectModeService"},
+            "selected_output_assets": [
+                {
+                    "source_type": "generated_output",
+                    "project_id": "project_doc260_general_reference",
+                    "job_id": source_job_id,
+                    "asset_id": reference.asset_id,
+                    "candidate_id": reference.candidate_id,
+                    "output_id": reference.output_id,
+                    "metadata": {"canonical_output_binding": canonical},
+                }
+            ],
+            "selected_reference_assets": [
+                {
+                    "source_type": "generated_selected",
+                    "project_id": "project_doc260_general_reference",
+                    "asset_ref_id": reference.output_id,
+                    "created_from_job_id": source_job_id,
+                    "created_from_output_id": reference.output_id,
+                    "metadata": {"canonical_output_binding": canonical},
+                }
+            ],
+            "selected_visual_references": [
+                {
+                    "source_type": "selected_output",
+                    "project_id": "project_doc260_general_reference",
+                    "output_id": reference.output_id,
+                    "source_job_id": source_job_id,
+                    "metadata": {"canonical_output_binding": canonical},
+                }
+            ],
+            "strong_reference_bindings": [
+                {
+                    "source_type": "selected_output",
+                    "source_id": reference.output_id,
+                    "output_id": reference.output_id,
+                    "source_job_id": source_job_id,
+                    "metadata": {"canonical_output_binding": canonical},
+                }
+            ],
+        }
+        if not server_owned:
+            context.pop("metadata")
+        record.request = record.request.model_copy(
+            update={
+                "metadata": {
+                    **dict(record.request.metadata),
+                    "project_id": "project_doc260_general_reference",
+                    "project_context_snapshot": context,
+                }
+            }
+        )
+
+    resolution = GeneratedOutputResolver(output_store).resolve_asset(
+        "job_doc260",
+        asset=type(
+            "Asset",
+            (),
+            {
+                "metadata": {
+                    "candidate_metadata": {
+                        "reference_truth_source_ids": [reference.output_id],
+                        "reference_input_execution": {
+                            "admission_outcome": "admitted",
+                            "operation_outcome": "pixels_received",
+                            "reference_count": 1,
+                        },
+                    }
+                },
+                "asset_id": "asset_generated_doc260",
+                "file_path": reference.file_path,
+            },
+        )(),
+        project_id="project_doc260_general_reference",
+    )
+    resolution = resolution.model_copy(
+        update={
+            "job_id": created.job_id,
+            "metadata": {
+                **dict(resolution.metadata),
+                "candidate_metadata": {
+                    "reference_truth_source_ids": [reference.output_id],
+                    "reference_input_execution": {
+                        "admission_outcome": "admitted",
+                        "operation_outcome": "pixels_received",
+                        "reference_count": 1,
+                    },
+                },
+            },
+        }
+    )
+
+    apply_context(source_job_id=reference.job_id)
+    metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    person_channel = metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert person_channel["evidence_state"] == "available"
+    assert person_channel["comparison_allowed"] is True
+    assert person_channel["source_type"] == "selected_output"
+    assert "review_evidence_person_identity_source_job_binding" not in person_channel["reason_codes"]
+    assert reference.job_id not in str(metadata)
+
+    apply_context(source_job_id="job_forged_general_reference")
+    forged_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    forged_channel = forged_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert forged_channel["evidence_state"] == "invalid"
+    assert forged_channel["comparison_allowed"] is False
+    assert "review_evidence_person_identity_output_source_job_binding" in forged_channel["reason_codes"]
+
+    apply_context(source_job_id=reference.job_id, canonical=False)
+    noncanonical_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    noncanonical_channel = noncanonical_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert noncanonical_channel["evidence_state"] == "invalid"
+    assert "review_evidence_person_identity_source_job_binding" in noncanonical_channel["reason_codes"]
+
+
+    apply_context(source_job_id=reference.job_id, server_owned=False)
+    untrusted_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    untrusted_channel = untrusted_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert untrusted_channel["evidence_state"] == "invalid"
+    assert "review_evidence_person_identity_source_job_binding" in untrusted_channel["reason_codes"]
+
+
+def test_doc260_current_job_selected_output_reference_remains_invalid(tmp_path) -> None:
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = _service(tmp_path, output_store=output_store)
+    created = _create_general_job(service)
+    record = service.job_store.get(created.job_id)
+    assert record is not None
+    current_output = output_store.save_base64_output(
+        job_id=created.job_id,
+        candidate_id="candidate_current_job",
+        asset_id="asset_current_job",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(),
+        mime_type="image/png",
+        output_format="png",
+    )
+    record.request = record.request.model_copy(
+        update={
+            "metadata": {
+                **dict(record.request.metadata),
+                "project_id": "project_doc260_current_job",
+                "project_context_snapshot": {
+                    "project_id": "project_doc260_current_job",
+                    "metadata": {"source": "V3ProjectModeService"},
+                    "selected_output_assets": [
+                        {
+                            "source_type": "generated_output",
+                            "project_id": "project_doc260_current_job",
+                            "job_id": created.job_id,
+                            "output_id": current_output.output_id,
+                            "metadata": {"canonical_output_binding": True},
+                        }
+                    ],
+                },
+            }
+        }
+    )
+    resolution = GeneratedOutputResolver(output_store).resolve_asset(
+        created.job_id,
+        asset=type(
+            "Asset",
+            (),
+            {
+                "metadata": {
+                    "candidate_metadata": {
+                        "reference_truth_source_ids": [current_output.output_id],
+                        "reference_input_execution": {
+                            "admission_outcome": "admitted",
+                            "operation_outcome": "pixels_received",
+                            "reference_count": 1,
+                        },
+                    }
+                },
+                "asset_id": current_output.asset_id,
+                "file_path": current_output.file_path,
+            },
+        )(),
+        project_id="project_doc260_current_job",
+    )
+
+    metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    person_channel = metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert person_channel["evidence_state"] == "invalid"
+    assert person_channel["comparison_allowed"] is False
+    assert "review_evidence_person_identity_reference_output_job_binding" in person_channel["reason_codes"]
+
+
 def test_doc260_wrong_job_source_binding_is_invalid_and_does_not_fallback(
     tmp_path,
 ) -> None:

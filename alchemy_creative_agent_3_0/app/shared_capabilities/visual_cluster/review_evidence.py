@@ -36,13 +36,16 @@ class ExactReviewEvidenceResolver:
         active_specs = specs
         uploaded_ids = _dedupe_strings(getattr(request, "uploaded_asset_ids", []) if request is not None else [])
         uploaded_id_set = set(uploaded_ids)
-        frozen_anchor_ids = self._frozen_anchor_ids(request)
+        frozen_anchor_source_jobs = self._frozen_anchor_source_jobs(request)
+        frozen_anchor_ids = self._frozen_anchor_ids(request) - set(frozen_anchor_source_jobs)
 
         source_entries = [
             self._resolve_source(
                 spec,
                 uploaded_id_set=uploaded_id_set,
                 frozen_anchor_ids=frozen_anchor_ids,
+                frozen_anchor_source_jobs=frozen_anchor_source_jobs,
+                current_job_id=job_id,
                 request=request,
             )
             for spec in active_specs
@@ -196,6 +199,105 @@ class ExactReviewEvidenceResolver:
             if isinstance(item, dict) and str(item.get("asset_id") or "").strip()
         }
 
+    @staticmethod
+    def _frozen_anchor_source_jobs(request: Any) -> dict[str, str]:
+        """Read only server-owned, canonical output/job bindings from context."""
+
+        metadata = getattr(request, "metadata", {}) if request is not None else {}
+        if not isinstance(metadata, dict):
+            return {}
+
+        bindings: dict[str, str] = {}
+
+        def register(output_id: str, source_job_id: str) -> None:
+            if not output_id:
+                return
+            existing = bindings.get(output_id)
+            if existing is None:
+                bindings[output_id] = source_job_id
+            elif existing != source_job_id:
+                bindings[output_id] = ""
+
+        def add_binding(item: Any, *, output_keys: tuple[str, ...], require_canonical: bool) -> None:
+            if not isinstance(item, dict):
+                return
+            nested = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            canonical = (
+                item.get("canonical_output_binding") is True
+                or nested.get("canonical_output_binding") is True
+            )
+            if require_canonical and not canonical:
+                return
+            output_id = next(
+                (
+                    str(item.get(key) or "").strip()
+                    for key in output_keys
+                    if str(item.get(key) or "").strip()
+                ),
+                "",
+            )
+            if not output_id:
+                return
+            source_job_values = [
+                str(item.get(key) or "").strip()
+                for key in ("source_job_id", "job_id", "created_from_job_id")
+                if str(item.get(key) or "").strip()
+            ]
+            source_job_values.extend(
+                str(nested.get(key) or "").strip()
+                for key in ("source_job_id", "job_id", "created_from_job_id")
+                if str(nested.get(key) or "").strip()
+            )
+            source_job_values = list(dict.fromkeys(source_job_values))
+            if not source_job_values:
+                return
+            register(output_id, source_job_values[0] if len(source_job_values) == 1 else "")
+
+        professional_references = metadata.get("professional_anchor_reference_assets", [])
+        if isinstance(professional_references, list):
+            for item in professional_references:
+                add_binding(
+                    item,
+                    output_keys=("output_id", "created_from_output_id", "asset_id"),
+                    require_canonical=False,
+                )
+
+        snapshot = metadata.get("project_context_snapshot")
+        if not isinstance(snapshot, dict):
+            return bindings
+        snapshot_metadata = snapshot.get("metadata")
+        if (
+            not isinstance(snapshot_metadata, dict)
+            or snapshot_metadata.get("source") != "V3ProjectModeService"
+        ):
+            return bindings
+        snapshot_project_id = str(snapshot.get("project_id") or "").strip()
+        request_project_id = str(metadata.get("project_id") or "").strip()
+        if not snapshot_project_id or (request_project_id and request_project_id != snapshot_project_id):
+            return bindings
+
+        for key in (
+            "selected_output_assets",
+            "selected_reference_assets",
+            "selected_visual_references",
+            "strong_reference_bindings",
+        ):
+            entries = snapshot.get(key)
+            if not isinstance(entries, list):
+                continue
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                item_project_id = str(item.get("project_id") or "").strip()
+                if item_project_id and item_project_id != snapshot_project_id:
+                    continue
+                add_binding(
+                    item,
+                    output_keys=("output_id", "created_from_output_id"),
+                    require_canonical=True,
+                )
+        return bindings
+
     def _resolution_binding_reasons(
         self,
         record: Any,
@@ -250,6 +352,8 @@ class ExactReviewEvidenceResolver:
         *,
         uploaded_id_set: set[str],
         frozen_anchor_ids: set[str],
+        frozen_anchor_source_jobs: dict[str, str],
+        current_job_id: str,
         request: Any,
     ) -> dict[str, Any]:
         source_id = str(spec["source_id"])
@@ -273,7 +377,7 @@ class ExactReviewEvidenceResolver:
                 return {**base, "state": "unavailable", "reason": "reference_not_admitted"}
             return {**base, **self._persisted_file_state(upload, "uploaded")}
 
-        if source_id in frozen_anchor_ids:
+        if source_id in frozen_anchor_ids or source_id in frozen_anchor_source_jobs:
             output = self.output_store.get_output(source_id)
             actual_channel = "person_identity"
             channel = actual_channel
@@ -291,7 +395,15 @@ class ExactReviewEvidenceResolver:
                 return {**base, "state": "unavailable"}
             if not spec.get("admitted"):
                 return {**base, "state": "unavailable", "reason": "reference_not_admitted"}
-            if str(getattr(output, "job_id", "") or "").strip() == str(getattr(request, "job_id", "") or "").strip():
+            if str(getattr(output, "output_id", "") or "").strip() != source_id:
+                return {**base, "state": "invalid", "reason": "output_identity_binding"}
+            expected_source_job_id = frozen_anchor_source_jobs.get(source_id)
+            if expected_source_job_id is not None and (
+                not expected_source_job_id
+                or str(getattr(output, "job_id", "") or "").strip() != expected_source_job_id
+            ):
+                return {**base, "state": "invalid", "reason": "output_source_job_binding"}
+            if str(getattr(output, "job_id", "") or "").strip() == current_job_id:
                 return {**base, "state": "invalid", "reason": "reference_output_job_binding"}
             return {**base, **self._persisted_file_state(output, "selected_output")}
 

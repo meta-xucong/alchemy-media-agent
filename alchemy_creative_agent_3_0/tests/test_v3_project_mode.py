@@ -1380,6 +1380,9 @@ def test_portrait_selection_becomes_strong_identity_reference(tmp_path) -> None:
     assert context["selected_visual_references"][0]["use_policy"] == "identity"
     assert context["selected_visual_references"][0]["file_path"]
     assert context["selected_visual_references"][0]["output_id"] == record.output_id
+    assert context["metadata"]["source"] == "V3ProjectModeService"
+    assert context["selected_output_assets"][0]["job_id"] == record.job_id
+    assert context["selected_reference_assets"][0]["created_from_job_id"] == record.job_id
     assert context["selected_output_assets"][0]["metadata"]["file_path"] == record.file_path
     assert context["strong_reference_bindings"][0]["use_policy"] == "identity"
     assert context["strong_reference_bindings"][0]["provider_input_required"] is True
