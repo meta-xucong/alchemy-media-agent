@@ -251,6 +251,7 @@ def build_provider_generation_request(
             "llm_brain": metadata.get("llm_brain", {}),
             "requested_image_count": metadata.get("requested_image_count"),
             "requested_image_size": metadata.get("requested_image_size"),
+            "requested_image_size_source": metadata.get("requested_image_size_source"),
             "requested_image_aspect_ratio": metadata.get("requested_image_aspect_ratio"),
             "requested_image_aspect_ratio_source": metadata.get("requested_image_aspect_ratio_source"),
             "require_real_images": bool(metadata.get("require_real_images")),
@@ -6499,20 +6500,21 @@ class ProductionImageGenerationProvider(GenerationProvider):
     ) -> tuple[str, dict[str, Any]]:
         """Resolve a renderer size against the active transport capabilities.
 
-        ``AssetSpec.aspect_ratio`` is a derived planning signal.  It may not
-        be sent as an unsupported canvas size to a certified square edit
-        transport.  Explicit user-owned size/aspect metadata remains hard and
-        is left unchanged so the normal provider capability guard can close
-        the request rather than silently changing the user's canvas.
+        ``AssetSpec.aspect_ratio`` and an unproven plan size are derived
+        planning signals.  They may not be sent as an unsupported canvas size
+        to a certified square edit transport.  A size with explicit server
+        provenance, or an explicit aspect-ratio decision, remains hard and is
+        left unchanged so the normal provider capability guard can close the
+        request rather than silently changing the user's canvas.
         """
 
         planned_size = self._size_for_request(request)
         if not reference_assets or planned_size == "1024x1024":
             return planned_size, {}
 
-        explicit_size = str(
-            request.metadata.get("requested_image_size")
-            or request.generation_plan.metadata.get("requested_image_size")
+        explicit_size_source = str(
+            request.metadata.get("requested_image_size_source")
+            or request.generation_plan.metadata.get("requested_image_size_source")
             or ""
         ).strip()
         explicit_aspect = str(
@@ -6520,7 +6522,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             or request.generation_plan.metadata.get("requested_image_aspect_ratio")
             or ""
         ).strip()
-        if explicit_size or explicit_aspect:
+        if explicit_size_source or explicit_aspect:
             return planned_size, {}
 
         try:

@@ -880,6 +880,61 @@ def test_square_edit_transport_does_not_rewrite_explicit_size(tmp_path, monkeypa
     assert materialization.size_adaptation == {}
 
 
+def test_provider_request_factory_preserves_size_provenance() -> None:
+    base = _generation_request()
+    base.generation_plan.metadata["requested_image_size"] = "1024x1536"
+    base.generation_plan.metadata["requested_image_size_source"] = "remote_brain_user_intent"
+
+    request = build_provider_generation_request(
+        asset_spec=base.asset_spec,
+        layout_plan=base.layout_plan,
+        prompt_compilation=base.prompt_compilation,
+        condition_plan=base.condition_plan,
+        generation_plan=base.generation_plan,
+        job_id="job_size_provenance",
+    )
+
+    assert request.metadata["requested_image_size"] == "1024x1536"
+    assert request.metadata["requested_image_size_source"] == "remote_brain_user_intent"
+
+
+def test_square_edit_transport_adapts_plan_size_without_explicit_size_provenance(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "square_b64_reference_edit")
+    monkeypatch.setattr(settings, "openai_image_edit_max_reference_images", None)
+
+    reference_path = _reference_image(tmp_path / "selected-output.png")
+    request = _human_generation_request()
+    request.generation_plan.metadata["requested_image_size"] = "1024x1536"
+    request.metadata["uploaded_assets"] = [
+        {
+            "asset_id": "selected_portrait_ref",
+            "output_id": "selected_portrait_ref",
+            "source_type": "selected_output",
+            "role": "identity_reference",
+            "use_policy": "identity",
+            "filename": reference_path.name,
+            "mime_type": "image/png",
+            "file_path": str(reference_path),
+            "provider_input_required": True,
+            "metadata": {
+                "canonical_output_binding": True,
+                "source_integrity_id": "sha256:selected_portrait_ref",
+            },
+        }
+    ]
+
+    materialization = ProductionImageGenerationProvider(
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs")
+    ).materialize_final_prompt(request)
+
+    assert materialization.size == "1024x1024"
+    assert materialization.size_adaptation["planned_size"] == "1024x1536"
+    assert materialization.size_adaptation["transport_profile"] == "square_b64_reference_edit"
+
+
 def test_standard_edit_transport_keeps_derived_aspect_size(tmp_path, monkeypatch) -> None:
     from app.config import settings
 

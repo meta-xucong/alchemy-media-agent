@@ -415,6 +415,7 @@ class CentralCreativeBrain:
                 "capability_execution_envelope": context.metadata.get("capability_execution_envelope"),
                 "requested_image_count": _bounded_requested_image_count(context.metadata.get("requested_image_count")),
                 "requested_image_size": context.metadata.get("requested_image_size"),
+                "requested_image_size_source": context.metadata.get("requested_image_size_source"),
                 "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
                 "requested_image_aspect_ratio_source": context.metadata.get(
                     "requested_image_aspect_ratio_source"
