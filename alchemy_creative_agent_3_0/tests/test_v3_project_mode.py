@@ -7,7 +7,13 @@ from alchemy_creative_agent_3_0.app.project_mode import (
     ProjectTemplateRegistry,
     TemplateActivationError,
 )
-from alchemy_creative_agent_3_0.app.project_mode.contracts import ProjectRecord
+from alchemy_creative_agent_3_0.app.project_mode.contracts import (
+    OutputRef,
+    ProjectRecord,
+    ProjectReferenceAsset,
+    ProjectReferenceSourceType,
+    ProjectReferenceUsePolicy,
+)
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
 from alchemy_creative_agent_3_0.app.product_api import V3GeneratedOutputStore, V3UploadedAssetStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
@@ -1226,6 +1232,116 @@ def test_selected_output_creates_active_generated_reference_and_selection_state(
     assert states[0]["selection_state"] == "selected"
     assert selected["context"]["selected_output_assets"]
     assert selected["context"]["selected_reference_assets"]
+
+
+def test_general_project_keeps_one_forced_continuation_reference(tmp_path) -> None:
+    handlers = _project_handlers_with_certified_review(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a premium social cover"})["project"]
+
+    first_job = handlers.post_project_job(project["project_id"], {"user_input": "Generate first cover"})
+    first_generated = handlers.post_project_job_generate(
+        project["project_id"],
+        first_job["job_id"],
+        {"quality_mode": "standard"},
+    )
+    first_selected = handlers.post_project_job_select(
+        project["project_id"],
+        first_generated["job_id"],
+        {"selected_candidate_id": first_generated["candidates"][0]["candidate_id"]},
+    )
+    first_output_id = first_selected["project"]["selected_output_refs"][0]["output_id"]
+
+    second_job = handlers.post_project_job(project["project_id"], {"user_input": "Generate another cover"})
+    second_generated = handlers.post_project_job_generate(
+        project["project_id"],
+        second_job["job_id"],
+        {"quality_mode": "standard"},
+    )
+    second_selected = handlers.post_project_job_select(
+        project["project_id"],
+        second_generated["job_id"],
+        {"selected_candidate_id": second_generated["candidates"][0]["candidate_id"]},
+    )
+    second_output_id = second_selected["project"]["selected_output_refs"][0]["output_id"]
+    context = handlers.get_project_context(project["project_id"])
+
+    assert first_output_id != second_output_id
+    assert [ref["output_id"] for ref in second_selected["project"]["selected_output_refs"]] == [second_output_id]
+    states = {
+        item["output_id"]: item["selection_state"]
+        for item in second_selected["project"]["selected_output_states"]
+    }
+    assert states[first_output_id] == "unselected"
+    assert states[second_output_id] == "selected"
+    active_generated = [
+        ref
+        for ref in second_selected["project"]["reference_assets"]
+        if ref["source_type"] == "generated_selected" and ref["status"] == "active"
+    ]
+    assert [ref["created_from_output_id"] for ref in active_generated] == [second_output_id]
+    assert len(context["selected_output_assets"]) == 1
+    assert len(context["selected_reference_assets"]) == 1
+    assert len(context["strong_reference_bindings"]) == 1
+    assert context["metadata"]["general_forced_reference_count"] == 1
+
+
+def test_general_context_collapses_legacy_multiple_forced_references(tmp_path) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create a premium social cover"})["project"]
+    project_record = handlers.project_service._require_project(project["project_id"])
+    first = _save_project_output(
+        handlers,
+        job_id="legacy-general-job-1",
+        candidate_id="legacy-candidate-1",
+        asset_id="legacy-asset-1",
+    )
+    second = _save_project_output(
+        handlers,
+        job_id="legacy-general-job-2",
+        candidate_id="legacy-candidate-2",
+        asset_id="legacy-asset-2",
+    )
+    selected_refs = [
+        OutputRef(
+            output_ref_id=f"legacy-output-ref-{index}",
+            source_type="generated_output",
+            project_id=project_record.project_id,
+            job_id=record.job_id,
+            asset_id=record.asset_id,
+            candidate_id=record.candidate_id,
+            output_id=record.output_id,
+            preview_url=record.preview_url,
+            thumbnail_url=record.thumbnail_url,
+            download_url=record.download_url,
+            selection_reason="legacy selected continuation",
+            selected_at=f"2026-08-31T00:0{index}:00+00:00",
+            metadata={"file_path": record.file_path},
+        )
+        for index, record in enumerate((first, second), start=1)
+    ]
+    project_record.selected_output_refs = selected_refs
+    project_record.reference_assets = [
+        ProjectReferenceAsset(
+            reference_id=f"legacy-generated-reference-{index}",
+            project_id=project_record.project_id,
+            source_type=ProjectReferenceSourceType.GENERATED_SELECTED,
+            asset_ref_id=record.output_id,
+            created_at="2026-08-31T00:00:00+00:00",
+            created_from_job_id=record.job_id,
+            created_from_output_id=record.output_id,
+            use_policy=ProjectReferenceUsePolicy.STYLE,
+            metadata={"canonical_output_binding": True},
+        )
+        for index, record in enumerate((first, second), start=1)
+    ]
+    handlers.project_service.project_store.save_project(project_record)
+
+    context = handlers.get_project_context(project_record.project_id)
+
+    assert [ref["output_id"] for ref in context["selected_output_assets"]] == [first.output_id]
+    assert [item["output_id"] for item in context["selected_reference_assets"]] == [first.output_id]
+    assert [item["output_id"] for item in context["strong_reference_bindings"]] == [first.output_id]
+    assert context["metadata"]["general_forced_reference_count"] == 1
 
 
 def test_portrait_selection_becomes_strong_identity_reference(tmp_path) -> None:

@@ -4867,9 +4867,75 @@ class V3ProjectModeService:
                 message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
                 unresolved_refs=unresolved_refs,
             )
+        if template_id == GENERAL_TEMPLATE_ID:
+            # General V3 uses one forced continuation image. Older projects
+            # may still contain several selected refs, so close those refs at
+            # the selection boundary while retaining their output history.
+            refs = refs[:1]
+        now = _utc_now_iso()
+        if template_id == GENERAL_TEMPLATE_ID:
+            retained_ids = {
+                str(value or "").strip()
+                for value in (
+                    refs[0].output_id,
+                    refs[0].asset_id,
+                    refs[0].candidate_id,
+                    refs[0].output_ref_id,
+                )
+                if str(value or "").strip()
+            }
+            previous_refs = list(project.selected_output_refs)
+            project.selected_output_refs = [
+                existing
+                for existing in previous_refs
+                if retained_ids.intersection(
+                    {
+                        str(value or "").strip()
+                        for value in (
+                            existing.output_id,
+                            existing.asset_id,
+                            existing.candidate_id,
+                            existing.output_ref_id,
+                        )
+                        if str(value or "").strip()
+                    }
+                )
+            ]
+            for existing in previous_refs:
+                existing_ids = {
+                    str(value or "").strip()
+                    for value in (
+                        existing.output_id,
+                        existing.asset_id,
+                        existing.candidate_id,
+                        existing.output_ref_id,
+                    )
+                    if str(value or "").strip()
+                }
+                if retained_ids.intersection(existing_ids):
+                    continue
+                self._set_output_state(
+                    project,
+                    existing,
+                    ProjectOutputSelectionStateValue.UNSELECTED,
+                    now,
+                    note="General V3 only keeps one forced continuation reference.",
+                )
+            for reference in project.reference_assets:
+                if reference.source_type != ProjectReferenceSourceType.GENERATED_SELECTED:
+                    continue
+                reference_ids = {
+                    str(value or "").strip()
+                    for value in (
+                        reference.asset_ref_id,
+                        reference.created_from_output_id,
+                    )
+                    if str(value or "").strip()
+                }
+                if not retained_ids.intersection(reference_ids):
+                    reference.status = ProjectReferenceStatus.INACTIVE
         existing_ref_ids = {ref.output_ref_id for ref in project.selected_output_refs}
         project.selected_output_refs.extend([ref for ref in refs if ref.output_ref_id not in existing_ref_ids])
-        now = _utc_now_iso()
         for ref in refs:
             self._set_output_state(project, ref, ProjectOutputSelectionStateValue.SELECTED, now)
             self._upsert_generated_reference(project, ref, now)
@@ -8797,6 +8863,16 @@ class V3ProjectModeService:
                         "reason": "legacy_or_unavailable_materialized_output",
                     }
                 )
+        selected_refs_for_context = list(selected_refs)
+        active_generated_references_for_context = list(active_generated_references)
+        if effective_template_id == GENERAL_TEMPLATE_ID:
+            (
+                selected_refs_for_context,
+                active_generated_references_for_context,
+            ) = self._general_single_forced_reference_inputs(
+                selected_refs,
+                active_generated_references,
+            )
         active_avoid_notes = [
             feedback.plain_text
             for feedback in project.feedback_records
@@ -8808,7 +8884,7 @@ class V3ProjectModeService:
         version = stable_id(
             "project_context",
             project.project_id,
-            len(selected_refs),
+            len(selected_refs_for_context),
             len(active_references),
             len(negative_notes),
             continuation_instruction,
@@ -8821,33 +8897,40 @@ class V3ProjectModeService:
             "unselected_candidates_excluded": True,
             "active_reference_count": len(active_references),
             "active_uploaded_reference_count": len(active_uploaded_references),
-            "active_generated_reference_count": len(active_generated_references),
+            "active_generated_reference_count": len(active_generated_references_for_context),
             "suppressed_generated_reference_count": len(unresolved_generated_references),
             "active_negative_feedback_count": len(active_avoid_notes),
             "template_id": effective_template_id,
             "reference_resolution_audit": {
-                "retained_selected_output_ids": [ref.output_id for ref in selected_refs if ref.output_id],
+                "retained_selected_output_ids": [
+                    ref.output_id for ref in selected_refs_for_context if ref.output_id
+                ],
                 "suppressed_selected_outputs": unresolved_selected_outputs,
                 "retained_generated_reference_ids": [
                     str(item.get("reference_id") or item.get("output_id") or "")
-                    for item in active_generated_references
+                    for item in active_generated_references_for_context
                 ],
                 "suppressed_generated_references": unresolved_generated_references,
                 "no_substitution": True,
             },
         }
+        if effective_template_id == GENERAL_TEMPLATE_ID:
+            metadata["general_forced_reference_count"] = max(
+                len(selected_refs_for_context),
+                len(active_generated_references_for_context),
+            )
         selected_visual_references = self._selected_visual_references(
             project,
             effective_template_id,
-            selected_refs,
-            active_generated_references,
+            selected_refs_for_context,
+            active_generated_references_for_context,
             active_uploaded_references,
         )
         visual_snapshot = self._project_visual_grammar_snapshot(
             project=project,
             context_version=version,
-            selected_refs=selected_refs,
-            active_generated_references=active_generated_references,
+            selected_refs=selected_refs_for_context,
+            active_generated_references=active_generated_references_for_context,
             active_uploaded_references=active_uploaded_references,
             negative_notes=negative_notes,
             tone=tone,
@@ -8865,7 +8948,7 @@ class V3ProjectModeService:
             subject_type=str(template_policy.get("identity_lock_default") or "generic"),
             template_id=effective_template_id,
             strong_bindings=strong_reference_bindings,
-            selected_outputs=[item.model_dump(mode="json") for item in selected_refs],
+            selected_outputs=[item.model_dump(mode="json") for item in selected_refs_for_context],
             advanced_reference_controls=self._clean_advanced_reference_controls(
                 project.metadata.get("advanced_reference_controls")
             ),
@@ -8881,7 +8964,7 @@ class V3ProjectModeService:
         project_identity_anchors = self._project_identity_anchors(
             project=project,
             template_policy=template_policy,
-            selected_refs=selected_refs,
+            selected_refs=selected_refs_for_context,
             strong_reference_bindings=strong_reference_bindings,
             identity_lock_profiles=identity_lock_profiles,
             reference_policy_package=reference_policy_package.model_dump(mode="json"),
@@ -8925,8 +9008,8 @@ class V3ProjectModeService:
             template_id=effective_template_id,
             linked_brand_id=project.linked_brand_id,
             confirmed_visual_tone=tone,
-            selected_reference_assets=active_generated_references,
-            selected_output_assets=selected_refs,
+            selected_reference_assets=active_generated_references_for_context,
+            selected_output_assets=selected_refs_for_context,
             uploaded_reference_assets=active_uploaded_references or legacy_uploaded_references,
             selected_visual_references=selected_visual_references,
             visual_grammar_snapshot=visual_snapshot,
@@ -8939,7 +9022,11 @@ class V3ProjectModeService:
             batch_identity_diversity_review=batch_identity_diversity_review,
             negative_visual_memory=negative_visual_memory,
             template_consistency_policy=template_policy,
-            confirmed_visual_profile_summary=self._visual_profile_summary(project, tone, selected_refs),
+            confirmed_visual_profile_summary=self._visual_profile_summary(
+                project,
+                tone,
+                selected_refs_for_context,
+            ),
             visual_continuity_strength=visual_snapshot["continuity_strength"],
             rejected_style_tags=negative_notes,
             negative_direction_notes=negative_notes,
@@ -8949,6 +9036,42 @@ class V3ProjectModeService:
             created_at=now,
             metadata=metadata,
         )
+
+    def _general_single_forced_reference_inputs(
+        self,
+        selected_refs: list[OutputRef],
+        active_generated_references: list[dict[str, Any]],
+    ) -> tuple[list[OutputRef], list[dict[str, Any]]]:
+        """Keep one server-selected continuation reference for General V3."""
+
+        if selected_refs:
+            primary_ref = selected_refs[0]
+            primary_ids = {
+                str(value or "").strip()
+                for value in (
+                    primary_ref.output_id,
+                    primary_ref.asset_id,
+                    primary_ref.candidate_id,
+                    primary_ref.output_ref_id,
+                )
+                if str(value or "").strip()
+            }
+            for item in active_generated_references:
+                generated_ids = {
+                    str(value or "").strip()
+                    for value in (
+                        item.get("output_id"),
+                        item.get("created_from_output_id"),
+                        item.get("asset_ref_id"),
+                        item.get("asset_id"),
+                        item.get("reference_id"),
+                    )
+                    if str(value or "").strip()
+                }
+                if primary_ids.intersection(generated_ids):
+                    return [primary_ref], [item]
+            return [primary_ref], []
+        return [], active_generated_references[:1]
 
     def _selected_visual_references(
         self,
