@@ -106,25 +106,12 @@ def test_doc66_post_generation_review_builds_candidate_scoped_signal_package() -
         },
     )
 
-    package = merger.build_package(
+    signal_package = merger._real_review_signal_package(  # noqa: SLF001
         job_id="job_doc66_review",
         project_id="project_doc66_review",
-        resolutions=[
-            GeneratedOutputResolution(
-                resolution_id="resolution_doc66",
-                project_id="project_doc66_review",
-                job_id="job_doc66_review",
-                candidate_id="candidate_doc66_retry",
-                output_id="output_doc66_retry",
-                status="ready",
-            )
-        ],
         inspections=[inspection],
-        max_attempts=1,
     )
 
-    signal_package = package.real_review_signal_package
-    assert signal_package is not None
     assert signal_package.retryable_candidate_ids == ["candidate_doc66_retry"]
     assert signal_package.retryable_output_ids == ["output_doc66_retry"]
     assert signal_package.issue_summary["faint_corner_watermark"] == 1
@@ -156,16 +143,12 @@ def test_doc160_retry_signal_keeps_bounded_visual_observations_as_evidence() -> 
         retryable=True,
     )
 
-    package = merger.build_package(
+    signal = merger._real_review_signal_package(  # noqa: SLF001
         job_id="job_doc160_review",
         project_id="project_doc160_review",
-        resolutions=[],
         inspections=[inspection],
-        max_attempts=1,
     )
 
-    signal = package.real_review_signal_package
-    assert signal is not None
     assert signal.candidate_signals[0].observed_review_evidence == [
         "Skin reads over-smoothed and the highlights are too uniform.",
         "Keep the scene direction while restoring camera-observed material variation.",
@@ -210,15 +193,12 @@ def test_doc118_manual_review_does_not_reinterpret_diagnostic_issue_as_an_auto_r
     )
 
     signal = package.real_review_signal_package
-    assert signal is not None
-    assert signal.retryable_candidate_ids == []
-    assert signal.retryable_output_ids == []
-    assert signal.commercial_readiness_status == "manual_review"
-    assert signal.candidate_signals[0].recommended_action == "review"
-    assert signal.candidate_signals[0].retryable_issue_codes == []
-    assert signal.candidate_signals[0].retry_patch == {}
-    assert package.auto_retry_decisions[0]["should_retry"] is False
-    assert package.auto_retry_decisions[0]["blocked_reason"] == "manual_confirmation_required"
+    assert signal is None
+    assert package.auto_retry_decisions == []
+    assert package.review_evidence_receipt_status == "closed"
+    assert package.review_evidence_receipt_errors == ("review_evidence_plan_missing",)
+    assert package.real_pixel_review is False
+    assert package.metadata["review_disposition"] == "manual_review_only"
 
 
 def test_doc118_unverified_retryable_issue_cannot_trigger_auto_retry_or_pass_projection() -> None:
@@ -247,14 +227,10 @@ def test_doc118_unverified_retryable_issue_cannot_trigger_auto_retry_or_pass_pro
     )
 
     signal = package.real_review_signal_package
-    assert signal is not None
-    assert signal.retryable_candidate_ids == []
-    assert signal.retryable_output_ids == []
-    assert signal.commercial_readiness_status == "manual_review"
-    assert signal.candidate_signals[0].recommended_action == "review"
-    assert signal.candidate_signals[0].retry_patch == {}
-    assert package.auto_retry_decisions[0]["should_retry"] is False
-    assert package.auto_retry_decisions[0]["blocked_reason"] == "review_not_verified"
+    assert signal is None
+    assert package.auto_retry_decisions == []
+    assert package.real_pixel_review is False
+    assert package.metadata["review_disposition"] == "manual_review_only"
 
     result = SimpleNamespace(
         metadata={"post_generation_review_package": {"inspections": [inspection.model_dump(mode="json")]}}
