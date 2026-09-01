@@ -228,6 +228,79 @@ class _BrainExecutionBudget:
         return max(0.0, self.deadline - time.perf_counter())
 
 
+class _TransportCancellation:
+    """Close resources owned by a timed-out remote transport attempt.
+
+    The provider facade still supports synchronous SDKs, so one outer worker
+    thread remains the last-resort deadline guard. Network transports register
+    their own close methods here; a timeout can then terminate the actual HTTP
+    operation instead of merely abandoning its worker.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._callbacks: dict[int, Any] = {}
+        self._next_token = 0
+        self._cancelled = False
+
+    def register(self, callback: Any) -> int | None:
+        if not callable(callback):
+            return None
+        with self._lock:
+            if self._cancelled:
+                call_now = True
+                token = None
+            else:
+                self._next_token += 1
+                token = self._next_token
+                self._callbacks[token] = callback
+                call_now = False
+        if call_now:
+            self._dispatch(callback)
+        return token
+
+    def unregister(self, token: int | None) -> None:
+        if token is None:
+            return
+        with self._lock:
+            self._callbacks.pop(token, None)
+
+    def cancel(self) -> None:
+        with self._lock:
+            if self._cancelled:
+                return
+            self._cancelled = True
+            callbacks = list(self._callbacks.values())
+            self._callbacks.clear()
+        for callback in callbacks:
+            self._dispatch(callback)
+
+    @classmethod
+    def _dispatch(cls, callback: Any) -> None:
+        """Start close without letting a third-party cleanup block the deadline."""
+
+        try:
+            threading.Thread(
+                target=cls._invoke,
+                args=(callback,),
+                name="v3-llm-brain-transport-close",
+                daemon=True,
+            ).start()
+        except BaseException:
+            # The outer timeout remains authoritative even if a best-effort
+            # close worker cannot be started.
+            return
+
+    @staticmethod
+    def _invoke(callback: Any) -> None:
+        try:
+            callback()
+        except BaseException:
+            # Cancellation is best effort. The original timeout remains the
+            # authoritative failure even when an SDK close method is noisy.
+            return
+
+
 _ACTIVE_EXECUTION_BUDGET: ContextVar[_BrainExecutionBudget | None] = ContextVar(
     "v3_active_remote_brain_execution_budget",
     default=None,
@@ -236,6 +309,11 @@ _ACTIVE_TRANSPORT_TRACE: ContextVar[dict[str, Any] | None] = ContextVar(
     "v3_active_remote_brain_transport_trace",
     default=None,
 )
+_ACTIVE_TRANSPORT_CANCELLATION: ContextVar[_TransportCancellation | None] = ContextVar(
+    "v3_active_remote_brain_transport_cancellation",
+    default=None,
+)
+_STREAM_PROGRESS_GRACE_SECONDS = 30.0
 
 
 class V3LLMBrainProvider:
@@ -446,6 +524,8 @@ class V3LLMBrainProvider:
         request: BrainRunRequest,
         json_recovery: bool = False,
     ) -> dict[str, Any]:
+        timeout_seconds = self._effective_timeout_seconds(request)
+        started = time.perf_counter()
         try:
             from openai import OpenAI
 
@@ -456,33 +536,45 @@ class V3LLMBrainProvider:
             kwargs = _openai_client_kwargs(api_key=api_key, base_url=base_url, max_retries=0)
             client = OpenAI(**kwargs)
             _mark_transport_event("client_constructed")
-            _mark_transport_event("request_dispatched")
-            response = client.responses.create(
-                model=self.model,
-                input=[
-                    {
-                        "role": "system",
-                        "content": _system_prompt(request.stage, json_recovery=json_recovery),
-                    },
-                    {"role": "user", "content": build_remote_payload(request)},
-                ],
-                text={"format": {"type": "json_object"}},
-                timeout=self._effective_timeout_seconds(request),
-                max_output_tokens=self.max_tokens,
-            )
-            _mark_transport_event("complete_response_observed")
-            text = getattr(response, "output_text", None) or ""
-            if not text:
-                text = _response_text_from_openai(response)
-            if _response_ended_at_output_limit(response):
-                raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
-            _mark_transport_event("json_parse_started")
-            parsed = _loads_json_object(text)
-            _mark_transport_event("json_parse_completed")
-            return parsed
+            client_registration = _register_transport_close(client)
+            try:
+                _mark_transport_event("request_dispatched")
+                response = client.responses.create(
+                    model=self.model,
+                    input=[
+                        {
+                            "role": "system",
+                            "content": _system_prompt(request.stage, json_recovery=json_recovery),
+                        },
+                        {"role": "user", "content": build_remote_payload(request)},
+                    ],
+                    text={"format": {"type": "json_object"}},
+                    timeout=timeout_seconds,
+                    max_output_tokens=self.max_tokens,
+                )
+                _mark_transport_event("complete_response_observed")
+                text = getattr(response, "output_text", None) or ""
+                if not text:
+                    text = _response_text_from_openai(response)
+                if _response_ended_at_output_limit(response):
+                    raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
+                _mark_transport_event("json_parse_started")
+                parsed = _loads_json_object(text)
+                _mark_transport_event("json_parse_completed")
+                return parsed
+            finally:
+                _unregister_transport_close(client_registration)
+        except BrainTransportTimeoutError:
+            raise
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
+            if _is_transport_timeout_exception(exc):
+                raise _transport_timeout_from_trace(
+                    _ACTIVE_TRANSPORT_TRACE.get() or {},
+                    timeout_seconds=timeout_seconds,
+                    elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
+                ) from exc
             if _is_unsupported_brain_protocol_error(exc):
                 raise _BrainProtocolUnsupported from exc
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
@@ -503,8 +595,9 @@ class V3LLMBrainProvider:
         or violates its frozen image-set contract.
         """
 
+        timeout_seconds = self._effective_timeout_seconds(request)
+        started = time.perf_counter()
         try:
-            timeout_seconds = self._effective_timeout_seconds(request)
             record_stage_event(
                 "brain_provider",
                 "stream_request_prepared",
@@ -540,9 +633,17 @@ class V3LLMBrainProvider:
             record_stage_event("brain_provider", "json_parse_completed", stage=request.stage)
             _mark_transport_event("json_parse_completed")
             return parsed
+        except BrainTransportTimeoutError:
+            raise
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
+            if _is_transport_timeout_exception(exc):
+                raise _transport_timeout_from_trace(
+                    _ACTIVE_TRANSPORT_TRACE.get() or {},
+                    timeout_seconds=timeout_seconds,
+                    elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
+                ) from exc
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
     def _run_anthropic_compatible(
@@ -554,6 +655,8 @@ class V3LLMBrainProvider:
         api_key, base_url = self._credentials()
         if not base_url:
             raise BrainProviderUnavailable("anthropic-compatible brain base URL is not configured")
+        timeout_seconds = self._effective_timeout_seconds(request)
+        started = time.perf_counter()
         try:
             import httpx
 
@@ -569,12 +672,16 @@ class V3LLMBrainProvider:
                 "messages": [{"role": "user", "content": build_remote_payload(request)}],
             }
             _mark_transport_event("client_constructing")
-            with httpx.Client(timeout=self._effective_timeout_seconds(request)) as client:
-                _mark_transport_event("client_constructed")
-                _mark_transport_event("request_dispatched")
-                response = client.post(url, headers=headers, json=payload)
-                _mark_transport_event("complete_response_observed")
-                response.raise_for_status()
+            with httpx.Client(timeout=timeout_seconds) as client:
+                client_registration = _register_transport_close(client)
+                try:
+                    _mark_transport_event("client_constructed")
+                    _mark_transport_event("request_dispatched")
+                    response = client.post(url, headers=headers, json=payload)
+                    _mark_transport_event("complete_response_observed")
+                    response.raise_for_status()
+                finally:
+                    _unregister_transport_close(client_registration)
             response_json = response.json()
             if _response_ended_at_output_limit(response_json):
                 raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
@@ -582,9 +689,17 @@ class V3LLMBrainProvider:
             parsed = _loads_json_object(_anthropic_text(response_json))
             _mark_transport_event("json_parse_completed")
             return parsed
+        except BrainTransportTimeoutError:
+            raise
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
+            if _is_transport_timeout_exception(exc):
+                raise _transport_timeout_from_trace(
+                    _ACTIVE_TRANSPORT_TRACE.get() or {},
+                    timeout_seconds=timeout_seconds,
+                    elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
+                ) from exc
             raise BrainProviderError(f"remote brain provider failed: {str(exc)[:240]}") from exc
 
     def _credentials(self) -> tuple[str, str | None]:
@@ -662,22 +777,65 @@ def _call_with_timeout(
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
     started = time.perf_counter()
+    timeout_seconds = max(0.1, float(timeout_seconds))
+    cancellation = _TransportCancellation()
+    hard_deadline = started + timeout_seconds
+    progress_grace_seconds = min(_STREAM_PROGRESS_GRACE_SECONDS, timeout_seconds)
+    progress_grace_deadline = hard_deadline + progress_grace_seconds
+    execution_budget = _ACTIVE_EXECUTION_BUDGET.get()
+    maximum_deadline = (
+        execution_budget.deadline
+        if execution_budget is not None
+        else progress_grace_deadline
+    )
 
     def runner() -> None:
+        cancellation_token = _ACTIVE_TRANSPORT_CANCELLATION.set(cancellation)
         try:
             _mark_transport_event("provider_runner_entered")
             result["value"] = callable_obj()
         except BaseException as exc:  # pragma: no cover - re-raised in caller thread
             result["error"] = exc
+        finally:
+            _ACTIVE_TRANSPORT_CANCELLATION.reset(cancellation_token)
 
     context = copy_context()
     thread = threading.Thread(target=lambda: context.run(runner), name="v3-llm-brain-provider", daemon=True)
     thread.start()
-    thread.join(timeout=max(0.1, float(timeout_seconds)))
-    if thread.is_alive():
+    observed_progress = 0
+    deadline = min(hard_deadline, maximum_deadline)
+    while thread.is_alive():
+        now = time.perf_counter()
+        remaining = deadline - now
+        if remaining <= 0.0:
+            current_progress = int((trace or {}).get("progress_event_count") or 0)
+            if current_progress > observed_progress and current_progress and now < maximum_deadline:
+                observed_progress = current_progress
+                deadline = min(maximum_deadline, now + progress_grace_seconds)
+                continue
+            cancellation.cancel()
+            # A transport that owns a closeable response should terminate
+            # promptly. Keep the grace join short for an uncooperative SDK so
+            # the caller still receives a deterministic terminal failure.
+            thread.join(timeout=min(0.25, max(0.05, timeout_seconds * 0.1)))
+            if trace is not None:
+                trace["transport_cancel_requested"] = True
+                trace["transport_worker_stopped"] = not thread.is_alive()
+            raise _transport_timeout_from_trace(
+                trace or {},
+                timeout_seconds=timeout_seconds,
+                elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
+            )
+        thread.join(timeout=min(0.25, remaining))
+        current_progress = int((trace or {}).get("progress_event_count") or 0)
+        if current_progress > observed_progress:
+            observed_progress = current_progress
+            deadline = min(maximum_deadline, max(deadline, time.perf_counter() + progress_grace_seconds))
+    if thread.is_alive():  # pragma: no cover - defensive loop invariant
+        cancellation.cancel()
         raise _transport_timeout_from_trace(
             trace or {},
-            timeout_seconds=float(timeout_seconds),
+            timeout_seconds=timeout_seconds,
             elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
         )
     if "error" in result:
@@ -699,6 +857,7 @@ def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:
         "complete_response_observed": False,
         "json_parse_started": False,
         "json_parse_completed": False,
+        "progress_event_count": 0,
     }
 
 
@@ -723,6 +882,25 @@ def _mark_transport_event(event: str) -> None:
     if normalized == "json_parse_completed":
         trace["json_parse_started"] = True
         trace["json_parse_completed"] = True
+    if normalized in {"stream_chunk_observed", "stream_progress"}:
+        trace["progress_event_count"] = int(trace.get("progress_event_count") or 0) + 1
+        trace["last_progress_at"] = time.perf_counter()
+
+
+def _register_transport_close(resource: Any) -> tuple[_TransportCancellation, int] | None:
+    cancellation = _ACTIVE_TRANSPORT_CANCELLATION.get()
+    close = getattr(resource, "close", None)
+    if cancellation is None or not callable(close):
+        return None
+    token = cancellation.register(close)
+    return (cancellation, token) if token is not None else None
+
+
+def _unregister_transport_close(registration: tuple[_TransportCancellation, int] | None) -> None:
+    if registration is None:
+        return
+    cancellation, token = registration
+    cancellation.unregister(token)
 
 
 def _transport_timeout_from_trace(
@@ -785,6 +963,14 @@ def _is_unsupported_brain_protocol_error(error: BaseException) -> bool:
         return False
 
 
+def _is_transport_timeout_exception(error: BaseException) -> bool:
+    """Recognize timeout types emitted by supported HTTP/SDK transports."""
+
+    module = str(error.__class__.__module__ or "").strip().lower()
+    name = str(error.__class__.__name__ or "").strip().lower()
+    return "timeout" in name and module.startswith(("httpx", "httpcore", "openai"))
+
+
 def _chat_completions_url(base_url: str | None) -> str:
     base = str(base_url or "").rstrip("/")
     if not base:
@@ -815,50 +1001,59 @@ def _collect_openai_chat_completion_stream(
     _mark_transport_event("client_constructing")
     record_stage_event("brain_provider", "stream_client_constructing")
     with httpx.Client(timeout=timeout) as client:
-        _mark_transport_event("client_constructed")
-        record_stage_event("brain_provider", "stream_client_constructed")
-        _mark_transport_event("request_dispatched")
-        record_stage_event("brain_provider", "stream_request_dispatched")
-        with client.stream("POST", url, headers=headers, json=payload) as response:
-            _mark_transport_event("response_started")
-            record_stage_event("brain_provider", "stream_response_started")
-            response.raise_for_status()
-            for raw_line in response.iter_lines():
-                line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line or "")
-                line = line.strip()
-                if not line:
-                    continue
-                data = line[5:].strip() if line.startswith("data:") else line
-                if data == "[DONE]":
-                    done = True
-                    _mark_transport_event("complete_response_observed")
-                    record_stage_event("brain_provider", "stream_complete_response_observed")
-                    break
+        client_registration = _register_transport_close(client)
+        try:
+            _mark_transport_event("client_constructed")
+            record_stage_event("brain_provider", "stream_client_constructed")
+            _mark_transport_event("request_dispatched")
+            record_stage_event("brain_provider", "stream_request_dispatched")
+            with client.stream("POST", url, headers=headers, json=payload) as response:
+                response_registration = _register_transport_close(response)
                 try:
-                    item = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                choices = item.get("choices") if isinstance(item, dict) else None
-                choice = choices[0] if isinstance(choices, list) and choices else None
-                finish_reason = str(choice.get("finish_reason") or "").strip().lower() if isinstance(choice, dict) else ""
-                if isinstance(choice, dict) and (
-                    _response_ended_at_output_limit(item, choice=choice)
-                    or finish_reason
-                    in {
-                        "length",
-                        "max_tokens",
-                        "max_output_tokens",
-                        "output_token_limit",
-                        "output_tokens_limit",
-                    }
-                ):
-                    raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
-                delta = choice.get("delta") if isinstance(choice, dict) else None
-                content = delta.get("content") if isinstance(delta, dict) else None
-                if content:
-                    _mark_transport_event("first_content_observed")
-                    record_stage_event("brain_provider", "stream_first_content_observed")
-                    chunks.append(str(content))
+                    _mark_transport_event("response_started")
+                    record_stage_event("brain_provider", "stream_response_started")
+                    response.raise_for_status()
+                    for raw_line in response.iter_lines():
+                        line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line or "")
+                        line = line.strip()
+                        if not line:
+                            continue
+                        _mark_transport_event("stream_chunk_observed")
+                        data = line[5:].strip() if line.startswith("data:") else line
+                        if data == "[DONE]":
+                            done = True
+                            _mark_transport_event("complete_response_observed")
+                            record_stage_event("brain_provider", "stream_complete_response_observed")
+                            break
+                        try:
+                            item = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        choices = item.get("choices") if isinstance(item, dict) else None
+                        choice = choices[0] if isinstance(choices, list) and choices else None
+                        finish_reason = str(choice.get("finish_reason") or "").strip().lower() if isinstance(choice, dict) else ""
+                        if isinstance(choice, dict) and (
+                            _response_ended_at_output_limit(item, choice=choice)
+                            or finish_reason
+                            in {
+                                "length",
+                                "max_tokens",
+                                "max_output_tokens",
+                                "output_token_limit",
+                                "output_tokens_limit",
+                            }
+                        ):
+                            raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
+                        delta = choice.get("delta") if isinstance(choice, dict) else None
+                        content = delta.get("content") if isinstance(delta, dict) else None
+                        if content:
+                            _mark_transport_event("first_content_observed")
+                            record_stage_event("brain_provider", "stream_first_content_observed")
+                            chunks.append(str(content))
+                finally:
+                    _unregister_transport_close(response_registration)
+        finally:
+            _unregister_transport_close(client_registration)
     if not done:
         raise BrainInvalidJsonResponse(
             "remote brain stream ended before the complete JSON response marker",
