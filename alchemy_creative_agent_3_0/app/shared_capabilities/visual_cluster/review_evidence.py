@@ -217,6 +217,8 @@ class ExactReviewEvidenceResolver:
             require_integrity: bool,
             job_invalid: bool,
             integrity_invalid: bool,
+            job_missing: bool = False,
+            integrity_missing: bool = False,
         ) -> None:
             if not output_id:
                 return
@@ -228,23 +230,31 @@ class ExactReviewEvidenceResolver:
                     "require_integrity": "1" if require_integrity else "",
                     "job_invalid": "1" if job_invalid else "",
                     "integrity_invalid": "1" if integrity_invalid else "",
+                    "job_missing": "1" if job_missing else "",
+                    "integrity_missing": "1" if integrity_missing else "",
                 }
                 return
-            if source_job_id and not existing["job_invalid"]:
+            if source_job_id:
                 if existing["source_job_id"] and existing["source_job_id"] != source_job_id:
                     existing["source_job_id"] = ""
                     existing["job_invalid"] = "1"
-                elif not existing["source_job_id"]:
+                elif not existing["source_job_id"] and not existing["job_invalid"]:
                     existing["source_job_id"] = source_job_id
-            if source_integrity_id and not existing["integrity_invalid"]:
+                    existing["job_missing"] = ""
+            elif job_missing and not existing["source_job_id"] and not existing["job_invalid"]:
+                existing["job_missing"] = "1"
+            if source_integrity_id:
                 if (
                     existing["source_integrity_id"]
                     and existing["source_integrity_id"] != source_integrity_id
                 ):
                     existing["source_integrity_id"] = ""
                     existing["integrity_invalid"] = "1"
-                elif not existing["source_integrity_id"]:
+                elif not existing["source_integrity_id"] and not existing["integrity_invalid"]:
                     existing["source_integrity_id"] = source_integrity_id
+                    existing["integrity_missing"] = ""
+            elif integrity_missing and not existing["source_integrity_id"] and not existing["integrity_invalid"]:
+                existing["integrity_missing"] = "1"
             if require_integrity:
                 existing["require_integrity"] = "1"
             if job_invalid:
@@ -259,6 +269,8 @@ class ExactReviewEvidenceResolver:
             require_canonical: bool,
             require_integrity: bool,
         ) -> None:
+            # Snapshots include complete bindings plus compact view projections;
+            # only explicit conflicts remain invalid when the complete claim exists.
             if not isinstance(item, dict):
                 return
             nested = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
@@ -289,17 +301,6 @@ class ExactReviewEvidenceResolver:
                 if str(nested.get(key) or "").strip()
             )
             source_job_values = list(dict.fromkeys(source_job_values))
-            if not source_job_values:
-                if require_canonical:
-                    register(
-                        output_id,
-                        "",
-                        "",
-                        require_integrity=require_integrity,
-                        job_invalid=True,
-                        integrity_invalid=require_integrity,
-                    )
-                return
             source_integrity_values = [
                 str(value or "").strip()
                 for value in (
@@ -313,7 +314,22 @@ class ExactReviewEvidenceResolver:
             )
             integrity_invalid = any(
                 not _normalize_integrity_digest(value) for value in source_integrity_values
-            ) or len(normalized_integrities) > 1 or (require_integrity and not normalized_integrities)
+            ) or len(normalized_integrities) > 1
+            integrity_missing = require_integrity and not normalized_integrities
+            if not source_job_values:
+                if not require_canonical:
+                    return
+                register(
+                    output_id,
+                    "",
+                    normalized_integrities[0] if len(normalized_integrities) == 1 and not integrity_invalid else "",
+                    require_integrity=require_integrity,
+                    job_invalid=False,
+                    integrity_invalid=integrity_invalid,
+                    job_missing=True,
+                    integrity_missing=integrity_missing,
+                )
+                return
             register(
                 output_id,
                 source_job_values[0] if len(source_job_values) == 1 else "",
@@ -321,6 +337,7 @@ class ExactReviewEvidenceResolver:
                 require_integrity=require_integrity,
                 job_invalid=len(source_job_values) > 1,
                 integrity_invalid=integrity_invalid,
+                integrity_missing=integrity_missing,
             )
 
         professional_references = metadata.get("professional_anchor_reference_assets", [])
@@ -480,8 +497,15 @@ class ExactReviewEvidenceResolver:
                 return {**base, "state": "invalid", "reason": "reference_output_job_binding"}
             expected_integrity_id = None
             if binding is not None:
-                if binding.get("job_invalid") or binding.get("integrity_invalid") or (
-                    binding.get("require_integrity") and not binding.get("source_integrity_id")
+                if (
+                    binding.get("job_invalid")
+                    or binding.get("integrity_invalid")
+                    or binding.get("job_missing")
+                    or binding.get("integrity_missing")
+                    or (
+                        binding.get("require_integrity")
+                        and not binding.get("source_integrity_id")
+                    )
                 ):
                     return {**base, "state": "invalid", "reason": "output_source_integrity_binding"}
                 expected_integrity_id = binding.get("source_integrity_id") or None

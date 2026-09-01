@@ -607,6 +607,7 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
         server_owned: bool = True,
         frozen_integrity_id: str | None = source_integrity_id,
         nested_integrity_id: str | None = None,
+        visual_reference_source_job_id: str | None = None,
     ) -> None:
         integrity_fields = (
             {"source_integrity_id": frozen_integrity_id}
@@ -617,6 +618,11 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
             {"source_integrity_id": nested_integrity_id}
             if nested_integrity_id is not None
             else {}
+        )
+        visual_source_job_id = (
+            source_job_id
+            if visual_reference_source_job_id is None
+            else visual_reference_source_job_id
         )
         context = {
             "project_id": "project_doc260_general_reference",
@@ -649,7 +655,7 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
                     "source_type": "selected_output",
                     "project_id": "project_doc260_general_reference",
                     "output_id": reference.output_id,
-                    "source_job_id": source_job_id,
+                    "source_job_id": visual_source_job_id,
                     **integrity_fields,
                     "metadata": {"canonical_output_binding": canonical, **nested_integrity_fields},
                 }
@@ -724,6 +730,15 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
     assert person_channel["source_type"] == "selected_output"
     assert "review_evidence_person_identity_source_job_binding" not in person_channel["reason_codes"]
     assert reference.job_id not in str(metadata)
+
+    apply_context(
+        source_job_id=reference.job_id,
+        visual_reference_source_job_id="",
+    )
+    projected_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    projected_person_channel = projected_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert projected_person_channel["evidence_state"] == "available"
+    assert projected_person_channel["comparison_allowed"] is True
 
     output_record_path = output_store.storage_root / reference.output_id / "output.json"
     legacy_record = json.loads(output_record_path.read_text(encoding="utf-8"))
