@@ -5,10 +5,11 @@ Correction model
 The fresh reference-assisted Body run admitted five server-owned
 ``body_proportion_reference`` assets and the Body request also carried the
 Face identity chain.  The first loss is at the route/materialization boundary:
-the MCP Body request inherits the direct GPT image-edit provider's five-image
-cap, while the shared asset-binding planner treats the Face inputs as generic
-hard-role competitors.  The result is a pre-MCP capability block even though
-the five Body assets and Face identity evidence were admitted independently.
+the MCP Body request must keep its typed Body/Face partition separate from the
+direct GPT image-edit provider's physical input cap, while the shared
+asset-binding planner treats the Face inputs as generic hard-role competitors.
+The result is a pre-MCP capability block even though the five Body assets and
+Face identity evidence were admitted independently.
 
 The owning fix is a typed, stage-aware materialization partition.  A strict
 Body/MCP request must retain the complete server-owned Body evidence partition
@@ -17,7 +18,7 @@ merging either into a generic Face role.  Body evidence informs the
 Body-owner/Vision/Brain proportion context; it is not a physical ImageGen
 input.  Only Face identity refs reach the renderer, so the direct image-edit
 cap is evaluated against the Face physical projection.  Direct image-edit
-routes keep their existing ``>5`` fail-closed contract.  The partition must
+routes keep the official standard-route ``>16`` fail-closed contract.  The partition must
 survive the frozen handoff/public view, while ordinary MCP, Expression,
 General, and other routes must not inherit Body fields.  Prompt text,
 candidate/formal/activation authority, and provider routing are out of scope.
@@ -250,8 +251,8 @@ def _attach_current_body_context(
     return request.model_copy(update={"body_refresh_analysis_context": context})
 
 
-def test_direct_image_edit_route_keeps_over_five_reference_fail_closed(tmp_path) -> None:
-    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=2)
+def test_direct_image_edit_route_keeps_over_sixteen_reference_fail_closed(tmp_path) -> None:
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=14, face_count=3)
     request = _provider_request(*body_assets, *face_assets, stage="body_silhouette")
 
     with pytest.raises(ReferenceInputAdmissionError) as exc_info:
@@ -755,7 +756,7 @@ def test_reference_assisted_partition_is_built_before_base_provider_capacity_che
 
 
 def test_reference_assisted_face_physical_projection_still_enforces_cap(tmp_path) -> None:
-    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=6)
+    body_assets, face_assets = _write_reference_assets(tmp_path, body_count=5, face_count=17)
     request = _mcp_body_generation_request(
         "Body proportion and stance only.",
         source_mode="reference_assisted",

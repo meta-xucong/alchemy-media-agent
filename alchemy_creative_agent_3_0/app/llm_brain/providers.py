@@ -736,7 +736,7 @@ def _default_model(provider: str) -> str:
     if provider in {"anthropic", "kimi", "claude"}:
         return _settings_value("kimi_llm_model") or _settings_value("backup_llm_model") or "kimi-for-coding"
     if provider == "deepseek":
-        return _settings_value("deepseek_llm_model") or _settings_value("default_llm_model") or "deepseek-v4-pro-260425"
+        return _settings_value("deepseek_llm_model") or _settings_value("default_llm_model") or "deepseek-v4-pro"
     return _settings_value("openai_llm_model") or _settings_value("default_llm_model") or "gpt-5.5"
 
 

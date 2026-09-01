@@ -2435,6 +2435,7 @@ class V3ProjectModeService:
         owner_user_id: int | None = None,
         compact: bool = False,
         project_id: str | None = None,
+        surface: str | None = None,
     ) -> dict[str, Any]:
         bounded_limit = max(1, min(int(limit or 60), 200))
         items: list[dict[str, Any]] = []
@@ -2442,6 +2443,29 @@ class V3ProjectModeService:
             project = self._require_project(project_id)
             review_items: list[dict[str, Any]] = []
             if project.status != ProjectStatus.ARCHIVED and self._project_visible_to_owner(project, owner_user_id):
+                if str(surface or "").strip().lower() == "delivery_preview":
+                    items = self._project_delivery_preview_items(
+                        project,
+                        limit=min(bounded_limit, 1),
+                        owner_user_id=owner_user_id,
+                        compact=compact,
+                    )
+                    return {
+                        "api_namespace": API_NAMESPACE,
+                        "route": f"{API_NAMESPACE}/project-outputs",
+                        "project_id": project_id,
+                        "total": len(items),
+                        "limit": min(bounded_limit, 1),
+                        "items": items,
+                        "review_items": [],
+                        "metadata": {
+                            **self._metadata(),
+                            "compact": bool(compact),
+                            "project_scoped": True,
+                            "surface": "delivery_preview",
+                            "complete": False,
+                        },
+                    }
                 self._reconcile_project_outputs(project)
                 items = self._project_output_items(
                     project,
@@ -2564,8 +2588,12 @@ class V3ProjectModeService:
         self,
         project_id: str,
         owner_user_id: int | None = None,
+        *,
+        view: str = "full",
     ) -> ProjectResponse:
         project = self._require_project(project_id)
+        if str(view or "").strip().lower() == "summary":
+            return self._project_summary_response(project, owner_user_id=owner_user_id)
         self._reconcile_project_outputs(project)
         self._ensure_project_product_reference_integrity(project)
         project.latest_context = self._build_context(project)
@@ -2583,6 +2611,98 @@ class V3ProjectModeService:
             project,
             owner_user_id=owner_user_id,
             context_override=public_context,
+        )
+
+    def _project_summary_response(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+    ) -> ProjectResponse:
+        """Return a cheap, safe project shell for first paint.
+
+        Full reconciliation and context rebuilding stay on the compatibility
+        path. This projection intentionally carries no output history; the
+        separate delivery-preview surface supplies at most one validated item.
+        """
+
+        public_project = self._public_project_record(
+            project,
+            owner_user_id=owner_user_id,
+            visible_output_items=[],
+        )
+        public_project = public_project.model_copy(
+            update={
+                "latest_context": None,
+                "memory_summary": self._lightweight_memory_summary(
+                    project,
+                    owner_user_id=owner_user_id,
+                ),
+            },
+            deep=True,
+        )
+        metadata = {
+            **self._metadata(),
+            "project_detail_view": "summary",
+            "project_outputs": [],
+            "project_outputs_complete": False,
+            "project_source_library": public_project_source_library(
+                self._doc270_project_source_library(project)
+            ),
+        }
+        return ProjectResponse(
+            api_namespace=API_NAMESPACE,
+            route=f"{API_NAMESPACE}/projects/{project.project_id}",
+            project=public_project,
+            templates=self.template_cards(),
+            context=None,
+            metadata=metadata,
+        )
+
+    def _lightweight_memory_summary(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+    ) -> ProjectMemorySummary:
+        """Build summary fields without reading Jobs, outputs, or context."""
+
+        state_map = self._selected_output_state_map(project)
+        selected_refs = [
+            ref
+            for ref in project.selected_output_refs
+            if state_map.get(
+                self._output_identity(ref),
+                ProjectOutputSelectionStateValue.SELECTED,
+            ) == ProjectOutputSelectionStateValue.SELECTED
+        ]
+        if owner_user_id is not None:
+            selected_refs = [
+                ref for ref in selected_refs
+                if self._output_ref_visible_to_owner(ref, owner_user_id)
+            ]
+        if selected_refs:
+            next_actions = ["继续同风格生成", "上传新参考图继续", "下载已选图片"]
+        elif project.job_ids:
+            next_actions = ["选中喜欢的图片", "继续生成新图", "补充参考图"]
+        else:
+            next_actions = ["生成第一组创意图", "上传参考图", "补充项目感觉"]
+        return ProjectMemorySummary(
+            project_id=project.project_id,
+            title=project.title,
+            goal=project.short_summary,
+            primary_template_id=project.primary_template_id,
+            scenario_id=self._scenario_id_for_template(project.primary_template_id),
+            active_template_label=self._template_label(project.primary_template_id),
+            latest_thumbnail_urls=[],
+            visible_output_count=0,
+            confirmed_style_chips=self._style_chips(project),
+            selected_asset_count=len(selected_refs),
+            job_count=len(project.job_ids),
+            latest_job_status=None,
+            last_action_label="项目已创建",
+            updated_at=project.updated_at,
+            next_suggested_actions=next_actions,
         )
 
     def begin_project_planning_operation(
@@ -10610,6 +10730,64 @@ class V3ProjectModeService:
                 if len(items) >= max(1, int(limit or 60)):
                     return items
         return items[: max(1, int(limit or 60))]
+
+    def _project_delivery_preview_items(
+        self,
+        project: ProjectRecord,
+        *,
+        limit: int = 1,
+        owner_user_id: int | None = None,
+        compact: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Find one newest project output without scanning every project Job.
+
+        The output store index is only a candidate locator. The existing
+        ``_project_output_items`` predicates still decide whether the Job and
+        output are a formal delivery, so preview loading cannot widen public
+        delivery or continuation authority.
+        """
+
+        output_store = getattr(self.product_service, "output_store", None)
+        list_by_project = getattr(output_store, "list_by_project", None)
+        if not callable(list_by_project):
+            return []
+        try:
+            records = list_by_project(project.project_id, limit=256)
+        except Exception:
+            return []
+        allowed_job_ids = {
+            str(job_id or "").strip()
+            for job_id in project.job_ids
+            if str(job_id or "").strip()
+        }
+        newest_by_job: dict[str, str] = {}
+        for record in records:
+            job_id = str(getattr(record, "job_id", "") or "").strip()
+            if not job_id or job_id not in allowed_job_ids:
+                continue
+            created_at = str(getattr(record, "created_at", "") or "")
+            if created_at > newest_by_job.get(job_id, ""):
+                newest_by_job[job_id] = created_at
+        if not newest_by_job:
+            return []
+        candidate_job_ids = [
+            job_id
+            for job_id, _created_at in sorted(
+                newest_by_job.items(),
+                key=lambda entry: (entry[1], entry[0]),
+                reverse=True,
+            )
+        ]
+        preview_project = project.model_copy(
+            update={"job_ids": candidate_job_ids},
+            deep=False,
+        )
+        return self._project_output_items(
+            preview_project,
+            limit=min(max(1, int(limit or 1)), 1),
+            owner_user_id=owner_user_id,
+            compact=compact,
+        )
 
     def _project_job_delivery_is_settled(self, job_id: str) -> bool:
         """Known in-flight jobs must not leak process outputs onto project boards."""

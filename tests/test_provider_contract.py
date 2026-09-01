@@ -1682,9 +1682,11 @@ def test_openai_image_provider_raises_retryable_rate_limit_after_retries(monkeyp
             )
         )
 
-    assert attempts == 6
+    assert attempts == 3
     assert raised.value.retryable is True
     assert raised.value.detail["upstream_concurrency_limited"] is True
+    assert raised.value.detail["transport_retry_terminal"] is True
+    assert raised.value.detail["transport_outcome"]["retryability"] == "exhausted"
 
 
 def test_openai_image_provider_cools_down_after_image_quota_limit(monkeypatch):

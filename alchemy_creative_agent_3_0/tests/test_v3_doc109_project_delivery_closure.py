@@ -7,13 +7,24 @@ from pathlib import Path
 import pytest
 
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRequest, ProductionImageGenerationProvider
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
+from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
+from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode.contracts import (
     OutputRef,
     ProjectOutputSelectionStateValue,
     ProjectSelectedOutputState,
 )
+from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import (
+    DisabledEcommerceViewActivationIssuer,
+)
+from alchemy_creative_agent_3_0.app.project_mode.service import (
+    Doc281GeneralSourceRegistry,
+    V3ProjectModeService,
+)
+from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -31,6 +42,42 @@ _PNG_BASE64 = (
 )
 
 
+class _Doc109BrainTestProvider:
+    """Keep legacy delivery assertions independent of live Brain configuration."""
+
+    provider = "doc109_brain_test_double"
+    model = "contract-fixture-v1"
+
+    @staticmethod
+    def available(*, force: bool = False) -> bool:
+        return True
+
+    @staticmethod
+    def run(request):
+        return build_fallback_result(request).model_dump(mode="json")
+
+
+def _legacy_doc109_handlers() -> V3ProductRouteHandlers:
+    """Keep legacy Doc109 assertions outside newer environment composition."""
+
+    service = V3ProductApiService(
+        scenario_runtime=ScenarioRuntime(
+            llm_brain_adapter=V3LLMBrainAdapter(provider=_Doc109BrainTestProvider())
+        )
+    )
+    handlers = V3ProductRouteHandlers(service=service)
+    previous_project_service = handlers.project_service
+    handlers.project_service = V3ProjectModeService(
+        product_service=handlers.service,
+        project_store=previous_project_service.project_store,
+        template_registry=previous_project_service.template_registry,
+        project_visual_asset_binding_service=handlers.project_visual_asset_binding_service,
+        ecommerce_view_activation_issuer=DisabledEcommerceViewActivationIssuer(),
+        doc281_general_source_registry=Doc281GeneralSourceRegistry(),
+    )
+    return handlers
+
+
 def _save_output(store: V3GeneratedOutputStore, *, job_id: str, candidate_id: str, asset_id: str):
     return store.save_base64_output(
         job_id=job_id,
@@ -45,7 +92,7 @@ def _save_output(store: V3GeneratedOutputStore, *, job_id: str, candidate_id: st
 
 
 def test_doc109_background_generation_is_not_selectable_or_visible_until_settled() -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _legacy_doc109_handlers()
     project = handlers.post_projects({"user_goal": "Create a clean launch image"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Create the launch image"})
 
@@ -64,7 +111,7 @@ def test_doc109_background_generation_is_not_selectable_or_visible_until_settled
 
 def test_doc109_canonical_resolver_requires_the_exact_candidate_not_another_asset_match(tmp_path: Path) -> None:
     output_store = V3GeneratedOutputStore(storage_root=tmp_path / "outputs")
-    handlers = V3ProductRouteHandlers()
+    handlers = _legacy_doc109_handlers()
     handlers.service.output_store = output_store
     project = handlers.post_projects({"user_goal": "Create a visual"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Create the visual"})
@@ -103,7 +150,7 @@ def test_doc109_canonical_resolver_requires_the_exact_candidate_not_another_asse
 
 
 def test_doc109_legacy_asset_only_selection_remains_readable_but_is_suppressed_from_continuation() -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _legacy_doc109_handlers()
     project_payload = handlers.post_projects({"user_goal": "Continue an older project"})["project"]
     project = handlers.project_service._require_project(project_payload["project_id"])
     legacy_ref = OutputRef(
@@ -134,7 +181,7 @@ def test_doc109_legacy_asset_only_selection_remains_readable_but_is_suppressed_f
 
 
 def test_doc109_selected_output_and_generated_reference_dedupe_by_content_identity() -> None:
-    handlers = V3ProductRouteHandlers()
+    handlers = _legacy_doc109_handlers()
     project = handlers.post_projects({"user_goal": "Create a premium cover"})["project"]
     job = handlers.post_project_job(project["project_id"], {"user_input": "Create the cover"})
     generated = handlers.post_project_job_generate(project["project_id"], job["job_id"], {"quality_mode": "standard"})

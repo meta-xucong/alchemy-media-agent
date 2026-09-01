@@ -55,6 +55,7 @@ class V3GeneratedOutputStore:
         self._records_cache_revision: tuple[int, int] | None = None
         self._records_cache: list[V3GeneratedOutputRecord] | None = None
         self._records_by_job_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
+        self._records_by_project_cache: dict[str, list[V3GeneratedOutputRecord]] | None = None
 
     def save_base64_output(
         self,
@@ -176,6 +177,15 @@ class V3GeneratedOutputStore:
             by_job = self._records_by_job_cache or {}
             return list(by_job.get(target, []))
 
+    def list_by_project(self, project_id: str, limit: int = 256) -> list[V3GeneratedOutputRecord]:
+        target = str(project_id or "").strip()
+        if not target:
+            return []
+        self._read_records_cached()
+        with self._cache_lock:
+            by_project = self._records_by_project_cache or {}
+            return list(by_project.get(target, []))[: max(1, int(limit or 256))]
+
     def file_for_variant(self, output_id: str, variant: str) -> tuple[Path, str, str] | None:
         record = self.get_output(output_id)
         if record is None:
@@ -256,6 +266,7 @@ class V3GeneratedOutputStore:
             self._records_cache_revision = None
             self._records_cache = None
             self._records_by_job_cache = None
+            self._records_by_project_cache = None
 
     def _storage_revision(self) -> tuple[int, int] | None:
         """Return a constant-time revision for the output directory.
@@ -302,13 +313,18 @@ class V3GeneratedOutputStore:
                 continue
         records = sorted(records, key=lambda record: record.created_at or "", reverse=True)
         by_job: dict[str, list[V3GeneratedOutputRecord]] = {}
+        by_project: dict[str, list[V3GeneratedOutputRecord]] = {}
         for record in records:
             by_job.setdefault(str(record.job_id or ""), []).append(record)
+            project_id = str((record.metadata or {}).get("project_id") or "").strip()
+            if project_id:
+                by_project.setdefault(project_id, []).append(record)
 
         with self._cache_lock:
             self._records_cache_revision = revision
             self._records_cache = list(records)
             self._records_by_job_cache = {key: list(value) for key, value in by_job.items()}
+            self._records_by_project_cache = {key: list(value) for key, value in by_project.items()}
         return list(records)
 
 

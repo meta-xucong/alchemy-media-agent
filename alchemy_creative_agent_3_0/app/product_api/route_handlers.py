@@ -142,12 +142,14 @@ class V3ProductRouteHandlers:
         owner_user_id: int | None = None,
         compact: bool = False,
         project_id: str | None = None,
+        surface: str | None = None,
     ) -> dict[str, Any]:
         return self.project_service.list_project_outputs(
             limit=limit,
             owner_user_id=owner_user_id,
             compact=compact,
             project_id=project_id,
+            surface=surface,
         )
 
     def post_projects(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -157,10 +159,12 @@ class V3ProductRouteHandlers:
         self,
         project_id: str,
         owner_user_id: int | None = None,
+        view: str = "full",
     ) -> dict[str, Any]:
         return self.project_service.get_project(
             project_id,
             owner_user_id=owner_user_id,
+            view=view,
         ).model_dump(mode="json")
 
     def begin_project_planning_operation(self, project_id: str, payload: dict[str, Any]) -> dict[str, Any]:

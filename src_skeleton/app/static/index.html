@@ -1841,19 +1841,14 @@
                       <div class="run-progress-meter" aria-hidden="true">
                         <span id="v3ProgressFill"></span>
                       </div>
-                      <div id="v3CapabilityList" class="run-progress-steps v3-progress-steps" aria-label="V3 生图制作进度">
-                        <span class="run-progress-step active">理解你的目标</span>
-                        <span class="run-progress-step">整理画面方向</span>
-                        <span class="run-progress-step">参考上传图片</span>
-                        <span class="run-progress-step">检查生成结果</span>
-                      </div>
+                      <div id="v3CapabilityList" class="run-progress-steps v3-progress-steps" aria-label="V3 生图制作进度"></div>
                       <p id="v3SummaryIntro" class="run-progress-detail">写一句需求后，V3 会把它整理成清晰的画面方向。</p>
                       <div id="v3ClosureList" class="v3-closure-list" aria-live="polite" hidden></div>
                       <div id="v3WarningList" class="v3-warning-list" aria-live="polite" hidden></div>
-                      <p id="v3SummaryFootnote" class="micro-copy">进度提示只展示关键成果，图片仍然是主结果。</p>
+                      <p id="v3SummaryFootnote" class="micro-copy v3-progress-footnote" hidden>进度提示只展示关键成果，图片仍然是主结果。</p>
                     </div>
 
-                    <div id="v3NoticeBar" class="notice-bar" role="status" aria-live="polite">请选择 V3 首页里的 Agent，然后开始生成。</div>
+                    <div id="v3NoticeBar" class="notice-bar v3-inline-notice" role="status" aria-live="polite" hidden></div>
 
                     <div class="composer-actions v3-action-row">
                       <button id="v3CreateJobBtn" class="button primary" type="button">生成一组图片</button>

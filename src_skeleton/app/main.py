@@ -1149,10 +1149,11 @@ def v3_project_outputs_endpoint(
     limit: int = 60,
     compact: bool = True,
     project_id: str | None = None,
+    surface: str | None = None,
     authorization: str = Header(default=""),
 ):
     user_id = _require_veyra_user_if_enabled(request, authorization)
-    return _run_v3_handler(v3_route_handlers.get_project_outputs, limit, user_id, compact, project_id)
+    return _run_v3_handler(v3_route_handlers.get_project_outputs, limit, user_id, compact, project_id, surface)
 
 
 @app.post("/api/v3/creative-agent/projects")
@@ -1165,9 +1166,16 @@ async def v3_create_project_endpoint(request: Request, authorization: str = Head
 
 
 @app.get("/api/v3/creative-agent/projects/{project_id}")
-def v3_get_project_endpoint(project_id: str, request: Request, authorization: str = Header(default="")):
+def v3_get_project_endpoint(
+    project_id: str,
+    request: Request,
+    view: str = "full",
+    authorization: str = Header(default=""),
+):
     user_id = _require_v3_project_visible(request, project_id, authorization)
-    response = _run_v3_handler(v3_route_handlers.get_project, project_id, user_id)
+    response = _run_v3_handler(v3_route_handlers.get_project, project_id, user_id, view)
+    if str(view or "").strip().lower() == "summary":
+        return response
     project = response.get("project") if isinstance(response, dict) else None
     job_ids = project.get("job_ids") if isinstance(project, dict) else None
     job_id = str(job_ids[-1] or "").strip() if isinstance(job_ids, list) and job_ids else ""

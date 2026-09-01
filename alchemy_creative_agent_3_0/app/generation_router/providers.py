@@ -1468,20 +1468,41 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     self._generate_with_app_provider(provider_name, app_request),
                     timeout_seconds=timeout_seconds,
                 )
-                attempts.append({"attempt": attempt, "status": "succeeded"})
+                transport_audit = self._provider_result_transport_audit(result)
+                if transport_audit is None:
+                    success_attempts = [{"attempt": attempt, "status": "succeeded"}]
+                    success_fresh_requests = attempt
+                    success_max_attempts = max_attempts
+                    success_execution_audit = execution_audit
+                else:
+                    success_attempts = list(transport_audit["attempts"])
+                    success_fresh_requests = max(
+                        1,
+                        int(transport_audit.get("fresh_upstream_requests") or 0),
+                    )
+                    success_max_attempts = max(
+                        1,
+                        int(transport_audit.get("max_attempts") or max_attempts),
+                    )
+                    success_execution_audit = {
+                        **execution_audit,
+                        "transport_retry_owner": transport_audit["owner"],
+                        "transport_max_attempts": success_max_attempts,
+                    }
+                attempts.extend(success_attempts)
                 self._last_provider_failure_retry_summary = {
-                    "executed_count": max(0, attempt - 1),
-                    "max_attempts": max_attempts,
-                    "fresh_upstream_requests": attempt,
+                    "executed_count": max(0, success_fresh_requests - 1),
+                    "max_attempts": success_max_attempts,
+                    "fresh_upstream_requests": success_fresh_requests,
                     "final_status": "succeeded",
                     "attempts": attempts,
                     "reference_asset_count": len(reference_assets),
                     "provider_prompt_chars": provider_prompt_chars,
-                    "execution_audit": execution_audit,
+                    "execution_audit": success_execution_audit,
                     "reference_input_execution": {
                         **reference_input_execution,
                         "operation_outcome": "pixels_received",
-                        "outer_request_count": attempt,
+                        "outer_request_count": success_fresh_requests,
                         "failure_code": None,
                         "failure_retry_link": "provider_failure_retry",
                         "safe_message": "Image pixels were received from the provider.",
@@ -1490,9 +1511,17 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 return result
             except BaseException as exc:
                 last_error = exc
-                classification = self._classify_provider_failure(exc)
+                transport_terminal = self._provider_transport_terminal(exc)
+                classification = (
+                    "non_retryable_provider_failure"
+                    if transport_terminal
+                    else self._classify_provider_failure(exc)
+                )
                 failure_code = self._provider_failure_code(exc, reference_assets=reference_assets)
-                retryable = classification in {"retryable_provider_failure", "unknown_retryable_failure"}
+                retryable = (
+                    not transport_terminal
+                    and classification in {"retryable_provider_failure", "unknown_retryable_failure"}
+                )
                 attempts.append(
                     {
                         "attempt": attempt,
@@ -1654,7 +1683,111 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 upstream_error[key] = value
         if upstream_error:
             result["upstream_error"] = upstream_error
+        transport_outcome = detail.get("transport_outcome")
+        if isinstance(transport_outcome, dict):
+            allowed = {
+                "schema_version",
+                "phase",
+                "output_index",
+                "attempt",
+                "status",
+                "request_state",
+                "retryability",
+                "failure_code",
+                "status_code",
+                "retry_after_seconds",
+                "elapsed_ms",
+                "fresh_upstream_request",
+                "explicit_failure",
+                "acceptance_unknown",
+            }
+            result["transport_outcome"] = {
+                key: value
+                for key, value in transport_outcome.items()
+                if key in allowed
+                and isinstance(value, (str, int, float, bool, type(None)))
+            }
+        owner = str(detail.get("transport_retry_owner") or "").strip()
+        if owner and len(owner) <= 80 and all(
+            character.isalnum() or character in {"_", "-", "."}
+            for character in owner
+        ):
+            result["transport_retry_owner"] = owner
+        for key in ("transport_retry_terminal", "transport_retry_exhausted"):
+            if isinstance(detail.get(key), bool):
+                result[key] = detail[key]
         return result
+
+    @staticmethod
+    def _provider_result_transport_audit(result: Any) -> dict[str, Any] | None:
+        raw_summary = getattr(result, "raw_response_summary", None)
+        if not isinstance(raw_summary, dict):
+            return None
+        raw = raw_summary.get("transport_retry")
+        if not isinstance(raw, dict):
+            return None
+        if raw.get("schema_version") != "v3_provider_transport_retry_v1":
+            return None
+        owner = str(raw.get("owner") or "").strip()
+        if not owner or len(owner) > 80 or not all(
+            character.isalnum() or character in {"_", "-", "."}
+            for character in owner
+        ):
+            return None
+        attempts: list[dict[str, Any]] = []
+        allowed = {
+            "schema_version",
+            "phase",
+            "output_index",
+            "attempt",
+            "status",
+            "request_state",
+            "retryability",
+            "failure_code",
+            "status_code",
+            "retry_after_seconds",
+            "elapsed_ms",
+            "fresh_upstream_request",
+            "explicit_failure",
+            "acceptance_unknown",
+        }
+        for item in raw.get("attempts", []):
+            if not isinstance(item, dict):
+                continue
+            attempts.append(
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key in allowed
+                    and isinstance(value, (str, int, float, bool, type(None)))
+                }
+            )
+        try:
+            max_attempts = max(1, int(raw.get("max_attempts") or 0))
+            fresh_requests = max(0, int(raw.get("fresh_upstream_requests") or 0))
+        except (TypeError, ValueError):
+            return None
+        if not attempts and fresh_requests == 0:
+            return None
+        return {
+            "owner": owner,
+            "max_attempts": max_attempts,
+            "fresh_upstream_requests": fresh_requests,
+            "attempts": attempts,
+        }
+
+    @staticmethod
+    def _provider_transport_terminal(exc: BaseException) -> bool:
+        detail = getattr(exc, "detail", None)
+        if not isinstance(detail, dict):
+            return False
+        if detail.get("transport_retry_terminal") is True:
+            return True
+        outcome = detail.get("transport_outcome")
+        return isinstance(outcome, dict) and (
+            outcome.get("request_state") == "accepted_unknown"
+            and outcome.get("retryability") == "status_required"
+        )
 
     def _app_request_prompt_chars(self, app_request) -> int:
         prompt_plan = getattr(app_request, "prompt_plan", None)
@@ -1685,6 +1818,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
     def _classify_provider_failure(self, exc: BaseException) -> str:
         if isinstance(exc, ReferenceInputAdmissionError):
             return REFERENCE_INPUT_CONTRACT_FAILURE_CLASSIFICATION
+        if self._provider_transport_terminal(exc):
+            return "non_retryable_provider_failure"
         code = str(getattr(exc, "code", "") or "").lower()
         detail = getattr(exc, "detail", None)
         declared_failure_code = ""
@@ -3570,16 +3705,16 @@ class ProductionImageGenerationProvider(GenerationProvider):
         if maximum is None or len(assets) <= maximum:
             return {"assets": assets, "audit": None}
         if maximum != 1:
-            return {
-                "assets": assets,
-                "audit": {
-                    "schema_version": "v3_provider_reference_capacity_adaptation_v1",
-                    "applied": False,
-                    "reason": "multiple_logical_sources_or_route_capability",
+            raise ReferenceInputAdmissionError(
+                "The configured image route cannot accept all declared reference images; no reference may be silently omitted.",
+                provider=self.provider_name,
+                detail={
+                    "reference_input_failure_code": "reference_input_capability_mismatch",
+                    "reference_count": len(assets),
                     "maximum_reference_images": maximum,
                     "materialized_reference_count": len(assets),
                 },
-            }
+            )
 
         source_ids = {
             str(item.get("source_asset_id") or item.get("asset_id") or "").strip()

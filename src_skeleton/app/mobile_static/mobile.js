@@ -5340,7 +5340,131 @@ function mobileV3ProjectDetailRequestIsCurrent(projectId, detailEpoch, shouldCon
   );
 }
 
-async function refreshMobileV3ProjectDetail(projectId, { detailEpoch = null, shouldContinue = null } = {}) {
+function mobileV3ProjectPreviewImages() {
+  const grid = document.querySelector("#mobileV3OutputGrid");
+  if (!grid) return [];
+  return Array.from(grid.querySelectorAll("img[data-mobile-v3-project-first-preview='true']"));
+}
+
+function mobileV3RequestWithTimeout(path, timeoutMs = 6000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("项目首屏读取超时"));
+    }, timeoutMs);
+    mobileV3Request(path).then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function waitForMobileV3FirstProjectPreviewImage({ projectId = "", detailEpoch = null, timeoutMs = 8000 } = {}) {
+  if (!mobileV3ProjectDetailRequestIsCurrent(projectId, detailEpoch)) return Promise.resolve(false);
+  const images = mobileV3ProjectPreviewImages();
+  if (!images.length || images.some(mobileV3ImageLoaded)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const cleanup = [];
+    let finished = false;
+    const finish = (loaded) => {
+      if (finished) return;
+      finished = true;
+      cleanup.forEach((release) => release());
+      window.clearTimeout(timeout);
+      resolve(loaded);
+    };
+    const check = () => {
+      if (!mobileV3ProjectDetailRequestIsCurrent(projectId, detailEpoch)) return finish(false);
+      if (images.some(mobileV3ImageLoaded)) return finish(true);
+      if (images.every((image) => image.complete)) finish(false);
+    };
+    const timeout = window.setTimeout(() => finish(false), timeoutMs);
+    images.forEach((image) => {
+      const onLoad = () => check();
+      const onError = () => window.setTimeout(check, 0);
+      image.addEventListener("load", onLoad);
+      image.addEventListener("error", onError);
+      cleanup.push(() => image.removeEventListener("load", onLoad));
+      cleanup.push(() => image.removeEventListener("error", onError));
+    });
+    check();
+  });
+}
+
+async function refreshMobileV3ProjectDetail(projectId, options = {}) {
+  const detailEpoch = options?.detailEpoch;
+  const shouldContinue = options?.shouldContinue || null;
+  if (!Number.isInteger(detailEpoch)) {
+    return syncMobileV3ProjectDetailFull(projectId, options);
+  }
+  const requestedProjectId = String(projectId || "").trim();
+  if (!requestedProjectId || !mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) return false;
+  const [projectResult, previewResult] = await Promise.allSettled([
+    mobileV3RequestWithTimeout(`/projects/${encodeURIComponent(requestedProjectId)}?view=summary`),
+    mobileV3RequestWithTimeout(`/project-outputs?limit=1&compact=true&project_id=${encodeURIComponent(requestedProjectId)}&surface=delivery_preview`),
+  ]);
+  if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) return false;
+  if (projectResult.status !== "fulfilled") throw projectResult.reason;
+  const projectPayload = projectResult.value;
+  const project = mobileV3ProjectWithResponseMetadata(
+    projectPayload.project || projectPayload,
+    projectPayload,
+  );
+  if (String(project?.project_id || "") !== requestedProjectId) return false;
+  if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) return false;
+  const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
+  if (!templateId) throw new Error("项目类型还没有确认，无法安全继续生成");
+  mobileV3State.currentProject = project;
+  mobileV3State.selectedTemplate = templateId;
+  const previewPayload = previewResult.status === "fulfilled" ? previewResult.value : null;
+  const previewItems = Array.isArray(previewPayload?.items) ? previewPayload.items : [];
+  mobileV3MergeProjectOutputs(requestedProjectId, previewItems, []);
+  mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== requestedProjectId)];
+  persistMobileV3Caches();
+  if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) return false;
+  renderMobileV3ProjectCards();
+  renderMobileV3ProjectMeta(project);
+  renderMobileV3ProjectSnapshot(project);
+  renderMobileV3ProjectCurrentOperation(project);
+  renderMobileV3ProjectOutputs(project);
+  renderMobileV3PhotographyRoleBoard(mobileV3State.currentJob, project);
+  renderMobileV3ReferenceBoard(project);
+  renderMobileV3Timeline([]);
+  updateMobileV3ReferencePriorityStatus();
+  updateMobileV3ControlState();
+  syncMobileV3PromptFromProject(project, { force: true });
+  await waitForMobileV3FirstProjectPreviewImage({
+    projectId: requestedProjectId,
+    detailEpoch,
+    timeoutMs: 8000,
+  });
+  if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) return false;
+  setMobileV3LoadingLayer(false);
+  updateMobileV3Status("项目已打开，正在后台同步完整记录。");
+  void syncMobileV3ProjectDetailFull(requestedProjectId, {
+    detailEpoch,
+    shouldContinue,
+  }).catch((error) => {
+    if (mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, detailEpoch, shouldContinue)) {
+      updateMobileV3Status(`项目记录后台同步失败：${friendlyError(error)}`);
+    }
+  });
+  return true;
+}
+
+async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, shouldContinue = null } = {}) {
   const requestedProjectId = String(projectId || "").trim();
   const requestEpoch = Number.isInteger(detailEpoch) ? detailEpoch : mobileV3InvalidateProjectDetail();
   if (!requestedProjectId || !mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
@@ -5486,7 +5610,7 @@ function renderMobileV3ProjectOutputs(project = mobileV3State.currentProject) {
     card.className = "v3-mobile-output-card";
     card.innerHTML = `
       <button class="v3-mobile-output-preview" type="button" data-mobile-v3-gallery-preview="${escapeHtml(mobileV3OutputId(item))}">
-        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="项目图片 ${index + 1}" loading="lazy" decoding="async" />` : `<span>图片</span>`}
+        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="项目图片 ${index + 1}" loading="${index === 0 ? "eager" : "lazy"}" decoding="async" ${index === 0 ? "fetchpriority=\"high\" data-mobile-v3-project-first-preview=\"true\"" : ""} />` : `<span>图片</span>`}
       </button>
       <div class="v3-mobile-output-copy">
         <strong>项目图片 ${index + 1}</strong>

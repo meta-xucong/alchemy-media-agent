@@ -7,7 +7,10 @@ or delivery implementation.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+from playwright.sync_api import sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +18,10 @@ APP_JS = ROOT / "src_skeleton" / "app" / "static" / "app.js"
 INDEX_HTML = ROOT / "src_skeleton" / "app" / "static" / "index.html"
 MOBILE_JS = ROOT / "src_skeleton" / "app" / "mobile_static" / "mobile.js"
 MOBILE_HTML = ROOT / "src_skeleton" / "app" / "mobile_static" / "index.html"
+
+
+def _inline_shell(path: Path) -> str:
+    return re.sub(r"<script\b[^>]*\bsrc=[^>]*></script>", "", path.read_text(encoding="utf-8"), flags=re.IGNORECASE)
 
 
 def _section(source: str, start: str, end: str) -> str:
@@ -137,6 +144,62 @@ def test_e23_continuation_selection_does_not_promote_raw_job_candidates_to_deliv
     assert "const visibleItems = [...rawItems, ...persistedItems]" not in board
 
 
+def test_e23_v3_progress_surface_hides_empty_notice_and_uses_compact_stages() -> None:
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    script = APP_JS.read_text(encoding="utf-8")
+    styles = (ROOT / "src_skeleton" / "app" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="v3NoticeBar" class="notice-bar v3-inline-notice"' in html
+    assert 'id="v3SummaryFootnote" class="micro-copy v3-progress-footnote" hidden' in html
+    assert "const normalizedMessage = String(message || \"\").trim();" in script
+    assert "els.v3NoticeBar.hidden = !normalizedMessage;" in script
+    assert "uniqueNonEmpty(entries).slice(0, 4)" in script
+    assert ".v3-progress-steps .run-progress-step::before" in styles
+    assert ".v3-inline-notice[hidden]" in styles
+
+
+def test_e23_v3_progress_surface_projects_live_dom_state_without_empty_bar() -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.set_content(_inline_shell(INDEX_HTML))
+            page.add_style_tag(content=(ROOT / "src_skeleton" / "app" / "static" / "styles.css").read_text(encoding="utf-8"))
+            page.add_script_tag(content=APP_JS.read_text(encoding="utf-8"))
+            result = page.evaluate(
+                """
+                () => {
+                  v3State.loading = true;
+                  v3State.progressStageKey = "planning";
+                  v3State.progressStartedAt = Date.now();
+                  renderV3OutcomeItems(["理解需求", "整理画面方向", "参考图片", "检查结果", "不应显示"]);
+                  const stages = Array.from(document.querySelectorAll("#v3CapabilityList .run-progress-step"));
+                  const before = {
+                    noticeHidden: document.querySelector("#v3NoticeBar").hidden,
+                    stageCount: stages.length,
+                    stageDisplay: getComputedStyle(stages[0]).display,
+                    stageBorder: getComputedStyle(stages[0]).borderTopWidth,
+                  };
+                  updateV3Notice("", "error");
+                  before.emptyNoticeHidden = document.querySelector("#v3NoticeBar").hidden;
+                  updateV3Notice("连接异常，请稍后重试。", "error");
+                  before.errorNoticeVisible = !document.querySelector("#v3NoticeBar").hidden;
+                  return before;
+                }
+                """
+            )
+            assert result == {
+                "noticeHidden": True,
+                "stageCount": 4,
+                "stageDisplay": "grid",
+                "stageBorder": "0px",
+                "emptyNoticeHidden": True,
+                "errorNoticeVisible": True,
+            }
+        finally:
+            browser.close()
+
+
 def test_v3_project_opening_without_current_job_keeps_result_board_renderable() -> None:
     script = APP_JS.read_text(encoding="utf-8")
     current_items = _section(script, "function v3CurrentJobImageItems", "function v3ReviewCertification")
@@ -165,7 +228,7 @@ def test_e23_next_actions_restore_human_recovery_for_blocked_held_and_completed_
     actions = _section(script, "function renderV3ProjectNextActions()", "function renderV3BrandMemoryPanel()")
 
     assert 'els.v3ProjectNextActions.hidden = false;' in actions
-    assert "v3ProjectCurrentOperation(project)" in actions
+    assert "v3EcommerceCurrentOperation(project, job)" in actions
     assert "operation?.state === \"failed_no_delivery\"" in actions
     assert '"edit_ecommerce_details"' in actions
     assert '"upload_reference_continue"' in actions

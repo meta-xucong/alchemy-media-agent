@@ -167,7 +167,7 @@ class Settings(BaseModel):
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "deepseek")
     default_llm_model: str = os.getenv(
         "DEFAULT_LLM_MODEL",
-        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro-260425")),
+        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro")),
     )
     backup_llm_provider: str = os.getenv("BACKUP_LLM_PROVIDER", "openai")
     backup_llm_model: str = os.getenv(
@@ -178,7 +178,7 @@ class Settings(BaseModel):
     kimi_llm_model: str = os.getenv("KIMI_LLM_MODEL", "kimi-for-coding")
     deepseek_llm_model: str = os.getenv(
         "DEEPSEEK_LLM_MODEL",
-        os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro-260425"),
+        os.getenv("V2_CLAUDE_ORCHESTRATOR_MODEL", "deepseek-v4-pro"),
     )
     deepseek_llm_base_url: str | None = (
         os.getenv("DEEPSEEK_LLM_BASE_URL")
@@ -199,7 +199,7 @@ class Settings(BaseModel):
     lab_llm_provider: str = os.getenv("LAB_LLM_PROVIDER", os.getenv("DEFAULT_LLM_PROVIDER", "deepseek"))
     lab_llm_model: str = os.getenv(
         "LAB_LLM_MODEL",
-        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "deepseek-v4-pro-260425")),
+        os.getenv("DEEPSEEK_LLM_MODEL", os.getenv("DEFAULT_LLM_MODEL", "deepseek-v4-pro")),
     )
     lab_openai_api_key: str | None = os.getenv("LAB_OPENAI_API_KEY") or os.getenv("V2_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or _codex_auth_value("OPENAI_API_KEY")
     lab_openai_base_url: str | None = _normalize_openai_base_url(os.getenv("LAB_OPENAI_BASE_URL") or os.getenv("V2_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE"))

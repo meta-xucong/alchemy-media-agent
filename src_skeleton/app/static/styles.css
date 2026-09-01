@@ -8892,7 +8892,109 @@ body.v3-page-loading-active {
 }
 
 .v3-progress-steps {
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.v3-progress-steps .run-progress-step {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.v3-progress-steps .run-progress-step::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: rgba(116, 130, 105, 0.35);
+}
+
+.v3-progress-steps .run-progress-step.done {
+  color: var(--green);
+  background: transparent;
+}
+
+.v3-progress-steps .run-progress-step.done::before {
+  background: var(--green);
+}
+
+.v3-progress-steps .run-progress-step.active {
+  color: var(--blue);
+  background: transparent;
+}
+
+.v3-progress-steps .run-progress-step.active::before {
+  background: var(--blue);
+  box-shadow: 0 0 0 3px rgba(34, 93, 168, 0.1);
+}
+
+.v3-progress-steps .run-progress-step.failed {
+  color: var(--red);
+  background: transparent;
+}
+
+.v3-progress-steps .run-progress-step.failed::before {
+  background: var(--red);
+}
+
+.v3-progress-footnote[hidden],
+.v3-inline-notice[hidden] {
+  display: none !important;
+}
+
+.v3-inline-notice {
+  min-height: 0;
+  display: block;
+  margin-top: 8px;
+  padding: 7px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.v3-inline-notice.success {
+  border-color: transparent;
+  color: var(--green);
+  background: transparent;
+}
+
+.v3-inline-notice.warning,
+.v3-inline-notice.error {
+  padding: 8px 10px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+}
+
+.v3-inline-notice.warning {
+  border-color: rgba(154, 117, 53, 0.24);
+  color: var(--brass);
+  background: rgba(154, 117, 53, 0.08);
+}
+
+.v3-inline-notice.error {
+  border-color: rgba(184, 51, 51, 0.2);
+  color: var(--red);
+  background: rgba(184, 51, 51, 0.07);
 }
 
 .v3-artifact-details {

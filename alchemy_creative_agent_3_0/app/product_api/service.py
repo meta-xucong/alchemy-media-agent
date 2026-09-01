@@ -587,11 +587,13 @@ V3_FAILED_ARTIFACT_STATUSES = frozenset(
 
 
 def _failure_artifact_expiry(record: "ProductJobRecord") -> str | None:
-    if record.status not in V3_FAILED_ARTIFACT_STATUSES:
+    # Some legacy/read-only adapters expose only the fields needed for their
+    # projection. They are not failure artifacts and must remain readable.
+    if getattr(record, "status", None) not in V3_FAILED_ARTIFACT_STATUSES:
         return None
     try:
-        updated_at = datetime.fromisoformat(str(record.updated_at).replace("Z", "+00:00"))
-    except ValueError:
+        updated_at = datetime.fromisoformat(str(getattr(record, "updated_at", "")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
         return None
     if updated_at.tzinfo is None:
         updated_at = updated_at.replace(tzinfo=timezone.utc)

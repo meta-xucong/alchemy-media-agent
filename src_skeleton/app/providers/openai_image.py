@@ -48,6 +48,8 @@ class _CrossLoopAsyncLock:
 
 _openai_image_generation_lock = _CrossLoopAsyncLock()
 _GATEWAY_MANAGED_FAILOVER_MINIMUM_TIMEOUT_SECONDS = 660.0
+_TRANSPORT_RETRY_SCHEMA_VERSION = "v3_provider_transport_retry_v1"
+_OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS = 3
 
 
 class _ImageEditCapabilityCache:
@@ -199,6 +201,7 @@ _openai_image_rate_limiter = _OpenAIImageRateLimiter()
 
 class OpenAIGPTImageProvider:
     name = "openai_gpt_image"
+    transport_retry_owner = "openai_image_provider"
     _STANDARD_TRANSPORT_PROFILE = "openai_standard"
     _GENERATION_ONLY_SQUARE_B64_TRANSPORT_PROFILE = "generation_only_square_b64"
     _SQUARE_B64_REFERENCE_EDIT_TRANSPORT_PROFILE = "square_b64_reference_edit"
@@ -206,6 +209,8 @@ class OpenAIGPTImageProvider:
 
     def __init__(self, model: str | None = None):
         self.model = model
+        self._transport_attempt_history: list[dict[str, object]] = []
+        self._transport_max_attempts = _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
 
     async def capabilities(self) -> ProviderCapabilities:
         configured = bool(settings.openai_api_key)
@@ -346,6 +351,10 @@ class OpenAIGPTImageProvider:
         # The upstream image gateway may enforce account-level concurrency. Keep
         # image requests serialized in this process so the UI waits in a local
         # queue instead of immediately tripping a provider-side 429.
+        self._transport_attempt_history = []
+        self._transport_max_attempts = (
+            1 if self._uses_gateway_managed_failover() else _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
+        )
         try:
             async with _openai_image_generation_lock:
                 for index in range(output_count):
@@ -377,20 +386,41 @@ class OpenAIGPTImageProvider:
                 "gateway_managed_failover": self._uses_gateway_managed_failover(),
                 "sdk_max_retries": self._sdk_max_retries(),
                 "client_timeout_seconds": self._client_timeout_seconds(image_edit=bool(reference_paths), plan=plan),
+                "transport_retry": self._transport_retry_summary(),
             },
         )
 
     async def _generate_one(self, client, prompt: str, plan, *, index: int) -> list[dict]:
-        max_attempts = 1 if self._uses_gateway_managed_failover() else 6
+        max_attempts = (
+            1
+            if self._uses_gateway_managed_failover()
+            else _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
+        )
+        self._transport_max_attempts = max(self._transport_max_attempts, max_attempts)
+        operation_timeout = self._client_timeout_seconds(image_edit=False, plan=plan)
+        operation_deadline = time.monotonic() + operation_timeout
         last_error: Exception | None = None
+        success_attempt = 0
+        success_started_at = time.monotonic()
+        success_request_started = False
         for attempt in range(1, max_attempts + 1):
+            attempt_started_at = time.monotonic()
+            request_started = False
+            rate_guard = None
             try:
+                remaining_timeout = operation_deadline - time.monotonic()
+                if remaining_timeout <= 0:
+                    raise TimeoutError(f"OpenAI image generation operation exceeded {operation_timeout:.1f}s")
                 rate_guard = await _openai_image_rate_limiter.acquire(
                     output_units=1,
                     model=self._model(),
                     operation="generate",
                 )
+                remaining_timeout = operation_deadline - time.monotonic()
+                if remaining_timeout <= 0:
+                    raise TimeoutError(f"OpenAI image generation operation exceeded {operation_timeout:.1f}s")
                 kwargs = self._image_kwargs(plan)
+                request_started = True
                 response = await self._call_with_timeout(
                     client.images.generate(
                         model=self._model(),
@@ -400,7 +430,11 @@ class OpenAIGPTImageProvider:
                     ),
                     image_edit=False,
                     plan=plan,
+                    timeout_seconds=max(0.1, remaining_timeout),
                 )
+                success_attempt = attempt
+                success_started_at = attempt_started_at
+                success_request_started = request_started
                 break
             except ProviderRateLimitError:
                 raise
@@ -425,10 +459,38 @@ class OpenAIGPTImageProvider:
                             "retry_after_seconds": cooldown,
                             "upstream_retry_after_seconds": retry_after,
                             "local_rate_guard": rate_guard,
+                            **self._transport_terminal_fields(
+                                self._record_transport_attempt(
+                                    exc=exc,
+                                    image_edit=False,
+                                    output_index=index,
+                                    attempt=attempt,
+                                    attempt_started_at=attempt_started_at,
+                                    request_started=request_started,
+                                    retryable=False,
+                                    terminal=True,
+                                )
+                            ),
                         },
                     ) from exc
-                retryable = self._is_retryable_error(exc)
-                if attempt >= max_attempts or not retryable:
+                operation_timeout_exhausted = (
+                    isinstance(exc, (asyncio.TimeoutError, TimeoutError))
+                    and time.monotonic() >= operation_deadline
+                )
+                retryable = self._is_retryable_error(exc) and not operation_timeout_exhausted
+                terminal = attempt >= max_attempts or not retryable or operation_timeout_exhausted
+                outcome = self._record_transport_attempt(
+                    exc=exc,
+                    image_edit=False,
+                    output_index=index,
+                    attempt=attempt,
+                    attempt_started_at=attempt_started_at,
+                    request_started=request_started,
+                    retryable=retryable,
+                    terminal=terminal,
+                    operation_timeout_exhausted=operation_timeout_exhausted,
+                )
+                if terminal:
                     error_cls = ProviderRateLimitError if self._is_concurrency_limit_error(exc) else ProviderRuntimeError
                     raise error_cls(
                         "OpenAI image generation failed.",
@@ -439,9 +501,12 @@ class OpenAIGPTImageProvider:
                             "request_index": index,
                             "attempts": attempt,
                             "retryable": retryable,
+                            "operation_timeout_exhausted": operation_timeout_exhausted,
+                            "operation_timeout_seconds": operation_timeout,
                             "runtime_transport": self._runtime_transport_summary(image_edit=False, plan=plan),
                             "upstream_concurrency_limited": self._is_concurrency_limit_error(exc),
                             "upstream_image_quota_limited": self._is_image_quota_limit_error(exc),
+                            **self._transport_terminal_fields(outcome),
                             **self._upstream_error_evidence(exc),
                         },
                     ) from exc
@@ -452,7 +517,48 @@ class OpenAIGPTImageProvider:
                 provider=self.name,
                 detail={"error_type": type(last_error).__name__, "message": str(last_error), "request_index": index},
             )
-        return self._outputs_from_response(response, plan, request_index=index)
+        try:
+            outputs = self._outputs_from_response(response, plan, request_index=index)
+        except ProviderRuntimeError as exc:
+            outcome = self._record_transport_attempt(
+                exc=exc,
+                image_edit=False,
+                output_index=index,
+                attempt=success_attempt,
+                attempt_started_at=success_started_at,
+                request_started=success_request_started,
+                retryable=False,
+                terminal=True,
+            )
+            detail = dict(getattr(exc, "detail", {}) or {})
+            detail.update(self._transport_terminal_fields(outcome))
+            raise ProviderRuntimeError(str(exc), provider=self.name, detail=detail) from exc
+        if not outputs:
+            self._record_transport_attempt(
+                exc=None,
+                image_edit=False,
+                output_index=index,
+                attempt=success_attempt,
+                attempt_started_at=success_started_at,
+                request_started=success_request_started,
+                retryable=False,
+                terminal=True,
+                failure_code="empty_provider_output",
+                request_state="terminal_failed",
+            )
+        else:
+            self._record_transport_attempt(
+                exc=None,
+                image_edit=False,
+                output_index=index,
+                attempt=success_attempt,
+                attempt_started_at=success_started_at,
+                request_started=success_request_started,
+                retryable=False,
+                terminal=False,
+                status="succeeded",
+            )
+        return outputs
 
     async def _generate_one_with_references(
         self,
@@ -465,7 +571,12 @@ class OpenAIGPTImageProvider:
         mask_path=None,
     ) -> list[dict]:
         gateway_managed_failover = self._uses_gateway_managed_failover()
-        max_attempts = 1 if gateway_managed_failover else 6
+        max_attempts = (
+            1
+            if gateway_managed_failover
+            else _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
+        )
+        self._transport_max_attempts = max(self._transport_max_attempts, max_attempts)
         fidelity_compatibility_replay_used = False
         last_error: Exception | None = None
         transient_retry_count = 0
@@ -507,9 +618,13 @@ class OpenAIGPTImageProvider:
         # input-fidelity capability negotiation below.  A ``while`` loop keeps
         # that one replay observable; ``range`` would snapshot the old bound.
         attempt = 0
+        success_started_at = time.monotonic()
+        success_request_started = False
         while attempt < max_attempts:
             attempt += 1
+            attempt_started_at = time.monotonic()
             rate_guard = None
+            request_started = False
             try:
                 remaining_timeout = operation_deadline - time.monotonic()
                 if remaining_timeout <= 0:
@@ -533,6 +648,7 @@ class OpenAIGPTImageProvider:
                         kwargs["input_fidelity"] = transport_fidelity
                     if mask_path is not None:
                         kwargs["mask"] = stack.enter_context(mask_path.open("rb"))
+                    request_started = True
                     response = await self._call_with_timeout(
                         client.images.edit(
                             model=self._model(),
@@ -546,6 +662,8 @@ class OpenAIGPTImageProvider:
                         timeout_seconds=max(0.1, remaining_timeout),
                     )
                 _openai_image_rate_limiter.note_image_edit_success()
+                success_started_at = attempt_started_at
+                success_request_started = request_started
                 break
             except ProviderRateLimitError:
                 raise
@@ -579,9 +697,22 @@ class OpenAIGPTImageProvider:
                     # It never opens generic 4xx/5xx/network retries.
                     if gateway_managed_failover and not fidelity_compatibility_replay_used:
                         max_attempts += 1
+                        self._transport_max_attempts = max(self._transport_max_attempts, max_attempts)
                         fidelity_compatibility_replay_used = True
                     transport_fidelity = None
                     applied_fidelity = None
+                    self._record_transport_attempt(
+                        exc=exc,
+                        image_edit=True,
+                        output_index=index,
+                        attempt=attempt,
+                        attempt_started_at=attempt_started_at,
+                        request_started=request_started,
+                        retryable=True,
+                        terminal=False,
+                        failure_code="input_fidelity_unsupported",
+                        request_state="terminal_failed",
+                    )
                     continue
                 if self._is_image_quota_limit_error(exc):
                     retry_after = self._retry_after_seconds_from_exception(exc)
@@ -603,12 +734,36 @@ class OpenAIGPTImageProvider:
                             "upstream_retry_after_seconds": retry_after,
                             "local_rate_guard": rate_guard,
                             "reference_image_count": len(reference_paths),
+                            **self._transport_terminal_fields(
+                                self._record_transport_attempt(
+                                    exc=exc,
+                                    image_edit=True,
+                                    output_index=index,
+                                    attempt=attempt,
+                                    attempt_started_at=attempt_started_at,
+                                    request_started=request_started,
+                                    retryable=False,
+                                    terminal=True,
+                                )
+                            ),
                         },
                     ) from exc
                 transient_image_edit = self._is_transient_image_edit_error(exc)
                 operation_timeout_exhausted = isinstance(exc, (asyncio.TimeoutError, TimeoutError)) and time.monotonic() >= operation_deadline
                 retryable = (self._is_retryable_error(exc) or transient_image_edit) and not operation_timeout_exhausted
-                if attempt >= max_attempts or not retryable:
+                terminal = attempt >= max_attempts or not retryable or operation_timeout_exhausted
+                outcome = self._record_transport_attempt(
+                    exc=exc,
+                    image_edit=True,
+                    output_index=index,
+                    attempt=attempt,
+                    attempt_started_at=attempt_started_at,
+                    request_started=request_started,
+                    retryable=retryable,
+                    terminal=terminal,
+                    operation_timeout_exhausted=operation_timeout_exhausted,
+                )
+                if terminal:
                     error_cls = ProviderRateLimitError if self._is_concurrency_limit_error(exc) else ProviderRuntimeError
                     raise error_cls(
                         "OpenAI image reference generation failed.",
@@ -628,6 +783,7 @@ class OpenAIGPTImageProvider:
                             "upstream_image_quota_limited": self._is_image_quota_limit_error(exc),
                             "status_code": self._status_code_from_exception(exc),
                             "gateway_base_url": self._is_openai_compatible_gateway(),
+                            **self._transport_terminal_fields(outcome),
                             **self._upstream_error_evidence(exc),
                         },
                     ) from exc
@@ -656,7 +812,47 @@ class OpenAIGPTImageProvider:
         else:
             support_state, cached_reason = _image_edit_capability_cache.state(capability_key)
             fidelity_fallback_reason = fidelity_fallback_reason or cached_reason
-        outputs = self._outputs_from_response(response, plan, request_index=index)
+        try:
+            outputs = self._outputs_from_response(response, plan, request_index=index)
+        except ProviderRuntimeError as exc:
+            outcome = self._record_transport_attempt(
+                exc=exc,
+                image_edit=True,
+                output_index=index,
+                attempt=attempt,
+                attempt_started_at=success_started_at,
+                request_started=success_request_started,
+                retryable=False,
+                terminal=True,
+            )
+            detail = dict(getattr(exc, "detail", {}) or {})
+            detail.update(self._transport_terminal_fields(outcome))
+            raise ProviderRuntimeError(str(exc), provider=self.name, detail=detail) from exc
+        if not outputs:
+            self._record_transport_attempt(
+                exc=None,
+                image_edit=True,
+                output_index=index,
+                attempt=attempt,
+                attempt_started_at=success_started_at,
+                request_started=success_request_started,
+                retryable=False,
+                terminal=True,
+                failure_code="empty_provider_output",
+                request_state="terminal_failed",
+            )
+        else:
+            self._record_transport_attempt(
+                exc=None,
+                image_edit=True,
+                output_index=index,
+                attempt=attempt,
+                attempt_started_at=success_started_at,
+                request_started=success_request_started,
+                retryable=False,
+                terminal=False,
+                status="succeeded",
+            )
         for output in outputs:
             output["reference_image_count"] = len(reference_paths)
             output["api_operation"] = "images.edit"
@@ -668,6 +864,159 @@ class OpenAIGPTImageProvider:
             output["input_fidelity_fallback_reason"] = fidelity_fallback_reason
             output["identity_local_repair"] = mask_path is not None
         return outputs
+
+    def _transport_retry_summary(self) -> dict[str, object]:
+        attempts = [dict(item) for item in self._transport_attempt_history]
+        fresh_requests = sum(
+            1 for item in attempts if item.get("fresh_upstream_request") is True
+        )
+        return {
+            "schema_version": _TRANSPORT_RETRY_SCHEMA_VERSION,
+            "owner": self.transport_retry_owner,
+            "max_attempts": max(1, int(self._transport_max_attempts)),
+            "fresh_upstream_requests": fresh_requests,
+            "attempts": attempts,
+        }
+
+    def _record_transport_attempt(
+        self,
+        *,
+        exc: Exception | None,
+        image_edit: bool,
+        output_index: int,
+        attempt: int,
+        attempt_started_at: float,
+        request_started: bool,
+        retryable: bool,
+        terminal: bool,
+        operation_timeout_exhausted: bool = False,
+        status: str = "failed",
+        failure_code: str | None = None,
+        request_state: str | None = None,
+    ) -> dict[str, object]:
+        outcome = self._transport_attempt_outcome(
+            exc=exc,
+            image_edit=image_edit,
+            output_index=output_index,
+            attempt=attempt,
+            attempt_started_at=attempt_started_at,
+            request_started=request_started,
+            retryable=retryable,
+            terminal=terminal,
+            operation_timeout_exhausted=operation_timeout_exhausted,
+            status=status,
+            failure_code=failure_code,
+            request_state=request_state,
+        )
+        self._transport_attempt_history.append(outcome)
+        return outcome
+
+    def _transport_attempt_outcome(
+        self,
+        *,
+        exc: Exception | None,
+        image_edit: bool,
+        output_index: int,
+        attempt: int,
+        attempt_started_at: float,
+        request_started: bool,
+        retryable: bool,
+        terminal: bool,
+        operation_timeout_exhausted: bool,
+        status: str,
+        failure_code: str | None,
+        request_state: str | None,
+    ) -> dict[str, object]:
+        elapsed_ms = max(0.0, round((time.monotonic() - attempt_started_at) * 1000, 3))
+        if status == "succeeded":
+            request_state = "pixels_received"
+            retryability = "never"
+            failure_code = None
+            status_code = None
+            retry_after = None
+        else:
+            request_state = request_state or self._transport_request_state(
+                exc,
+                request_started=request_started,
+            )
+            status_code = self._status_code_from_exception(exc) if exc is not None else None
+            retry_after = self._retry_after_seconds_from_exception(exc) if exc is not None else None
+            if retry_after is not None:
+                retry_after = min(
+                    max(0.0, float(retry_after)),
+                    max(0.0, float(settings.openai_image_max_retry_after_seconds)),
+                )
+            if request_state == "not_started":
+                retryability = "never"
+            elif request_state == "accepted_unknown":
+                retryability = (
+                    "status_required"
+                    if operation_timeout_exhausted or terminal
+                    else "immediate_transient"
+                    if retryable
+                    else "status_required"
+                )
+            elif retryable:
+                retryability = "exhausted" if terminal else "immediate_transient"
+            else:
+                retryability = "never"
+            if not failure_code and exc is not None:
+                evidence = self._upstream_error_evidence(exc)
+                failure_code = str(evidence.get("upstream_code") or "").strip() or None
+            if not failure_code:
+                if operation_timeout_exhausted or isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                    failure_code = "provider_timeout"
+                elif request_state == "accepted_unknown":
+                    failure_code = "provider_transport_ambiguous"
+                elif retryable:
+                    failure_code = "provider_transient"
+                else:
+                    failure_code = "provider_terminal_failure"
+        return {
+            "schema_version": _TRANSPORT_RETRY_SCHEMA_VERSION,
+            "phase": "image_edit" if image_edit else "image_generation",
+            "output_index": max(0, int(output_index)),
+            "attempt": max(0, int(attempt)),
+            "status": status,
+            "request_state": request_state,
+            "retryability": retryability,
+            "failure_code": failure_code,
+            "status_code": status_code,
+            "retry_after_seconds": retry_after,
+            "elapsed_ms": elapsed_ms,
+            "fresh_upstream_request": bool(request_started),
+            "explicit_failure": request_state == "terminal_failed",
+            "acceptance_unknown": request_state == "accepted_unknown",
+        }
+
+    @staticmethod
+    def _transport_request_state(
+        exc: Exception | None,
+        *,
+        request_started: bool,
+    ) -> str:
+        if not request_started:
+            return "not_started"
+        if exc is not None and isinstance(
+            exc,
+            (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException, httpx.TransportError),
+        ):
+            return "accepted_unknown"
+        return "terminal_failed"
+
+    def _transport_terminal_fields(self, outcome: dict[str, object]) -> dict[str, object]:
+        return {
+            "transport_retry_owner": self.transport_retry_owner,
+            "transport_retry_terminal": True,
+            "transport_retry_exhausted": True,
+            "transport_outcome": dict(outcome),
+            "transport_attempts": [dict(item) for item in self._transport_attempt_history],
+            "fresh_upstream_requests": sum(
+                1
+                for item in self._transport_attempt_history
+                if item.get("fresh_upstream_request") is True
+            ),
+        }
 
     def _requested_input_fidelity(self, plan) -> str | None:
         variables = getattr(plan, "variables", None)
@@ -762,6 +1111,10 @@ class OpenAIGPTImageProvider:
             )
         )
         prompt = self._render_prompt(plan)
+        self._transport_attempt_history = []
+        self._transport_max_attempts = (
+            1 if self._uses_gateway_managed_failover() else _OPENAI_DIRECT_TRANSPORT_MAX_ATTEMPTS
+        )
         try:
             async with _openai_image_generation_lock:
                 outputs = await self._generate_one_with_references(client, prompt, plan, [source_path], index=0)
@@ -783,6 +1136,7 @@ class OpenAIGPTImageProvider:
                 "source_job_id": source_job_id,
                 "source_output_format": source_format,
                 "reference_image_count": 1,
+                "transport_retry": self._transport_retry_summary(),
             },
         )
 
@@ -1172,7 +1526,10 @@ class OpenAIGPTImageProvider:
         return {}
 
     def _is_retryable_error(self, exc: Exception) -> bool:
-        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        if isinstance(
+            exc,
+            (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException, httpx.TransportError),
+        ):
             return True
         status_code = self._status_code_from_exception(exc)
         if status_code in {408, 429, 500, 502, 503, 504}:
@@ -1207,7 +1564,10 @@ class OpenAIGPTImageProvider:
         return any(marker in message for marker in retryable_markers)
 
     def _is_transient_image_edit_error(self, exc: Exception) -> bool:
-        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        if isinstance(
+            exc,
+            (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException, httpx.TransportError),
+        ):
             return True
         status_code = self._status_code_from_exception(exc)
         message = str(exc).lower()
@@ -1256,6 +1616,9 @@ class OpenAIGPTImageProvider:
                 return None
         response = getattr(exc, "response", None)
         status_code = getattr(response, "status_code", None)
+        if status_code is None:
+            detail = getattr(exc, "detail", None)
+            status_code = detail.get("status_code") if isinstance(detail, dict) else None
         try:
             return int(status_code) if status_code is not None else None
         except (TypeError, ValueError):
