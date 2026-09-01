@@ -36,15 +36,15 @@ class ExactReviewEvidenceResolver:
         active_specs = specs
         uploaded_ids = _dedupe_strings(getattr(request, "uploaded_asset_ids", []) if request is not None else [])
         uploaded_id_set = set(uploaded_ids)
-        frozen_anchor_source_jobs = self._frozen_anchor_source_jobs(request)
-        frozen_anchor_ids = self._frozen_anchor_ids(request) - set(frozen_anchor_source_jobs)
+        frozen_anchor_bindings = self._frozen_anchor_bindings(request)
+        frozen_anchor_ids = self._frozen_anchor_ids(request) - set(frozen_anchor_bindings)
 
         source_entries = [
             self._resolve_source(
                 spec,
                 uploaded_id_set=uploaded_id_set,
                 frozen_anchor_ids=frozen_anchor_ids,
-                frozen_anchor_source_jobs=frozen_anchor_source_jobs,
+                frozen_anchor_bindings=frozen_anchor_bindings,
                 current_job_id=job_id,
                 request=request,
             )
@@ -200,25 +200,65 @@ class ExactReviewEvidenceResolver:
         }
 
     @staticmethod
-    def _frozen_anchor_source_jobs(request: Any) -> dict[str, str]:
-        """Read only server-owned, canonical output/job bindings from context."""
+    def _frozen_anchor_bindings(request: Any) -> dict[str, dict[str, str]]:
+        """Read server-owned output/job/integrity bindings from context."""
 
         metadata = getattr(request, "metadata", {}) if request is not None else {}
         if not isinstance(metadata, dict):
             return {}
 
-        bindings: dict[str, str] = {}
+        bindings: dict[str, dict[str, str]] = {}
 
-        def register(output_id: str, source_job_id: str) -> None:
+        def register(
+            output_id: str,
+            source_job_id: str,
+            source_integrity_id: str,
+            *,
+            require_integrity: bool,
+            job_invalid: bool,
+            integrity_invalid: bool,
+        ) -> None:
             if not output_id:
                 return
             existing = bindings.get(output_id)
             if existing is None:
-                bindings[output_id] = source_job_id
-            elif existing != source_job_id:
-                bindings[output_id] = ""
+                bindings[output_id] = {
+                    "source_job_id": source_job_id,
+                    "source_integrity_id": source_integrity_id,
+                    "require_integrity": "1" if require_integrity else "",
+                    "job_invalid": "1" if job_invalid else "",
+                    "integrity_invalid": "1" if integrity_invalid else "",
+                }
+                return
+            if source_job_id and not existing["job_invalid"]:
+                if existing["source_job_id"] and existing["source_job_id"] != source_job_id:
+                    existing["source_job_id"] = ""
+                    existing["job_invalid"] = "1"
+                elif not existing["source_job_id"]:
+                    existing["source_job_id"] = source_job_id
+            if source_integrity_id and not existing["integrity_invalid"]:
+                if (
+                    existing["source_integrity_id"]
+                    and existing["source_integrity_id"] != source_integrity_id
+                ):
+                    existing["source_integrity_id"] = ""
+                    existing["integrity_invalid"] = "1"
+                elif not existing["source_integrity_id"]:
+                    existing["source_integrity_id"] = source_integrity_id
+            if require_integrity:
+                existing["require_integrity"] = "1"
+            if job_invalid:
+                existing["job_invalid"] = "1"
+            if integrity_invalid:
+                existing["integrity_invalid"] = "1"
 
-        def add_binding(item: Any, *, output_keys: tuple[str, ...], require_canonical: bool) -> None:
+        def add_binding(
+            item: Any,
+            *,
+            output_keys: tuple[str, ...],
+            require_canonical: bool,
+            require_integrity: bool,
+        ) -> None:
             if not isinstance(item, dict):
                 return
             nested = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
@@ -250,8 +290,38 @@ class ExactReviewEvidenceResolver:
             )
             source_job_values = list(dict.fromkeys(source_job_values))
             if not source_job_values:
+                if require_canonical:
+                    register(
+                        output_id,
+                        "",
+                        "",
+                        require_integrity=require_integrity,
+                        job_invalid=True,
+                        integrity_invalid=require_integrity,
+                    )
                 return
-            register(output_id, source_job_values[0] if len(source_job_values) == 1 else "")
+            source_integrity_values = [
+                str(value or "").strip()
+                for value in (
+                    item.get("source_integrity_id"),
+                    nested.get("source_integrity_id"),
+                )
+                if str(value or "").strip()
+            ]
+            normalized_integrities = list(
+                dict.fromkeys(_normalize_integrity_digest(value) for value in source_integrity_values)
+            )
+            integrity_invalid = any(
+                not _normalize_integrity_digest(value) for value in source_integrity_values
+            ) or len(normalized_integrities) > 1 or (require_integrity and not normalized_integrities)
+            register(
+                output_id,
+                source_job_values[0] if len(source_job_values) == 1 else "",
+                normalized_integrities[0] if len(normalized_integrities) == 1 and not integrity_invalid else "",
+                require_integrity=require_integrity,
+                job_invalid=len(source_job_values) > 1,
+                integrity_invalid=integrity_invalid,
+            )
 
         professional_references = metadata.get("professional_anchor_reference_assets", [])
         if isinstance(professional_references, list):
@@ -260,6 +330,7 @@ class ExactReviewEvidenceResolver:
                     item,
                     output_keys=("output_id", "created_from_output_id", "asset_id"),
                     require_canonical=False,
+                    require_integrity=False,
                 )
 
         snapshot = metadata.get("project_context_snapshot")
@@ -295,6 +366,7 @@ class ExactReviewEvidenceResolver:
                     item,
                     output_keys=("output_id", "created_from_output_id"),
                     require_canonical=True,
+                    require_integrity=True,
                 )
         return bindings
 
@@ -352,7 +424,7 @@ class ExactReviewEvidenceResolver:
         *,
         uploaded_id_set: set[str],
         frozen_anchor_ids: set[str],
-        frozen_anchor_source_jobs: dict[str, str],
+        frozen_anchor_bindings: dict[str, dict[str, str]],
         current_job_id: str,
         request: Any,
     ) -> dict[str, Any]:
@@ -377,7 +449,7 @@ class ExactReviewEvidenceResolver:
                 return {**base, "state": "unavailable", "reason": "reference_not_admitted"}
             return {**base, **self._persisted_file_state(upload, "uploaded")}
 
-        if source_id in frozen_anchor_ids or source_id in frozen_anchor_source_jobs:
+        if source_id in frozen_anchor_ids or source_id in frozen_anchor_bindings:
             output = self.output_store.get_output(source_id)
             actual_channel = "person_identity"
             channel = actual_channel
@@ -397,7 +469,8 @@ class ExactReviewEvidenceResolver:
                 return {**base, "state": "unavailable", "reason": "reference_not_admitted"}
             if str(getattr(output, "output_id", "") or "").strip() != source_id:
                 return {**base, "state": "invalid", "reason": "output_identity_binding"}
-            expected_source_job_id = frozen_anchor_source_jobs.get(source_id)
+            binding = frozen_anchor_bindings.get(source_id)
+            expected_source_job_id = binding.get("source_job_id") if binding is not None else None
             if expected_source_job_id is not None and (
                 not expected_source_job_id
                 or str(getattr(output, "job_id", "") or "").strip() != expected_source_job_id
@@ -405,7 +478,21 @@ class ExactReviewEvidenceResolver:
                 return {**base, "state": "invalid", "reason": "output_source_job_binding"}
             if str(getattr(output, "job_id", "") or "").strip() == current_job_id:
                 return {**base, "state": "invalid", "reason": "reference_output_job_binding"}
-            return {**base, **self._persisted_file_state(output, "selected_output")}
+            expected_integrity_id = None
+            if binding is not None:
+                if binding.get("job_invalid") or binding.get("integrity_invalid") or (
+                    binding.get("require_integrity") and not binding.get("source_integrity_id")
+                ):
+                    return {**base, "state": "invalid", "reason": "output_source_integrity_binding"}
+                expected_integrity_id = binding.get("source_integrity_id") or None
+            return {
+                **base,
+                **self._persisted_file_state(
+                    output,
+                    "selected_output",
+                    expected_integrity_id=expected_integrity_id,
+                ),
+            }
 
         upload = self.asset_store.get_upload(source_id)
         output = self.output_store.get_output(source_id)
@@ -420,7 +507,13 @@ class ExactReviewEvidenceResolver:
             "reason": "source_job_binding" if exists_upload or exists_output else None,
         }
 
-    def _persisted_file_state(self, record: Any, source_type: str) -> dict[str, Any]:
+    def _persisted_file_state(
+        self,
+        record: Any,
+        source_type: str,
+        *,
+        expected_integrity_id: str | None = None,
+    ) -> dict[str, Any]:
         path = Path(str(getattr(record, "file_path", "") or ""))
         if not path.is_file():
             return {"state": "unavailable", "file_path": str(path)}
@@ -428,12 +521,22 @@ class ExactReviewEvidenceResolver:
             actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
         except OSError:
             return {"state": "unavailable", "file_path": str(path)}
-        expected_digest = str(
-            getattr(record, "content_sha256", None)
-            or (getattr(record, "metadata", {}) or {}).get("content_sha256", "")
-            or ""
-        ).strip()
-        if not expected_digest or expected_digest != actual_digest:
+        stored_digest, stored_digest_invalid = _record_integrity_digest(record)
+        if expected_integrity_id is not None:
+            expected_digest = _normalize_integrity_digest(expected_integrity_id)
+            if not expected_digest or expected_digest != actual_digest:
+                return {
+                    "state": "invalid",
+                    "file_path": str(path),
+                    "reason": f"{source_type}_source_integrity_binding",
+                }
+            if stored_digest_invalid or (stored_digest and stored_digest != actual_digest):
+                return {
+                    "state": "invalid",
+                    "file_path": str(path),
+                    "reason": f"{source_type}_content_integrity",
+                }
+        elif stored_digest_invalid or not stored_digest or stored_digest != actual_digest:
             return {"state": "invalid", "file_path": str(path), "reason": f"{source_type}_content_integrity"}
         return {
             "state": "unavailable" if getattr(record, "status", "ready") not in {"ready", "stored"} else "available",
@@ -616,6 +719,41 @@ def _safe_int(value: Any) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _normalize_integrity_digest(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw.startswith("sha256:"):
+        raw = raw.split(":", 1)[1].strip()
+    if len(raw) != 64:
+        return ""
+    try:
+        int(raw, 16)
+    except ValueError:
+        return ""
+    return raw
+
+
+def _record_integrity_digest(record: Any) -> tuple[str, bool]:
+    metadata = getattr(record, "metadata", {})
+    metadata = metadata if isinstance(metadata, dict) else {}
+    values = [getattr(record, "content_sha256", None)]
+    values.extend(metadata.get(key) for key in (
+        "artifact_sha256",
+        "content_sha256",
+        "output_sha256",
+        "original_sha256",
+    ))
+    values = [str(value).strip() for value in values if str(value or "").strip()]
+    if not values:
+        return "", False
+    normalized = [_normalize_integrity_digest(value) for value in values]
+    if any(not value for value in normalized):
+        return "", True
+    unique = list(dict.fromkeys(normalized))
+    if len(unique) != 1:
+        return "", True
+    return unique[0], False
 
 
 def _dedupe_strings(values: Any) -> list[str]:

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 from io import BytesIO
+import json
 from pathlib import Path
 
 import pytest
@@ -596,13 +597,27 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
     created = _create_general_job(service)
     record = service.job_store.get(created.job_id)
     assert record is not None
+    source_integrity_id = f"sha256:{hashlib.sha256(Path(reference.file_path).read_bytes()).hexdigest()}"
+    original_source_bytes = Path(reference.file_path).read_bytes()
 
     def apply_context(
         *,
         source_job_id: str,
         canonical: bool = True,
         server_owned: bool = True,
+        frozen_integrity_id: str | None = source_integrity_id,
+        nested_integrity_id: str | None = None,
     ) -> None:
+        integrity_fields = (
+            {"source_integrity_id": frozen_integrity_id}
+            if frozen_integrity_id is not None
+            else {}
+        )
+        nested_integrity_fields = (
+            {"source_integrity_id": nested_integrity_id}
+            if nested_integrity_id is not None
+            else {}
+        )
         context = {
             "project_id": "project_doc260_general_reference",
             "metadata": {"source": "V3ProjectModeService"},
@@ -614,7 +629,8 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
                     "asset_id": reference.asset_id,
                     "candidate_id": reference.candidate_id,
                     "output_id": reference.output_id,
-                    "metadata": {"canonical_output_binding": canonical},
+                    **integrity_fields,
+                    "metadata": {"canonical_output_binding": canonical, **nested_integrity_fields},
                 }
             ],
             "selected_reference_assets": [
@@ -624,7 +640,8 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
                     "asset_ref_id": reference.output_id,
                     "created_from_job_id": source_job_id,
                     "created_from_output_id": reference.output_id,
-                    "metadata": {"canonical_output_binding": canonical},
+                    **integrity_fields,
+                    "metadata": {"canonical_output_binding": canonical, **nested_integrity_fields},
                 }
             ],
             "selected_visual_references": [
@@ -633,7 +650,8 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
                     "project_id": "project_doc260_general_reference",
                     "output_id": reference.output_id,
                     "source_job_id": source_job_id,
-                    "metadata": {"canonical_output_binding": canonical},
+                    **integrity_fields,
+                    "metadata": {"canonical_output_binding": canonical, **nested_integrity_fields},
                 }
             ],
             "strong_reference_bindings": [
@@ -642,7 +660,8 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
                     "source_id": reference.output_id,
                     "output_id": reference.output_id,
                     "source_job_id": source_job_id,
-                    "metadata": {"canonical_output_binding": canonical},
+                    **integrity_fields,
+                    "metadata": {"canonical_output_binding": canonical, **nested_integrity_fields},
                 }
             ],
         }
@@ -705,6 +724,54 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
     assert person_channel["source_type"] == "selected_output"
     assert "review_evidence_person_identity_source_job_binding" not in person_channel["reason_codes"]
     assert reference.job_id not in str(metadata)
+
+    output_record_path = output_store.storage_root / reference.output_id / "output.json"
+    legacy_record = json.loads(output_record_path.read_text(encoding="utf-8"))
+    legacy_record["metadata"].pop("content_sha256", None)
+    output_record_path.write_text(json.dumps(legacy_record, ensure_ascii=False, indent=2), encoding="utf-8")
+    legacy_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    legacy_channel = legacy_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert legacy_channel["evidence_state"] == "available"
+    assert legacy_channel["comparison_allowed"] is True
+
+    stale_record = json.loads(output_record_path.read_text(encoding="utf-8"))
+    stale_record["metadata"]["content_sha256"] = "0" * 64
+    output_record_path.write_text(json.dumps(stale_record, ensure_ascii=False, indent=2), encoding="utf-8")
+    stale_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    stale_channel = stale_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert stale_channel["evidence_state"] == "invalid"
+    assert "review_evidence_person_identity_selected_output_content_integrity" in stale_channel["reason_codes"]
+
+    restored_record = json.loads(output_record_path.read_text(encoding="utf-8"))
+    restored_record["metadata"]["content_sha256"] = hashlib.sha256(original_source_bytes).hexdigest()
+    output_record_path.write_text(json.dumps(restored_record, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path(reference.file_path).write_bytes(original_source_bytes + b"tampered")
+    mutated_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    mutated_channel = mutated_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert mutated_channel["evidence_state"] == "invalid"
+    assert "review_evidence_person_identity_selected_output_source_integrity_binding" in mutated_channel["reason_codes"]
+
+    Path(reference.file_path).write_bytes(original_source_bytes)
+    apply_context(source_job_id=reference.job_id, frozen_integrity_id=None)
+    missing_binding_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    missing_binding_channel = missing_binding_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert missing_binding_channel["evidence_state"] == "invalid"
+    assert "review_evidence_person_identity_output_source_integrity_binding" in missing_binding_channel["reason_codes"]
+
+    apply_context(source_job_id="")
+    missing_job_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    missing_job_channel = missing_job_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert missing_job_channel["evidence_state"] == "invalid"
+    assert "review_evidence_person_identity_output_source_job_binding" in missing_job_channel["reason_codes"]
+
+    apply_context(
+        source_job_id=reference.job_id,
+        nested_integrity_id="1" * 64,
+    )
+    conflicting_binding_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
+    conflicting_binding_channel = conflicting_binding_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert conflicting_binding_channel["evidence_state"] == "invalid"
+    assert "review_evidence_person_identity_output_source_integrity_binding" in conflicting_binding_channel["reason_codes"]
 
     apply_context(source_job_id="job_forged_general_reference")
     forged_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001

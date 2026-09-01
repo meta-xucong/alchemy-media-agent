@@ -41,6 +41,12 @@ quality-threshold, retry, prompt, or frontend defect.
 5. This is shared foundation behavior. It must work for General and
    Professional callers without adding scenario-specific branches or
    changing E-Commerce product-truth authority.
+6. A historical output record may predate persisted record-level content
+   hashes. In that compatibility case, the resolver may use the exact
+   `source_integrity_id` already frozen by the server-built Project Mode
+   context, but only after recomputing the output file hash. Any present
+   record-level hash must also match; missing, malformed, conflicting, or
+   mismatched frozen bindings remain non-certifying.
 
 ## 3. Minimal Correction
 
@@ -81,6 +87,9 @@ The focused regression must prove:
 - a wrong source job, missing canonical marker, and swapped output remain
   non-certifying;
 - a current-job output remains rejected;
+- a legacy source record without a record-level content hash is accepted only
+  when its server-frozen project integrity binding matches the file, while a
+  missing, conflicting, stale, or mutated binding remains non-certifying;
 - existing professional anchor and ordinary uploaded-reference tests remain
   unchanged;
 - public review output contains no private source job, path, digest, prompt,
