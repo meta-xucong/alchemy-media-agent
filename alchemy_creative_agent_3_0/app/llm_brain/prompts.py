@@ -238,7 +238,7 @@ def _compact_required_remote_creative_schema() -> dict:
         "image_set_plan": {
             "set_goal": "string",
             "image_count": "integer exactly equal to requested_image_count",
-            "size": "canonical provider size 1024x1024|1024x1536|1536x1024, only when explicit in user_input; otherwise null",
+            "size": "canonical provider size 1024x1024|1024x1536|1536x1024|2048x1152, only when explicit in user_input; otherwise null",
             "aspect_ratio": "explicit user aspect ratio such as 2.35:1 or 16:9 when present in user_input; otherwise null",
             "shot_plan": ["one original whole-image natural-language direction per requested output"],
             "composition_rules": ["string"],
@@ -655,7 +655,8 @@ def _compact_remote_creative_payload(
         "canvas_resolution_instructions": (
             "Treat user_input as the only authority for an explicit canvas size or aspect ratio. "
             "When user_input clearly specifies one, resolve image_set_plan.size to the closest supported "
-            "canonical provider size: 1024x1024, 1024x1536, or 1536x1024. "
+            "canonical provider size: 1024x1024, 1024x1536, 1536x1024, or 2048x1152. "
+            "For an explicit 16:9 request, prefer 2048x1152. "
             "When user_input does not clearly specify size or aspect ratio, return image_set_plan.size as null; "
             "the server will use web_selected_image_size as a fallback. Never copy the web selection into the "
             "Brain size field merely because it was supplied by the page."
@@ -795,7 +796,8 @@ def build_remote_payload(request: BrainRunRequest) -> str:
         "canvas_resolution_instructions": (
             "Treat user_input as the only authority for an explicit canvas size or aspect ratio. "
             "When user_input clearly specifies one, resolve image_set_plan.size to the closest supported "
-            "canonical provider size: 1024x1024, 1024x1536, or 1536x1024. "
+            "canonical provider size: 1024x1024, 1024x1536, 1536x1024, or 2048x1152. "
+            "For an explicit 16:9 request, prefer 2048x1152. "
             "When user_input does not clearly specify size or aspect ratio, return image_set_plan.size as null; "
             "the server will use web_selected_image_size as a fallback. Never copy the web selection into the "
             "Brain size field merely because it was supplied by the page."
@@ -878,7 +880,7 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             "image_set_plan": {
                 "set_goal": "string",
                 "image_count": "integer exactly equal to requested_image_count",
-                "size": "canonical provider size 1024x1024|1024x1536|1536x1024, only when explicit in user_input; otherwise null",
+                "size": "canonical provider size 1024x1024|1024x1536|1536x1024|2048x1152, only when explicit in user_input; otherwise null",
                 "aspect_ratio": "explicit user aspect ratio such as 2.35:1 or 16:9 when present in user_input; otherwise null",
                 "shot_plan": ["string"],
                 "evidence_dimensions_by_output": [

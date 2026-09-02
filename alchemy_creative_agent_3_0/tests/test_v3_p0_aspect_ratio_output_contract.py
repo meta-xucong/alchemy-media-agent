@@ -40,6 +40,27 @@ def test_explicit_brain_aspect_ratio_is_applied_to_persisted_pixels(tmp_path) ->
     assert record.metadata["aspect_ratio_actual_dimensions"] == {"width": 1536, "height": 654}
 
 
+def test_explicit_16_9_canvas_is_preserved_without_server_crop(tmp_path) -> None:
+    store = V3GeneratedOutputStore(tmp_path)
+
+    record = store.save_base64_output(
+        job_id="job_test_16_9",
+        candidate_id="candidate_test_16_9",
+        asset_id="asset_test_16_9",
+        provider="openai_gpt_image",
+        model="gpt-image-2",
+        encoded_image=_png_base64((2048, 1152)),
+        metadata={
+            "requested_image_size": "2048x1152",
+            "requested_image_aspect_ratio": "16:9",
+            "requested_image_aspect_ratio_source": "remote_brain_user_intent",
+        },
+    )
+
+    assert (record.width, record.height) == (2048, 1152)
+    assert "aspect_ratio_normalization" not in record.metadata
+
+
 def test_browser_size_without_explicit_brain_ratio_is_not_cropped(tmp_path) -> None:
     store = V3GeneratedOutputStore(tmp_path)
 

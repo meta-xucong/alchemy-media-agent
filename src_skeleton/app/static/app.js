@@ -6331,6 +6331,7 @@ function handleV3ProjectActionClick(event) {
     return;
   }
   if (action === "continue_same_style") {
+    setV3ContinuationGenerationDefaults();
     if (els.v3PromptInput) {
       els.v3PromptInput.value = v3State.selectedScenario === "ecommerce"
         ? `参考这个项目已确认的商品信息和画面方向，继续制作一张完整商品图片。${goal ? ` 目标：${goal}` : ""}`
@@ -8890,6 +8891,16 @@ function v3FixedGenerationCountForSelectedScenario() {
     || v3ScenarioForTemplate(v3State.currentProject?.primary_template_id || v3State.selectedTemplate || "general_template");
   if (scenarioId !== "photography") return null;
   return v3State.selectedPreset === "professional_set" ? 3 : 1;
+}
+
+function setV3ContinuationGenerationDefaults() {
+  const fixedCount = v3FixedGenerationCountForSelectedScenario();
+  const scenarioId = v3State.selectedScenario || "general_creative";
+  const supported = v3DeclaredGenerationCounts(v3TemplateIdForScenario(scenarioId));
+  const count = fixedCount ?? (supported.includes(1) ? 1 : supported[0] || 1);
+  v3State.generationCount = count;
+  if (els.v3CountInput) els.v3CountInput.value = String(count);
+  syncV3GenerationCountControl();
 }
 
 function syncV3GenerationCountControl() {

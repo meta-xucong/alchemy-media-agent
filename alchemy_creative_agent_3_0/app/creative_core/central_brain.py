@@ -37,6 +37,19 @@ def _bounded_requested_image_count(value: object) -> int:
         return 2
 
 
+def _requested_image_count_for_context(context: PipelineContext) -> int | None:
+    raw_count = context.metadata.get("requested_image_count")
+    if raw_count is not None:
+        return _bounded_requested_image_count(raw_count)
+    return len(context.series_plan.assets) if context.series_plan else None
+
+
+class GenerationOutputCountMismatch(RuntimeError):
+    """Raised when generic generation cannot materialize every planned output."""
+
+    code = "v3_output_count_mismatch"
+
+
 class CentralCreativeBrain:
     """Orchestrates the V3 planning-only commercial creative pipeline."""
 
@@ -323,7 +336,7 @@ class CentralCreativeBrain:
                 "template_id": context.metadata.get("template_id"),
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
-                "requested_image_count": len(context.series_plan.assets) if context.series_plan else None,
+                "requested_image_count": _requested_image_count_for_context(context),
                 "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
                 "requested_image_aspect_ratio_source": context.metadata.get(
                     "requested_image_aspect_ratio_source"
@@ -365,6 +378,16 @@ class CentralCreativeBrain:
         auto_identity_anchor_reference: dict[str, Any] | None = None
         role_execution_records: list[dict[str, Any]] = []
         require_independent_role_terminal_states = self._requires_independent_role_terminal_states(context)
+        requested_image_count = _requested_image_count_for_context(context)
+        planned_asset_count = len(context.series_plan.assets) if context.series_plan else 0
+        if (
+            not require_independent_role_terminal_states
+            and requested_image_count is not None
+            and planned_asset_count != requested_image_count
+        ):
+            raise GenerationOutputCountMismatch(
+                f"expected={requested_image_count}; planned={planned_asset_count}"
+            )
 
         for index, asset in enumerate(context.series_plan.assets):
             asset = self._asset_with_mode_role(context, asset, index)
@@ -602,6 +625,10 @@ class CentralCreativeBrain:
                     f"specialized role {mode_role_recipe.get('role_key') or asset.asset_id} failed: {str(exc)[:240]}"
                 )
                 continue
+            if not require_independent_role_terminal_states and selected_candidate is None:
+                raise GenerationOutputCountMismatch(
+                    f"expected={requested_image_count}; missing_asset={asset.asset_id}"
+                )
             pack_warnings.extend(asset_warnings)
             if selected_candidate is not None:
                 context.selected_candidates.append(selected_candidate)
@@ -626,6 +653,15 @@ class CentralCreativeBrain:
                 pack_warnings.append(
                     f"asset {asset.asset_id} packaged with {selected_evaluation.recommendation} recommendation"
                 )
+
+        if (
+            not require_independent_role_terminal_states
+            and requested_image_count is not None
+            and len(context.selected_candidates) != requested_image_count
+        ):
+            raise GenerationOutputCountMismatch(
+                f"expected={requested_image_count}; selected={len(context.selected_candidates)}"
+            )
 
         accepted_candidates = [
             candidate
@@ -729,7 +765,7 @@ class CentralCreativeBrain:
                 "template_id": context.metadata.get("template_id"),
                 "shared_capabilities": context.metadata.get("shared_capabilities", {}),
                 "visual_cluster": self._visual_cluster_metadata(context),
-                "requested_image_count": len(context.series_plan.assets) if context.series_plan else None,
+                "requested_image_count": _requested_image_count_for_context(context),
                 "requested_image_aspect_ratio": context.metadata.get("requested_image_aspect_ratio"),
                 "requested_image_aspect_ratio_source": context.metadata.get(
                     "requested_image_aspect_ratio_source"

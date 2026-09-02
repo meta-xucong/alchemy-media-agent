@@ -34,8 +34,24 @@ def test_brain_explicit_canvas_size_overrides_web_selection() -> None:
         brain_result,
     )
 
-    assert resolved.effective_image_size == "1536x1024"
-    assert request.metadata["requested_image_size"] == "1536x1024"
+    assert resolved.effective_image_size == "2048x1152"
+    assert request.metadata["requested_image_size"] == "2048x1152"
+    assert request.metadata["requested_image_size_source"] == "remote_brain_user_intent"
+    assert request.metadata["web_selected_image_size"] == "1024x1024"
+
+
+def test_brain_explicit_wide_canvas_size_overrides_web_selection() -> None:
+    request = SimpleNamespace(metadata={"requested_image_size": "1024x1024"})
+    brain_result = SimpleNamespace(image_set_plan=SimpleNamespace(size="2048x1152"))
+
+    resolved = ScenarioRuntime()._apply_brain_image_size_precedence(  # noqa: SLF001
+        request,
+        _normalized_intent("1024x1024"),
+        brain_result,
+    )
+
+    assert resolved.effective_image_size == "2048x1152"
+    assert request.metadata["requested_image_size"] == "2048x1152"
     assert request.metadata["requested_image_size_source"] == "remote_brain_user_intent"
     assert request.metadata["web_selected_image_size"] == "1024x1024"
 
@@ -71,6 +87,7 @@ def test_brain_payload_separates_web_size_fallback_from_prompt_size() -> None:
     payload = json.loads(build_remote_payload(request))
 
     assert payload["web_selected_image_size"] == "1024x1536"
+    assert "2048x1152" in payload["canvas_resolution_instructions"]
     assert "user_input as the only authority" in payload["canvas_resolution_instructions"]
     assert "return image_set_plan.size as null" in payload["canvas_resolution_instructions"]
 
@@ -206,3 +223,15 @@ def test_terminal_retry_payload_includes_generated_jobs_without_visible_images()
     assert "v3_retry_after_terminal_job_id" in mobile
     assert "v3_user_initiated_generation: true" in mobile
     assert '"generated", "selected", "ready", "blocked", "failed", "not_found"' in mobile
+
+
+def test_desktop_continuation_defaults_to_one_image() -> None:
+    desktop = (ROOT / "src_skeleton" / "app" / "static" / "app.js").read_text(encoding="utf-8")
+
+    assert "function setV3ContinuationGenerationDefaults()" in desktop
+    assert "supported.includes(1) ? 1" in desktop
+    continuation = desktop.split('if (action === "continue_same_style")', 1)[1].split(
+        'if (action === "upload_reference_continue")', 1
+    )[0]
+    assert "setV3ContinuationGenerationDefaults();" in continuation
+    assert continuation.index("setV3ContinuationGenerationDefaults();") < continuation.index("els.v3PromptInput.value")

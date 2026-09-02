@@ -1,8 +1,10 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from alchemy_creative_agent_3_0.app.creative_core import CentralCreativeBrain
+from alchemy_creative_agent_3_0.app.creative_core.central_brain import GenerationOutputCountMismatch
 from alchemy_creative_agent_3_0.app.generation_router import (
     GenerationProvider,
     GenerationRequest,
@@ -15,14 +17,20 @@ from alchemy_creative_agent_3_0.app.schemas import CandidateResult, ProviderStra
 class RecordingImageProvider(GenerationProvider):
     provider_name = "recording_image_provider"
 
-    def __init__(self, output_dir: Path) -> None:
+    def __init__(self, output_dir: Path, empty_request_indexes: set[int] | None = None) -> None:
         self.output_dir = output_dir
         self.requests: list[dict] = []
+        self.empty_request_indexes = set(empty_request_indexes or set())
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         snapshot = request.model_dump(mode="json")
         self.requests.append(snapshot)
         index = len(self.requests)
+        if index in self.empty_request_indexes:
+            return GenerationResponse(
+                candidates=[],
+                provider_metadata={"provider_name": self.provider_name, "simulated_empty_response": True},
+            )
         output_path = self.output_dir / f"generated_{index}.png"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (96, 96), color=(120 + index, 180, 210)).save(output_path)
@@ -85,6 +93,29 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
     )
     assert "eye shape and spacing" in second_metadata["reference_assets"][0]["lock_targets"]
     assert result.metadata["candidate_loop"] is True
+
+
+def test_generic_generation_fails_closed_when_a_planned_output_has_no_candidate(tmp_path) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs", empty_request_indexes={2})
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+
+    with pytest.raises(GenerationOutputCountMismatch) as exc_info:
+        brain.run_generation_loop(
+            "Create a two-image summer portrait set with the same subject and natural daylight.",
+            provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+            runtime_metadata={
+                "requested_image_count": 2,
+                "requested_image_size": "1024x1024",
+                "template_id": "general_template",
+                "scenario_id": "general_creative",
+                "variation_mode": "delivery_suite",
+                "effective_variation_mode": "delivery_suite",
+            },
+        )
+
+    assert exc_info.value.code == "v3_output_count_mismatch"
+    assert len(provider.requests) == 2
+    assert len(list((tmp_path / "outputs").glob("*.png"))) == 1
 
 
 def test_doc73_user_selected_reference_has_priority_over_auto_first_output(tmp_path) -> None:

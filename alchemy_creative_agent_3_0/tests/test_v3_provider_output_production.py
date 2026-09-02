@@ -773,6 +773,19 @@ def test_provider_official_options_default_quality_is_auto_when_omitted(tmp_path
     assert provider._quality_for_request(request) == "auto"  # noqa: SLF001
 
 
+def test_provider_maps_brain_16_9_to_wide_canvas_without_text_parsing(tmp_path) -> None:
+    request = _generation_request()
+    request.asset_spec = request.asset_spec.model_copy(update={"aspect_ratio": "16:9"})
+    request.metadata["requested_image_aspect_ratio"] = "16:9"
+    provider = ProductionImageGenerationProvider(output_store=V3GeneratedOutputStore(tmp_path / "outputs"))
+
+    assert provider._size_for_request(request) == "2048x1152"  # noqa: SLF001
+    assert "aspect ratio: 16:9" in provider._asset_canvas_instruction(  # noqa: SLF001
+        request,
+        request.asset_spec,
+    )
+
+
 def test_constrained_edit_profile_adapts_one_logical_source_to_one_input(tmp_path, monkeypatch) -> None:
     """One selected source may use one best derivative on a singular edit route."""
 

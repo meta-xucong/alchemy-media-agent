@@ -6664,7 +6664,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "3:2": "1536x1024",
             "4:3": "1536x1024",
             "5:4": "1536x1024",
-            "16:9": "1536x1024",
+            "16:9": "2048x1152",
         }
         return mapping.get(ratio, "1024x1024")
 
@@ -6731,6 +6731,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             "1024x1024": "1:1",
             "1024x1536": "2:3",
             "1536x1024": "3:2",
+            "2048x1152": "16:9",
         }.get(requested_size)
         aspect_ratio = explicit_ratio or asset.aspect_ratio
         return f"Platform: {asset.platform.value}; aspect ratio: {aspect_ratio}"
