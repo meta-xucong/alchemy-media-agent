@@ -65,8 +65,10 @@ not a generic age/person retry path.
 
 `V3_LLM_BRAIN_TIMEOUT_SECONDS` remains a per-remote-call maximum.
 `V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS` is a single deadline shared by all
-remote decisions in one ScenarioRuntime preparation. Its default is at least
-two ordinary per-call windows plus a small hand-off margin.
+remote decisions in one ScenarioRuntime preparation. The current defaults are
+300 seconds per call and 520 seconds for the whole preparation; explicit
+per-call values are bounded to 360 seconds. Doc288 records the supersession of
+the historical 210-second cap and the reason the shared budget remains finite.
 
 Each transport call uses the smaller of its ordinary per-call timeout and the
 remaining logical budget. When no time remains, the runtime returns

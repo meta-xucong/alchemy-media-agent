@@ -19,7 +19,13 @@ from .context_digest import (
     selected_outputs_from_context,
     selected_references_from_context,
 )
-from .contracts import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult
+from .contracts import (
+    BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS,
+    BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
+    BrainCanonicalProviderPrompt,
+    BrainRunRequest,
+    BrainRunResult,
+)
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .finalizer_lifecycle import (
     REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES,
@@ -1736,7 +1742,10 @@ def _brain_transport_timeout_seconds(metadata: dict[str, Any]) -> float | None:
         value = float(raw)
     except (TypeError, ValueError):
         return None
-    return max(1.0, min(210.0, value))
+    return max(
+        BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
+        min(BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS, value),
+    )
 
 
 def _bounded_count(value: Any) -> int:

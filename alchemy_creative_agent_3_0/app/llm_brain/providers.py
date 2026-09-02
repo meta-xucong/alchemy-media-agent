@@ -11,7 +11,14 @@ import threading
 import time
 from typing import Any
 
-from .contracts import BrainRunRequest
+from .contracts import (
+    BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS,
+    BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS,
+    BRAIN_TRANSPORT_TIMEOUT_DEFAULT_SECONDS,
+    BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS,
+    BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
+    BrainRunRequest,
+)
 from .prompts import build_remote_payload, system_prompt_for_stage
 from .stage_trace import record_stage_event
 
@@ -323,7 +330,16 @@ class V3LLMBrainProvider:
         self.provider = _env("V3_LLM_BRAIN_PROVIDER") or _preferred_provider()
         self.provider = self.provider.strip().lower()
         self.model = _env("V3_LLM_BRAIN_MODEL") or _default_model(self.provider)
-        self.timeout = max(1.0, min(210.0, _float_env("V3_LLM_BRAIN_TIMEOUT_SECONDS", 210.0)))
+        self.timeout = max(
+            BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
+            min(
+                BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS,
+                _float_env(
+                    "V3_LLM_BRAIN_TIMEOUT_SECONDS",
+                    BRAIN_TRANSPORT_TIMEOUT_DEFAULT_SECONDS,
+                ),
+            ),
+        )
         # A V3 preparation has more than one legitimate Brain decision: a
         # semantic plan and the final signed renderer direction.  Bound the
         # *logical* preparation as one unit so a later valid sign-off does not
@@ -333,7 +349,10 @@ class V3LLMBrainProvider:
         # prompt fallback.
         self.execution_budget_seconds = _float_env(
             "V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS",
-            max(520.0, (self.timeout * 2.0) + 100.0),
+            max(
+                BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS,
+                self.timeout + BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS,
+            ),
         )
         # A compact V3 plan can still need substantial output allowance when a
         # reasoning-capable remote model accounts for its private deliberation
@@ -766,7 +785,10 @@ def _request_timeout_cap_seconds(request: BrainRunRequest) -> float | None:
         value = float(raw)
     except (TypeError, ValueError):
         return None
-    return max(1.0, min(210.0, value))
+    return max(
+        BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
+        min(BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS, value),
+    )
 
 
 def _call_with_timeout(

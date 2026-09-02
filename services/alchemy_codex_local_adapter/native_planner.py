@@ -36,6 +36,11 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import (
     ScenarioRuntimeStatus,
 )
 from alchemy_creative_agent_3_0.app.llm_brain.stage_trace import record_stage_event
+from alchemy_creative_agent_3_0.app.llm_brain.contracts import (
+    BRAIN_TRANSPORT_TIMEOUT_DEFAULT_SECONDS,
+    BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS,
+    BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
+)
 from alchemy_creative_agent_3_0.app.creative_core.rules import stable_id
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce import (
     build_professional_ecommerce_poolside_pose_contract,
@@ -105,7 +110,13 @@ _LOCAL_MCP_PLANNING_TIMEOUT_SECONDS = _float_env(
 )
 _LOCAL_MCP_BRAIN_TRANSPORT_TIMEOUT_SECONDS = _float_env(
     "CODEX_NATIVE_IMAGEGEN_BRAIN_TRANSPORT_TIMEOUT_SECONDS",
-    min(210.0, max(1.0, (_LOCAL_MCP_PLANNING_TIMEOUT_SECONDS - 120.0) / 2.0)),
+    min(
+        BRAIN_TRANSPORT_TIMEOUT_DEFAULT_SECONDS,
+        max(
+            BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
+            _LOCAL_MCP_PLANNING_TIMEOUT_SECONDS - 120.0,
+        ),
+    ),
 )
 
 
@@ -225,7 +236,10 @@ class CodexNativeImageGenPlanner:
         self._brain_transport_timeout_seconds = (
             _LOCAL_MCP_BRAIN_TRANSPORT_TIMEOUT_SECONDS
             if brain_transport_timeout_seconds is None
-            else max(0.1, min(210.0, float(brain_transport_timeout_seconds)))
+            else max(
+                BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
+                min(BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS, float(brain_transport_timeout_seconds)),
+            )
         )
 
     @staticmethod

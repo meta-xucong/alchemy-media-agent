@@ -1418,8 +1418,8 @@ def test_remote_brain_default_timeout_allows_slow_reasoning(monkeypatch) -> None
 
     provider = V3LLMBrainProvider()
 
-    assert provider.timeout >= 120
-    assert provider.execution_budget_seconds >= (provider.timeout * 2) + 20
+    assert provider.timeout == 300
+    assert provider.execution_budget_seconds >= provider.timeout + 220
 
 
 def test_remote_brain_default_output_budget_allows_complete_reasoning_contract(monkeypatch) -> None:

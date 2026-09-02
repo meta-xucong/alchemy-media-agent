@@ -16,6 +16,11 @@ state is Section 13K; any older statement that describes the current gate as a
 live N=6 planning read-timeout, capacity block, or rejected old frozen plan is
 historical/superseded for this product-set state.
 
+Current runtime timeout authority is now Doc288. Its 300-second default and
+360-second explicit ceiling supersede the historical Section 13A recommendation
+to retain a 210-second per-call cap; the observations and old decisions below
+remain append-only evidence.
+
 ## 1. Historical blocked fact pattern
 
 This section records the original blocked state that opened Doc259. It remains
