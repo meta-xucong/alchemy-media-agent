@@ -27,7 +27,11 @@ from ..creative_core.mcp_reference_partition import (
 )
 from ..creative_core.rules import stable_id
 from ..creative_core.doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    DOC73_AUTO_IDENTITY_ANCHOR_SKELETON_KEY,
     doc281_output_index_from_plan_position,
+    issue_doc73_auto_identity_anchor_source_skeleton,
+    issue_doc73_auto_identity_anchor_target_skeleton,
     issue_doc281_output_plan_binding,
 )
 from ..condition_engine.providers import ProviderCapabilities
@@ -345,6 +349,10 @@ def build_provider_generation_request(
             "auto_batch_identity_anchor_applied": metadata.get("auto_batch_identity_anchor_applied", False),
             "auto_batch_identity_anchor_source_output_id": metadata.get("auto_batch_identity_anchor_source_output_id"),
             "auto_batch_identity_anchor_source_candidate_id": metadata.get("auto_batch_identity_anchor_source_candidate_id"),
+            "doc73_batch_plan_digest": metadata.get("doc73_batch_plan_digest"),
+            "doc73_auto_identity_anchor_receipt": metadata.get("doc73_auto_identity_anchor_receipt"),
+            "doc73_auto_identity_anchor_reference": metadata.get("doc73_auto_identity_anchor_reference"),
+            "output_index": metadata.get("output_index"),
             "industry": metadata.get("industry"),
             "user_input": metadata.get("user_input"),
             "normalized_input": metadata.get("normalized_input"),
@@ -1162,6 +1170,32 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 checkpoint_output_id = str(
                     (mcp_materialization.get("expected_checkpoint") or {}).get("output_id") or ""
                 ).strip()
+            doc73_skeleton: dict[str, Any] = {}
+            plan_position = request.metadata.get("output_index")
+            project_id = str(request.metadata.get("project_id") or "").strip()
+            source_receipt = request.metadata.get("doc73_auto_identity_anchor_receipt")
+            if index == 0 and type(plan_position) is int:
+                if isinstance(source_receipt, dict):
+                    doc73_skeleton = issue_doc73_auto_identity_anchor_target_skeleton(
+                        request.metadata,
+                        source_binding=source_receipt,
+                        job_id=job_id,
+                        project_id=project_id,
+                        asset_id=request.generation_plan.asset_id,
+                        plan_position=plan_position,
+                    )
+                elif retry_attempt == 0 and type(planned_output_index) is int:
+                    doc73_skeleton = issue_doc73_auto_identity_anchor_source_skeleton(
+                        request.metadata,
+                        job_id=job_id,
+                        project_id=project_id,
+                        asset_id=request.generation_plan.asset_id,
+                        plan_position=plan_position,
+                        output_index=planned_output_index,
+                        candidate_id=candidate_id,
+                        refine_round=int(request.metadata.get("refine_round") or 0),
+                        retry_attempt=retry_attempt,
+                    )
             record = self.output_store.save_base64_output(
                 job_id=job_id,
                 candidate_id=candidate_id,
@@ -1252,6 +1286,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "mode_role_label": mode_role_recipe.get("label"),
                     "strong_reference_closure_package": strong_reference_closure,
                     "mode_quality_profile": mode_quality_profile,
+                    **(
+                        {DOC73_AUTO_IDENTITY_ANCHOR_SKELETON_KEY: doc73_skeleton}
+                        if doc73_skeleton
+                        else {}
+                    ),
                     **output_binding,
                 },
             )
@@ -1352,6 +1391,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "mode_role_label": mode_role_recipe.get("label"),
                         "strong_reference_closure_package": strong_reference_closure,
                         "mode_quality_profile": mode_quality_profile,
+                        DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: record.metadata.get(
+                            DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY
+                        ),
                     },
                 )
             )
@@ -4327,6 +4369,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             asset_id = str(asset.get("asset_id") or f"reference_{index + 1}")
             source_order.append(asset_id)
             asset_metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+            is_doc73_continuity = self._is_doc73_auto_continuity_source(asset)
             codex_native_channel = str(
                 asset.get("codex_native_reference_channel")
                 or asset_metadata.get("codex_native_reference_channel")
@@ -4352,7 +4395,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
             layers: list[str] = []
             priority_note = "style_or_context_reference"
             channel_policy = self._reference_channel_policy_for_asset(request, asset)
-            if is_body_proportion:
+            if is_doc73_continuity:
+                # Same-batch continuity is provider input context only.  It is
+                # deliberately represented in the package without any formal
+                # truth layer so the review resolver cannot manufacture a
+                # person_identity requirement from it.
+                priority_note = "doc73_auto_batch_continuity_input"
+            elif is_body_proportion:
                 layers = ["body_proportion_truth"]
                 priority_note = "professional_server_owned_body_proportion_truth"
             elif (
@@ -4788,6 +4837,14 @@ class ProductionImageGenerationProvider(GenerationProvider):
             return True
         asset_id = str(asset.get("asset_id") or "").lower()
         return asset_id.startswith("v3_asset") or asset_id.startswith("uploaded")
+
+    @staticmethod
+    def _is_doc73_auto_continuity_source(asset: dict[str, Any]) -> bool:
+        metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+        binding = asset.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+        if not isinstance(binding, dict):
+            binding = metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+        return isinstance(binding, dict) and binding.get("origin") == "auto_batch_continuity"
 
     def _is_selected_generated_source(self, asset: dict[str, Any]) -> bool:
         source_type = str(asset.get("source_type") or "").lower()

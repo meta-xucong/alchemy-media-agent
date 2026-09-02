@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from ...creative_core.rules import stable_id
+from ...creative_core.doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    validate_doc73_binding,
+)
 from .contracts import ReviewEvidenceChannel, ReviewEvidencePlan
 
 
@@ -50,6 +54,14 @@ class ExactReviewEvidenceResolver:
             )
             for spec in active_specs
         ]
+        continuity_state = self._doc73_continuity_state(
+            record=record,
+            request=request,
+            resolution=resolution,
+            candidate_records=candidate_records,
+            job_id=job_id,
+            output_id=output_id,
+        )
         missing_required = bool(audit_present and not admitted_specs)
         channels: dict[str, ReviewEvidenceChannel] = {}
         for channel in _REFERENCE_CHANNELS:
@@ -113,6 +125,7 @@ class ExactReviewEvidenceResolver:
             "review_reference_evidence_available": any(
                 channels[name].evidence_state == "available" for name in _REFERENCE_CHANNELS
             ),
+            "doc73_auto_identity_anchor_review": continuity_state,
         }
         uploaded_assets = [
             self._review_asset(entry)
@@ -165,7 +178,19 @@ class ExactReviewEvidenceResolver:
             audit = item.get("reference_input_execution")
             audit_present = isinstance(audit, dict)
             admitted = ExactReviewEvidenceResolver._is_admitted_pixels_received(audit)
-            source_ids = _dedupe_strings(item.get("reference_truth_source_ids") or item.get("reference_asset_ids") or [])
+            auto_output_ids = ExactReviewEvidenceResolver._doc73_output_ids(item)
+            if "reference_truth_source_ids" in item:
+                source_ids = [
+                    source_id
+                    for source_id in _dedupe_strings(item.get("reference_truth_source_ids"))
+                    if source_id not in auto_output_ids
+                ]
+            else:
+                source_ids = [
+                    source_id
+                    for source_id in _dedupe_strings(item.get("reference_asset_ids"))
+                    if source_id not in auto_output_ids
+                ]
             claimed_channel = str(item.get("reference_truth_channel") or item.get("reference_channel") or "").strip().lower()
             claimed_role = str(item.get("reference_truth_role") or item.get("reference_role") or "").strip()
             for source_id in source_ids:
@@ -179,6 +204,152 @@ class ExactReviewEvidenceResolver:
                     }
                 )
         return _dedupe_specs(specs)
+
+    @staticmethod
+    def _doc73_bindings(record: dict[str, Any]) -> list[dict[str, Any]]:
+        values: list[dict[str, Any]] = []
+
+        def add(value: Any) -> None:
+            if isinstance(value, dict) and value.get("origin") == "auto_batch_continuity":
+                values.append(value)
+
+        add(record.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY))
+        metadata = record.get("metadata")
+        if isinstance(metadata, dict):
+            add(metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY))
+        candidate_metadata = record.get("candidate_metadata")
+        if isinstance(candidate_metadata, dict):
+            add(candidate_metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY))
+        return _dedupe_record_dicts(values)
+
+    @classmethod
+    def _doc73_output_ids(cls, record: dict[str, Any]) -> set[str]:
+        output_ids: set[str] = set()
+        for binding in cls._doc73_bindings(record):
+            for key in ("source_output_id", "target_output_id"):
+                value = str(binding.get(key) or "").strip()
+                if value:
+                    output_ids.add(value)
+        return output_ids
+
+    def _doc73_continuity_state(
+        self,
+        *,
+        record: Any,
+        request: Any,
+        resolution: Any,
+        candidate_records: list[dict[str, Any]],
+        job_id: str,
+        output_id: str,
+    ) -> dict[str, Any]:
+        bindings = [binding for item in candidate_records for binding in self._doc73_bindings(item)]
+        bindings = _dedupe_record_dicts(bindings)
+        if not bindings:
+            return {"state": "not_provided"}
+        target_record = self.output_store.get_output(output_id) if output_id else None
+        project_id = str(
+            (getattr(request, "metadata", {}) or {}).get("project_id")
+            if request is not None and isinstance(getattr(request, "metadata", {}), dict)
+            else ""
+        ).strip()
+        if target_record is not None and not project_id:
+            project_id = str((target_record.metadata or {}).get("project_id") or "").strip()
+        batch_plan_digest = self._doc73_current_batch_plan_digest(request, target_record)
+        if not batch_plan_digest:
+            return {"state": "invalid", "reason": "doc73_batch_plan_digest_missing"}
+        for binding in bindings:
+            if not validate_doc73_binding(
+                binding,
+                expected_job_id=job_id,
+                expected_project_id=project_id or None,
+                expected_batch_plan_digest=batch_plan_digest,
+                expected_output_id=output_id or None,
+            ):
+                continue
+            if target_record is None:
+                continue
+            if str(binding.get("source_output_id") or "").strip() == output_id:
+                if self._doc73_source_record_is_valid(
+                    binding,
+                    target_record,
+                    job_id,
+                    project_id,
+                    batch_plan_digest,
+                ):
+                    return {"state": "available", "role": "source"}
+                continue
+            if str(binding.get("target_output_id") or "").strip() != output_id:
+                continue
+            if str(target_record.job_id or "").strip() != job_id:
+                continue
+            if str(target_record.asset_id or "").strip() != str(binding.get("target_asset_id") or "").strip():
+                continue
+            source_id = str(binding.get("source_output_id") or "").strip()
+            source_record = self.output_store.get_output(source_id)
+            if source_record is None:
+                continue
+            source_binding = source_record.metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+            if not isinstance(source_binding, dict):
+                continue
+            if str(source_binding.get("binding_digest") or "") != str(binding.get("source_binding_digest") or ""):
+                continue
+            if not self._doc73_source_record_is_valid(
+                source_binding,
+                source_record,
+                job_id,
+                project_id,
+                batch_plan_digest,
+            ):
+                continue
+            target_state = self._persisted_file_state(target_record, "auto_batch_continuity")
+            if target_state.get("state") != "available":
+                continue
+            return {"state": "available", "role": "target"}
+        return {"state": "invalid", "reason": "doc73_binding_invalid"}
+
+    @staticmethod
+    def _doc73_current_batch_plan_digest(request: Any, target_record: Any) -> str:
+        """Read the frozen batch digest from server-owned review context."""
+
+        sources = []
+        request_metadata = getattr(request, "metadata", {}) if request is not None else {}
+        if isinstance(request_metadata, dict):
+            sources.append(request_metadata)
+        target_metadata = getattr(target_record, "metadata", {}) if target_record is not None else {}
+        if isinstance(target_metadata, dict):
+            sources.append(target_metadata)
+        for source in sources:
+            value = str(source.get("doc73_batch_plan_digest") or "").strip().lower()
+            if len(value) == 64 and all(character in "0123456789abcdef" for character in value):
+                return value
+        return ""
+
+    def _doc73_source_record_is_valid(
+        self,
+        binding: dict[str, Any],
+        output: Any,
+        job_id: str,
+        project_id: str,
+        batch_plan_digest: str,
+    ) -> bool:
+        expected_project_id = project_id or str((getattr(output, "metadata", {}) or {}).get("project_id") or "").strip()
+        if not validate_doc73_binding(
+            binding,
+            expected_job_id=job_id,
+            expected_project_id=expected_project_id or None,
+            expected_batch_plan_digest=batch_plan_digest,
+            expected_output_id=str(getattr(output, "output_id", "") or "").strip(),
+            expected_source_asset_id=str(binding.get("source_asset_id") or "").strip(),
+            expected_source_plan_position=0,
+            expected_source_candidate_id=str(getattr(output, "candidate_id", "") or "").strip(),
+        ):
+            return False
+        state = self._persisted_file_state(
+            output,
+            "auto_batch_continuity",
+            expected_integrity_id=str(binding.get("source_content_sha256") or ""),
+        )
+        return state.get("state") == "available"
 
     @staticmethod
     def _is_admitted_pixels_received(audit: Any) -> bool:

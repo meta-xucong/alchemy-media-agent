@@ -97,7 +97,13 @@ class AssetPackager:
     ) -> CommercialAssetPack:
         layouts_by_asset = {layout.asset_id: layout for layout in layout_plans}
         prompts_by_asset = {prompt.asset_id: prompt for prompt in prompt_compilations}
-        candidates_by_asset = {candidate.asset_id: candidate for candidate in selected_candidates}
+        # One selected candidate per frozen asset position is authoritative.
+        # Keep the first server-selected relationship when an append-only
+        # retry/compatibility projection happens to contain a duplicate asset;
+        # a later candidate must not silently replace the record being reviewed.
+        candidates_by_asset: dict[str, CandidateResult] = {}
+        for candidate in selected_candidates:
+            candidates_by_asset.setdefault(candidate.asset_id, candidate)
         evals_by_candidate_id = {report.candidate_id: report for report in evaluation_reports if report.candidate_id}
         render_entries_by_asset = {layout.asset_id: render_manifest_entry(layout) for layout in layout_plans}
         pack_warnings = warnings or []

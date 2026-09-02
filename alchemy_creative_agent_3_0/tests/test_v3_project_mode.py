@@ -1985,6 +1985,72 @@ def test_project_outputs_mark_retry_superseded_and_final_delivery_group(tmp_path
     assert all(item["metadata"]["retry_superseded"] is False for item in final_outputs)
 
 
+def test_project_outputs_use_job_review_final_ids_over_stale_record_preference(tmp_path, monkeypatch) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects({"user_goal": "Create two reviewed portraits", "title": "Canonical Review"})[
+        "project"
+    ]
+    job = handlers.post_project_job(project["project_id"], {"user_input": "Create two matching portraits"})
+    original_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=0,
+        count=2,
+        prefix="stale_preference",
+    )
+    retry_ids = _save_project_output_batch(
+        handlers,
+        job_id=job["job_id"],
+        attempt=1,
+        count=2,
+        prefix="canonical_review",
+    )
+    for output_id in original_ids:
+        handlers.service.output_store.update_metadata(output_id, {"delivery_preferred_output": True})
+
+    original_get_job = handlers.service.get_job
+    base_status = original_get_job(job["job_id"])
+    reviewed_status = base_status.model_copy(
+        update={
+            "status": ProductJobStatusValue.GENERATED,
+            "metadata": {
+                **dict(base_status.metadata or {}),
+                "post_generation_review": {
+                    "recommended_output_ids": retry_ids,
+                    "inspections": [
+                        {
+                            "output_id": output_id,
+                            "mode": "hybrid",
+                            "status": "pass",
+                            "verification_state": "verified",
+                        }
+                        for output_id in retry_ids
+                    ],
+                },
+                "final_delivery": {
+                    "final_delivery_status": "ready",
+                    "automatic_delivery_available": True,
+                    "manual_confirmation_required": False,
+                    "delivery_gate_applies": True,
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(
+        handlers.service,
+        "get_job",
+        lambda target_job_id: reviewed_status if target_job_id == job["job_id"] else original_get_job(target_job_id),
+    )
+
+    payload = handlers.get_project_outputs(project_id=project["project_id"], limit=20, compact=True)
+    visible_ids = {item["output_id"] for item in payload["items"]}
+    review_ids = {item["output_id"] for item in payload["review_items"]}
+
+    assert visible_ids == set(retry_ids)
+    assert not visible_ids.intersection(original_ids)
+    assert set(original_ids).issubset(review_ids)
+
+
 def test_project_outputs_keep_complete_original_when_retry_is_incomplete(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     project = handlers.post_projects({"user_goal": "Create four complete images", "title": "Incomplete Retry"})[

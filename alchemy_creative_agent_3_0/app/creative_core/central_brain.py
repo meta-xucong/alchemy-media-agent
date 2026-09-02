@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
 
 from .context import PipelineContext
 from .rules import RULE_VERSION, stable_id
+from .doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    doc73_batch_plan_digest,
+    validate_doc73_binding,
+)
 from ..agents import (
     AssetPackagerAgent,
     BrandMemoryAgent,
@@ -380,6 +387,14 @@ class CentralCreativeBrain:
         require_independent_role_terminal_states = self._requires_independent_role_terminal_states(context)
         requested_image_count = _requested_image_count_for_context(context)
         planned_asset_count = len(context.series_plan.assets) if context.series_plan else 0
+        batch_plan_digest = self._doc73_batch_plan_digest(context)
+        context.metadata["doc73_batch_plan_digest"] = batch_plan_digest
+        if auto_identity_anchor_enabled:
+            auto_identity_anchor_reference = self._auto_identity_anchor_reference_from_receipt(
+                context.metadata.get("doc73_auto_identity_anchor_receipt"),
+                context.metadata.get("doc73_auto_identity_anchor_reference"),
+                context=context,
+            )
         if (
             not require_independent_role_terminal_states
             and requested_image_count is not None
@@ -474,6 +489,13 @@ class CentralCreativeBrain:
                 ),
                 "doc270_ecommerce_view_activation_receipts": context.metadata.get(
                     "doc270_ecommerce_view_activation_receipts"
+                ),
+                "doc73_batch_plan_digest": batch_plan_digest,
+                "doc73_auto_identity_anchor_receipt": context.metadata.get(
+                    "doc73_auto_identity_anchor_receipt"
+                ),
+                "doc73_auto_identity_anchor_reference": context.metadata.get(
+                    "doc73_auto_identity_anchor_reference"
                 ),
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
@@ -632,7 +654,13 @@ class CentralCreativeBrain:
             pack_warnings.extend(asset_warnings)
             if selected_candidate is not None:
                 context.selected_candidates.append(selected_candidate)
-                if auto_identity_anchor_enabled and auto_identity_anchor_reference is None:
+                if (
+                    auto_identity_anchor_enabled
+                    and auto_identity_anchor_reference is None
+                    and index == 0
+                    and selected_evaluation is not None
+                    and selected_evaluation.recommendation == Recommendation.ACCEPT
+                ):
                     auto_identity_anchor_reference = self._auto_identity_anchor_reference_from_candidate(
                         selected_candidate,
                         asset=asset,
@@ -772,6 +800,21 @@ class CentralCreativeBrain:
                 ),
                 "effective_variation_mode": context.metadata.get("effective_variation_mode")
                 or context.metadata.get("variation_mode"),
+                "doc73_batch_plan_digest": batch_plan_digest,
+                **(
+                    {
+                        "doc73_auto_identity_anchor_receipt": dict(
+                            auto_identity_anchor_reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) or {}
+                        ),
+                        "doc73_auto_identity_anchor_reference": dict(auto_identity_anchor_reference),
+                    }
+                    if isinstance(auto_identity_anchor_reference, dict)
+                    and isinstance(
+                        auto_identity_anchor_reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY),
+                        dict,
+                    )
+                    else {}
+                ),
             },
         )
 
@@ -884,6 +927,16 @@ class CentralCreativeBrain:
     def _llm_brain_metadata(self, context: PipelineContext) -> dict[str, Any]:
         value = context.metadata.get("llm_brain")
         return value if isinstance(value, dict) else {}
+
+    def _doc73_batch_plan_digest(self, context: PipelineContext) -> str:
+        # The digest is derived from the frozen server plan at the point where
+        # the Brain has materialized that plan.  A same-shaped value in
+        # runtime metadata is not an authority and must not select a different
+        # continuity batch.
+        return doc73_batch_plan_digest(
+            job_id=context.creative_job.job_id if context.creative_job else "",
+            assets=list(context.series_plan.assets if context.series_plan else []),
+        )
 
     def _uses_brain_owned_forward_execution(self, context: PipelineContext) -> bool:
         """Return whether local vertical creative refinements are forbidden.
@@ -1327,7 +1380,51 @@ class CentralCreativeBrain:
             "auto_batch_identity_anchor_applied": True,
             "auto_batch_identity_anchor_source_output_id": auto_reference.get("output_id"),
             "auto_batch_identity_anchor_source_candidate_id": auto_reference.get("candidate_id"),
+            "doc73_auto_identity_anchor_receipt": dict(
+                auto_reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) or {}
+            ),
+            "doc73_auto_identity_anchor_reference": dict(auto_reference),
         }
+
+    def _auto_identity_anchor_reference_from_receipt(
+        self,
+        receipt: Any,
+        transport_reference: Any,
+        *,
+        context: PipelineContext,
+    ) -> dict[str, Any] | None:
+        if not isinstance(receipt, dict) or not isinstance(transport_reference, dict):
+            return None
+        source_output_id = str(receipt.get("source_output_id") or "").strip()
+        source_candidate_id = str(receipt.get("source_candidate_id") or "").strip()
+        file_path = str(transport_reference.get("file_path") or "").strip()
+        if not source_output_id or not source_candidate_id or not file_path:
+            return None
+        if not validate_doc73_binding(
+            receipt,
+            expected_job_id=context.creative_job.job_id if context.creative_job else None,
+            expected_project_id=str(context.metadata.get("project_id") or "").strip() or None,
+            expected_batch_plan_digest=context.metadata.get("doc73_batch_plan_digest"),
+            expected_output_id=source_output_id,
+            expected_source_asset_id=str(receipt.get("source_asset_id") or "").strip(),
+            expected_source_plan_position=0,
+            expected_source_candidate_id=source_candidate_id,
+        ):
+            return None
+        path = Path(file_path)
+        try:
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != str(
+                receipt.get("source_content_sha256") or ""
+            ).strip().lower():
+                return None
+        except OSError:
+            return None
+        return self._auto_identity_anchor_reference_from_binding(
+            receipt,
+            file_path=file_path,
+            candidate_id=source_candidate_id,
+            context=context,
+        )
 
     def _auto_identity_anchor_reference_from_candidate(
         self,
@@ -1336,23 +1433,66 @@ class CentralCreativeBrain:
         asset,
         context: PipelineContext,
     ) -> dict[str, Any] | None:
-        file_path = str(candidate.file_path or "").strip()
-        if not file_path:
+        binding = candidate.metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+        if not isinstance(binding, dict):
             return None
-        output_id = str(candidate.metadata.get("output_id") or candidate.candidate_id)
+        output_id = str(binding.get("source_output_id") or "").strip()
+        file_path = str(candidate.file_path or "").strip()
+        project_id = str(context.metadata.get("project_id") or "").strip()
+        batch_digest = str(context.metadata.get("doc73_batch_plan_digest") or "").strip()
+        if (
+            not output_id
+            or not file_path
+            or not project_id
+            or not validate_doc73_binding(
+                binding,
+                expected_job_id=context.creative_job.job_id if context.creative_job else None,
+                expected_project_id=project_id,
+                expected_batch_plan_digest=batch_digest,
+                expected_output_id=output_id,
+                expected_source_asset_id=str(getattr(asset, "asset_id", "") or "").strip(),
+                expected_source_plan_position=0,
+                expected_source_candidate_id=candidate.candidate_id,
+            )
+        ):
+            return None
+        try:
+            if not Path(file_path).is_file() or hashlib.sha256(Path(file_path).read_bytes()).hexdigest() != str(
+                binding.get("source_content_sha256") or ""
+            ).strip().lower():
+                return None
+        except OSError:
+            return None
+        return self._auto_identity_anchor_reference_from_binding(
+            binding,
+            file_path=file_path,
+            candidate_id=candidate.candidate_id,
+            context=context,
+        )
+
+    def _auto_identity_anchor_reference_from_binding(
+        self,
+        binding: dict[str, Any],
+        *,
+        file_path: str,
+        candidate_id: str,
+        context: PipelineContext,
+    ) -> dict[str, Any]:
+        output_id = str(binding.get("source_output_id") or "").strip()
         return {
             "asset_id": output_id,
             "source_id": output_id,
             "output_id": output_id,
-            "candidate_id": candidate.candidate_id,
-            "source_type": "generated_first_output",
-            "role": "identity_anchor",
-            "use_policy": "identity",
+            "candidate_id": candidate_id,
+            "source_type": "auto_batch_continuity",
+            "origin": "auto_batch_continuity",
+            "role": "continuity_reference",
+            "use_policy": "continuity",
             "strength": "hard",
             "provider_input_required": True,
             "file_path": file_path,
-            "filename": f"{output_id}.png",
-            "mime_type": str(candidate.metadata.get("mime_type") or "image/png"),
+            "filename": Path(file_path).name,
+            "mime_type": "image/png",
             "lock_targets": [
                 "broad face shape",
                 "eye shape and spacing",
@@ -1364,12 +1504,15 @@ class CentralCreativeBrain:
             "metadata": {
                 "doc": "73",
                 "auto_batch_identity_anchor": True,
-                "source_asset_id": getattr(asset, "asset_id", None),
+                "origin": "auto_batch_continuity",
+                DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: dict(binding),
+                "source_asset_id": binding.get("source_asset_id"),
                 "project_id": context.metadata.get("project_id"),
                 "template_id": context.metadata.get("template_id"),
                 "user_reference_priority": True,
                 "doc93_reference_channel_safe": True,
             },
+            DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: dict(binding),
         }
 
     def _non_empty_dict_list(self, value: Any) -> bool:

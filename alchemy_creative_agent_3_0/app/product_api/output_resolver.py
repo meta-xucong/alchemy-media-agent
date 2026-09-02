@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..creative_core.rules import stable_id
+from ..creative_core.doc281_output_plan_binding import DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY
 from ..schemas import PackagedAsset, PlanningResult
 from ..shared_capabilities.visual_cluster import GeneratedOutputResolution
 from .outputs import V3GeneratedOutputRecord, V3GeneratedOutputStore
@@ -35,6 +36,20 @@ class GeneratedOutputResolver:
             record = self.output_store.get_output(str(output_id))
             if record is not None:
                 return self._from_record(record, asset, project_id=project_id)
+            binding = candidate_metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+            if not isinstance(binding, dict):
+                binding = metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+            if isinstance(binding, dict) and binding.get("origin") == "auto_batch_continuity":
+                return self._missing_resolution(
+                    job_id,
+                    asset,
+                    project_id=project_id,
+                    candidate_id=candidate_id,
+                    output_id=output_id,
+                    status="unbound",
+                    warning="Automatic continuity output has no canonical persisted record.",
+                    candidate_metadata=candidate_metadata,
+                )
         file_path = asset.file_path or candidate_metadata.get("file_path")
         if file_path:
             path = Path(str(file_path))

@@ -26,7 +26,11 @@ from ..app_shell.navigation import get_navigation_entry
 from ..app_shell.routes import API_NAMESPACE, get_route_contracts
 from ..brand_memory.profile_service import BrandProfileService
 from ..creative_core.rules import RULE_VERSION, stable_id
-from ..creative_core.doc281_output_plan_binding import issue_doc281_output_plan_binding
+from ..creative_core.doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    validate_doc73_binding,
+    issue_doc281_output_plan_binding,
+)
 from ..generation_router import GenerationRouter, ProductionImageGenerationProvider, safe_runtime_execution_budget
 from ..generation_router.providers import McpMaterializationProvider, build_provider_generation_request
 from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
@@ -6577,6 +6581,7 @@ class V3ProductApiService:
 
         record.request.metadata = {
             **base_metadata,
+            **self._doc73_retry_metadata(merged_result),
             "visual_auto_retry": self._visual_auto_retry_summary(records, max_attempts),
         }
         merged_result = self._with_doc276_face_integrity_retry_receipt(
@@ -7258,6 +7263,145 @@ class V3ProductApiService:
         summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
         return dict(summary) if isinstance(summary, dict) else {}
 
+    def _doc73_retry_metadata(self, result: PlanningResult) -> dict[str, Any]:
+        """Reuse only a canonical, persisted Doc73 source output on retry.
+
+        The first generated output is an automatic continuity input only after
+        its finalized binding and bytes can be re-read from OutputStore.  A
+        candidate path, output id, or result-local metadata on its own is not
+        enough to become a retry reference.
+        """
+
+        receipt: Any = None
+        job_id = str(getattr(result.creative_job, "job_id", "") or "").strip()
+        result_metadata = dict(result.metadata or {})
+        candidate_sources = (
+            result_metadata,
+            dict(result.asset_pack.metadata or {}),
+            dict(result.asset_pack.manifest or {}),
+        )
+        for source in candidate_sources:
+            value = source.get("doc73_auto_identity_anchor_receipt")
+            if isinstance(value, dict):
+                receipt = value
+                break
+        if receipt is None:
+            for asset in result.asset_pack.assets:
+                asset_metadata = dict(asset.metadata or {})
+                candidate_metadata = asset_metadata.get("candidate_metadata")
+                if isinstance(candidate_metadata, dict):
+                    value = candidate_metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+                    if isinstance(value, dict):
+                        receipt = value
+                        break
+        if receipt is None and job_id:
+            receipt_reader = getattr(self.output_store, "get_doc73_auto_identity_anchor_receipt", None)
+            if callable(receipt_reader):
+                receipt = receipt_reader(job_id)
+        if not isinstance(receipt, dict):
+            return {}
+
+        expected_batch_plan_digest = ""
+        for source in candidate_sources:
+            value = str(source.get("doc73_batch_plan_digest") or "").strip().lower()
+            if len(value) == 64 and all(character in "0123456789abcdef" for character in value):
+                expected_batch_plan_digest = value
+                break
+        if not expected_batch_plan_digest:
+            return {}
+
+        source_output_id = str(receipt.get("source_output_id") or "").strip()
+        source_candidate_id = str(receipt.get("source_candidate_id") or "").strip()
+        project_id = str(receipt.get("project_id") or "").strip()
+        if not source_output_id or not source_candidate_id or not job_id or not project_id:
+            return {}
+        if not validate_doc73_binding(
+            receipt,
+            expected_job_id=job_id,
+            expected_project_id=project_id,
+            expected_batch_plan_digest=expected_batch_plan_digest,
+            expected_output_id=source_output_id,
+            expected_source_asset_id=str(receipt.get("source_asset_id") or "").strip(),
+            expected_source_plan_position=0,
+            expected_source_candidate_id=source_candidate_id,
+        ):
+            return {}
+
+        source_record = self.output_store.get_output(source_output_id)
+        if source_record is None:
+            return {}
+        record_metadata = dict(source_record.metadata or {})
+        record_binding = record_metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+        if (
+            not isinstance(record_binding, dict)
+            or record_binding != receipt
+            or source_record.job_id != job_id
+            or source_record.candidate_id != source_candidate_id
+            or source_record.asset_id != str(receipt.get("source_asset_id") or "").strip()
+            or str(record_metadata.get("project_id") or "").strip() != project_id
+        ):
+            return {}
+        if not validate_doc73_binding(
+            record_binding,
+            expected_job_id=job_id,
+            expected_project_id=project_id,
+            expected_batch_plan_digest=expected_batch_plan_digest,
+            expected_output_id=source_output_id,
+            expected_source_asset_id=source_record.asset_id,
+            expected_source_plan_position=0,
+            expected_source_candidate_id=source_candidate_id,
+        ):
+            return {}
+        source_path = Path(source_record.file_path)
+        try:
+            if (
+                not source_path.is_file()
+                or hashlib.sha256(source_path.read_bytes()).hexdigest()
+                != str(receipt.get("source_content_sha256") or "").strip().lower()
+            ):
+                return {}
+        except OSError:
+            return {}
+
+        reference = {
+            "asset_id": source_output_id,
+            "source_id": source_output_id,
+            "output_id": source_output_id,
+            "candidate_id": source_candidate_id,
+            "source_type": "auto_batch_continuity",
+            "origin": "auto_batch_continuity",
+            "role": "continuity_reference",
+            "use_policy": "continuity",
+            "strength": "hard",
+            "provider_input_required": True,
+            "file_path": str(source_path),
+            "filename": source_path.name,
+            "mime_type": source_record.mime_type or "image/png",
+            "lock_targets": [
+                "broad face shape",
+                "eye shape and spacing",
+                "nose-mouth relationship",
+                "jawline direction",
+                "age impression",
+                "body type and proportions",
+            ],
+            "metadata": {
+                "doc": "73",
+                "auto_batch_identity_anchor": True,
+                "origin": "auto_batch_continuity",
+                DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: dict(receipt),
+                "source_asset_id": receipt.get("source_asset_id"),
+                "project_id": project_id,
+                "user_reference_priority": True,
+                "doc93_reference_channel_safe": True,
+            },
+            DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: dict(receipt),
+        }
+        return {
+            "doc73_auto_identity_anchor_receipt": dict(receipt),
+            "doc73_auto_identity_anchor_reference": reference,
+        }
+
     def _resolved_retry_metadata(self, result: PlanningResult, retry_patch: dict[str, Any]) -> dict[str, Any]:
         """Carry retry evidence through the shared runtime without local prose.
 
@@ -7267,13 +7411,21 @@ class V3ProductApiService:
         retry input the canonical prompt finalizer may use.
         """
 
+        doc73_metadata = self._doc73_retry_metadata(result)
         plan = self._activation_plan_from_result(result)
         if str(plan.get("activation_mode") or "").lower() != "enforced":
-            return {"visual_retry_patch": dict(retry_patch)} if self._legacy_prompt_compatibility_allowed(result) else {}
+            return {
+                **doc73_metadata,
+                **(
+                    {"visual_retry_patch": dict(retry_patch)}
+                    if self._legacy_prompt_compatibility_allowed(result)
+                    else {}
+                ),
+            }
         plan_id = str(plan.get("plan_id") or "").strip()
         fingerprint = str(plan.get("fingerprint") or "").strip()
         if not plan_id or not fingerprint:
-            return {}
+            return doc73_metadata
         if self._uses_brain_signed_provider_prompts(result):
             provenance = {
                 "authority": "v3_product_api",
@@ -7286,9 +7438,11 @@ class V3ProductApiService:
             if observed_evidence:
                 provenance["observed_review_evidence"] = observed_evidence
             return {
+                **doc73_metadata,
                 "resolved_retry_provenance": provenance,
             }
         return {
+            **doc73_metadata,
             "resolved_retry_patch": dict(retry_patch),
             "resolved_retry_provenance": {
                 "authority": "v3_product_api",
@@ -10310,6 +10464,7 @@ class V3ProductApiService:
             "provider_response_summary",
             "runtime_transport",
             "final_provider_prompt",
+            "provider_reference_assets",
             "professional_standard_front_framing_profile",
             "post_generation_review_package",
             "observed_review_evidence",
@@ -10323,6 +10478,15 @@ class V3ProductApiService:
             "doc270_general_source_activation_receipts",
             "doc270_general_original_source_projection",
             "doc270_general_command_identity",
+            "doc73_batch_plan_digest",
+            "doc73_auto_identity_anchor_binding",
+            "doc73_auto_identity_anchor_skeleton",
+            "doc73_auto_identity_anchor_receipt",
+            "doc73_auto_identity_anchor_reference",
+            "auto_batch_identity_anchor_policy",
+            "auto_batch_identity_anchor_applied",
+            "auto_batch_identity_anchor_source_output_id",
+            "auto_batch_identity_anchor_source_candidate_id",
         }
         if isinstance(value, dict):
             projected: dict[str, Any] = {}
@@ -11381,7 +11545,9 @@ class V3ProductApiService:
         asset_series: list[AssetSeriesItem] = []
         candidates: list[CandidateSummary] = []
         for index, record in enumerate(records):
-            candidate_metadata = self._candidate_metadata_from_output_record(record)
+            candidate_metadata = self._public_metadata_projection(
+                self._candidate_metadata_from_output_record(record)
+            )
             asset_series.append(
                 AssetSeriesItem(
                     asset_id=record.asset_id,
@@ -12937,6 +13103,9 @@ class V3ProductApiService:
             "doc270_ecommerce_view_activation_receipts",
             "doc270_ecommerce_view_activation_selection",
             "provider_image_options",
+            "doc73_batch_plan_digest",
+            "doc73_auto_identity_anchor_receipt",
+            "doc73_auto_identity_anchor_reference",
         }
     )
 

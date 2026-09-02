@@ -9949,13 +9949,20 @@ class V3ProjectModeService:
             return []
         urls: list[str] = []
         for job_id in reversed(project.job_ids):
-            if not self._project_job_delivery_is_settled(job_id):
+            try:
+                job_status = self.product_service.get_job(job_id)
+            except Exception:
+                continue
+            if not self._job_delivery_is_settled(job_status):
                 continue
             try:
                 records = output_store.list_by_job(job_id)
             except Exception:
                 continue
-            delivery = self._delivery_annotations_for_records(records)
+            delivery = self._delivery_annotations_for_records(
+                records,
+                final_output_ids=self._canonical_final_delivery_output_ids(job_status),
+            )
             for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
                 delivery_state = delivery.get(self._output_record_identity(record), {}).get("delivery_state")
                 if delivery_state != "final_delivery":
@@ -9967,7 +9974,12 @@ class V3ProjectModeService:
                         return list(dict.fromkeys(urls))[:limit]
         return list(dict.fromkeys(urls))[:limit]
 
-    def _delivery_annotations_for_records(self, records: list[Any]) -> dict[str, dict[str, Any]]:
+    def _delivery_annotations_for_records(
+        self,
+        records: list[Any],
+        *,
+        final_output_ids: set[str] | None = None,
+    ) -> dict[str, dict[str, Any]]:
         usable_records = [record for record in records if self._output_record_has_usable_image(record)]
         if not usable_records:
             return {}
@@ -9986,7 +9998,18 @@ class V3ProjectModeService:
             if bool((getattr(record, "metadata", None) or {}).get("delivery_preferred_output"))
         ]
         preference_active = bool(preferred_records)
-        if preference_active:
+        if final_output_ids is not None:
+            final_records = [
+                record
+                for record in usable_records
+                if self._output_record_identity(record) in final_output_ids
+                and not self._output_record_is_review_rejected(record)
+            ]
+            final_attempt = max(
+                (self._output_record_retry_attempt(record) for record in final_records),
+                default=max(sorted_attempts),
+            )
+        elif preference_active:
             preferred_records.sort(key=lambda item: item.created_at or "")
             final_records = preferred_records[:requested_count]
             final_attempt = self._output_record_retry_attempt(final_records[0])
@@ -10689,7 +10712,10 @@ class V3ProjectModeService:
                 continue
             if not self._job_record_visible_to_owner(job_record, owner_user_id):
                 continue
-            delivery = self._delivery_annotations_for_records(records)
+            delivery = self._delivery_annotations_for_records(
+                records,
+                final_output_ids=self._canonical_final_delivery_output_ids(job_status),
+            )
             for record in sorted(records, key=lambda item: item.created_at or "", reverse=True):
                 if not self._output_record_visible_to_owner(record, owner_user_id):
                     continue
@@ -10868,6 +10894,37 @@ class V3ProjectModeService:
         }
 
     @staticmethod
+    def _canonical_final_delivery_output_ids(job_status: ProductJobStatus) -> set[str] | None:
+        """Return the Job-owned final output set when a modern review gate applies."""
+
+        metadata = dict(job_status.metadata or {})
+        final_delivery = metadata.get("final_delivery")
+        if not isinstance(final_delivery, dict) or not bool(final_delivery.get("delivery_gate_applies")):
+            return None
+        if final_delivery.get("automatic_delivery_available") is not True:
+            return set()
+        review = metadata.get("post_generation_review")
+        if not isinstance(review, dict):
+            return set()
+        if "recommended_output_ids" in review:
+            values = review.get("recommended_output_ids")
+            if not isinstance(values, list):
+                return set()
+            return {str(value).strip() for value in values if str(value).strip()}
+        review_items = review.get("review_items", review.get("inspections", []))
+        if not isinstance(review_items, list):
+            return set()
+        return {
+            str(item.get("output_id") or "").strip()
+            for item in review_items
+            if isinstance(item, dict)
+            and str(item.get("output_id") or "").strip()
+            and str(item.get("mode") or "").strip().lower() in {"vision_model", "hybrid"}
+            and str(item.get("verification_state") or "").strip().lower() == "verified"
+            and str(item.get("status") or "").strip().lower() in {"pass", "warning"}
+        }
+
+    @staticmethod
     def _public_output_review_projection(job_status: ProductJobStatus, record: Any) -> dict[str, Any]:
         """Project safe, per-output projection of the canonical shared review.
 
@@ -10897,6 +10954,7 @@ class V3ProjectModeService:
         final_delivery = metadata.get("final_delivery")
         final_delivery = dict(final_delivery) if isinstance(final_delivery, dict) else {}
         public_delivery_state = str(final_delivery.get("final_delivery_status") or "not_evaluated").strip().lower()
+        canonical_final_output_ids = V3ProjectModeService._canonical_final_delivery_output_ids(job_status)
         certified = (
             review_mode in {"vision_model", "hybrid"}
             and verification_state == "verified"
@@ -10922,6 +10980,10 @@ class V3ProjectModeService:
             # public result remains limited to the safe review projection.
             # A baseline ``not_evaluated`` placeholder is not an applied gate.
             "_final_delivery_recorded": bool(final_delivery.get("delivery_gate_applies")),
+            "_final_delivery_output_eligible": (
+                canonical_final_output_ids is None
+                or output_id in canonical_final_output_ids
+            ),
         }
 
     @staticmethod
@@ -10936,7 +10998,10 @@ class V3ProjectModeService:
 
         if not bool(review_projection.get("_final_delivery_recorded")):
             return True
-        return str(review_projection.get("public_delivery_state") or "").strip().lower() == "ready"
+        return (
+            str(review_projection.get("public_delivery_state") or "").strip().lower() == "ready"
+            and bool(review_projection.get("_final_delivery_output_eligible"))
+        )
 
     def _output_ref_from_record(self, project: ProjectRecord, record: Any) -> OutputRef:
         return OutputRef(

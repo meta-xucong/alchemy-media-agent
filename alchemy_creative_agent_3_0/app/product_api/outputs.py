@@ -13,7 +13,13 @@ from pathlib import Path
 import re
 import shutil
 import threading
+from typing import Any
 from uuid import uuid4
+
+from ..creative_core.doc281_output_plan_binding import (
+    finalize_doc73_auto_identity_anchor_binding,
+    validate_doc73_binding,
+)
 
 
 _OUTPUT_ID_PATTERN = re.compile(r"^v3_output_[a-f0-9]{20}$")
@@ -118,6 +124,18 @@ class V3GeneratedOutputStore:
         _write_resized_png(content, thumbnail_path, max_side=512)
 
         stored_metadata = _doc281_bind_output_record_metadata(dict(metadata or {}), output_id=output_id)
+        stored_metadata = finalize_doc73_auto_identity_anchor_binding(
+            stored_metadata,
+            job_id=job_id,
+            project_id=str(stored_metadata.get("project_id") or "").strip(),
+            candidate_id=candidate_id,
+            asset_id=asset_id,
+            output_id=output_id,
+            content_sha256=content_sha256,
+        )
+        source_binding = stored_metadata.get("doc73_auto_identity_anchor_binding")
+        if _is_doc73_source_binding(source_binding) and not self.claim_doc73_auto_identity_anchor(source_binding):
+            stored_metadata.pop("doc73_auto_identity_anchor_binding", None)
         if normalized_dimensions is not None:
             stored_metadata["aspect_ratio_normalization"] = "server_crop_to_explicit_user_ratio"
             stored_metadata["aspect_ratio_source_dimensions"] = {
@@ -163,6 +181,59 @@ class V3GeneratedOutputStore:
             return V3GeneratedOutputRecord(**data)
         except Exception:
             return None
+
+    def claim_doc73_auto_identity_anchor(self, binding: dict) -> bool:
+        """Atomically keep the first valid source binding for one Job."""
+
+        if not _is_doc73_source_binding(binding):
+            return False
+        job_id = str(binding.get("job_id") or "").strip()
+        project_id = str(binding.get("project_id") or "").strip()
+        output_id = str(binding.get("source_output_id") or "").strip()
+        if not job_id or not project_id or not validate_doc73_binding(
+            binding,
+            expected_job_id=job_id,
+            expected_project_id=project_id,
+            expected_output_id=output_id,
+            expected_source_asset_id=str(binding.get("source_asset_id") or "").strip(),
+            expected_source_plan_position=0,
+            expected_source_candidate_id=str(binding.get("source_candidate_id") or "").strip(),
+        ):
+            return False
+        receipt_path = self._doc73_anchor_receipt_path(job_id)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(dict(binding), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        try:
+            descriptor = os.open(
+                receipt_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            )
+        except FileExistsError:
+            return self.get_doc73_auto_identity_anchor_receipt(job_id) == dict(binding)
+        except OSError:
+            return False
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError:
+            try:
+                receipt_path.unlink()
+            except OSError:
+                pass
+            return False
+        return True
+
+    def get_doc73_auto_identity_anchor_receipt(self, job_id: str) -> dict | None:
+        """Read the immutable source receipt used by retry/replay paths."""
+
+        path = self._doc73_anchor_receipt_path(job_id)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
+        return dict(data) if isinstance(data, dict) else None
 
     def list_outputs(self, limit: int = 100) -> list[V3GeneratedOutputRecord]:
         records = self._read_records_cached()
@@ -261,6 +332,10 @@ class V3GeneratedOutputStore:
     def _record_path(self, output_id: str) -> Path:
         return self.storage_root / output_id / "output.json"
 
+    def _doc73_anchor_receipt_path(self, job_id: str) -> Path:
+        job_digest = hashlib.sha256(str(job_id or "").strip().encode("utf-8")).hexdigest()
+        return self.storage_root / "_doc73_anchor_receipts" / f"{job_digest}.json"
+
     def _invalidate_cache(self) -> None:
         with self._cache_lock:
             self._records_cache_revision = None
@@ -353,6 +428,14 @@ def _now_iso() -> str:
 
 def _valid_output_id(output_id: str) -> bool:
     return bool(_OUTPUT_ID_PATTERN.match(str(output_id or "")))
+
+
+def _is_doc73_source_binding(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and "source_output_id" in value
+        and "target_output_id" not in value
+    )
 
 
 def _doc281_bind_output_record_metadata(metadata: dict, *, output_id: str) -> dict:
