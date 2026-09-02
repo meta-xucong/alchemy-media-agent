@@ -615,6 +615,30 @@ def test_openai_image_provider_passes_official_output_options_to_sdk_call(monkey
     }
 
 
+def test_openai_image_provider_standard_edit_transport_preserves_wide_canvas(monkeypatch):
+    provider = registry.image("openai_gpt_image")
+    monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
+    monkeypatch.setattr(settings, "openai_image_edit_transport_profile", "openai_standard")
+
+    kwargs = provider._image_kwargs(  # noqa: SLF001
+        ImagePromptPlan(
+            main_subject="portrait",
+            count=1,
+            size="2048x1152",
+            quality="high",
+            output_format="png",
+        ),
+        image_edit=True,
+    )
+
+    assert kwargs == {
+        "quality": "high",
+        "output_format": "png",
+        "size": "2048x1152",
+    }
+    assert provider.reference_image_capacity() == provider._OFFICIAL_MAX_REFERENCE_IMAGES  # noqa: SLF001
+
+
 def test_openai_image_provider_rejects_official_option_combinations_and_bad_custom_size(monkeypatch):
     provider = registry.image("openai_gpt_image")
     monkeypatch.setattr(settings, "openai_image_transport_profile", "openai_standard")
