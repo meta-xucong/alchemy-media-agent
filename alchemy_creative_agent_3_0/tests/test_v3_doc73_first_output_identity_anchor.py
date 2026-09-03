@@ -1,6 +1,7 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -165,6 +166,8 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
     source_record = provider.output_store.get_output(source_output_id)
     assert source_record is not None
     assert second_metadata["reference_assets"][0]["file_path"] == source_record.file_path
+    source_digest = source_record.metadata["content_sha256"]
+    assert source_record.metadata["source_integrity_id"] == f"sha256:{source_digest}"
     source_binding = source_record.metadata[DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY]
     assert validate_doc73_binding(
         source_binding,
@@ -177,6 +180,50 @@ def test_doc73_first_output_becomes_identity_anchor_when_user_has_no_reference(t
     assert second_metadata["doc73_auto_identity_anchor_receipt"] == source_binding
     assert "eye shape and spacing" in second_metadata["reference_assets"][0]["lock_targets"]
     assert result.metadata["candidate_loop"] is True
+
+
+def test_doc73_unbound_project_anchor_does_not_reenter_next_generation(tmp_path) -> None:
+    provider = RecordingImageProvider(tmp_path / "outputs")
+    brain = CentralCreativeBrain(generation_router=GenerationRouter(provider=provider))
+
+    brain.run_generation_loop(
+        "Create a two-image realistic portrait set with the same adult subject and natural daylight.",
+        provider_strategy=ProviderStrategy.DEFAULT_IMAGE_PROVIDER,
+        runtime_metadata={
+            "requested_image_count": 2,
+            "requested_image_size": "1024x1024",
+            "project_id": "project_doc73_unbound",
+            "template_id": "general_template",
+            "scenario_id": "general_creative",
+            "variation_mode": "delivery_suite",
+            "effective_variation_mode": "delivery_suite",
+            "project_context_snapshot": {
+                "project_id": "project_doc73_unbound",
+                "metadata": {
+                    "source": "V3ProjectModeService",
+                    "doc73_auto_identity_anchor_state": "unbound",
+                },
+            },
+            "llm_brain": {
+                "visual_task_profile": {
+                    "subject_entities": [
+                        {"entity_id": "portrait_subject_1", "entity_type": "person", "confidence": 0.98}
+                    ]
+                }
+            },
+        },
+    )
+
+    assert len(provider.requests) >= 2
+    assert all(
+        request["metadata"]["auto_batch_identity_anchor_policy"]["enabled"] is False
+        for request in provider.requests
+    )
+    assert all(
+        item.get("source_type") != "auto_batch_continuity"
+        for request in provider.requests
+        for item in request["metadata"].get("reference_assets", [])
+    )
 
 
 def test_generic_generation_fails_closed_when_a_planned_output_has_no_candidate(tmp_path) -> None:
@@ -435,7 +482,10 @@ def test_doc73_output_store_binding_is_available_to_review_without_formal_identi
     replayed = replay_service._doc73_retry_metadata(
         SimpleNamespace(
             creative_job=SimpleNamespace(job_id=job_id),
-            metadata={"doc73_batch_plan_digest": batch_digest},
+            metadata={
+                "doc73_batch_plan_digest": batch_digest,
+                "doc73_auto_identity_anchor_receipt": {"source_output_id": source_record.output_id},
+            },
             asset_pack=SimpleNamespace(metadata={}, manifest={}, assets=[]),
         )
     )
@@ -453,6 +503,245 @@ def test_doc73_output_store_binding_is_available_to_review_without_formal_identi
         output_store=store,
     ).resolve(record=tampered_record, resolution=resolution)
     assert tampered_review["doc73_auto_identity_anchor_review"]["state"] == "invalid"
+
+
+def test_doc73_target_binding_preserves_source_identity_across_jobs(tmp_path) -> None:
+    project_id = "project_doc73_cross_job_binding"
+    source_job_id = "job_doc73_cross_job_source"
+    target_job_id = "job_doc73_cross_job_target"
+    source_asset_id = "asset_doc73_cross_job_source"
+    target_asset_id = "asset_doc73_cross_job_target"
+    source_candidate_id = "candidate_doc73_cross_job_source"
+    target_candidate_id = "candidate_doc73_cross_job_target"
+    source_batch_digest = doc73_batch_plan_digest(
+        job_id=source_job_id,
+        assets=[{"asset_id": source_asset_id, "asset_type": "single_image", "aspect_ratio": "1:1"}],
+    )
+    target_batch_digest = doc73_batch_plan_digest(
+        job_id=target_job_id,
+        assets=[{"asset_id": target_asset_id, "asset_type": "single_image", "aspect_ratio": "4:5"}],
+    )
+    store = V3GeneratedOutputStore(tmp_path / "records")
+    source_metadata = {
+        "project_id": project_id,
+        "doc73_batch_plan_digest": source_batch_digest,
+        "auto_batch_identity_anchor_policy": {"enabled": True},
+    }
+    source_skeleton = issue_doc73_auto_identity_anchor_source_skeleton(
+        source_metadata,
+        job_id=source_job_id,
+        project_id=project_id,
+        asset_id=source_asset_id,
+        plan_position=0,
+        output_index=1,
+        candidate_id=source_candidate_id,
+    )
+    source_record = store.save_base64_output(
+        job_id=source_job_id,
+        candidate_id=source_candidate_id,
+        asset_id=source_asset_id,
+        provider="doc73_test",
+        model="doc73-test",
+        encoded_image=_encoded_test_png((120, 180, 210)),
+        metadata={**source_metadata, "doc73_auto_identity_anchor_skeleton": source_skeleton},
+    )
+    source_binding = source_record.metadata[DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY]
+
+    target_skeleton = issue_doc73_auto_identity_anchor_target_skeleton(
+        {
+            "project_id": project_id,
+            "doc73_batch_plan_digest": target_batch_digest,
+        },
+        source_binding=source_binding,
+        job_id=target_job_id,
+        project_id=project_id,
+        asset_id=target_asset_id,
+        plan_position=1,
+    )
+    assert target_skeleton
+    target_record = store.save_base64_output(
+        job_id=target_job_id,
+        candidate_id=target_candidate_id,
+        asset_id=target_asset_id,
+        provider="doc73_test",
+        model="doc73-test",
+        encoded_image=_encoded_test_png((220, 160, 120)),
+        metadata={
+            "project_id": project_id,
+            "doc73_batch_plan_digest": target_batch_digest,
+            "doc73_auto_identity_anchor_skeleton": target_skeleton,
+        },
+    )
+    target_binding = target_record.metadata[DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY]
+
+    assert validate_doc73_binding(
+        target_binding,
+        expected_job_id=target_job_id,
+        expected_project_id=project_id,
+        expected_batch_plan_digest=target_batch_digest,
+        expected_output_id=target_record.output_id,
+        expected_target_asset_id=target_asset_id,
+        expected_target_plan_position=1,
+    )
+    assert target_binding["source_output_id"] == source_record.output_id
+    assert target_binding["source_binding_digest"] == source_binding["binding_digest"]
+
+    # The compatibility resolver must validate the source tuple against the
+    # source Job, while validating the target tuple against the current Job.
+    # This is the same cross-Job shape used by a later project generation when
+    # the server receipt is not present in an old compact result.
+    target_asset = PackagedAsset(
+        asset_id=target_asset_id,
+        asset_type=AssetType.SINGLE_IMAGE,
+        platform=Platform.GENERIC,
+        aspect_ratio="4:5",
+        purpose="cross-job continuity target",
+        file_path=target_record.file_path,
+        metadata={
+            "output_id": target_record.output_id,
+            "candidate_metadata": {
+                DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: target_binding,
+            },
+        },
+    )
+    resolution = GeneratedOutputResolver(store).resolve_asset(
+        target_job_id,
+        target_asset,
+        project_id=project_id,
+    )
+    assert resolution.status == "ready"
+    review = ExactReviewEvidenceResolver(
+        asset_store=SimpleNamespace(get_upload=lambda _asset_id: None),
+        output_store=store,
+    ).resolve(
+        record=SimpleNamespace(
+            job_id=target_job_id,
+            request=SimpleNamespace(
+                job_id=target_job_id,
+                uploaded_asset_ids=[],
+                product_profile=None,
+                metadata={
+                    "project_id": project_id,
+                    "doc73_batch_plan_digest": target_batch_digest,
+                },
+            ),
+        ),
+        resolution=resolution,
+    )
+    assert review["doc73_auto_identity_anchor_review"] == {"state": "available", "role": "target"}
+    assert review["review_evidence_plan"]["channels"]["person_identity"]["evidence_state"] == "not_applicable"
+
+
+def test_doc73_auto_anchor_review_uses_server_receipt_when_legacy_source_fields_are_missing(tmp_path) -> None:
+    project_id = "project_doc73_legacy_auto_review"
+    source_job_id = "job_doc73_legacy_auto_source"
+    target_job_id = "job_doc73_legacy_auto_target"
+    source_asset_id = "asset_doc73_legacy_auto_source"
+    target_asset_id = "asset_doc73_legacy_auto_target"
+    source_candidate_id = "candidate_doc73_legacy_auto_source"
+
+    source_batch_digest = doc73_batch_plan_digest(
+        job_id=source_job_id,
+        assets=[{"asset_id": source_asset_id, "asset_type": "single_image", "aspect_ratio": "1:1"}],
+    )
+    target_batch_digest = doc73_batch_plan_digest(
+        job_id=target_job_id,
+        assets=[{"asset_id": target_asset_id, "asset_type": "single_image", "aspect_ratio": "1:1"}],
+    )
+    source_metadata = {
+        "project_id": project_id,
+        "doc73_batch_plan_digest": source_batch_digest,
+        "auto_batch_identity_anchor_policy": {"enabled": True},
+    }
+    store = V3GeneratedOutputStore(tmp_path / "records")
+    source_skeleton = issue_doc73_auto_identity_anchor_source_skeleton(
+        source_metadata,
+        job_id=source_job_id,
+        project_id=project_id,
+        asset_id=source_asset_id,
+        plan_position=0,
+        output_index=1,
+        candidate_id=source_candidate_id,
+    )
+    source_record = store.save_base64_output(
+        job_id=source_job_id,
+        candidate_id=source_candidate_id,
+        asset_id=source_asset_id,
+        provider="doc73_test",
+        model="doc73-test",
+        encoded_image=_encoded_test_png((120, 180, 210)),
+        metadata={**source_metadata, "doc73_auto_identity_anchor_skeleton": source_skeleton},
+    )
+    source_binding = source_record.metadata[DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY]
+    source_record_path = store.storage_root / source_record.output_id / "output.json"
+    legacy_payload = json.loads(source_record_path.read_text(encoding="utf-8"))
+    legacy_payload["metadata"].pop("content_sha256", None)
+    legacy_payload["metadata"].pop("source_integrity_id", None)
+    source_record_path.write_text(json.dumps(legacy_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    target_record = store.save_base64_output(
+        job_id=target_job_id,
+        candidate_id="candidate_doc73_legacy_auto_target",
+        asset_id=target_asset_id,
+        provider="doc73_test",
+        model="doc73-test",
+        encoded_image=_encoded_test_png((220, 160, 120)),
+        metadata={
+            "project_id": project_id,
+            "doc73_batch_plan_digest": target_batch_digest,
+            "reference_truth_source_ids": [source_record.output_id],
+            "reference_input_execution": {
+                "admission_outcome": "admitted",
+                "operation_outcome": "pixels_received",
+                "reference_count": 1,
+            },
+        },
+    )
+    target_asset = PackagedAsset(
+        asset_id=target_asset_id,
+        asset_type=AssetType.SINGLE_IMAGE,
+        platform=Platform.GENERIC,
+        aspect_ratio="1:1",
+        purpose="legacy automatic anchor target",
+        metadata={"output_id": target_record.output_id},
+    )
+    resolution = GeneratedOutputResolver(store).resolve_asset(
+        target_job_id,
+        target_asset,
+        project_id=project_id,
+    )
+    request = SimpleNamespace(
+        job_id=target_job_id,
+        uploaded_asset_ids=[],
+        product_profile=None,
+        metadata={"project_id": project_id, "doc73_batch_plan_digest": target_batch_digest},
+    )
+    record = SimpleNamespace(job_id=target_job_id, request=request)
+    server_review_metadata = {
+        "doc73_auto_identity_anchor_receipt": dict(source_binding),
+        "doc73_auto_identity_anchor_reference": {
+            "output_id": source_record.output_id,
+            "source_type": "auto_batch_continuity",
+            "origin": "auto_batch_continuity",
+            DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: dict(source_binding),
+        },
+    }
+
+    review_metadata = ExactReviewEvidenceResolver(
+        asset_store=SimpleNamespace(get_upload=lambda _asset_id: None),
+        output_store=store,
+    ).resolve(
+        record=record,
+        resolution=resolution,
+        server_metadata=server_review_metadata,
+    )
+
+    assert review_metadata["doc73_auto_identity_anchor_review"] == {"state": "available", "role": "target"}
+    person_channel = review_metadata["review_evidence_plan"]["channels"]["person_identity"]
+    assert person_channel["applicability"] == "not_applicable"
+    assert person_channel["evidence_state"] == "not_applicable"
+    assert review_metadata["reference_assets"][0]["output_id"] == source_record.output_id
+    assert review_metadata["reference_assets"][0]["source_type"] == "auto_batch_continuity"
 
 
 def test_doc73_auto_anchor_cannot_be_promoted_by_explicit_truth_ids() -> None:

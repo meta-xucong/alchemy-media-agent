@@ -164,7 +164,14 @@ class V3GeneratedOutputStore:
             preview_url=preview_route(output_id),
             thumbnail_url=thumbnail_route(output_id),
             created_at=_now_iso(),
-            metadata={**stored_metadata, "v3_owned_output": True, "content_sha256": content_sha256},
+            metadata={
+                **stored_metadata,
+                "v3_owned_output": True,
+                "content_sha256": content_sha256,
+                # New records publish both names for one canonical integrity
+                # fact; older readers may still provide either one.
+                "source_integrity_id": f"sha256:{content_sha256}",
+            },
         )
         self._write_record(record)
         self._invalidate_cache()
@@ -488,6 +495,7 @@ def _expected_output_content_sha256(record: V3GeneratedOutputRecord) -> str:
         "content_sha256",
         "output_sha256",
         "original_sha256",
+        "source_integrity_id",
     ):
         value = str(metadata.get(key) or "").strip().lower()
         if value.startswith("sha256:"):

@@ -20,6 +20,11 @@ from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductR
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.generation_router import GenerationRouter, MockGenerationProvider, ProductionImageGenerationProvider
+from alchemy_creative_agent_3_0.app.creative_core.doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    DOC73_AUTO_IDENTITY_ANCHOR_SKELETON_KEY,
+    issue_doc73_auto_identity_anchor_source_skeleton,
+)
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.project_mode.ecommerce_view_activation import DisabledEcommerceViewActivationIssuer
 from alchemy_creative_agent_3_0.app.scenario_packs import ScenarioPackRegistry
@@ -1836,6 +1841,137 @@ def test_project_outputs_append_across_jobs_and_delete_hides_only_selected_image
     assert first_record.output_id not in history_ids_after_delete
     assert second_record.output_id in history_ids_after_delete
     assert state_map[first_record.output_id] == "unselected"
+
+
+def test_doc73_auto_anchor_is_publicly_rebindable_and_excluded_from_review(tmp_path, monkeypatch) -> None:
+    handlers = _project_handlers_with_output_store(tmp_path)
+    project = handlers.post_projects(
+        {"user_goal": "Create a two-image realistic adult portrait set"}
+    )["project"]
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "user_input": "Create two same-person portraits with natural daylight",
+            "metadata": {"requested_image_count": 2},
+        },
+    )
+    batch_digest = "a" * 64
+    anchor_metadata = {
+        "project_id": project["project_id"],
+        "doc73_batch_plan_digest": batch_digest,
+        "auto_batch_identity_anchor_policy": {"enabled": True},
+    }
+    skeleton = issue_doc73_auto_identity_anchor_source_skeleton(
+        anchor_metadata,
+        job_id=job["job_id"],
+        project_id=project["project_id"],
+        asset_id="asset_auto_anchor",
+        plan_position=0,
+        output_index=1,
+        candidate_id="candidate_auto_anchor",
+    )
+    assert skeleton
+    anchor = handlers.service.output_store.save_base64_output(
+        job_id=job["job_id"],
+        candidate_id="candidate_auto_anchor",
+        asset_id="asset_auto_anchor",
+        provider="test_provider",
+        model="test-model",
+        encoded_image=_png_base64(),
+        metadata={
+            **anchor_metadata,
+            DOC73_AUTO_IDENTITY_ANCHOR_SKELETON_KEY: skeleton,
+        },
+    )
+    assert DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY in anchor.metadata
+
+    original_get_job = handlers.service.get_job
+    base_status = original_get_job(job["job_id"])
+    review_status = base_status.model_copy(
+        update={
+            "status": ProductJobStatusValue.GENERATED,
+            "metadata": {
+                **dict(base_status.metadata or {}),
+                "post_generation_review": {
+                    "inspections": [
+                        {
+                            "output_id": anchor.output_id,
+                            "mode": "hybrid",
+                            "status": "manual_review",
+                            "verification_state": "unverified",
+                        }
+                    ]
+                },
+                "final_delivery": {
+                    "final_delivery_status": "withheld_manual_confirmation",
+                    "automatic_delivery_available": False,
+                    "manual_confirmation_required": True,
+                    "delivery_gate_applies": True,
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(
+        handlers.service,
+        "get_job",
+        lambda target_job_id: review_status
+        if target_job_id == job["job_id"]
+        else original_get_job(target_job_id),
+    )
+
+    detail = handlers.get_project(project["project_id"])
+    public_anchor = detail["project"]["metadata"]["doc73_auto_identity_anchor"]
+    assert public_anchor["output_id"] == anchor.output_id
+    assert public_anchor["state"] == "bound"
+    assert public_anchor["can_unbind"] is True
+    assert public_anchor["can_bind"] is False
+
+    review_payload = handlers.get_project_outputs(
+        project_id=project["project_id"],
+        limit=10,
+        compact=True,
+    )
+    assert anchor.output_id not in {
+        item["output_id"] for item in review_payload["review_items"]
+    }
+
+    unbound = handlers.post_project_output_unselect(project["project_id"], anchor.output_id, {})
+    unbound_anchor = unbound["project"]["metadata"]["doc73_auto_identity_anchor"]
+    assert unbound_anchor["state"] == "unbound"
+    assert unbound_anchor["can_unbind"] is False
+    assert unbound_anchor["can_bind"] is True
+    assert unbound["context"]["metadata"]["doc73_auto_identity_anchor_state"] == "unbound"
+
+    rebound = handlers.post_project_job_select(
+        project["project_id"],
+        job["job_id"],
+        {
+            "selected_output_id": anchor.output_id,
+            "metadata": {"identity_anchor_action": "bind"},
+        },
+    )
+    rebound_anchor = rebound["project"]["metadata"]["doc73_auto_identity_anchor"]
+    assert rebound_anchor["state"] == "bound"
+    assert rebound_anchor["can_unbind"] is True
+    assert rebound["context"]["metadata"]["doc73_auto_identity_anchor_state"] == "bound"
+
+    handlers.project_service.project_store.append_private_record(
+        project["project_id"],
+        "doc73_auto_identity_anchor_controls_v1",
+        {
+            "schema_version": "doc73_auto_identity_anchor_control_v1",
+            "project_id": project["project_id"],
+            "job_id": job["job_id"],
+            "output_id": anchor.output_id,
+            "state": "bound",
+            "changed_at": "tampered",
+            "unexpected": True,
+        },
+    )
+    invalid_detail = handlers.get_project(project["project_id"])
+    assert "doc73_auto_identity_anchor" not in invalid_detail["project"]["metadata"]
+    invalid_context = handlers.get_project_context(project["project_id"])
+    assert invalid_context["metadata"]["doc73_auto_identity_anchor_state"] == "invalid"
 
 
 def test_project_outputs_separate_rejected_pixels_from_formal_delivery(tmp_path) -> None:

@@ -255,6 +255,9 @@ def test_e23_ecommerce_project_reference_surface_consumes_server_view() -> None:
     assert "selected_continuation_directions" in renderer
     assert "generated_and_review_history" in renderer
     assert "项目成片不会进入原始商品图" in renderer
+    assert "v3ProjectAutoIdentityAnchor(project)" in renderer
+    assert "auto_identity_anchor" in renderer
+    assert "bind_auto_identity_anchor" in renderer
 
 
 def test_e23_mobile_ecommerce_reference_surface_consumes_server_view() -> None:
@@ -269,9 +272,28 @@ def test_e23_mobile_ecommerce_reference_surface_consumes_server_view() -> None:
     assert "renderMobileV3EcommerceProjectViewReferences(project, ecommerceView)" in renderer
     assert "original_product_inputs" in renderer
     assert "locked_person_identity" in renderer
+    assert "mobileV3ProjectAutoIdentityAnchor(project)" in renderer
+    assert "auto_identity_anchor" in renderer
+    assert "bind_auto_identity_anchor" in renderer
     assert "selected_continuation_directions" in renderer
     assert "generated_and_review_history" in renderer
     assert "项目成片不会进入原始商品图" in renderer
+
+
+def test_v3_general_reference_surface_renders_auto_identity_anchor_controls() -> None:
+    desktop = APP_JS.read_text(encoding="utf-8")
+    desktop_renderer = _section(desktop, "function renderV3UsefulReferences", "async function handleV3ReferenceBoardClick")
+    assert "v3ProjectAutoIdentityAnchor(project)" in desktop_renderer
+    assert "v3-auto-identity-anchor-tile" in desktop_renderer
+    assert "bind_auto_identity_anchor" in desktop_renderer
+    assert "解除人物锚点" in desktop_renderer
+
+    mobile = MOBILE_JS.read_text(encoding="utf-8")
+    mobile_renderer = _section(mobile, "function renderMobileV3ReferenceBoard", "async function selectMobileV3OutputItem")
+    assert "mobileV3ProjectAutoIdentityAnchor(project)" in mobile_renderer
+    assert "v3-mobile-auto-identity-anchor-tile" in mobile_renderer
+    assert "bind_auto_identity_anchor" in mobile_renderer
+    assert "解除人物锚点" in mobile_renderer
 
 
 def test_e23_local_product_truth_binding_failure_has_actionable_browser_copy() -> None:

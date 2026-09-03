@@ -7,6 +7,12 @@ from pathlib import Path
 import pytest
 
 from alchemy_creative_agent_3_0.app.brand_memory import BrandProfileService, BrandProfileStore
+from alchemy_creative_agent_3_0.app.creative_core.doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    doc73_batch_plan_digest,
+    finalize_doc73_auto_identity_anchor_binding,
+    issue_doc73_auto_identity_anchor_source_skeleton,
+)
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import ProductJobStatusValue, V3ProductApiService
@@ -743,6 +749,7 @@ def test_doc260_general_selected_output_reference_uses_server_source_job_binding
     output_record_path = output_store.storage_root / reference.output_id / "output.json"
     legacy_record = json.loads(output_record_path.read_text(encoding="utf-8"))
     legacy_record["metadata"].pop("content_sha256", None)
+    legacy_record["metadata"].pop("source_integrity_id", None)
     output_record_path.write_text(json.dumps(legacy_record, ensure_ascii=False, indent=2), encoding="utf-8")
     legacy_metadata = service._admitted_review_reference_metadata(record, resolution)  # noqa: SLF001
     legacy_channel = legacy_metadata["review_evidence_plan"]["channels"]["person_identity"]
@@ -1082,6 +1089,175 @@ def test_doc260_ready_output_plans_are_scoped_by_output_id(tmp_path) -> None:
     assert plans["output_doc260_a"]["output_id"] == "output_doc260_a"
     assert plans["output_doc260_b"]["output_id"] == "output_doc260_b"
     assert plans["output_doc260_a"]["plan_id"] != plans["output_doc260_b"]["plan_id"]
+
+
+def test_doc260_review_recovers_persisted_auto_anchor_when_result_omits_private_fields(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    provider = _StaticVisionProvider({"status": "pass", "confidence": 0.96, "issue_codes": []})
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+    service.generate_job(
+        created.job_id,
+        {"quality_mode": "standard", "metadata": {"max_visual_retry_attempts": 0}},
+    )
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    generation_result = record.generation_result.model_copy(
+        update={
+            "metadata": {
+                key: value
+                for key, value in record.generation_result.metadata.items()
+                if key
+                not in {
+                    "doc73_auto_identity_anchor_receipt",
+                    "doc73_auto_identity_anchor_reference",
+                }
+            }
+        }
+    )
+    generation_result = generation_result.model_copy(
+        update={
+            "metadata": {
+                **generation_result.metadata,
+                # A legacy compact result may retain only partial private
+                # fields. The persisted server receipt must replace both.
+                "doc73_auto_identity_anchor_receipt": {"source_output_id": "stale_partial"},
+                "doc73_auto_identity_anchor_reference": {"output_id": "stale_partial"},
+            }
+        }
+    )
+    transport = {
+        "doc73_auto_identity_anchor_receipt": {"source_output_id": "output_doc260_anchor"},
+        "doc73_auto_identity_anchor_reference": {
+            "output_id": "output_doc260_anchor",
+            "source_type": "auto_batch_continuity",
+        },
+    }
+    captured: list[dict] = []
+    original = service._admitted_review_reference_metadata  # noqa: SLF001
+
+    def capture(current_record, resolution, *, server_metadata=None):  # noqa: ANN001
+        captured.append(dict(server_metadata or {}))
+        return original(current_record, resolution)
+
+    monkeypatch.setattr(service, "_doc73_retry_metadata", lambda _result: transport)
+    monkeypatch.setattr(service, "_admitted_review_reference_metadata", capture)
+    reviewed = service._attach_post_generation_review(  # noqa: SLF001
+        record,
+        generation_result,
+        GenerateJobRequest.model_validate({"quality_mode": "standard", "metadata": {}}),
+    )
+
+    assert captured
+    assert captured[0]["doc73_auto_identity_anchor_receipt"] == transport[
+        "doc73_auto_identity_anchor_receipt"
+    ]
+    assert captured[0]["doc73_auto_identity_anchor_reference"] == transport[
+        "doc73_auto_identity_anchor_reference"
+    ]
+    assert reviewed.metadata["post_generation_review_package"]
+
+
+def test_doc260_review_recovers_server_request_anchor_when_continuation_result_is_partial(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    provider = _StaticVisionProvider({"status": "pass", "confidence": 0.96, "issue_codes": []})
+    service = _service(
+        tmp_path,
+        output_resolver=_StaticReadyResolver(_ready_resolution(tmp_path)),
+        vision_inspector=VisionOutputInspector(vision_provider=provider),
+    )
+    created = _create_general_job(service)
+    service.generate_job(
+        created.job_id,
+        {"quality_mode": "standard", "metadata": {"max_visual_retry_attempts": 0}},
+    )
+    record = service.job_store.get(created.job_id)
+    assert record is not None and record.generation_result is not None
+    source_job_id = "job_doc260_source"
+    source_project_id = "project_doc260"
+    source_asset_id = "asset_doc260_source"
+    source_candidate_id = "candidate_doc260_source"
+    source_output_id = "output_doc260_source"
+    source_batch_digest = doc73_batch_plan_digest(
+        job_id=source_job_id,
+        assets=[{"asset_id": source_asset_id, "asset_type": "single_image", "aspect_ratio": "1:1"}],
+    )
+    source_skeleton = issue_doc73_auto_identity_anchor_source_skeleton(
+        {
+            "project_id": source_project_id,
+            "doc73_batch_plan_digest": source_batch_digest,
+            "auto_batch_identity_anchor_policy": {"enabled": True},
+        },
+        job_id=source_job_id,
+        project_id=source_project_id,
+        asset_id=source_asset_id,
+        plan_position=0,
+        output_index=1,
+        candidate_id=source_candidate_id,
+    )
+    source_metadata = finalize_doc73_auto_identity_anchor_binding(
+        {"doc73_auto_identity_anchor_skeleton": source_skeleton},
+        job_id=source_job_id,
+        project_id=source_project_id,
+        candidate_id=source_candidate_id,
+        asset_id=source_asset_id,
+        output_id=source_output_id,
+        content_sha256="b" * 64,
+    )
+    source_binding = source_metadata[DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY]
+    transport = {
+        "doc73_auto_identity_anchor_receipt": source_binding,
+        "doc73_auto_identity_anchor_reference": {
+            "output_id": source_output_id,
+            "source_type": "auto_batch_continuity",
+            "origin": "auto_batch_continuity",
+            DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: source_binding,
+            "candidate_id": source_candidate_id,
+            "file_path": str(tmp_path / "anchor.png"),
+        },
+    }
+    request_metadata = dict(record.request.metadata)
+    request_metadata.update(transport)
+    record.request.metadata = request_metadata
+    generation_result = record.generation_result.model_copy(
+        update={
+            "metadata": {
+                **record.generation_result.metadata,
+                "doc73_auto_identity_anchor_receipt": {"source_output_id": "partial"},
+            }
+        }
+    )
+    captured: list[dict] = []
+    original = service._admitted_review_reference_metadata  # noqa: SLF001
+
+    def capture(current_record, resolution, *, server_metadata=None):  # noqa: ANN001
+        captured.append(dict(server_metadata or {}))
+        return original(current_record, resolution)
+
+    monkeypatch.setattr(service, "_doc73_retry_metadata", lambda _result: {})
+    monkeypatch.setattr(service, "_admitted_review_reference_metadata", capture)
+    service._attach_post_generation_review(  # noqa: SLF001
+        record,
+        generation_result,
+        GenerateJobRequest.model_validate({"quality_mode": "standard", "metadata": {}}),
+    )
+
+    assert captured
+    assert captured[0]["doc73_auto_identity_anchor_receipt"] == transport[
+        "doc73_auto_identity_anchor_receipt"
+    ]
+    assert captured[0]["doc73_auto_identity_anchor_reference"] == transport[
+        "doc73_auto_identity_anchor_reference"
+    ]
+
 
 def test_doc260_non_admitted_existing_source_is_unavailable(tmp_path) -> None:
     service = _service(tmp_path)

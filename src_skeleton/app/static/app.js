@@ -4151,6 +4151,12 @@ function v3ReferenceImageCandidates(ref) {
   ]).map(v3MediaUrl);
 }
 
+function v3ProjectAutoIdentityAnchor(project = v3State.currentProject) {
+  const anchor = project?.metadata?.doc73_auto_identity_anchor;
+  if (!anchor || typeof anchor !== "object" || !String(anchor.output_id || "").trim()) return null;
+  return anchor;
+}
+
 function v3CurrentJobImageItems(job = v3State.currentJob) {
   if (!job) return [];
   if (v3FailureArtifactExpired(job)) return [];
@@ -4829,8 +4835,9 @@ function renderV3EcommerceProjectViewReferences(project, ecommerceView) {
   const selectedDirections = v3EcommerceProjectViewItems(ecommerceView, "selected_continuation_directions");
   const history = v3EcommerceProjectViewHistory(ecommerceView);
   const sourceLibrary = v3ProjectSourceLibraryEntries(project);
+  const autoAnchor = v3ProjectAutoIdentityAnchor(project);
   const historyCount = history.delivered_outputs.length + history.review_withheld_outputs.length + history.failed_attempts.length;
-  const totalCount = originalInputs.length + lockedIdentity.length + selectedDirections.length + historyCount;
+  const totalCount = originalInputs.length + lockedIdentity.length + selectedDirections.length + historyCount + (autoAnchor ? 1 : 0);
   els.v3UsefulReferenceBoard.innerHTML = "";
   els.v3UsefulReferenceBoard.classList.toggle("empty-v3-list", totalCount === 0);
   if (!totalCount) {
@@ -4945,6 +4952,47 @@ function renderV3EcommerceProjectViewReferences(project, ecommerceView) {
     els.v3UsefulReferenceBoard.appendChild(group);
   }
 
+  if (autoAnchor) {
+    const bound = String(autoAnchor.state || "bound").trim().toLowerCase() === "bound";
+    const group = document.createElement("section");
+    group.className = "v3-project-reference-group auto_identity_anchor";
+    group.innerHTML = `
+      <div class="v3-project-reference-group-head">
+        <div>
+          <strong>人物身份锚点</strong>
+          <p>${bound ? "本项目首张真实成片，用于保持后续人物一致性。" : "已识别本项目的人物锚点，当前暂不用于后续生成。"}</p>
+        </div>
+        <span>${bound ? "已绑定" : "未绑定"}</span>
+      </div>
+      <div class="v3-project-reference-group-grid"></div>
+    `;
+    const grid = group.querySelector(".v3-project-reference-group-grid");
+    const tile = document.createElement("article");
+    tile.className = "v3-useful-reference-tile v3-auto-identity-anchor-tile";
+    const urls = v3ReferenceImageCandidates(autoAnchor);
+    tile.innerHTML = `
+      ${urls.length ? `<img alt="人物身份锚点" />` : `<div class="v3-reference-placeholder">锚点图</div>`}
+      <div>
+        <span class="v3-reference-origin">自动连续性</span>
+        <strong>人物身份锚点</strong>
+        <p>${bound ? "后续生图会优先保持脸部结构、年龄感和人物连续性。" : "解绑后，后续生图不会再使用这张图维持人物一致性。"}</p>
+        <div class="v3-reference-actions">
+          <button type="button"
+            data-v3-reference-action="${bound ? "remove" : "bind_auto_identity_anchor"}"
+            data-v3-reference-source="auto_identity_anchor"
+            data-v3-reference-id=""
+            data-v3-output-id="${escapeHtml(autoAnchor.output_id)}">
+            ${bound ? "解除人物锚点" : "绑定人物锚点"}
+          </button>
+        </div>
+      </div>
+    `;
+    const image = tile.querySelector("img");
+    if (image) bindImageWithFallback(image, urls, { emptyAlt: "人物身份锚点暂时无法加载" });
+    grid?.appendChild(tile);
+    els.v3UsefulReferenceBoard.appendChild(group);
+  }
+
   renderImageGroup({
     key: "selected_continuation_directions",
     title: "已选延续方向",
@@ -5007,7 +5055,10 @@ function renderV3UsefulReferences() {
   }
   const groups = v3ProjectReferenceGroups(project);
   const sourceLibrary = v3ProjectSourceLibraryEntries(project);
-  const referenceCount = (sourceLibrary.length || groups.original_inputs.length) + groups.continuation_outputs.length;
+  const autoAnchor = v3ProjectAutoIdentityAnchor(project);
+  const referenceCount = (sourceLibrary.length || groups.original_inputs.length)
+    + groups.continuation_outputs.length
+    + (autoAnchor ? 1 : 0);
   els.v3UsefulReferenceBoard.innerHTML = "";
   els.v3UsefulReferenceBoard.classList.toggle("empty-v3-list", !referenceCount);
   if (!project) {
@@ -5016,6 +5067,46 @@ function renderV3UsefulReferences() {
   }
 
   renderV3ProjectSourceLibraryGroup(sourceLibrary);
+  if (autoAnchor) {
+    const bound = String(autoAnchor.state || "bound").trim().toLowerCase() === "bound";
+    const group = document.createElement("section");
+    group.className = "v3-project-reference-group auto_identity_anchor";
+    group.innerHTML = `
+      <div class="v3-project-reference-group-head">
+        <div>
+          <strong>人物身份锚点</strong>
+          <p>${bound ? "本项目首张真实成片，用于保持后续人物一致性。" : "已识别本项目的人物锚点，当前暂不用于后续生成。"}</p>
+        </div>
+        <span>${bound ? "已绑定" : "未绑定"}</span>
+      </div>
+      <div class="v3-project-reference-group-grid"></div>
+    `;
+    const grid = group.querySelector(".v3-project-reference-group-grid");
+    const tile = document.createElement("article");
+    tile.className = "v3-useful-reference-tile v3-auto-identity-anchor-tile";
+    const urls = v3ReferenceImageCandidates(autoAnchor);
+    tile.innerHTML = `
+      ${urls.length ? `<img alt="人物身份锚点" />` : `<div class="v3-reference-placeholder">锚点图</div>`}
+      <div>
+        <span class="v3-reference-origin">自动连续性</span>
+        <strong>人物身份锚点</strong>
+        <p>${bound ? "后续生图会优先保持脸部结构、年龄感和人物连续性。" : "解绑后，后续生图不会再使用这张图维持人物一致性。"}</p>
+        <div class="v3-reference-actions">
+          <button type="button"
+            data-v3-reference-action="${bound ? "remove" : "bind_auto_identity_anchor"}"
+            data-v3-reference-source="auto_identity_anchor"
+            data-v3-reference-id=""
+            data-v3-output-id="${escapeHtml(autoAnchor.output_id)}">
+            ${bound ? "解除人物锚点" : "绑定人物锚点"}
+          </button>
+        </div>
+      </div>
+    `;
+    const image = tile.querySelector("img");
+    if (image) bindImageWithFallback(image, urls, { emptyAlt: "人物身份锚点暂时无法加载" });
+    grid?.appendChild(tile);
+    els.v3UsefulReferenceBoard.appendChild(group);
+  }
   if (!referenceCount) {
     els.v3UsefulReferenceBoard.textContent = "还没有原始参考图或已选延续方向。正式交付图可单独设为延续方向。";
     return;
@@ -5120,7 +5211,9 @@ async function handleV3ReferenceBoardClick(event) {
   const referenceId = button.dataset.v3ReferenceId || "";
   const outputId = button.dataset.v3OutputId || "";
   const sourceType = button.dataset.v3ReferenceSource || "";
-  if (action === "remove") {
+  if (action === "bind_auto_identity_anchor") {
+    await bindV3AutoIdentityAnchor({ output_id: outputId });
+  } else if (action === "remove") {
     await removeV3ProjectReference(referenceId, outputId, sourceType);
   } else if (action === "reject") {
     if (!outputId) return;
@@ -5132,6 +5225,43 @@ async function handleV3ReferenceBoardClick(event) {
   } else if (action === "confirm_reject") {
     const input = button.closest("article")?.querySelector("[data-v3-negative-feedback-input]");
     await rejectV3ProjectReference(outputId, input?.value || "");
+  }
+}
+
+async function bindV3AutoIdentityAnchor(anchor) {
+  const projectId = v3State.currentProject?.project_id;
+  const outputId = String(anchor?.output_id || "").trim();
+  const projectAnchor = v3ProjectAutoIdentityAnchor(v3State.currentProject);
+  const jobId = String(anchor?.job_id || projectAnchor?.job_id || "").trim();
+  if (!projectId || !outputId || !jobId) {
+    updateV3Notice("这张锚点图暂时不能绑定。", "warning");
+    return;
+  }
+  try {
+    setV3Busy(true, "正在绑定人物锚点...");
+    const payload = await request(`${v3ApiBase}/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/select`, {
+      method: "POST",
+      body: {
+        selected_output_id: outputId,
+        selected_asset_id: projectAnchor?.asset_id || null,
+        apply_memory_update: false,
+        metadata: {
+          frontend_surface: "commercial_v3_project_mode",
+          identity_anchor_action: "bind",
+        },
+      },
+    });
+    if (payload.project) v3State.currentProject = payload.project;
+    if (payload.job_status) v3State.currentJob = payload.job_status;
+    syncV3ProjectOutputsFromPayload(payload);
+    saveV3ProjectSnapshot(v3State.currentProject);
+    await loadV3ProjectTimeline(projectId, { silent: true });
+    renderV3ProjectDetail();
+    updateV3Notice("已绑定人物身份锚点。", "success");
+  } catch (error) {
+    updateV3Notice(`绑定失败：${friendlyError(error)}`, "error");
+  } finally {
+    setV3Busy(false);
   }
 }
 
@@ -5158,7 +5288,14 @@ async function removeV3ProjectReference(referenceId, outputId, sourceType = "") 
     saveV3ProjectSnapshot(v3State.currentProject);
     await loadV3ProjectTimeline(projectId, { silent: true });
     renderV3ProjectDetail();
-    updateV3Notice(sourceType === "generated_selected" ? "已取消沿用这张成片。它仍会保留在项目成果里。" : "已停止把这张原图作为后续生成依据。上传记录仍会保留。", "success");
+    updateV3Notice(
+      sourceType === "auto_identity_anchor"
+        ? "已解绑人物身份锚点。这张图仍保留在项目成果和历史里。"
+        : sourceType === "generated_selected"
+          ? "已取消沿用这张成片。它仍会保留在项目成果里。"
+          : "已停止把这张原图作为后续生成依据。上传记录仍会保留。",
+      "success",
+    );
   } catch (error) {
     updateV3Notice(`参考更新失败：${friendlyError(error)}`, "error");
   } finally {

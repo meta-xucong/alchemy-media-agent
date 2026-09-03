@@ -1186,8 +1186,13 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest | dict[str, Any],
         *,
         server_job_instance_id: str | None = None,
+        doc73_auto_identity_anchor_transport: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
-        return self._create_creative_job(request, server_job_instance_id=server_job_instance_id)
+        return self._create_creative_job(
+            request,
+            server_job_instance_id=server_job_instance_id,
+            doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
+        )
 
     def create_project_visual_asset_bound_job(
         self,
@@ -1195,6 +1200,7 @@ class V3ProductApiService:
         *,
         binding_service: ProjectVisualAssetBindingService,
         server_job_instance_id: str | None = None,
+        doc73_auto_identity_anchor_transport: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
         """Internal Project Mode seam for an explicit library asset selection.
 
@@ -1207,6 +1213,7 @@ class V3ProductApiService:
             request,
             project_visual_asset_binding_service=binding_service,
             server_job_instance_id=server_job_instance_id,
+            doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
         )
 
     def create_project_ecommerce_job(
@@ -1303,6 +1310,7 @@ class V3ProductApiService:
         mcp_operation_id: str | None = None,
         project_visual_asset_binding_service: ProjectVisualAssetBindingService | None = None,
         server_job_instance_id: str | None = None,
+        doc73_auto_identity_anchor_transport: dict[str, Any] | None = None,
         project_ecommerce_canonical_product_asset_ids: list[str] | None = None,
         doc269_selected_continuation_admissions: list[dict[str, Any]] | None = None,
         doc270_source_library_enabled: bool = False,
@@ -1346,6 +1354,10 @@ class V3ProductApiService:
             trusted_professional_character_card=trusted_professional_character_card,
             trusted_professional_anchor_preparation=trusted_professional_anchor_preparation,
             trusted_doc270_ecommerce_view_activation=trusted_doc270_ecommerce_view_activation,
+        )
+        self._bind_doc73_auto_identity_anchor_transport(
+            create_request,
+            doc73_auto_identity_anchor_transport,
         )
         self._bind_typed_image_options(create_request)
         if doc269_selected_continuation_admissions is not None:
@@ -1892,8 +1904,13 @@ class V3ProductApiService:
         request: CreateCreativeJobRequest | dict[str, Any],
         *,
         server_job_instance_id: str | None = None,
+        doc73_auto_identity_anchor_transport: dict[str, Any] | None = None,
     ) -> ProductJobStatus:
-        return self.create_creative_job(request, server_job_instance_id=server_job_instance_id)
+        return self.create_creative_job(
+            request,
+            server_job_instance_id=server_job_instance_id,
+            doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
+        )
 
     def create_professional_anchor_preparation_job(
         self,
@@ -5778,6 +5795,8 @@ class V3ProductApiService:
             "doc276_expected_face_binding",
             "face_integrity_attestation",
             "reference_comparison_certification",
+            "doc73_auto_identity_anchor_receipt",
+            "doc73_auto_identity_anchor_reference",
         ):
             public_metadata.pop(key, None)
         review_metadata = {
@@ -5796,6 +5815,62 @@ class V3ProductApiService:
             "scenario_id": generation_result.metadata.get("scenario_id"),
             "template_id": record.request.metadata.get("template_id") or generation_result.metadata.get("scenario_id"),
         }
+        for key in (
+            "doc73_auto_identity_anchor_receipt",
+            "doc73_auto_identity_anchor_reference",
+        ):
+            value = generation_result.metadata.get(key)
+            if isinstance(value, dict) and value:
+                review_metadata[key] = dict(value)
+        if not self._doc73_auto_identity_transport_complete(review_metadata):
+            # The first output is persisted before review is attached, but its
+            # compact planning result may not retain the private receipt.  Read
+            # the server-owned binding back from OutputStore so a valid
+            # automatic anchor is reviewed as continuity evidence rather than
+            # as an incomplete uploaded identity record.
+            try:
+                persisted_auto_anchor = self._doc73_retry_metadata(generation_result)
+            except Exception:
+                persisted_auto_anchor = {}
+            persisted_receipt = persisted_auto_anchor.get("doc73_auto_identity_anchor_receipt")
+            persisted_reference = persisted_auto_anchor.get("doc73_auto_identity_anchor_reference")
+            if (
+                isinstance(persisted_receipt, dict)
+                and persisted_receipt
+                and isinstance(persisted_reference, dict)
+                and persisted_reference
+            ):
+                # Replace the pair together. A partially present planning
+                # projection is not an authority and must not be combined
+                # with a different persisted receipt or reference.
+                review_metadata["doc73_auto_identity_anchor_receipt"] = dict(persisted_receipt)
+                review_metadata["doc73_auto_identity_anchor_reference"] = dict(persisted_reference)
+        if not self._doc73_auto_identity_transport_complete(review_metadata):
+            # Continuation Jobs carry the source receipt in the server-injected
+            # request envelope. It remains available even when a compact
+            # PlanningResult drops its private continuity fields.
+            request_metadata = dict(record.request.metadata or {})
+            request_anchor = {
+                key: value
+                for key, value in request_metadata.items()
+                if key
+                in {
+                    "doc73_auto_identity_anchor_receipt",
+                    "doc73_auto_identity_anchor_reference",
+                }
+                and isinstance(value, dict)
+            }
+            if self._doc73_auto_identity_transport_complete(request_anchor):
+                review_metadata.update(
+                    {
+                        "doc73_auto_identity_anchor_receipt": dict(
+                            request_anchor["doc73_auto_identity_anchor_receipt"]
+                        ),
+                        "doc73_auto_identity_anchor_reference": dict(
+                            request_anchor["doc73_auto_identity_anchor_reference"]
+                        ),
+                    }
+                )
         execution_envelope = generation_result.metadata.get("capability_execution_envelope")
         if isinstance(execution_envelope, dict):
             review_metadata["capability_execution_envelope"] = dict(execution_envelope)
@@ -5845,7 +5920,20 @@ class V3ProductApiService:
         frozen_contract_by_resolution = []
         doc276_required_output_ids: list[str] = []
         for resolution in resolutions:
-            evidence_metadata = self._admitted_review_reference_metadata(record, resolution)
+            if any(
+                key in review_metadata
+                for key in (
+                    "doc73_auto_identity_anchor_receipt",
+                    "doc73_auto_identity_anchor_reference",
+                )
+            ):
+                evidence_metadata = self._admitted_review_reference_metadata(
+                    record,
+                    resolution,
+                    server_metadata=review_metadata,
+                )
+            else:
+                evidence_metadata = self._admitted_review_reference_metadata(record, resolution)
             frozen_contract = self._frozen_output_review_contract(
                 resolution,
                 frozen_output_review_contracts,
@@ -5867,6 +5955,12 @@ class V3ProductApiService:
                     evidence_metadata["doc276_expected_face_binding"] = binding
             evidence_metadata_by_resolution.append(evidence_metadata)
             frozen_contract_by_resolution.append(frozen_contract)
+        if any(
+            isinstance(metadata.get("doc73_auto_identity_anchor_review"), dict)
+            and metadata["doc73_auto_identity_anchor_review"].get("state") == "available"
+            for metadata in evidence_metadata_by_resolution
+        ):
+            review_metadata["enable_real_vision_inspection"] = True
         inspections = [
             self.vision_inspector.inspect(
                 resolution,
@@ -6003,6 +6097,45 @@ class V3ProductApiService:
         return generation_result.model_copy(update={"metadata": metadata, "asset_pack": asset_pack})
 
     @staticmethod
+    def _doc73_auto_identity_transport_complete(metadata: dict[str, Any]) -> bool:
+        """Accept a result-local anchor only when the pair is self-consistent."""
+
+        receipt = metadata.get("doc73_auto_identity_anchor_receipt")
+        reference = metadata.get("doc73_auto_identity_anchor_reference")
+        if not isinstance(receipt, dict) or not isinstance(reference, dict):
+            return False
+        source_output_id = str(receipt.get("source_output_id") or "").strip()
+        source_job_id = str(receipt.get("job_id") or "").strip()
+        source_project_id = str(receipt.get("project_id") or "").strip()
+        source_asset_id = str(receipt.get("source_asset_id") or "").strip()
+        source_candidate_id = str(receipt.get("source_candidate_id") or "").strip()
+        source_batch_digest = str(receipt.get("batch_plan_digest") or "").strip()
+        return bool(
+            source_output_id
+            and source_job_id
+            and source_project_id
+            and source_asset_id
+            and source_candidate_id
+            and source_batch_digest
+            and reference.get("origin") == "auto_batch_continuity"
+            and reference.get("source_type") == "auto_batch_continuity"
+            and reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) == receipt
+            and str(reference.get("output_id") or reference.get("source_id") or "").strip() == source_output_id
+            and str(reference.get("candidate_id") or "").strip() == source_candidate_id
+            and str(reference.get("file_path") or "").strip()
+            and validate_doc73_binding(
+                receipt,
+                expected_job_id=source_job_id,
+                expected_project_id=source_project_id,
+                expected_batch_plan_digest=source_batch_digest,
+                expected_output_id=source_output_id,
+                expected_source_asset_id=source_asset_id,
+                expected_source_plan_position=0,
+                expected_source_candidate_id=source_candidate_id,
+            )
+        )
+
+    @staticmethod
     def _doc276_face_integrity_delivery_enabled() -> bool:
         """Read the server-owned rollout gate for newly attached reviews."""
 
@@ -6037,6 +6170,8 @@ class V3ProductApiService:
         self,
         record: ProductJobRecord,
         resolution,
+        *,
+        server_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return only the exact admitted job assets for pixel comparison.
 
@@ -6055,7 +6190,11 @@ class V3ProductApiService:
         return ExactReviewEvidenceResolver(
             asset_store=self.asset_store,
             output_store=self.output_store,
-        ).resolve(record=record, resolution=resolution)
+        ).resolve(
+            record=record,
+            resolution=resolution,
+            server_metadata=server_metadata,
+        )
 
     @staticmethod
     def _doc276_expected_face_binding(
@@ -7273,6 +7412,7 @@ class V3ProductApiService:
         """
 
         receipt: Any = None
+        hinted_receipt: dict[str, Any] | None = None
         job_id = str(getattr(result.creative_job, "job_id", "") or "").strip()
         result_metadata = dict(result.metadata or {})
         candidate_sources = (
@@ -7282,9 +7422,22 @@ class V3ProductApiService:
         )
         for source in candidate_sources:
             value = source.get("doc73_auto_identity_anchor_receipt")
-            if isinstance(value, dict):
-                receipt = value
-                break
+            if isinstance(value, dict) and hinted_receipt is None:
+                hinted_receipt = dict(value)
+        # The durable job receipt is the authority. A compact PlanningResult
+        # can carry no receipt or an incomplete compatibility projection; that
+        # projection must never shadow a valid server-owned record.
+        if job_id:
+            receipt_reader = getattr(self.output_store, "get_doc73_auto_identity_anchor_receipt", None)
+            if callable(receipt_reader):
+                try:
+                    durable_receipt = receipt_reader(job_id)
+                except Exception:
+                    durable_receipt = None
+                if isinstance(durable_receipt, dict) and durable_receipt:
+                    receipt = dict(durable_receipt)
+        if receipt is None and hinted_receipt is not None:
+            receipt = hinted_receipt
         if receipt is None:
             for asset in result.asset_pack.assets:
                 asset_metadata = dict(asset.metadata or {})
@@ -7294,10 +7447,6 @@ class V3ProductApiService:
                     if isinstance(value, dict):
                         receipt = value
                         break
-        if receipt is None and job_id:
-            receipt_reader = getattr(self.output_store, "get_doc73_auto_identity_anchor_receipt", None)
-            if callable(receipt_reader):
-                receipt = receipt_reader(job_id)
         if not isinstance(receipt, dict):
             return {}
 
@@ -7307,6 +7456,8 @@ class V3ProductApiService:
             if len(value) == 64 and all(character in "0123456789abcdef" for character in value):
                 expected_batch_plan_digest = value
                 break
+        if not expected_batch_plan_digest:
+            expected_batch_plan_digest = str(receipt.get("batch_plan_digest") or "").strip().lower()
         if not expected_batch_plan_digest:
             return {}
 
@@ -13762,6 +13913,66 @@ class V3ProductApiService:
         request.metadata = {
             **dict(request.metadata or {}),
             "v3_job_instance_id": uuid4().hex,
+        }
+
+    @staticmethod
+    def _bind_doc73_auto_identity_anchor_transport(
+        request: CreateCreativeJobRequest,
+        transport: dict[str, Any] | None,
+    ) -> None:
+        """Carry one Project Mode validated anchor across a new Job.
+
+        The receipt is internal server transport.  It is intentionally added
+        after public metadata rejection so a browser cannot author or replace
+        the source identity used by Central Brain and review evidence.
+        """
+
+        if transport is None:
+            return
+        if not isinstance(transport, dict):
+            raise ValueError("doc73_auto_identity_anchor_transport_invalid")
+        receipt = transport.get("doc73_auto_identity_anchor_receipt")
+        reference = transport.get("doc73_auto_identity_anchor_reference")
+        if not isinstance(receipt, dict) or not isinstance(reference, dict):
+            raise ValueError("doc73_auto_identity_anchor_transport_invalid")
+        source_output_id = str(receipt.get("source_output_id") or "").strip()
+        source_job_id = str(receipt.get("job_id") or "").strip()
+        source_project_id = str(receipt.get("project_id") or "").strip()
+        source_asset_id = str(receipt.get("source_asset_id") or "").strip()
+        source_candidate_id = str(receipt.get("source_candidate_id") or "").strip()
+        source_batch_plan_digest = str(receipt.get("batch_plan_digest") or "").strip()
+        request_project_id = str(dict(request.metadata or {}).get("project_id") or "").strip()
+        if (
+            not source_output_id
+            or not source_job_id
+            or not source_project_id
+            or not source_asset_id
+            or not source_candidate_id
+            or not source_batch_plan_digest
+            or (request_project_id and request_project_id != source_project_id)
+            or reference.get("origin") != "auto_batch_continuity"
+            or reference.get("source_type") != "auto_batch_continuity"
+            or reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) != receipt
+            or str(reference.get("output_id") or reference.get("source_id") or "").strip()
+            != source_output_id
+            or str(reference.get("candidate_id") or "").strip() != source_candidate_id
+            or not str(reference.get("file_path") or "").strip()
+            or not validate_doc73_binding(
+                receipt,
+                expected_job_id=source_job_id,
+                expected_project_id=source_project_id,
+                expected_batch_plan_digest=source_batch_plan_digest,
+                expected_output_id=source_output_id,
+                expected_source_asset_id=source_asset_id,
+                expected_source_plan_position=0,
+                expected_source_candidate_id=source_candidate_id,
+            )
+        ):
+            raise ValueError("doc73_auto_identity_anchor_transport_invalid")
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "doc73_auto_identity_anchor_receipt": dict(receipt),
+            "doc73_auto_identity_anchor_reference": dict(reference),
         }
 
     @staticmethod

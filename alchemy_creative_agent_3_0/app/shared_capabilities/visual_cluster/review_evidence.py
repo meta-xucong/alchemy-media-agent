@@ -26,7 +26,20 @@ class ExactReviewEvidenceResolver:
         self.asset_store = asset_store
         self.output_store = output_store
 
-    def resolve(self, *, record: Any, resolution: Any) -> dict[str, Any]:
+    def resolve(
+        self,
+        *,
+        record: Any,
+        resolution: Any,
+        server_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the review plan from persisted evidence and server receipts.
+
+        Automatic identity continuity is a server-owned reference channel.  It
+        must not be reconstructed from the public request or promoted into the
+        formal uploaded ``person_identity`` channel.
+        """
+
         request = getattr(record, "request", None)
         job_id = self._job_id(record, request)
         output_id = str(getattr(resolution, "output_id", "") or "").strip()
@@ -34,7 +47,23 @@ class ExactReviewEvidenceResolver:
         requested_channels = self._requested_channels(request)
         binding_reasons = self._resolution_binding_reasons(record, job_id, output_id, resolution)
 
-        specs = self._source_specs(candidate_records)
+        server_auto_anchor = self._server_doc73_auto_anchor(
+            server_metadata=server_metadata,
+            candidate_records=candidate_records,
+            request=request,
+            resolution=resolution,
+            job_id=job_id,
+            output_id=output_id,
+        )
+        excluded_auto_source_ids = (
+            set(server_auto_anchor.get("source_ids", ()))
+            if server_auto_anchor is not None
+            else set()
+        )
+        specs = self._source_specs(
+            candidate_records,
+            excluded_source_ids=excluded_auto_source_ids,
+        )
         audit_present = any(spec["audit_present"] for spec in specs)
         admitted_specs = [spec for spec in specs if spec["admitted"]]
         active_specs = specs
@@ -54,13 +83,21 @@ class ExactReviewEvidenceResolver:
             )
             for spec in active_specs
         ]
-        continuity_state = self._doc73_continuity_state(
-            record=record,
-            request=request,
-            resolution=resolution,
-            candidate_records=candidate_records,
-            job_id=job_id,
-            output_id=output_id,
+        continuity_state = (
+            {
+                key: value
+                for key, value in server_auto_anchor.items()
+                if key in {"state", "role", "reason"}
+            }
+            if server_auto_anchor is not None
+            else self._doc73_continuity_state(
+                record=record,
+                request=request,
+                resolution=resolution,
+                candidate_records=candidate_records,
+                job_id=job_id,
+                output_id=output_id,
+            )
         )
         missing_required = bool(audit_present and not admitted_specs)
         channels: dict[str, ReviewEvidenceChannel] = {}
@@ -80,11 +117,19 @@ class ExactReviewEvidenceResolver:
             comparison_allowed=False,
             source_type="prompt_contract",
         )
+        selected_binding = frozen_anchor_bindings.get(output_id)
+        selected_expected_integrity_id = None
+        if isinstance(selected_binding, dict) and not any(
+            selected_binding.get(key)
+            for key in ("integrity_invalid", "integrity_missing", "job_invalid", "job_missing")
+        ):
+            selected_expected_integrity_id = selected_binding.get("source_integrity_id") or None
         selected_state, selected_reason = self._selected_output_state(
             job_id=job_id,
             output_id=output_id,
             resolution=resolution,
             binding_reasons=binding_reasons,
+            expected_integrity_id=selected_expected_integrity_id,
         )
         channels["selected_output"] = ReviewEvidenceChannel(
             applicability="required",
@@ -137,10 +182,18 @@ class ExactReviewEvidenceResolver:
             for entry in source_entries
             if entry.get("state") == "available" and entry.get("source_type") == "selected_output"
         ]
+        auto_anchor_assets = []
+        if (
+            isinstance(server_auto_anchor, dict)
+            and server_auto_anchor.get("state") == "available"
+            and isinstance(server_auto_anchor.get("entry"), dict)
+        ):
+            auto_anchor_assets = [self._review_asset(server_auto_anchor["entry"])]
         if uploaded_assets:
             metadata["uploaded_assets"] = uploaded_assets
-        if selected_output_assets:
-            metadata["reference_assets"] = selected_output_assets
+        if selected_output_assets or auto_anchor_assets:
+            metadata["reference_assets"] = [*auto_anchor_assets, *selected_output_assets]
+            metadata["doc73_auto_identity_anchor_assets"] = list(auto_anchor_assets)
         return metadata
 
     @staticmethod
@@ -172,8 +225,13 @@ class ExactReviewEvidenceResolver:
                 add(output_metadata.get("candidate_metadata"))
         return _dedupe_record_dicts(records)
     @staticmethod
-    def _source_specs(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _source_specs(
+        records: list[dict[str, Any]],
+        *,
+        excluded_source_ids: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
         specs: list[dict[str, Any]] = []
+        excluded = {str(value).strip() for value in (excluded_source_ids or set()) if str(value).strip()}
         for item in records:
             audit = item.get("reference_input_execution")
             audit_present = isinstance(audit, dict)
@@ -183,13 +241,13 @@ class ExactReviewEvidenceResolver:
                 source_ids = [
                     source_id
                     for source_id in _dedupe_strings(item.get("reference_truth_source_ids"))
-                    if source_id not in auto_output_ids
+                    if source_id not in auto_output_ids and source_id not in excluded
                 ]
             else:
                 source_ids = [
                     source_id
                     for source_id in _dedupe_strings(item.get("reference_asset_ids"))
-                    if source_id not in auto_output_ids
+                    if source_id not in auto_output_ids and source_id not in excluded
                 ]
             claimed_channel = str(item.get("reference_truth_channel") or item.get("reference_channel") or "").strip().lower()
             claimed_role = str(item.get("reference_truth_role") or item.get("reference_role") or "").strip()
@@ -204,6 +262,233 @@ class ExactReviewEvidenceResolver:
                     }
                 )
         return _dedupe_specs(specs)
+
+    @staticmethod
+    def _server_doc73_auto_anchor_source_ids(server_metadata: Any) -> set[str]:
+        """Collect only IDs that must not fall back into formal source handling."""
+
+        if not isinstance(server_metadata, dict):
+            return set()
+        result: set[str] = set()
+        values = [
+            server_metadata.get("doc73_auto_identity_anchor_receipt"),
+            server_metadata.get("doc73_auto_identity_anchor_reference"),
+        ]
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            for key in ("source_output_id", "output_id", "source_id"):
+                source_id = str(value.get(key) or "").strip()
+                if source_id:
+                    result.add(source_id)
+            binding = value.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+            if isinstance(binding, dict):
+                source_id = str(binding.get("source_output_id") or "").strip()
+                if source_id:
+                    result.add(source_id)
+        return result
+
+    @staticmethod
+    def _doc73_target_links_source(
+        candidate_records: list[dict[str, Any]],
+        source_output_id: str,
+    ) -> bool:
+        for item in candidate_records:
+            if not ExactReviewEvidenceResolver._is_admitted_pixels_received(
+                item.get("reference_input_execution")
+            ):
+                continue
+            if "reference_truth_source_ids" in item:
+                source_ids = _dedupe_strings(item.get("reference_truth_source_ids"))
+            else:
+                source_ids = _dedupe_strings(item.get("reference_asset_ids"))
+            if source_output_id in source_ids:
+                return True
+        return False
+
+    def _server_doc73_auto_anchor(
+        self,
+        *,
+        server_metadata: dict[str, Any] | None,
+        candidate_records: list[dict[str, Any]],
+        request: Any,
+        resolution: Any,
+        job_id: str,
+        output_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve the trusted automatic anchor without requiring legacy fields.
+
+        The immutable Doc73 receipt supplies the source integrity fact.  The
+        persisted source record and current output still have to match it, and
+        a cross-job source is accepted only when the current output's admitted
+        reference execution explicitly links that source.
+        """
+
+        if not isinstance(server_metadata, dict) or not any(
+            key in server_metadata
+            for key in (
+                "doc73_auto_identity_anchor_receipt",
+                "doc73_auto_identity_anchor_reference",
+            )
+        ):
+            return None
+
+        source_ids = self._server_doc73_auto_anchor_source_ids(server_metadata)
+        receipt = server_metadata.get("doc73_auto_identity_anchor_receipt")
+        reference = server_metadata.get("doc73_auto_identity_anchor_reference")
+
+        def invalid(reason: str, state: str = "invalid") -> dict[str, Any]:
+            return {"state": state, "reason": reason, "source_ids": source_ids}
+
+        if not isinstance(receipt, dict) or not isinstance(reference, dict):
+            return invalid("doc73_server_receipt_missing")
+        if (
+            reference.get("origin") != "auto_batch_continuity"
+            or reference.get("source_type") != "auto_batch_continuity"
+            or reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) != receipt
+        ):
+            return invalid("doc73_server_receipt_reference_mismatch")
+
+        source_output_id = str(receipt.get("source_output_id") or "").strip()
+        source_job_id = str(receipt.get("job_id") or "").strip()
+        source_project_id = str(receipt.get("project_id") or "").strip()
+        source_asset_id = str(receipt.get("source_asset_id") or "").strip()
+        source_candidate_id = str(receipt.get("source_candidate_id") or "").strip()
+        source_batch_digest = str(receipt.get("batch_plan_digest") or "").strip()
+        if not all(
+            (
+                source_output_id,
+                source_job_id,
+                source_project_id,
+                source_asset_id,
+                source_candidate_id,
+                source_batch_digest,
+            )
+        ):
+            return invalid("doc73_server_receipt_incomplete")
+        if not validate_doc73_binding(
+            receipt,
+            expected_job_id=source_job_id,
+            expected_project_id=source_project_id,
+            expected_batch_plan_digest=source_batch_digest,
+            expected_output_id=source_output_id,
+            expected_source_asset_id=source_asset_id,
+            expected_source_plan_position=0,
+            expected_source_candidate_id=source_candidate_id,
+        ):
+            return invalid("doc73_server_receipt_invalid")
+        if (
+            str(reference.get("output_id") or reference.get("source_id") or "").strip()
+            != source_output_id
+        ):
+            return invalid("doc73_server_reference_output_mismatch")
+
+        try:
+            source_record = self.output_store.get_output(source_output_id)
+        except Exception:
+            return invalid("doc73_anchor_source_lookup_failed", state="unavailable")
+        if source_record is None:
+            return invalid("doc73_anchor_source_missing", state="unavailable")
+        source_metadata = getattr(source_record, "metadata", {})
+        source_metadata = source_metadata if isinstance(source_metadata, dict) else {}
+        if (
+            str(getattr(source_record, "output_id", "") or "").strip() != source_output_id
+            or str(getattr(source_record, "job_id", "") or "").strip() != source_job_id
+            or str(getattr(source_record, "candidate_id", "") or "").strip() != source_candidate_id
+            or str(getattr(source_record, "asset_id", "") or "").strip() != source_asset_id
+            or (
+                str(source_metadata.get("project_id") or "").strip()
+                and str(source_metadata.get("project_id") or "").strip() != source_project_id
+            )
+            or source_metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) != receipt
+        ):
+            return invalid("doc73_anchor_source_record_binding")
+        receipt_reader = getattr(self.output_store, "get_doc73_auto_identity_anchor_receipt", None)
+        if callable(receipt_reader):
+            try:
+                stored_receipt = receipt_reader(source_job_id)
+            except Exception:
+                return invalid("doc73_anchor_source_receipt_lookup_failed", state="unavailable")
+            if stored_receipt != receipt:
+                return invalid("doc73_anchor_source_receipt_binding")
+        try:
+            source_state = self._persisted_file_state(
+                source_record,
+                "auto_batch_continuity",
+                expected_integrity_id=str(receipt.get("source_content_sha256") or ""),
+            )
+        except Exception:
+            return invalid("doc73_anchor_source_integrity_lookup_failed", state="unavailable")
+        if source_state.get("state") != "available":
+            return invalid(
+                str(source_state.get("reason") or "doc73_anchor_source_unavailable"),
+                state=str(source_state.get("state") or "unavailable"),
+            )
+
+        try:
+            target_record = self.output_store.get_output(output_id) if output_id else None
+        except Exception:
+            return invalid("doc73_anchor_target_lookup_failed", state="unavailable")
+        request_metadata = getattr(request, "metadata", {}) if request is not None else {}
+        request_project_id = (
+            str(request_metadata.get("project_id") or "").strip()
+            if isinstance(request_metadata, dict)
+            else ""
+        )
+        if target_record is None:
+            return invalid("doc73_anchor_target_record_missing", state="unavailable")
+        target_metadata = getattr(target_record, "metadata", {})
+        target_metadata = target_metadata if isinstance(target_metadata, dict) else {}
+        if (
+            str(getattr(target_record, "output_id", "") or "").strip() != output_id
+            or str(getattr(target_record, "job_id", "") or "").strip() != job_id
+            or (
+                request_project_id
+                and str(target_metadata.get("project_id") or "").strip()
+                and str(target_metadata.get("project_id") or "").strip() != request_project_id
+            )
+            or (
+                request_project_id
+                and request_project_id != source_project_id
+            )
+        ):
+            return invalid("doc73_anchor_target_record_binding")
+
+        if output_id == source_output_id:
+            if job_id != source_job_id:
+                return invalid("doc73_anchor_source_job_binding")
+            role = "source"
+        else:
+            if not self._doc73_target_links_source(candidate_records, source_output_id):
+                return invalid("doc73_anchor_target_reference_binding")
+            try:
+                target_state = self._persisted_file_state(target_record, "auto_batch_continuity")
+            except Exception:
+                return invalid("doc73_anchor_target_integrity_lookup_failed", state="unavailable")
+            if target_state.get("state") != "available":
+                return invalid(
+                    str(target_state.get("reason") or "doc73_anchor_target_unavailable"),
+                    state=str(target_state.get("state") or "unavailable"),
+                )
+            role = "target"
+
+        entry = {
+            "source_id": source_output_id,
+            "channel": "person_identity",
+            "source_type": "auto_batch_continuity",
+            "role": "face_reference",
+            "state": "available",
+            "file_path": str(source_record.file_path),
+            "mime_type": source_record.mime_type or "image/png",
+            "use_policy": "identity_continuity",
+            "output_id": source_output_id,
+        }
+        return {
+            "state": "available",
+            "role": role,
+            "source_ids": source_ids or {source_output_id},
+            "entry": entry,
+        }
 
     @staticmethod
     def _doc73_bindings(record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -293,12 +578,17 @@ class ExactReviewEvidenceResolver:
                 continue
             if str(source_binding.get("binding_digest") or "") != str(binding.get("source_binding_digest") or ""):
                 continue
+            source_job_id = str(source_binding.get("job_id") or "").strip()
+            source_project_id = str(source_binding.get("project_id") or "").strip()
+            source_batch_plan_digest = str(source_binding.get("batch_plan_digest") or "").strip()
+            if not source_job_id or not source_project_id or not source_batch_plan_digest:
+                continue
             if not self._doc73_source_record_is_valid(
                 source_binding,
                 source_record,
-                job_id,
-                project_id,
-                batch_plan_digest,
+                source_job_id,
+                source_project_id,
+                source_batch_plan_digest,
             ):
                 continue
             target_state = self._persisted_file_state(target_record, "auto_batch_continuity")
@@ -747,6 +1037,7 @@ class ExactReviewEvidenceResolver:
         output_id: str,
         resolution: Any,
         binding_reasons: list[str],
+        expected_integrity_id: str | None = None,
     ) -> tuple[str, list[str]]:
         if binding_reasons:
             return "invalid", binding_reasons
@@ -757,17 +1048,44 @@ class ExactReviewEvidenceResolver:
             return "unavailable", ["selected_output_unreadable"]
         metadata = resolution.metadata if isinstance(getattr(resolution, "metadata", None), dict) else {}
         output_record = metadata.get("output_record") if isinstance(metadata.get("output_record"), dict) else {}
-        expected = str(
-            output_record.get("content_sha256")
-            or (output_record.get("metadata") or {}).get("content_sha256")
-            or metadata.get("content_sha256")
-            or ""
-        ).strip()
+        output_metadata = output_record.get("metadata") if isinstance(output_record.get("metadata"), dict) else {}
+        asset_metadata = metadata.get("asset_metadata") if isinstance(metadata.get("asset_metadata"), dict) else {}
+        candidate_metadata = metadata.get("candidate_metadata") if isinstance(metadata.get("candidate_metadata"), dict) else {}
+        integrity_values = [
+            output_record.get("content_sha256"),
+            output_record.get("source_integrity_id"),
+            output_metadata.get("content_sha256"),
+            output_metadata.get("source_integrity_id"),
+            metadata.get("content_sha256"),
+            metadata.get("source_integrity_id"),
+            asset_metadata.get("content_sha256"),
+            asset_metadata.get("source_integrity_id"),
+            candidate_metadata.get("content_sha256"),
+            candidate_metadata.get("source_integrity_id"),
+        ]
         try:
             actual = hashlib.sha256(path.read_bytes()).hexdigest()
         except OSError:
             return "unavailable", ["selected_output_unreadable"]
-        if not expected or expected != actual:
+        declared_values = [
+            str(value).strip()
+            for value in integrity_values
+            if str(value or "").strip()
+        ]
+        normalized_values = [
+            _normalize_integrity_digest(value)
+            for value in declared_values
+        ]
+        if any(not value for value in normalized_values):
+            return "invalid", ["selected_output_content_integrity"]
+        if len(set(normalized_values)) > 1:
+            return "invalid", ["selected_output_content_integrity"]
+        expected = _normalize_integrity_digest(expected_integrity_id)
+        if expected and expected != actual:
+            return "invalid", ["selected_output_content_integrity"]
+        if normalized_values and normalized_values[0] != actual:
+            return "invalid", ["selected_output_content_integrity"]
+        if not normalized_values and not expected:
             return "invalid", ["selected_output_content_integrity"]
         return "available", []
 
@@ -823,7 +1141,7 @@ class ExactReviewEvidenceResolver:
             "file_path": entry["file_path"],
             "mime_type": entry.get("mime_type"),
         }
-        if entry.get("source_type") == "selected_output":
+        if entry.get("source_type") in {"selected_output", "auto_batch_continuity"}:
             asset["output_id"] = entry["source_id"]
         return asset
 
@@ -938,6 +1256,7 @@ def _record_integrity_digest(record: Any) -> tuple[str, bool]:
         "content_sha256",
         "output_sha256",
         "original_sha256",
+        "source_integrity_id",
     ))
     values = [str(value).strip() for value in values if str(value or "").strip()]
     if not values:

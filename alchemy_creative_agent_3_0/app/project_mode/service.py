@@ -14,6 +14,10 @@ from typing import Any
 from uuid import uuid4
 
 from ..app_shell.routes import API_NAMESPACE
+from ..creative_core.doc281_output_plan_binding import (
+    DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
+    validate_doc73_binding,
+)
 from ..creative_core.rules import stable_id
 from ..product_api import V3ProductApiService
 from ..product_api.contracts import (
@@ -320,6 +324,8 @@ _DOC281_TERMINAL_RECEIPT_SCHEMA = "doc281_source_association_terminal_receipt_v1
 _DOC281_GENERAL_COMMAND_NAMESPACE = "doc281_general_commands_v1"
 _DOC281_GENERAL_SELECTION_NAMESPACE = "doc281_general_selection_receipts_v2"
 _DOC281_GENERAL_RECEIPT_NAMESPACE = "doc281_general_resolution_receipts_v1"
+_DOC73_AUTO_IDENTITY_ANCHOR_CONTROL_NAMESPACE = "doc73_auto_identity_anchor_controls_v1"
+_DOC73_AUTO_IDENTITY_ANCHOR_CONTROL_SCHEMA = "doc73_auto_identity_anchor_control_v1"
 _DOC281_GENERAL_SOURCE_POLICY_FIELDS = frozenset({
     "enabled",
     "policy_authority",
@@ -3369,6 +3375,37 @@ class V3ProjectModeService:
         project = self._require_project(project_id)
         state_request = self._coerce_output_state_request(request or {})
         now = _utc_now_iso()
+        auto_anchor = self._doc73_auto_identity_anchor_record(
+            project,
+            output_id=output_id,
+        )
+        if auto_anchor is not None:
+            record = auto_anchor["record"]
+            canonical_output_id = str(getattr(record, "output_id", "") or "").strip()
+            if not self._record_doc73_auto_identity_anchor_control(
+                project_id=project.project_id,
+                job_id=str(getattr(record, "job_id", "") or "").strip(),
+                output_id=canonical_output_id,
+                state="unbound",
+                changed_at=now,
+            ):
+                raise ValueError("identity_anchor_state_unavailable")
+            context = self._refresh_project_context(project)
+            self._append_timeline(
+                project.project_id,
+                TimelineItemType.CANDIDATE_UNSELECTED,
+                "解绑了人物身份锚点",
+                "这张图仍保留在项目成果和历史里，但不会继续作为本项目的自动人物一致性依据。",
+                job_id=str(getattr(record, "job_id", "") or "").strip(),
+                asset_ids=[str(getattr(record, "asset_id", "") or "").strip()],
+                candidate_ids=[str(getattr(record, "candidate_id", "") or "").strip()],
+                metadata={
+                    "output_id": canonical_output_id,
+                    "reference_binding_mode": "automatic_continuity",
+                    "anchor_state": "unbound",
+                },
+            )
+            return self._state_change_response(project, context)
         ref = self._find_output_ref(project, output_id)
         self._set_output_state(
             project,
@@ -4026,6 +4063,7 @@ class V3ProjectModeService:
             template_id=template_manifest.template_id,
             commerce_profile=commerce_profile,
         )
+        doc73_auto_identity_anchor_transport = self._doc73_auto_identity_anchor_transport(project)
         context_snapshot = context.model_dump(mode="json")
         scenario_selection = self._scenario_selection_for_template(
             template_manifest,
@@ -4140,11 +4178,13 @@ class V3ProjectModeService:
                 create_payload,
                 binding_service=self.project_visual_asset_binding_service,
                 server_job_instance_id=doc270_general_retry_instance_id,
+                doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
             )
             if self.project_visual_asset_binding_service is not None
             else self.product_service.create_job(
                 create_payload,
                 server_job_instance_id=doc270_general_retry_instance_id,
+                doc73_auto_identity_anchor_transport=doc73_auto_identity_anchor_transport,
             )
         )
         if (
@@ -4939,6 +4979,62 @@ class V3ProjectModeService:
         metadata.update({"project_id": project.project_id, "template_id": template_id, "project_mode": True})
         payload["metadata"] = metadata
         current_status = self.product_service.get_job(job_id)
+        if str(metadata.get("identity_anchor_action") or "").strip() == "bind":
+            selected_output_id = str(
+                payload.get("selected_output_id")
+                or payload.get("selected_asset_id")
+                or ""
+            ).strip()
+            auto_anchor = self._doc73_auto_identity_anchor_record(
+                project,
+                output_id=selected_output_id,
+            )
+            anchor_record = auto_anchor.get("record") if auto_anchor is not None else None
+            if (
+                anchor_record is None
+                or str(getattr(anchor_record, "job_id", "") or "").strip() != job_id
+                or str(getattr(anchor_record, "output_id", "") or "").strip() != selected_output_id
+            ):
+                raise ValueError("automatic_identity_anchor_not_found")
+            if not self._record_doc73_auto_identity_anchor_control(
+                project_id=project.project_id,
+                job_id=job_id,
+                output_id=selected_output_id,
+                state="bound",
+                changed_at=_utc_now_iso(),
+            ):
+                raise ValueError("identity_anchor_state_unavailable")
+            context = self._refresh_project_context(project)
+            self._append_timeline(
+                project.project_id,
+                TimelineItemType.CANDIDATE_SELECTED,
+                "绑定了人物身份锚点",
+                "这张图会继续作为本项目的人物一致性依据；正式参考图和生成方向仍保持独立。",
+                job_id=job_id,
+                asset_ids=[str(getattr(anchor_record, "asset_id", "") or "").strip()],
+                candidate_ids=[str(getattr(anchor_record, "candidate_id", "") or "").strip()],
+                metadata={
+                    "output_id": selected_output_id,
+                    "reference_binding_mode": "automatic_continuity",
+                    "anchor_state": "bound",
+                },
+            )
+            visible_output_items = self._project_output_items(project, limit=60)
+            return {
+                "job_id": job_id,
+                "status": current_status.status.value,
+                "job_status": current_status.model_dump(mode="json"),
+                "project": self._public_project_record(
+                    project,
+                    visible_output_items=visible_output_items,
+                ).model_dump(mode="json"),
+                "context": context.model_dump(mode="json") if context else None,
+                "metadata": {
+                    **self._metadata(),
+                    "project_outputs": visible_output_items,
+                    "identity_anchor_action": "bind",
+                },
+            }
         if current_status.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}:
             return self._selection_hold_response(
                 project,
@@ -5071,9 +5167,13 @@ class V3ProjectModeService:
             selected_output_refs=refs,
             metadata={"brand_memory_auto_applied": False},
         )
+        visible_output_items = self._project_output_items(project, limit=60)
         return {
             **selected.model_dump(mode="json"),
-            "project": project.model_dump(mode="json"),
+            "project": self._public_project_record(
+                project,
+                visible_output_items=visible_output_items,
+            ).model_dump(mode="json"),
             "context": project.latest_context.model_dump(mode="json") if project.latest_context else None,
             "metadata": {
                 **selected.metadata,
@@ -5082,7 +5182,7 @@ class V3ProjectModeService:
                 "project_mode": True,
                 "brand_memory_auto_applied": False,
                 "continuation_available": True,
-                "project_outputs": self._project_output_items(project, limit=60),
+                "project_outputs": visible_output_items,
             },
         }
 
@@ -8888,14 +8988,18 @@ class V3ProjectModeService:
         *,
         feedback: ProjectFeedbackRecord | None = None,
     ) -> dict[str, Any]:
+        visible_output_items = self._project_output_items(project, limit=60)
         payload: dict[str, Any] = {
             "api_namespace": API_NAMESPACE,
             "route": f"{API_NAMESPACE}/projects/{project.project_id}",
-            "project": project.model_dump(mode="json"),
+            "project": self._public_project_record(
+                project,
+                visible_output_items=visible_output_items,
+            ).model_dump(mode="json"),
             "context": context.model_dump(mode="json"),
             "metadata": {
                 **self._metadata(),
-                "project_outputs": self._project_output_items(project, limit=60),
+                "project_outputs": visible_output_items,
             },
         }
         if feedback is not None:
@@ -9118,6 +9222,14 @@ class V3ProjectModeService:
         metadata["general_suite_role_plan_id"] = general_suite_role_plan.get("plan_id")
         metadata["batch_identity_diversity_review_id"] = batch_identity_diversity_review.get("review_id")
         metadata["template_consistency_policy"] = template_policy
+        auto_anchor = self._doc73_auto_identity_anchor_record(
+            project,
+            owner_user_id=owner_user_id,
+        )
+        if auto_anchor is not None:
+            metadata["doc73_auto_identity_anchor_state"] = str(
+                auto_anchor.get("state") or ""
+            ).strip().lower()
         if effective_template_id == ECOMMERCE_TEMPLATE_ID and effective_commerce_profile is not None:
             metadata["commerce_profile"] = effective_commerce_profile.model_dump(mode="json")
             metadata["product_reference_required"] = True
@@ -10091,11 +10203,22 @@ class V3ProjectModeService:
             for item in final_items
             if self._public_project_output_identity(item)
         }
+        auto_anchor = self._doc73_auto_identity_anchor_record(project, owner_user_id=owner_user_id)
+        auto_anchor_output_id = (
+            str(getattr(auto_anchor.get("record"), "output_id", "") or "").strip()
+            if auto_anchor is not None
+            else ""
+        )
         review_items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in all_items:
             identity = self._public_project_output_identity(item)
-            if not identity or identity in final_ids or identity in seen:
+            if (
+                not identity
+                or identity == auto_anchor_output_id
+                or identity in final_ids
+                or identity in seen
+            ):
                 continue
             if not self._public_project_output_has_image(item):
                 continue
@@ -10756,6 +10879,269 @@ class V3ProjectModeService:
                 if len(items) >= max(1, int(limit or 60)):
                     return items
         return items[: max(1, int(limit or 60))]
+
+    def _doc73_auto_identity_anchor_record(
+        self,
+        project: ProjectRecord,
+        *,
+        output_id: str | None = None,
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Read the one valid automatic identity anchor for this project.
+
+        The source binding is the authority.  Project metadata and browser
+        references are only projections and cannot nominate another output.
+        """
+
+        output_store = getattr(self.product_service, "output_store", None)
+        list_by_job = getattr(output_store, "list_by_job", None)
+        receipt_reader = getattr(output_store, "get_doc73_auto_identity_anchor_receipt", None)
+        if output_store is None or not callable(list_by_job) or not callable(receipt_reader):
+            return None
+        requested_output_id = str(output_id or "").strip()
+        for job_id in reversed(project.job_ids):
+            clean_job_id = str(job_id or "").strip()
+            if not clean_job_id:
+                continue
+            try:
+                records = list(list_by_job(clean_job_id))
+            except Exception:
+                continue
+            for record in sorted(records, key=lambda item: str(getattr(item, "created_at", "") or "")):
+                record_output_id = str(getattr(record, "output_id", "") or "").strip()
+                if not record_output_id or (
+                    requested_output_id
+                    and requested_output_id not in {
+                        record_output_id,
+                        str(getattr(record, "asset_id", "") or "").strip(),
+                        str(getattr(record, "candidate_id", "") or "").strip(),
+                    }
+                ):
+                    continue
+                if str(getattr(record, "job_id", "") or "").strip() != clean_job_id:
+                    continue
+                if owner_user_id is not None and not self._output_record_visible_to_owner(record, owner_user_id):
+                    continue
+                metadata = dict(getattr(record, "metadata", {}) or {})
+                binding = metadata.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY)
+                if not isinstance(binding, dict):
+                    continue
+                if binding.get("origin") != "auto_batch_continuity":
+                    continue
+                if (
+                    binding.get("project_id") != project.project_id
+                    or binding.get("job_id") != clean_job_id
+                    or binding.get("source_output_id") != record_output_id
+                    or binding.get("source_asset_id") != str(getattr(record, "asset_id", "") or "").strip()
+                    or binding.get("source_candidate_id") != str(getattr(record, "candidate_id", "") or "").strip()
+                ):
+                    continue
+                record_project_id = str(metadata.get("project_id") or "").strip()
+                if record_project_id and record_project_id != project.project_id:
+                    continue
+                record_batch_digest = str(metadata.get("doc73_batch_plan_digest") or "").strip()
+                binding_batch_digest = str(binding.get("batch_plan_digest") or "").strip()
+                if record_batch_digest and record_batch_digest != binding_batch_digest:
+                    continue
+                if not validate_doc73_binding(
+                    binding,
+                    expected_job_id=clean_job_id,
+                    expected_project_id=project.project_id,
+                    expected_batch_plan_digest=binding_batch_digest,
+                    expected_output_id=record_output_id,
+                    expected_source_asset_id=str(getattr(record, "asset_id", "") or "").strip(),
+                    expected_source_plan_position=0,
+                    expected_source_candidate_id=str(getattr(record, "candidate_id", "") or "").strip(),
+                ):
+                    continue
+                try:
+                    if receipt_reader(clean_job_id) != binding:
+                        continue
+                    path = Path(str(getattr(record, "file_path", "") or ""))
+                    actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                except (OSError, ValueError, TypeError):
+                    continue
+                expected_digest = str(binding.get("source_content_sha256") or "").strip().lower()
+                if expected_digest.startswith("sha256:"):
+                    expected_digest = expected_digest.split(":", 1)[1].strip()
+                if (
+                    len(expected_digest) != 64
+                    or any(character not in "0123456789abcdef" for character in expected_digest)
+                    or actual_digest != expected_digest
+                ):
+                    continue
+                control_state = self._doc73_auto_identity_anchor_control_state(
+                    project.project_id,
+                    clean_job_id,
+                    record_output_id,
+                )
+                if control_state == "invalid":
+                    return {
+                        "record": record,
+                        "binding": dict(binding),
+                        "state": "invalid",
+                    }
+                return {
+                    "record": record,
+                    "binding": dict(binding),
+                    "state": "unbound" if control_state == "unbound" else "bound",
+                }
+        return None
+
+    def _doc73_auto_identity_anchor_transport(
+        self,
+        project: ProjectRecord,
+    ) -> dict[str, Any] | None:
+        """Project Mode's private handoff for the already-bound auto anchor."""
+
+        anchor = self._doc73_auto_identity_anchor_record(project)
+        if not isinstance(anchor, dict) or anchor.get("state") != "bound":
+            return None
+        record = anchor.get("record")
+        binding = anchor.get("binding")
+        file_path = str(getattr(record, "file_path", "") or "").strip()
+        output_id = str(getattr(record, "output_id", "") or "").strip()
+        candidate_id = str(getattr(record, "candidate_id", "") or "").strip()
+        if not file_path or not output_id or not candidate_id or not isinstance(binding, dict):
+            return None
+        reference = {
+            "asset_id": output_id,
+            "source_id": output_id,
+            "output_id": output_id,
+            "candidate_id": candidate_id,
+            "source_type": "auto_batch_continuity",
+            "origin": "auto_batch_continuity",
+            "role": "continuity_reference",
+            "use_policy": "continuity",
+            "strength": "hard",
+            "provider_input_required": True,
+            "file_path": file_path,
+            "filename": Path(file_path).name,
+            "mime_type": str(getattr(record, "mime_type", "") or "image/png"),
+            "lock_targets": [
+                "broad face shape",
+                "eye shape and spacing",
+                "nose-mouth relationship",
+                "jawline direction",
+                "age impression",
+                "body type and proportions",
+            ],
+            "metadata": {
+                "doc": "73",
+                "auto_batch_identity_anchor": True,
+                "origin": "auto_batch_continuity",
+                DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: dict(binding),
+                "source_asset_id": binding.get("source_asset_id"),
+                "project_id": project.project_id,
+                "user_reference_priority": True,
+                "doc93_reference_channel_safe": True,
+            },
+            DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: dict(binding),
+        }
+        return {
+            "doc73_auto_identity_anchor_receipt": dict(binding),
+            "doc73_auto_identity_anchor_reference": reference,
+        }
+
+    def _doc73_auto_identity_anchor_control_state(
+        self,
+        project_id: str,
+        job_id: str,
+        output_id: str,
+    ) -> str:
+        list_private_records = getattr(self.project_store, "list_private_records", None)
+        if not callable(list_private_records):
+            return "bound"
+        try:
+            records = list_private_records(project_id, _DOC73_AUTO_IDENTITY_ANCHOR_CONTROL_NAMESPACE)
+        except Exception:
+            return "invalid"
+        control_keys = {
+            "schema_version", "project_id", "job_id", "output_id", "state", "changed_at",
+        }
+        for record in reversed(records):
+            if not isinstance(record, dict):
+                continue
+            if (
+                record.get("project_id") != project_id
+                or record.get("job_id") != job_id
+                or record.get("output_id") != output_id
+            ):
+                continue
+            if (
+                set(record) != control_keys
+                or record.get("schema_version") != _DOC73_AUTO_IDENTITY_ANCHOR_CONTROL_SCHEMA
+            ):
+                return "invalid"
+            state = record.get("state")
+            if state in {"bound", "unbound"}:
+                return state
+            return "invalid"
+        return "bound"
+
+    def _record_doc73_auto_identity_anchor_control(
+        self,
+        *,
+        project_id: str,
+        job_id: str,
+        output_id: str,
+        state: str,
+        changed_at: str,
+    ) -> bool:
+        append_private_record = getattr(self.project_store, "append_private_record", None)
+        if not callable(append_private_record) or state not in {"bound", "unbound"}:
+            return False
+        try:
+            append_private_record(
+                project_id,
+                _DOC73_AUTO_IDENTITY_ANCHOR_CONTROL_NAMESPACE,
+                {
+                    "schema_version": _DOC73_AUTO_IDENTITY_ANCHOR_CONTROL_SCHEMA,
+                    "project_id": project_id,
+                    "job_id": job_id,
+                    "output_id": output_id,
+                    "state": state,
+                    "changed_at": changed_at,
+                },
+            )
+        except Exception:
+            return False
+        return True
+
+    def _doc73_auto_identity_anchor_public_projection(
+        self,
+        project: ProjectRecord,
+        *,
+        owner_user_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        anchor = self._doc73_auto_identity_anchor_record(
+            project,
+            owner_user_id=owner_user_id,
+        )
+        if anchor is None:
+            return None
+        record = anchor["record"]
+        state = str(anchor.get("state") or "").strip().lower()
+        if state not in {"bound", "unbound"}:
+            return None
+        bound = state == "bound"
+        return {
+            "schema_version": "doc73_auto_identity_anchor_public_v1",
+            "state": state,
+            "binding_mode": "automatic_continuity",
+            "review_surface": "identity_anchor",
+            "project_id": project.project_id,
+            "job_id": str(getattr(record, "job_id", "") or "").strip(),
+            "output_id": str(getattr(record, "output_id", "") or "").strip(),
+            "asset_id": str(getattr(record, "asset_id", "") or "").strip(),
+            "preview_url": getattr(record, "preview_url", None),
+            "thumbnail_url": getattr(record, "thumbnail_url", None),
+            "download_url": getattr(record, "download_url", None),
+            "created_at": getattr(record, "created_at", None),
+            "label": "人物身份锚点",
+            "can_unbind": bound,
+            "can_bind": not bound,
+        }
 
     def _project_delivery_preview_items(
         self,
@@ -12055,6 +12441,12 @@ class V3ProjectModeService:
             for key, value in dict(project.metadata or {}).items()
             if key in public_metadata_keys
         }
+        auto_anchor = self._doc73_auto_identity_anchor_public_projection(
+            project,
+            owner_user_id=owner_user_id,
+        )
+        if auto_anchor is not None:
+            public_metadata["doc73_auto_identity_anchor"] = auto_anchor
         public_project = project.model_copy(update={"metadata": public_metadata}, deep=True)
         if owner_user_id is None:
             return public_project

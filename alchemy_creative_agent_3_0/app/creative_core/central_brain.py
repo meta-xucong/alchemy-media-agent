@@ -376,11 +376,13 @@ class CentralCreativeBrain:
         pack_warnings: list[str] = []
         use_mock_generation = provider_strategy == ProviderStrategy.MOCK_GENERATION
         explicit_references_present = self._has_explicit_user_reference_assets(context)
+        auto_identity_anchor_state = self._project_auto_identity_anchor_state(context)
         auto_identity_anchor_enabled = (
             not use_mock_generation
             and not explicit_references_present
             and self._is_human_identity_suite_context(context)
             and self._generated_output_reference_chain_allowed(context)
+            and auto_identity_anchor_state not in {"unbound", "invalid"}
         )
         auto_identity_anchor_reference: dict[str, Any] | None = None
         role_execution_records: list[dict[str, Any]] = []
@@ -1151,6 +1153,22 @@ class CentralCreativeBrain:
                 return True
         return False
 
+    @staticmethod
+    def _project_auto_identity_anchor_state(context: PipelineContext) -> str | None:
+        """Read the server-owned automatic-anchor state from the frozen snapshot."""
+
+        snapshot = (context.metadata or {}).get("project_context_snapshot")
+        if not isinstance(snapshot, dict):
+            return None
+        snapshot_metadata = snapshot.get("metadata")
+        if (
+            not isinstance(snapshot_metadata, dict)
+            or snapshot_metadata.get("source") != "V3ProjectModeService"
+        ):
+            return None
+        state = str(snapshot_metadata.get("doc73_auto_identity_anchor_state") or "").strip().lower()
+        return state if state in {"bound", "unbound", "invalid"} else None
+
     def _requires_independent_role_terminal_states(self, context: PipelineContext) -> bool:
         """Return the generic specialized-execution opt-in, if any.
 
@@ -1396,17 +1414,34 @@ class CentralCreativeBrain:
         if not isinstance(receipt, dict) or not isinstance(transport_reference, dict):
             return None
         source_output_id = str(receipt.get("source_output_id") or "").strip()
+        source_job_id = str(receipt.get("job_id") or "").strip()
+        source_project_id = str(receipt.get("project_id") or "").strip()
+        source_batch_plan_digest = str(receipt.get("batch_plan_digest") or "").strip()
+        source_asset_id = str(receipt.get("source_asset_id") or "").strip()
         source_candidate_id = str(receipt.get("source_candidate_id") or "").strip()
         file_path = str(transport_reference.get("file_path") or "").strip()
-        if not source_output_id or not source_candidate_id or not file_path:
+        current_project_id = str(context.metadata.get("project_id") or "").strip()
+        if (
+            not source_output_id
+            or not source_job_id
+            or not source_project_id
+            or not source_batch_plan_digest
+            or not source_asset_id
+            or not source_candidate_id
+            or not file_path
+            or current_project_id != source_project_id
+            or transport_reference.get(DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY) not in (None, receipt)
+        ):
             return None
         if not validate_doc73_binding(
             receipt,
-            expected_job_id=context.creative_job.job_id if context.creative_job else None,
-            expected_project_id=str(context.metadata.get("project_id") or "").strip() or None,
-            expected_batch_plan_digest=context.metadata.get("doc73_batch_plan_digest"),
+            # The receipt belongs to the source Job.  A continuation must
+            # validate that immutable source identity, not the new target Job.
+            expected_job_id=source_job_id,
+            expected_project_id=source_project_id,
+            expected_batch_plan_digest=source_batch_plan_digest,
             expected_output_id=source_output_id,
-            expected_source_asset_id=str(receipt.get("source_asset_id") or "").strip(),
+            expected_source_asset_id=source_asset_id,
             expected_source_plan_position=0,
             expected_source_candidate_id=source_candidate_id,
         ):

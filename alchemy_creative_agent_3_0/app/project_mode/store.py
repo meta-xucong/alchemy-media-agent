@@ -26,6 +26,7 @@ _DOC270_PHASE4_PRIVATE_NAMESPACES = frozenset(
         "doc281_general_requirements_v1",
         "doc281_source_evidence_observations_v1",
         "doc281_general_resolution_receipts_v1",
+        "doc73_auto_identity_anchor_controls_v1",
     }
 )
 

@@ -216,11 +216,9 @@ def issue_doc73_auto_identity_anchor_target_skeleton(
             expected_output_id=source_output_id,
         )
         or not source_job_id
-        or source_job_id != values["job_id"]
         or not source_project_id
         or source_project_id != values["project_id"]
         or not source_batch_digest
-        or source_batch_digest != batch_digest
         or not source_output_id
         or not source_binding_digest
         or not values["target_asset_id"]
