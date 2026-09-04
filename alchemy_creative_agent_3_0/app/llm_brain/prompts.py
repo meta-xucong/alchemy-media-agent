@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import NoReturn
 
 from .contracts import BrainRunRequest
 from ..visual_assets.body_proportion_evidence_profile import BODY_REFRESH_REFERENCE_AGE_SCOPE
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS
 from ..shared_capabilities.visual_cluster.expression_review import LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION
+from ..shared_capabilities.visual_cluster.contracts import VariationExecutionContract
 from ..visual_assets.body_proportion_evidence_profile import BodyMorphologyEvidenceProfile
 
 
@@ -53,6 +55,7 @@ SYSTEM_PROMPT = (
 CANONICAL_FINALIZER_SYSTEM_PROMPT = """You are the V3 Creative OS final prompt-signing brain. Return JSON only and never reveal hidden reasoning.
 Author the exact complete natural-language renderer prompt requested by the schema. The frozen render context is authoritative for protected user intent, reference-channel ownership, template/cardinality, capability obligations, and normalized review evidence. Reconcile all of it as one whole image; do not emit IDs, diagnostics, prompt fragments, checklists, local recipes, or markdown.
 The Remote Brain is the sole final prompt author. Do not replace an explicit current-request choice with an inherited reference style, age, camera, hair, wardrobe, expression, complexion, or scene unless the frozen ownership context explicitly assigns it to the reference.
+When frozen_render_context.variation_execution_contract is present, use its neutral output purposes, variation axes, must-keep meaning, and anti-drift meaning to make the outputs materially distinct. Translate that contract into complete prompts without copying its fields, local role language, or any recipe wording into renderer text.
 Treat every explicit current-request choice of atmosphere, palette, time of day, lighting color or direction, lens, film finish, environment, composition, and mood as protected user-owned intent. Human Realism may improve the camera-observed rendering of people and materials inside that direction, but it must not replace, brighten, cool, warm, modernize, soften, or otherwise redesign those channels. When a channel is not defined by the request, resolve it conservatively from the complete meaning; do not invent a new location, palette, lighting setup, or cinematic mood merely to demonstrate realism.
 For a visible real person, resolve identity, current developmental stage, expression, photographic material, and scene together. Keep the person age-appropriate and non-sexual. Do not turn age, expression, complexion, skin, anatomy, or beauty into a feature formula or word stack. Preserve an explicitly user-owned commercial aesthetic while keeping the person materially camera-observed and individual; a pleasant or commercial frame alone does not justify a generic presenter expression.
 When multiple visible people share the frame, preserve the user's desired beauty, appeal, facial harmony, styling, and mood as the first visual priority while authoring them as distinct individuals observed in one real moment. Let their attention, timing, posture, expression, facial character, and light-dependent surface response differ naturally with the situation, without making faces interchangeable, retouching uniform, or skin artificially plastic. Keep the beauty direction flattering and coherent across the group; realism should add camera-observed material detail and presence, not make the people less attractive. Do not equate realism with dullness, harshness, fatigue, roughness, or deliberately imperfect facial features: preserve balanced attractive features, healthy complexion, and expressive eyes. If realism and texture compete with beauty, reduce the texture intervention before reducing facial appeal. Resolve skin as natural human material with restrained local highlights and soft highlight rolloff, preserving fine nonuniform texture without oily sheen or waxy gloss. Keep each face readable through scene-consistent reflected or ambient fill from the existing light, without replacing directional light with flat frontal studio fill. Preserve the prompt's light direction, color, mood, and contrast; keep facial shadow detail open without lifting the whole scene, and keep highlight rolloff physically coherent with the background and hair rim light. If warm backlight, retro color, soft focus, diffusion, or halation is requested, balance those effects against neutral skin color, gentle highlight transitions, and open shadow detail rather than intensifying amber saturation or contrast. When soft focus, diffusion, or halation is requested, keep it an optical property of the scene and highlights while retaining local face and material contrast at the focal plane.
@@ -498,6 +501,103 @@ def _compact_human_realism_execution_contract(shared_capabilities: dict[str, obj
     }
 
 
+def _compact_general_variation_execution_contract(request: BrainRunRequest) -> dict[str, object]:
+    """Project only the typed neutral variation bridge into a General request."""
+
+    if (
+        request.scenario_id != "general_creative"
+        or request.template_id != "general_template"
+        or request.requested_image_count <= 1
+    ):
+        return {}
+    if request.metadata.get("variation_execution_contract_enforced") is not True:
+        return {}
+
+    def contract_error(message: str) -> NoReturn:
+        # Import lazily because providers imports this prompt module while it
+        # defines the provider exception type.
+        from .providers import BrainPromptContractInvalid
+
+        raise BrainPromptContractInvalid(f"General variation execution contract {message}.")
+
+    shared_capabilities = request.shared_capabilities
+    cluster = shared_capabilities.get("visual_cluster") if isinstance(shared_capabilities, dict) else None
+    cluster = cluster if isinstance(cluster, dict) else {}
+    raw_contract = cluster.get("variation_execution_contract")
+    if not isinstance(raw_contract, dict):
+        contract_error("is missing from the enforced Brain request")
+    try:
+        contract = VariationExecutionContract.model_validate(raw_contract)
+    except Exception:
+        contract_error("is invalid")
+    expected_binding = {
+        "contract_version": contract.contract_version,
+        "contract_digest": contract.contract_digest,
+    }
+    if (
+        not contract.contract_digest
+        or contract.contract_digest != contract.computed_digest()
+        or contract.requested_image_count != request.requested_image_count
+    ):
+        contract_error("does not match the frozen Brain request")
+    if request.metadata.get("variation_execution_contract_binding") != expected_binding:
+        contract_error("frozen version/digest binding is missing or mismatched")
+    if [item.output_index for item in contract.outputs] != list(range(1, contract.requested_image_count + 1)):
+        contract_error("output indices do not match the frozen Brain request")
+    return contract.model_dump(mode="json")
+
+
+def _validated_general_variation_contract_for_finalizer(
+    request: BrainRunRequest,
+    context: dict[str, object],
+) -> VariationExecutionContract | None:
+    """Validate the frozen bridge, while leaving legacy/specialized records alone."""
+
+    in_general_multi_image_scope = (
+        request.scenario_id == "general_creative"
+        and request.template_id == "general_template"
+        and request.requested_image_count > 1
+    )
+    if not in_general_multi_image_scope:
+        context.pop("variation_execution_contract", None)
+        return None
+    raw_contract = context.get("variation_execution_contract")
+    if raw_contract is None:
+        if context.get("variation_execution_contract_required") is True:
+            raise ValueError("General variation execution contract is missing from the frozen context.")
+        return None
+    try:
+        contract = VariationExecutionContract.model_validate(raw_contract)
+    except Exception as exc:
+        raise ValueError("General variation execution contract is invalid.") from exc
+    if (
+        not contract.contract_digest
+        or contract.contract_digest != contract.computed_digest()
+        or contract.requested_image_count != request.requested_image_count
+        or [item.output_index for item in contract.outputs]
+        != list(range(1, request.requested_image_count + 1))
+    ):
+        raise ValueError("General variation execution contract binding does not match the frozen request.")
+    frozen_binding = context.get("frozen_binding")
+    frozen_contract_binding = (
+        frozen_binding.get("variation_execution_contract")
+        if isinstance(frozen_binding, dict)
+        else None
+    )
+    expected_binding = {
+        "contract_version": contract.contract_version,
+        "contract_digest": contract.contract_digest,
+    }
+    if context.get("variation_execution_contract_required") is True and not isinstance(
+        frozen_contract_binding,
+        dict,
+    ):
+        raise ValueError("General variation execution contract frozen binding is missing.")
+    if frozen_contract_binding is not None and frozen_contract_binding != expected_binding:
+        raise ValueError("General variation execution contract frozen binding does not match.")
+    return contract
+
+
 def _compact_declared_fact_map(value: object) -> dict[str, object]:
     """Compact explicit structured facts without inventing or renaming them."""
 
@@ -677,6 +777,15 @@ def _compact_remote_creative_payload(
         "capability_activation_instructions": CAPABILITY_ACTIVATION_INSTRUCTIONS,
         "human_expression_authenticity_instructions": HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS,
     }
+    variation_contract = _compact_general_variation_execution_contract(request)
+    if variation_contract:
+        payload["variation_execution_contract"] = variation_contract
+        payload["variation_execution_contract_instructions"] = (
+            "Use this typed contract as neutral per-output semantic guidance. Preserve its subject/style and "
+            "anti-drift meaning, make each output serve its own purpose and variation axes, and author the "
+            "complete Brain-owned direction for each output. Do not echo the contract fields, internal role "
+            "language, or any local recipe in a renderer prompt."
+        )
     if ecommerce_context:
         payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
@@ -760,6 +869,12 @@ def build_remote_payload(request: BrainRunRequest) -> str:
             "the return schema, never natural-language aliases. Developmental age and expression are governed by "
             "their separate semantic fields and are not reference-channel IDs."
         )
+        if "variation_execution_contract" in payload:
+            payload["remote_response_contract"] += (
+                " When variation_execution_contract is present, use its neutral per-output purpose and variation "
+                "axes to make image_set_plan.shot_plan materially distinct while preserving its must-keep and "
+                "anti-drift meaning. Do not return the contract itself as prompt text or add local recipe wording."
+            )
         if professional_ecommerce_pose_contract:
             payload["professional_ecommerce_pose_contract_instructions"] = (
                 PROFESSIONAL_ECOMMERCE_POSE_CONTRACT_INSTRUCTIONS
@@ -971,6 +1086,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
 
     context = request.metadata.get("canonical_prompt_context")
     context = dict(context) if isinstance(context, dict) else {}
+    variation_execution_contract = _validated_general_variation_contract_for_finalizer(request, context)
     is_human_naturalness_resign = request.stage == "provider_prompt_human_naturalness_resign"
     is_developmental_presence_verify = (
         request.stage == "provider_prompt_developmental_presence_verify"
@@ -1241,6 +1357,14 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         "prompt": "one complete final natural-language image-rendering prompt for this exact output",
         "review_status": "approved",
     }
+    if variation_execution_contract is not None:
+        prompt_schema["variation_execution_receipt"] = {
+            "contract_version": variation_execution_contract.contract_version,
+            "contract_digest": variation_execution_contract.contract_digest,
+            "output_index": "same integer as this canonical_provider_prompts item",
+            "status": "approved|rewritten",
+            "owner": "remote_v3_llm_brain",
+        }
     if request.metadata.get("require_lossless_user_direction") is True:
         prompt_schema["user_direction_integrity"] = {
             "contract_version": "v3_user_direction_integrity_v1",
@@ -1378,6 +1502,16 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "individual presence. Do not use keyword matching, phrase counting, a "
             "structured visual recipe, or a local repair suffix; compare the complete "
             "meanings semantically and rewrite the whole prompt when restoration is needed."
+        )
+    if variation_execution_contract is not None:
+        response_contract += (
+            " For every output, use the frozen variation_execution_contract to author a materially distinct output "
+            "purpose and variation direction while preserving its must_keep and avoid_drift meaning. Return the "
+            "exact schema-only variation_execution_receipt with contract_version "
+            f"{variation_execution_contract.contract_version}, contract_digest "
+            f"{variation_execution_contract.contract_digest}, the matching output_index, status approved or rewritten, "
+            "and owner remote_v3_llm_brain. The receipt is audit data, not renderer wording; do not copy contract "
+            "fields, internal role language, or local recipe wording into the prompt."
         )
     if preflight_required:
         response_contract += (

@@ -8,11 +8,231 @@ contract-shaped substitute.
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+from typing import Any
 
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.physical_renderer_reference_plan import (
+    DOC269_MAX_REFERENCE_IMAGES,
+    build_physical_renderer_reference_plan,
+)
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projection import (
+    ProductTruthAdmission,
+    ProductTruthSource,
+    _upload_receipt_digest,
+    build_physical_product_projection,
+    build_product_truth_admission,
+)
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.contracts import VariationExecutionContract
+from services.alchemy_codex_local_adapter.ecommerce_authority import (
+    _LEGACY_TEST_AUTHORITY_CAPABILITY,
+    NativeEcommerceAuthority,
+    NativeEcommerceAuthorityPreflight,
+)
+
+
+def _resolve_ecommerce_test_authority(
+    *,
+    planning_result: Any,
+    project_id: str,
+    job_id: str,
+    asset_id: str,
+    output_index: int,
+    **_: Any,
+) -> NativeEcommerceAuthority | None:
+    """Re-type the test runtime's server-owned E-Commerce planning result.
+
+    This is deliberately a test-only host seam.  The input is the typed
+    runtime result, never the public Native request or its metadata.
+    """
+
+    generation_plans = getattr(planning_result, "generation_plans", None)
+    if not isinstance(generation_plans, list) or not generation_plans:
+        return None
+    if not isinstance(output_index, int) or isinstance(output_index, bool) or output_index < 1:
+        return None
+    try:
+        planning_metadata = getattr(planning_result, "metadata", None)
+        if not isinstance(planning_metadata, dict):
+            return None
+        deliverable_plan = planning_metadata.get("template_deliverable_plan")
+        deliverables = deliverable_plan.get("deliverables") if isinstance(deliverable_plan, dict) else None
+        if not isinstance(deliverables, list) or len(deliverables) != len(generation_plans):
+            return None
+
+        generation_metadata_by_position: dict[int, dict[str, Any]] = {}
+        product_assets_by_id: dict[str, dict[str, Any]] = {}
+        identity_assets_by_id: dict[str, dict[str, Any]] = {}
+        for position, generation_plan in enumerate(generation_plans):
+            metadata = getattr(generation_plan, "metadata", None)
+            if not isinstance(metadata, dict) or not isinstance(metadata.get("reference_assets"), list):
+                return None
+            internal_output_index = metadata.get("output_index")
+            if (
+                not isinstance(internal_output_index, int)
+                or isinstance(internal_output_index, bool)
+                or internal_output_index != position
+            ):
+                return None
+            generation_metadata_by_position[position] = metadata
+            for raw_asset in metadata["reference_assets"]:
+                if not isinstance(raw_asset, dict):
+                    return None
+                reference_asset_id = str(raw_asset.get("asset_id") or "").strip()
+                if not reference_asset_id:
+                    return None
+                if raw_asset.get("role") == "product_reference":
+                    product_assets_by_id[reference_asset_id] = raw_asset
+                elif raw_asset.get("role") == "face_reference":
+                    identity_assets_by_id[reference_asset_id] = raw_asset
+        positions = tuple(range(len(generation_plans)))
+        if tuple(sorted(generation_metadata_by_position)) != positions or not product_assets_by_id:
+            return None
+
+        product_sources = []
+        for source_asset_id, raw_asset in product_assets_by_id.items():
+            asset_metadata = raw_asset.get("metadata")
+            content_sha256 = (
+                asset_metadata.get("source_integrity_id")
+                if isinstance(asset_metadata, dict)
+                else None
+            )
+            if not isinstance(content_sha256, str):
+                return None
+            consent_reference = "doc134_test_product_truth_consent"
+            rights_reference = "doc134_test_product_truth_rights"
+            product_sources.append(
+                ProductTruthSource(
+                    asset_id=source_asset_id,
+                    content_sha256=content_sha256,
+                    consent_reference=consent_reference,
+                    rights_reference=rights_reference,
+                    receipt_digest=_upload_receipt_digest(
+                        asset_id=source_asset_id,
+                        content_sha256=content_sha256,
+                        role="product_reference",
+                        product_truth_channel="product_truth",
+                        consent_reference=consent_reference,
+                        rights_reference=rights_reference,
+                    ),
+                    role="product_reference",
+                    product_truth_channel="product_truth",
+                    readiness="ready",
+                    file_integrity="sha256_verified",
+                    provenance="doc134_typed_test_planning_result",
+                )
+            )
+        admission = build_product_truth_admission(
+            project_id=str(project_id),
+            job_id=str(job_id),
+            sources=product_sources,
+            product_truth_plan_digest=hashlib.sha256(
+                ("doc134_test_product_truth|" + "|".join(item.asset_id for item in product_sources)).encode()
+            ).hexdigest(),
+        )
+        projections = []
+        physical_plans = []
+        for position in positions:
+            contract_output_index = position + 1
+            deliverable = deliverables[position]
+            deliverable_output_index = deliverable.get("output_index") if isinstance(deliverable, dict) else None
+            if (
+                not isinstance(deliverable_output_index, int)
+                or isinstance(deliverable_output_index, bool)
+                or deliverable_output_index != contract_output_index
+            ):
+                return None
+            deliverable_metadata = deliverable.get("metadata") if isinstance(deliverable, dict) else None
+            if not isinstance(deliverable_metadata, dict):
+                return None
+            selected = deliverable_metadata.get("selected_product_truth_asset_ids")
+            role = deliverable_metadata.get("product_truth_selection_role")
+            if not isinstance(selected, list) or not selected or not isinstance(role, str):
+                return None
+            projection = build_physical_product_projection(
+                job_id=str(job_id),
+                output_index=contract_output_index,
+                admission=admission,
+                selected_product_asset_ids=[str(item) for item in selected],
+                selection_source="doc134_typed_test_planning_result",
+                selection_role=role,
+                cap_reservation=max(1, min(2, len(selected))),
+            )
+            physical_plan = build_physical_renderer_reference_plan(
+                admission=admission,
+                projection=projection,
+                uploaded_assets=list(product_assets_by_id.values()),
+                locked_identity_references=list(identity_assets_by_id.values()),
+                selected_continuation_references=[],
+                maximum_reference_images=DOC269_MAX_REFERENCE_IMAGES,
+            )
+            projections.append(projection)
+            physical_plans.append(physical_plan)
+        primary_projection = next(item for item in projections if item.output_index == output_index)
+        primary_plan = next(item for item in physical_plans if item.output_index == output_index)
+        return NativeEcommerceAuthority(
+            project_id=str(project_id),
+            job_id=str(job_id),
+            asset_id=str(asset_id),
+            output_index=output_index,
+            admission=admission,
+            projection=primary_projection,
+            physical_plan=primary_plan,
+            projections=tuple(projections),
+            physical_plans=tuple(physical_plans),
+        )
+    except (KeyError, TypeError, ValueError, StopIteration):
+        return None
+
+
+class _EcommerceTestAuthorityResolver:
+    """Explicit test-host seam for the server-owned Native authority.
+
+    The preflight is intentionally derived only from the test host's frozen
+    job scope.  The callable resolves the final typed records after the
+    runtime returns output positions; it never accepts authority dictionaries
+    from a public MCP request.
+    """
+
+    # This adapter intentionally preserves legacy fixture construction.  The
+    # production planner accepts this path only for a test-module resolver.
+    legacy_test_only_post_brain_resolution = True
+
+    def preflight(
+        self,
+        *,
+        project_id: str,
+        job_id: str,
+        requested_output_count: int,
+        server_owned_references: tuple[Any, ...] = (),
+        server_owned_body_references: tuple[Any, ...] = (),
+    ) -> NativeEcommerceAuthorityPreflight | None:
+        digest = hashlib.sha256(
+            (
+                "doc134-test-server-authority|"
+                f"{project_id}|{job_id}|{requested_output_count}"
+            ).encode("utf-8")
+        ).hexdigest()
+        try:
+            return NativeEcommerceAuthorityPreflight(
+                schema_version="native_ecommerce_authority_preflight_v1",
+                project_id=project_id,
+                job_id=job_id,
+                requested_output_count=requested_output_count,
+                authority_digest=digest,
+                legacy_test_adapter_capability=_LEGACY_TEST_AUTHORITY_CAPABILITY,
+            )
+        except ValueError:
+            return None
+
+    def __call__(self, **kwargs: Any) -> NativeEcommerceAuthority | None:
+        return _resolve_ecommerce_test_authority(**kwargs)
+
+
+ecommerce_test_authority_resolver = _EcommerceTestAuthorityResolver()
 
 
 class EcommerceRemoteBrainTestProvider:
@@ -105,6 +325,37 @@ class EcommerceRemoteBrainTestProvider:
                 else []
             )
         context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else {}
+        variation_contract = None
+        raw_variation_contract = context.get("variation_execution_contract") if isinstance(context, dict) else None
+        frozen_binding = context.get("frozen_binding") if isinstance(context, dict) else None
+        frozen_variation_binding = (
+            frozen_binding.get("variation_execution_contract")
+            if isinstance(frozen_binding, dict)
+            else None
+        )
+        if (
+            request.stage == "provider_prompt_finalize"
+            and request.scenario_id == "general_creative"
+            and request.template_id == "general_template"
+            and count > 1
+            and isinstance(context, dict)
+            and context.get("variation_execution_contract_required") is True
+            and isinstance(raw_variation_contract, dict)
+        ):
+            try:
+                candidate_contract = VariationExecutionContract.model_validate(raw_variation_contract)
+            except Exception:
+                candidate_contract = None
+            if (
+                candidate_contract is not None
+                and candidate_contract.contract_digest
+                == candidate_contract.computed_digest()
+                and candidate_contract.requested_image_count == count
+                and isinstance(frozen_variation_binding, dict)
+                and frozen_variation_binding.get("contract_version") == candidate_contract.contract_version
+                and frozen_variation_binding.get("contract_digest") == candidate_contract.contract_digest
+            ):
+                variation_contract = candidate_contract
         preflight = context.get("final_prompt_semantic_preflight") if isinstance(context, dict) else {}
         requires_human_preflight = isinstance(preflight, dict) and bool(preflight.get("required"))
         decision_requirement = context.get("human_naturalness_decision") if isinstance(context, dict) else None
@@ -385,6 +636,19 @@ class EcommerceRemoteBrainTestProvider:
                     )
                 ),
                 "review_status": "approved",
+                **(
+                    {
+                        "variation_execution_receipt": {
+                            "contract_version": variation_contract.contract_version,
+                            "contract_digest": variation_contract.contract_digest,
+                            "output_index": index,
+                            "status": "approved",
+                            "owner": "remote_v3_llm_brain",
+                        }
+                    }
+                    if variation_contract is not None
+                    else {}
+                ),
                 **(
                     {
                         "user_direction_integrity": {

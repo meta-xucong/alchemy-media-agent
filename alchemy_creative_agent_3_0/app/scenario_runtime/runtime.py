@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import os
 from typing import Any, Callable
@@ -79,6 +80,12 @@ from ..shared_capabilities.visual_cluster.expression_review import (
     laugh_expression_materialization_directive,
 )
 from ..shared_capabilities.visual_cluster.review_repair import shared_review_repair_prompt_delta
+from ..shared_capabilities.visual_cluster.contracts import (
+    GENERAL_VARIATION_MAX_OUTPUTS,
+    VariationExecutionContract,
+)
+from ..shared_capabilities.visual_cluster.mode_role_director import ModeAwareRoleDirector
+from ..shared_capabilities.visual_cluster.module import VisualCapabilityClusterModule
 from ..visual_assets import (
     CanonicalProviderPromptReceipt,
     FrozenVisualAssetBindingSet,
@@ -661,6 +668,7 @@ class ScenarioRuntime:
         )
         specialized_plan = self._prepare_specialized_scenario_plan(request, resolution)
         normalized_intent = self._normalize_v3_job_intent(request, resolution)
+        request = self._bind_initial_general_variation_contract(request, resolution, normalized_intent)
         if resolution.manifest.scenario_id == "photography" and mode != "enforced":
             raise CapabilityActivationError("Photography production activation requires enforced capability execution")
         policy = self._resolve_template_capability_policy(request, resolution)
@@ -797,6 +805,7 @@ class ScenarioRuntime:
             catalog.catalog_version,
             mode,
         )
+        self._validate_general_variation_suite_direction_binding(request, resolution, plan)
         record_stage_event("scenario_runtime", "activation_plan_build_returned", stage=stage)
         record_stage_event("scenario_runtime", "template_deliverable_plan_build_call", stage=stage)
         deliverable_plan = self._build_template_deliverable_plan(
@@ -2553,6 +2562,7 @@ class ScenarioRuntime:
                 if reason
                 in {
                     "human_realism_semantic_contract_missing",
+                    "general_variation_execution_contract_missing",
                     "professional_face_identity_quality_contract_missing",
                     "professional_body_silhouette_source_contract_missing",
                     "professional_anchor_view_contract_missing",
@@ -3078,6 +3088,42 @@ class ScenarioRuntime:
         projection = dict(ledger.provider_projection or {})
         semantic_contracts = ScenarioRuntime._active_semantic_capability_contracts(plan, ledger)
         human_realism_execution_contract = ScenarioRuntime._human_realism_execution_contract(projection)
+        variation_execution_contract = ScenarioRuntime._general_variation_execution_contract(projection)
+        try:
+            effective_image_count = int(projection.get("effective_image_count") or 1)
+        except (TypeError, ValueError):
+            effective_image_count = 1
+        general_variation_scope = (
+            str(projection.get("scenario_id") or "").strip() == "general_creative"
+            and str(projection.get("template_id") or "").strip() == "general_template"
+            and effective_image_count > 1
+        )
+        variation_contract_enforced = request.metadata.get("variation_execution_contract_enforced") is True
+        if general_variation_scope and variation_contract_enforced and not variation_execution_contract:
+            raise CapabilityActivationError("general_variation_execution_contract_missing")
+        if general_variation_scope and variation_contract_enforced:
+            raw_bound_contract = request.metadata.get("variation_execution_contract")
+            try:
+                bound_contract = VariationExecutionContract.model_validate(deepcopy(raw_bound_contract))
+                projected_contract = VariationExecutionContract.model_validate(
+                    deepcopy(variation_execution_contract)
+                )
+            except Exception as exc:
+                raise CapabilityActivationError(
+                    "general_variation_execution_contract_binding_mismatch"
+                ) from exc
+            if (
+                bound_contract.model_dump(mode="json") != projected_contract.model_dump(mode="json")
+                or request.metadata.get("variation_execution_contract_binding")
+                != {
+                    "contract_version": bound_contract.contract_version,
+                    "contract_digest": bound_contract.contract_digest,
+                }
+            ):
+                raise CapabilityActivationError("general_variation_execution_contract_binding_mismatch")
+        variation_execution_contract_required = bool(
+            general_variation_scope and variation_contract_enforced
+        )
         age_resolution = ScenarioRuntime._human_realism_age_resolution(projection)
         retry_provenance = request.metadata.get("resolved_retry_provenance")
         retry_evidence = {
@@ -3114,6 +3160,16 @@ class ScenarioRuntime:
                     )
                 binding["professional_anchor_lineage_role"] = lineage_role
             references.append(binding)
+        frozen_binding = {
+            "envelope_id": envelope.envelope_id,
+            "ledger_id": ledger.ledger_id,
+            "execution_fingerprint": envelope.execution_fingerprint,
+        }
+        if variation_execution_contract:
+            frozen_binding["variation_execution_contract"] = {
+                "contract_version": variation_execution_contract["contract_version"],
+                "contract_digest": variation_execution_contract["contract_digest"],
+            }
         context = {
             "protected_user_intent": projection.get("protected_user_intent"),
             "rendering_semantics": projection.get("rendering_semantics"),
@@ -3157,6 +3213,7 @@ class ScenarioRuntime:
             "apparel_construction": projection.get("apparel_construction", {}),
             "active_shared_capability_ids": list(plan.dependency_order),
             "active_semantic_capability_contracts": semantic_contracts,
+            "variation_execution_contract_required": variation_execution_contract_required,
             "final_prompt_semantic_preflight": {
                 "required": bool(semantic_contracts),
                 "scope": "whole_image_human_photographic_plausibility",
@@ -3167,16 +3224,17 @@ class ScenarioRuntime:
             "retry_evidence": retry_evidence,
             # These are opaque integrity bindings for the runtime, not
             # creative vocabulary for the final prompt.
-            "frozen_binding": {
-                "envelope_id": envelope.envelope_id,
-                "ledger_id": ledger.ledger_id,
-                "execution_fingerprint": envelope.execution_fingerprint,
-            },
+            "frozen_binding": frozen_binding,
         }
         if human_realism_execution_contract:
             # Keep the final Brain sign-off aware of the shared camera/material
             # profile. This is typed capability context, not renderer prose.
             context["human_realism_execution_contract"] = human_realism_execution_contract
+        if variation_execution_contract:
+            # This is the neutral General variation bridge. The final Brain
+            # translates it into complete prompts; local code does not append
+            # role or recipe language.
+            context["variation_execution_contract"] = variation_execution_contract
         raw_ecommerce_context = request.metadata.get("ecommerce_creative_context")
         if request.metadata.get("ecommerce_creative_context_server_owned") is True:
             try:
@@ -3529,6 +3587,41 @@ class ScenarioRuntime:
                 if profile.get(key) is not None
             },
         }
+
+    @staticmethod
+    def _general_variation_execution_contract(provider_projection: dict[str, Any]) -> dict[str, Any]:
+        """Read the narrow General variation contract from the frozen ledger."""
+
+        try:
+            effective_count = int(provider_projection.get("effective_image_count") or 1)
+        except (TypeError, ValueError):
+            return {}
+        if (
+            str(provider_projection.get("scenario_id") or "").strip() != "general_creative"
+            or str(provider_projection.get("template_id") or "").strip() != "general_template"
+            or effective_count <= 1
+        ):
+            return {}
+        capabilities = provider_projection.get("capability_projection")
+        raw_contract = capabilities.get("variation_execution_contract") if isinstance(capabilities, dict) else None
+        if not isinstance(raw_contract, dict):
+            return {}
+        try:
+            contract = VariationExecutionContract.model_validate(raw_contract)
+        except Exception:
+            return {}
+        if not contract.contract_digest or contract.contract_digest != contract.computed_digest():
+            return {}
+        if contract.requested_image_count != effective_count:
+            return {}
+        if [item.output_index for item in contract.outputs] != list(range(1, contract.requested_image_count + 1)):
+            return {}
+        if capabilities.get("variation_execution_contract_binding") != {
+            "contract_version": contract.contract_version,
+            "contract_digest": contract.contract_digest,
+        }:
+            return {}
+        return contract.model_dump(mode="json")
 
     @staticmethod
     def _human_realism_age_resolution(provider_projection: dict[str, Any]) -> dict[str, Any]:
@@ -3908,7 +4001,8 @@ class ScenarioRuntime:
         if isinstance(frozen_intent, dict):
             normalized = NormalizedV3JobIntent.model_validate(frozen_intent)
             return normalized.effective_image_count
-        parameters = request.scenario_selection.parameters if request.scenario_selection else {}
+        scenario_selection = getattr(request, "scenario_selection", None)
+        parameters = scenario_selection.parameters if scenario_selection else {}
         raw = (
             request.metadata.get("requested_image_count")
             or (parameters.get("requested_image_count") if isinstance(parameters, dict) else None)
@@ -4022,6 +4116,177 @@ class ScenarioRuntime:
             request.metadata["requested_image_aspect_ratio"] = ratio_resolution[0]
             request.metadata["requested_image_aspect_ratio_source"] = "remote_brain_user_intent"
         return updated
+
+    def _bind_initial_general_variation_contract(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution: ScenarioPackResolution,
+        normalized_intent: NormalizedV3JobIntent,
+    ) -> ScenarioRuntimeRequest:
+        """Freeze one General variation contract before the first Brain call."""
+
+        # Legacy and shadow are authoritative compatibility modes of a
+        # trusted frozen activation plan. They must not receive a new
+        # enforced contract or a new Brain input.
+        if self._capability_activation_mode(request) != "enforced":
+            return request
+        scenario_id = str(resolution.manifest.scenario_id or "").strip()
+        template_id = self._template_id(request, resolution)
+        requested_count = int(normalized_intent.effective_image_count)
+        if (
+            scenario_id != "general_creative"
+            or template_id != "general_template"
+            or requested_count <= 1
+        ):
+            return request
+        if requested_count > GENERAL_VARIATION_MAX_OUTPUTS:
+            raise CapabilityActivationError("general_variation_execution_contract_count_unsupported")
+
+        metadata = dict(request.metadata or {})
+        frozen_plan = metadata.get("capability_activation_plan")
+        if isinstance(frozen_plan, dict) and frozen_plan.get("plan_id"):
+            if (
+                frozen_plan.get("activation_mode") != "enforced"
+                or "suite_direction" not in set(frozen_plan.get("dependency_order") or [])
+            ):
+                return request
+        raw_contract = metadata.get("variation_execution_contract")
+        historical_reuse_without_contract = bool(
+            request.trusted_capability_plan_reuse
+            and isinstance(metadata.get("capability_activation_plan"), dict)
+            and raw_contract is None
+            and "suite_direction" not in set(
+                metadata.get("capability_activation_plan", {}).get("dependency_order") or []
+            )
+        )
+        if historical_reuse_without_contract:
+            return request
+        if raw_contract is not None:
+            try:
+                contract = VariationExecutionContract.model_validate(deepcopy(raw_contract))
+            except Exception as exc:
+                raise CapabilityActivationError("general_variation_execution_contract_invalid") from exc
+        else:
+            module = self.shared_capability_registry.get(VISUAL_CAPABILITY_CLUSTER_ID)
+            if not isinstance(module, VisualCapabilityClusterModule) or not isinstance(
+                module.mode_role_director,
+                ModeAwareRoleDirector,
+            ):
+                raise CapabilityActivationError("general_variation_execution_director_missing")
+            director = module.mode_role_director
+            role_binding = self._resolved_general_variation_role_binding(request)
+            parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
+            mode = (
+                metadata.get("effective_variation_mode")
+                or metadata.get("variation_mode")
+                or parameters.get("effective_variation_mode")
+                or parameters.get("variation_mode")
+                or "delivery_suite"
+            )
+            role_plan = director.build(
+                project_id=str(metadata.get("project_id") or "") or None,
+                job_id=self._runtime_job_id(request, resolution),
+                user_input=request.user_input,
+                mode=str(mode),
+                requested_image_count=requested_count,
+                subject_type=role_binding["subject_type"],
+                scenario_id=scenario_id,
+                template_id=template_id,
+                has_identity_anchor=role_binding["has_identity_anchor"],
+            )
+            contract = director.build_variation_execution_contract(
+                role_plan=role_plan,
+                scenario_id=scenario_id,
+                template_id=template_id,
+            )
+            if contract is None:
+                raise CapabilityActivationError("general_variation_execution_contract_missing")
+
+        if (
+            not contract.contract_digest
+            or contract.contract_digest != contract.computed_digest()
+            or contract.contract_version != "v3_general_variation_execution_v1"
+            or contract.requested_image_count != requested_count
+            or [item.output_index for item in contract.outputs]
+            != list(range(1, requested_count + 1))
+        ):
+            raise CapabilityActivationError("general_variation_execution_contract_binding_mismatch")
+        expected_binding = {
+            "contract_version": contract.contract_version,
+            "contract_digest": contract.contract_digest,
+        }
+        raw_binding = metadata.get("variation_execution_contract_binding")
+        if raw_binding is not None and raw_binding != expected_binding:
+            raise CapabilityActivationError("general_variation_execution_contract_binding_mismatch")
+        metadata.update(
+            {
+                "resolved_scenario_id": scenario_id,
+                "resolved_template_id": template_id,
+                "variation_execution_contract": deepcopy(contract.model_dump(mode="json")),
+                "variation_execution_contract_binding": expected_binding,
+                "variation_execution_contract_enforced": True,
+                "variation_execution_mode": contract.mode,
+                "variation_execution_requested_image_count": contract.requested_image_count,
+                "variation_execution_suite_direction_authoritative": True,
+            }
+        )
+        role_binding = self._resolved_general_variation_role_binding(request)
+        if role_binding["source"] == "runtime_typed_reference_facts":
+            metadata["variation_execution_role_binding"] = role_binding
+        return request.model_copy(update={"metadata": metadata})
+
+    @staticmethod
+    def _resolved_general_variation_role_binding(
+        request: ScenarioRuntimeRequest,
+    ) -> dict[str, Any]:
+        """Resolve typed subject facts before Brain without reading prompt prose."""
+
+        roles = {
+            str(asset.role.value if hasattr(asset.role, "value") else asset.role or "").strip().lower()
+            for asset in request.uploaded_assets
+        }
+        person_anchor_roles = {
+            "face_reference",
+            "body_proportion_reference",
+        }
+        identity_anchor_roles = person_anchor_roles | {
+            "product_reference",
+            "nonhuman_identity_reference",
+        }
+        if roles & person_anchor_roles:
+            subject_type = "character"
+        elif "product_reference" in roles or bool(request.product_profile):
+            subject_type = "product"
+        else:
+            subject_type = "generic"
+        return {
+            "subject_type": subject_type,
+            "has_identity_anchor": bool(roles & identity_anchor_roles),
+            "source": (
+                "runtime_typed_reference_facts"
+                if roles & identity_anchor_roles or bool(request.product_profile)
+                else "runtime_subject_facts_unresolved"
+            ),
+        }
+
+    @staticmethod
+    def _validate_general_variation_suite_direction_binding(
+        request: ScenarioRuntimeRequest,
+        resolution: ScenarioPackResolution,
+        plan: CapabilityActivationPlan,
+    ) -> None:
+        """Require the initial bridge to be backed by the active suite capability."""
+
+        if request.metadata.get("variation_execution_contract_enforced") is not True:
+            return
+        if (
+            str(resolution.manifest.scenario_id or "").strip() != "general_creative"
+            or str(request.metadata.get("resolved_scenario_id") or "").strip() != "general_creative"
+            or str(request.metadata.get("resolved_template_id") or "").strip() != "general_template"
+            or plan.activation_mode != "enforced"
+            or "suite_direction" not in plan.dependency_order
+        ):
+            raise CapabilityActivationError("general_variation_suite_direction_not_active")
 
     def _normalize_v3_job_intent(
         self,
@@ -4839,6 +5104,22 @@ class ScenarioRuntime:
             ),
             "brain_semantic_analysis_required": plan.activation_mode == "enforced",
         }
+        # The runtime-bound bridge is the one contract authority. Keep its
+        # typed value and binding ahead of any capability-derived metadata so
+        # the active executor cannot rebuild a second contract.
+        for key in (
+            "resolved_scenario_id",
+            "resolved_template_id",
+            "variation_execution_contract",
+            "variation_execution_contract_binding",
+            "variation_execution_contract_enforced",
+            "variation_execution_mode",
+            "variation_execution_requested_image_count",
+            "variation_execution_suite_direction_authoritative",
+            "variation_execution_role_binding",
+        ):
+            if key in request.metadata:
+                active_metadata[key] = deepcopy(request.metadata[key])
         ecommerce_review_context = self._ecommerce_human_realism_review_context(
             request,
             requested_image_count=self._requested_image_count_for_brain(request),
@@ -5577,6 +5858,7 @@ class ScenarioRuntime:
             "identity_repair_strategy_plan": {"portrait_identity"},
             "mode_execution_policy": {"suite_direction"},
             "role_specific_generation_plan": {"suite_direction"},
+            "variation_execution_contract": {"suite_direction"},
             "mode_role_recipe": {"suite_direction"},
             "mode_quality_profile": {"suite_direction"},
             "reference_truth_package": {
@@ -5602,6 +5884,32 @@ class ScenarioRuntime:
             if not isinstance(value, dict) or not (active & required_capabilities):
                 continue
             projection[key] = dict(value)
+        raw_variation_contract = raw_cluster.get("variation_execution_contract")
+        if "suite_direction" in active and isinstance(raw_variation_contract, dict):
+            try:
+                variation_contract = VariationExecutionContract.model_validate(
+                    deepcopy(raw_variation_contract)
+                )
+            except Exception as exc:
+                raise CapabilityActivationError(
+                    "general_variation_execution_contract_invalid"
+                ) from exc
+            if (
+                not variation_contract.contract_digest
+                or variation_contract.contract_digest != variation_contract.computed_digest()
+            ):
+                raise CapabilityActivationError(
+                    "general_variation_execution_contract_binding_mismatch"
+                )
+            projection["variation_execution_contract"] = variation_contract.model_dump(mode="json")
+            projection["variation_execution_contract_binding"] = {
+                "contract_version": variation_contract.contract_version,
+                "contract_digest": variation_contract.contract_digest,
+            }
+            projection["variation_execution_mode"] = variation_contract.mode
+            projection["variation_execution_requested_image_count"] = (
+                variation_contract.requested_image_count
+            )
         if "suite_direction" in active and isinstance(raw_cluster.get("mode_role_plan_reconciled_to_series"), bool):
             projection["mode_role_plan_reconciled_to_series"] = raw_cluster["mode_role_plan_reconciled_to_series"]
         return projection
@@ -5822,6 +6130,8 @@ class ScenarioRuntime:
             prior_results=list(prior_results or []),
             metadata={
                 **dict(request.metadata),
+                "resolved_scenario_id": resolution.manifest.scenario_id,
+                "resolved_template_id": self._template_id(request, resolution),
                 "scenario_mode_id": resolution.selected_mode_id,
                 "scenario_preset_id": resolution.selected_preset_id,
                 **dict(metadata or {}),
@@ -5857,6 +6167,24 @@ class ScenarioRuntime:
                 return frozen_mode
         configured = os.getenv("V3_CAPABILITY_ACTIVATION_MODE", "enforced").strip().lower()
         return "enforced" if configured != "enforced" else configured
+
+    @staticmethod
+    def _general_variation_suite_direction_is_authoritative(
+        request: ScenarioRuntimeRequest,
+    ) -> bool:
+        """Accept only runtime-owned suite activation evidence."""
+
+        frozen_plan = request.metadata.get("capability_activation_plan")
+        if isinstance(frozen_plan, dict):
+            try:
+                plan = CapabilityActivationPlan.model_validate(frozen_plan)
+            except Exception:
+                return False
+            return (
+                plan.activation_mode == "enforced"
+                and "suite_direction" in plan.dependency_order
+            )
+        return request.metadata.get("variation_execution_suite_direction_authoritative") is True
 
     def _require_trusted_frozen_capability_plan_boundary(
         self,
@@ -5905,6 +6233,25 @@ class ScenarioRuntime:
         if preparation.resolved_constraint_ledger is not None:
             metadata["resolved_constraint_ledger"] = preparation.resolved_constraint_ledger.model_dump(mode="json")
             metadata["resolved_constraint_ledger_id"] = preparation.resolved_constraint_ledger.ledger_id
+            capability_projection = preparation.resolved_constraint_ledger.provider_projection.get(
+                "capability_projection"
+            )
+            if isinstance(capability_projection, dict):
+                variation_contract = capability_projection.get("variation_execution_contract")
+                variation_binding = capability_projection.get("variation_execution_contract_binding")
+                if isinstance(variation_contract, dict) and isinstance(variation_binding, dict):
+                    metadata.update(
+                        {
+                            "variation_execution_contract": deepcopy(variation_contract),
+                            "variation_execution_contract_binding": dict(variation_binding),
+                            "variation_execution_contract_enforced": True,
+                            "variation_execution_mode": variation_contract.get("mode"),
+                            "variation_execution_requested_image_count": variation_contract.get(
+                                "requested_image_count"
+                            ),
+                            "variation_execution_suite_direction_authoritative": True,
+                        }
+                    )
         if preparation.capability_execution_envelope is not None:
             envelope = preparation.capability_execution_envelope.safe_metadata()
             metadata.update(
@@ -6649,8 +6996,10 @@ class ScenarioRuntime:
                     )
                     if key in safe_admission
                 }
-                stage = self._professional_character_card_stage(base_metadata, safe_admission)
-                if stage == "body_silhouette":
+                professional_stage = self._professional_character_card_stage(base_metadata, safe_admission)
+                if professional_stage:
+                    stage = professional_stage
+                if professional_stage == "body_silhouette":
                     body_contract = self._professional_body_silhouette_source_contract(
                         safe_admission
                     )
@@ -6681,6 +7030,68 @@ class ScenarioRuntime:
         if slot_delta_timeout is not None:
             base_metadata["_brain_transport_timeout_seconds"] = slot_delta_timeout
         uploaded_assets = [asset.model_dump(mode="json") for asset in self._uploaded_assets(request)]
+        shared_capability_metadata = self._capability_metadata(capability_run)
+        raw_variation_contract = request.metadata.get("variation_execution_contract")
+        general_variation_scope = bool(
+            resolution.manifest.scenario_id == "general_creative"
+            and self._template_id(request, resolution) == "general_template"
+            and self._requested_image_count_for_brain(request) > 1
+        )
+        general_variation_contract_active = False
+        if general_variation_scope and request.metadata.get("variation_execution_contract_enforced") is True:
+            activation_mode = self._capability_activation_mode(request)
+            suite_direction_authoritative = self._general_variation_suite_direction_is_authoritative(request)
+            if activation_mode == "enforced" and suite_direction_authoritative:
+                general_variation_contract_active = True
+            elif activation_mode in {"legacy", "shadow"}:
+                # A persisted compatibility record may carry the marker from
+                # a newer run.  Do not let it reactivate the new Brain bridge.
+                for key in (
+                    "variation_execution_contract",
+                    "variation_execution_contract_binding",
+                    "variation_execution_contract_enforced",
+                    "variation_execution_mode",
+                    "variation_execution_requested_image_count",
+                    "variation_execution_suite_direction_authoritative",
+                ):
+                    base_metadata.pop(key, None)
+                visual_cluster_metadata = shared_capability_metadata.get("visual_cluster")
+                if isinstance(visual_cluster_metadata, dict):
+                    visual_cluster_metadata = dict(visual_cluster_metadata)
+                    visual_cluster_metadata.pop("variation_execution_contract", None)
+                    shared_capability_metadata["visual_cluster"] = visual_cluster_metadata
+            else:
+                raise CapabilityActivationError("general_variation_suite_direction_not_active")
+        if general_variation_contract_active:
+            if raw_variation_contract is None:
+                raise CapabilityActivationError("general_variation_execution_contract_missing")
+            try:
+                variation_contract = VariationExecutionContract.model_validate(
+                    deepcopy(raw_variation_contract)
+                )
+            except Exception as exc:
+                raise CapabilityActivationError("general_variation_execution_contract_invalid") from exc
+            if (
+                not variation_contract.contract_digest
+                or variation_contract.contract_digest != variation_contract.computed_digest()
+                or variation_contract.requested_image_count != self._requested_image_count_for_brain(request)
+                or request.metadata.get("variation_execution_contract_binding")
+                != {
+                    "contract_version": variation_contract.contract_version,
+                    "contract_digest": variation_contract.contract_digest,
+                }
+            ):
+                raise CapabilityActivationError("general_variation_execution_contract_binding_mismatch")
+            # Keep the first Brain's top-level cardinality/mode aligned with
+            # the same typed contract the active capability pass will reuse.
+            base_metadata["requested_image_count"] = variation_contract.requested_image_count
+            base_metadata["effective_variation_mode"] = variation_contract.mode
+            base_metadata["variation_mode"] = variation_contract.mode
+            visual_cluster_metadata = dict(shared_capability_metadata.get("visual_cluster") or {})
+            visual_cluster_metadata["variation_execution_contract"] = deepcopy(
+                variation_contract.model_dump(mode="json")
+            )
+            shared_capability_metadata["visual_cluster"] = visual_cluster_metadata
         brain_request = self.llm_brain_adapter.build_request(
             user_input=request.user_input,
             job_id=self._runtime_job_id(request, resolution),
@@ -6688,7 +7099,7 @@ class ScenarioRuntime:
             scenario_id=resolution.manifest.scenario_id,
             template_id=self._template_id(request, resolution),
             metadata=base_metadata,
-            shared_capabilities=self._capability_metadata(capability_run),
+            shared_capabilities=shared_capability_metadata,
             uploaded_assets=uploaded_assets,
             product_profile=dict(request.product_profile),
             capability_catalog=capability_catalog,

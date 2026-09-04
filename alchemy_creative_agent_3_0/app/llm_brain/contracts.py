@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from ..schemas.models import V3BaseModel
 from ..scenario_packs.ecommerce.contracts import (
@@ -286,6 +286,26 @@ class BrainReferenceLedSlotDeltaDecision(V3BaseModel):
     owner: Literal["remote_v3_llm_brain"]
 
 
+class VariationExecutionReceipt(V3BaseModel):
+    """Typed binding proving a Brain prompt used the frozen variation contract."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    contract_version: Literal["v3_general_variation_execution_v1"]
+    contract_digest: str = Field(min_length=64, max_length=64)
+    output_index: StrictInt = Field(ge=1, le=16)
+    status: Literal["approved", "rewritten"]
+    owner: Literal["remote_v3_llm_brain"]
+
+    @field_validator("contract_digest")
+    @classmethod
+    def validate_contract_digest_shape(cls, value: str) -> str:
+        value = str(value or "").lower()
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("variation execution receipt digest must be a SHA-256 hex digest")
+        return value
+
+
 class BrainCanonicalProviderPrompt(V3BaseModel):
     """One Brain-signed, renderer-ready prompt for a frozen output.
 
@@ -298,6 +318,9 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     output_index: int = Field(ge=1)
     prompt: str
     review_status: Literal["approved"] = "approved"
+    # General multi-image only. Optional keeps single-image, specialized, and
+    # historical canonical prompt records readable.
+    variation_execution_receipt: VariationExecutionReceipt | None = None
     # This receipt remains optional for historical record readability.  New
     # enforced Human Realism jobs validate that it was explicitly supplied by
     # the remote Brain before they can materialize a renderer operation.

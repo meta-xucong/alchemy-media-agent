@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+import hashlib
+import json
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import ConfigDict, Field, StrictInt, field_serializer, field_validator, model_validator
 
 from ...schemas.models import V3BaseModel
 
@@ -196,6 +198,127 @@ class GeneralSuiteRolePlan(V3BaseModel):
     batch_review_rules: list[str] = Field(default_factory=list)
     user_visible_summary: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+GeneralVariationMode = Literal[
+    "selection_candidates",
+    "delivery_suite",
+    "creative_exploration",
+    "format_layout_adaptation",
+]
+
+VariationAxis = Literal[
+    "presentation",
+    "framing",
+    "scale",
+    "layout",
+    "expression",
+    "attention",
+    "pose",
+    "gesture",
+    "viewpoint",
+    "context",
+    "detail",
+    "material",
+    "styling",
+    "mood",
+    "palette",
+    "depth",
+    "placement",
+    "concept",
+    "composition",
+]
+
+VariationPurpose = Literal[
+    "primary_presentation",
+    "detail_focus",
+    "alternate_view",
+    "context_expansion",
+    "creative_direction",
+    "format_adaptation",
+]
+
+VariationKeep = Literal[
+    "subject_identity",
+    "style_direction",
+    "scene_continuity",
+    "user_intent",
+]
+
+VariationAvoid = Literal[
+    "duplicate_still",
+    "unrelated_scene",
+    "unrequested_style_shift",
+    "collage_layout",
+]
+
+# Keep the General variation bridge aligned with the existing V3 Native
+# planning range.  The bridge describes each requested output; it must not
+# introduce a smaller batch limit than the public planning contract.
+GENERAL_VARIATION_MAX_OUTPUTS = 16
+
+
+class VariationExecutionOutput(V3BaseModel):
+    """Neutral per-output variation evidence for the Brain."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    output_index: StrictInt = Field(ge=1, le=GENERAL_VARIATION_MAX_OUTPUTS)
+    output_purpose: VariationPurpose
+    variation_axes: tuple[VariationAxis, ...] = Field(default_factory=tuple, max_length=6)
+    must_keep: tuple[VariationKeep, ...] = Field(default_factory=tuple, max_length=4)
+    avoid_drift: tuple[VariationAvoid, ...] = Field(default_factory=tuple, max_length=4)
+
+
+class VariationExecutionContract(V3BaseModel):
+    """Compact projection of a General role plan without renderer recipes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    contract_version: Literal["v3_general_variation_execution_v1"]
+    contract_digest: str = Field(default="", max_length=64)
+    mode: GeneralVariationMode = "delivery_suite"
+    requested_image_count: int = Field(ge=2, le=GENERAL_VARIATION_MAX_OUTPUTS)
+    preserve_subject: bool = True
+    preserve_style: bool = True
+    outputs: tuple[VariationExecutionOutput, ...] = Field(
+        min_length=2,
+        max_length=GENERAL_VARIATION_MAX_OUTPUTS,
+    )
+
+    @model_validator(mode="after")
+    def output_indices_cover_requested_count(self) -> "VariationExecutionContract":
+        indices = [item.output_index for item in self.outputs]
+        if indices != list(range(1, self.requested_image_count + 1)):
+            raise ValueError("variation execution outputs must cover requested image count in order")
+        signatures = [
+            (item.output_purpose, tuple(item.variation_axes))
+            for item in self.outputs
+        ]
+        if any(not axes for _, axes in signatures):
+            raise ValueError("variation execution outputs require a non-empty semantic signature")
+        if len(signatures) != len(set(signatures)):
+            raise ValueError("variation execution outputs require unique semantic signatures")
+        if self.contract_digest and self.contract_digest != self.computed_digest():
+            raise ValueError("variation execution contract digest does not match its contents")
+        return self
+
+    @field_validator("contract_digest")
+    @classmethod
+    def validate_contract_digest_shape(cls, value: str) -> str:
+        value = str(value or "").lower()
+        if value and (len(value) != 64 or any(char not in "0123456789abcdef" for char in value)):
+            raise ValueError("variation execution contract digest must be a SHA-256 hex digest")
+        return value
+
+    def computed_digest(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"contract_digest"})
+        canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def bind_digest(self) -> "VariationExecutionContract":
+        """Return an immutable-value copy bound to its semantic contents."""
+        return self.model_copy(update={"contract_digest": self.computed_digest()})
 
 
 class ModeExecutionPolicy(V3BaseModel):
@@ -1144,6 +1267,7 @@ class VisualCapabilityClusterResult(V3BaseModel):
     project_identity_anchors: list[ProjectIdentityAnchor] = Field(default_factory=list)
     strong_reference_continuation_plan: StrongReferenceContinuationPlan | None = None
     general_suite_role_plan: GeneralSuiteRolePlan | None = None
+    variation_execution_contract: VariationExecutionContract | None = None
     mode_execution_policy: ModeExecutionPolicy | None = None
     role_specific_generation_plan: RoleSpecificGenerationPlan | None = None
     mode_differentiation_review: ModeDifferentiationReview | None = None
@@ -1182,3 +1306,24 @@ class VisualCapabilityClusterResult(V3BaseModel):
     has_visual_evidence: bool = False
     user_visible_summary: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("variation_execution_contract", mode="before")
+    @classmethod
+    def read_legacy_variation_contract(cls, value: Any) -> Any:
+        """Keep old cluster records readable when the optional bridge is absent."""
+
+        if value is None or value == "" or value == {}:
+            return None
+        if isinstance(value, VariationExecutionContract):
+            contract = value
+        else:
+            try:
+                contract = VariationExecutionContract.model_validate(value)
+            except Exception:
+                return None
+        try:
+            if not contract.contract_digest or contract.contract_digest != contract.computed_digest():
+                return None
+        except Exception:
+            return None
+        return contract

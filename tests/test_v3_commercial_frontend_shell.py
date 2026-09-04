@@ -423,7 +423,28 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "async function loadV3ProjectOutputs" in script.text
     assert "project_id=${encodeURIComponent(scopedProjectId)}" in script.text
     assert "/project-outputs?limit=${boundedLimit}&compact=true${scoped}${cacheBust}" in script.text
-    assert "loadV3ProjectOutputs({ silent: true, force: true, limit: 80 })" in script.text
+    project_detail_sync = script.text.split(
+        "async function syncV3ProjectDetailInBackground", 1
+    )[1].split("\nfunction renderV3ProjectOpeningState", 1)[0]
+    output_call_start = project_detail_sync.index("loadV3ProjectOutputs({")
+    output_call_end = project_detail_sync.index("\n      }),", output_call_start)
+    output_call = project_detail_sync[output_call_start:output_call_end]
+    assert "loadV3ProjectOutputs({" in output_call
+    assert "silent: true" in output_call
+    assert "force: true" in output_call
+    assert "limit: 80" in output_call
+    assert "projectId" in output_call
+    assert "detailEpoch" in output_call
+    assert "sessionReceipt:" in output_call
+    assert 'kind: "project_detail"' in output_call
+    restore_call_start = project_detail_sync.index(
+        "recoveryJob = await restoreV3LatestProjectJob("
+    )
+    restore_call_end = project_detail_sync.index("\n    });", restore_call_start)
+    restore_call = project_detail_sync[restore_call_start:restore_call_end]
+    assert "v3State.currentProject" in restore_call
+    assert "silent: true" in restore_call
+    assert "shouldContinue" in restore_call
     assert "projectOutputsRequest" in script.text
     assert "if (v3State.projectOutputsRequest) await v3State.projectOutputsRequest;" in script.text
     assert "/api/lab/history?limit=1000" not in script.text
@@ -611,9 +632,19 @@ def test_v3_frontend_assets_use_v3_namespace_and_card_module_styles() -> None:
     assert "function v3ProjectJobNeedsRecovery" in script.text
     assert "function resumeV3ActiveProjectJobRecovery" in script.text
     assert "正在恢复仍在后台完成的图片任务，避免重复生成。" in script.text
-    assert "const restoredJob = await restoreV3LatestProjectJob(v3State.currentProject, { silent: true });" in script.text
-    assert "recoveryJob = restoredJob || v3State.currentJob;" in script.text
-    assert "resumeV3ActiveProjectJobRecovery(recoveryJob);" in script.text
+    recovery_body = script.text.split(
+        "function resumeV3ActiveProjectJobRecovery", 1
+    )[1].split("\nfunction ", 1)[0]
+    recovery_call_start = recovery_body.index("recoverV3GeneratedJob(")
+    recovery_call_end = recovery_body.index("\n  })", recovery_call_start)
+    recovery_call = recovery_body[recovery_call_start:recovery_call_end]
+    assert "projectId, jobId" in recovery_call
+    assert 'new Error("v3_background_generation_pending")' in recovery_call
+    assert "expectedCount" in recovery_call
+    assert "shouldContinue:" in recovery_call
+    assert "recoveryJob = await restoreV3LatestProjectJob(" in restore_call
+    assert "v3ProjectJobNeedsRecovery(recoveryJob || v3State.currentJob)" in project_detail_sync
+    assert "resumeV3ActiveProjectJobRecovery(recoveryJob || v3State.currentJob);" in project_detail_sync
     assert 'throw new Error("v3_project_recovery_replaced")' in script.text
     assert "requested_image_count: expectedCount" in script.text
     assert "missing_output_count: missingCount" in script.text

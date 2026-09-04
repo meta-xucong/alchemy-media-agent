@@ -38,6 +38,7 @@ from alchemy_creative_agent_3_0.app.visual_assets import (
 )
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
     EcommerceRemoteBrainTestProvider,
+    ecommerce_test_authority_resolver,
 )
 from alchemy_creative_agent_3_0.tests.photography_test_support import (
     PhotographyRemoteBrainTestProvider,
@@ -45,6 +46,9 @@ from alchemy_creative_agent_3_0.tests.photography_test_support import (
 from services.alchemy_codex_local_adapter.contracts import (
     NativeReferenceInput,
     NativeProfessionalImageGenPlanRequest,
+)
+from services.alchemy_codex_local_adapter.ecommerce_authority import (
+    NativeEcommerceAuthority,
 )
 from services.alchemy_codex_local_adapter.native_planner import (
     CodexNativeImageGenPlanner,
@@ -142,17 +146,34 @@ class _BodyReceiptPhotographyProvider(PhotographyRemoteBrainTestProvider):
         )
 
 
-def _capture_materializations(monkeypatch: pytest.MonkeyPatch) -> list[list[dict[str, Any]]]:
+def _capture_materializations(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    captured_provider_input_plans: list[dict[str, Any]] | None = None,
+) -> list[list[dict[str, Any]]]:
     captured: list[list[dict[str, Any]]] = []
     original = CodexNativeImageGenPlanner._canonical_materializations
 
-    def capture(planning_result, *, metadata_overrides=None, metadata_overrides_by_asset_id=None):  # noqa: ANN001
+    def capture(
+        planning_result,
+        *,
+        metadata_overrides=None,
+        metadata_overrides_by_asset_id=None,
+        ecommerce_authority_by_asset_id=None,
+        native_body_reference_binding_by_asset_id=None,
+    ):  # noqa: ANN001
         materializations = original(
             planning_result,
             metadata_overrides=metadata_overrides,
             metadata_overrides_by_asset_id=metadata_overrides_by_asset_id,
+            ecommerce_authority_by_asset_id=ecommerce_authority_by_asset_id,
+            native_body_reference_binding_by_asset_id=native_body_reference_binding_by_asset_id,
         )
         captured.extend([list(item.reference_assets) for item in materializations])
+        if captured_provider_input_plans is not None:
+            captured_provider_input_plans.extend(
+                [dict(item.asset_plan.get("provider_input_plan") or {}) for item in materializations]
+            )
         return materializations
 
     monkeypatch.setattr(
@@ -174,6 +195,7 @@ def _professional_planner(
     return CodexNativeImageGenPlanner(
         runtime_factory=lambda: runtime,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
 
@@ -620,7 +642,11 @@ def test_professional_general_and_photography_visible_body_admit_body_only_truth
         include_body=True,
         body_output_id=body_output_id,
     )
-    captured = _capture_materializations(monkeypatch)
+    captured_provider_input_plans: list[dict[str, Any]] = []
+    captured = _capture_materializations(
+        monkeypatch,
+        captured_provider_input_plans=captured_provider_input_plans,
+    )
     provider = provider_factory(
         requirement_by_index={1: "visible_body_required"},
         view_by_index={1: "front_full"},
@@ -642,6 +668,11 @@ def test_professional_general_and_photography_visible_body_admit_body_only_truth
 
     assert result["status"] == "planned_for_codex_native_imagegen"
     assert captured
+    assert captured_provider_input_plans
+    assert captured_provider_input_plans[0]["reference_image_count"] == len(captured[0])
+    assert captured_provider_input_plans[0]["reference_image_asset_ids"] == [
+        item["asset_id"] for item in captured[0]
+    ]
     _assert_single_body_only_projection(
         result=result,
         materialized_refs=captured[0],
@@ -669,7 +700,11 @@ def test_professional_ecommerce_visible_body_admits_body_product_and_identity_on
         body_output_id=body_output_id,
     )
     product = _write_png(tmp_path / "product.png", color=(80, 145, 210))
-    captured = _capture_materializations(monkeypatch)
+    captured_provider_input_plans: list[dict[str, Any]] = []
+    captured = _capture_materializations(
+        monkeypatch,
+        captured_provider_input_plans=captured_provider_input_plans,
+    )
     provider = _BodyReceiptEcommerceProvider(
         requirement_by_index={1: "visible_body_required"},
         view_by_index={1: "front_full"},
@@ -692,6 +727,11 @@ def test_professional_ecommerce_visible_body_admits_body_product_and_identity_on
 
     assert result["status"] == "planned_for_codex_native_imagegen"
     assert captured
+    assert captured_provider_input_plans
+    assert captured_provider_input_plans[0]["reference_image_count"] == len(captured[0])
+    assert captured_provider_input_plans[0]["reference_image_asset_ids"] == [
+        item["asset_id"] for item in captured[0]
+    ]
     _assert_single_body_only_projection(
         result=result,
         materialized_refs=captured[0],
@@ -709,6 +749,88 @@ def test_professional_ecommerce_visible_body_admits_body_product_and_identity_on
     assert source_ids.count(face_output_id) == 1
     assert source_ids.count(product_id) == 1
     assert source_ids.count(body_output_id) == 1
+
+
+def _ecommerce_visible_body_fixture(
+    tmp_path: Path,
+) -> tuple[CodexNativeImageGenPlanner, NativeProfessionalImageGenPlanRequest]:
+    root_source_id = "v3_asset_root"
+    face_output_id = "v3_output_front"
+    body_output_id = "v3_output_body_front_full"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=face_output_id,
+        include_body=True,
+        body_output_id=body_output_id,
+    )
+    product = _write_png(tmp_path / "product.png", color=(80, 145, 210))
+    planner = _professional_planner(
+        library_root=library_root,
+        provider=_BodyReceiptEcommerceProvider(
+            requirement_by_index={1: "visible_body_required"},
+            view_by_index={1: "front_full"},
+        ),
+    )
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+            user_input="Create one Professional product-on-person visible-body image.",
+        )
+    )
+    return planner, request
+
+
+def test_professional_ecommerce_body_carrier_missing_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner, request = _ecommerce_visible_body_fixture(tmp_path)
+    original_issue = NativeEcommerceAuthority.issue_native_body_reference_binding
+
+    def omit_body_binding(self, server_owned_reference):  # noqa: ANN001
+        original_issue(self, server_owned_reference)
+        return None
+
+    monkeypatch.setattr(
+        NativeEcommerceAuthority,
+        "issue_native_body_reference_binding",
+        omit_body_binding,
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_professional_body_reference_missing"
+
+
+def test_professional_ecommerce_body_carrier_wrong_sha_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner, request = _ecommerce_visible_body_fixture(tmp_path)
+    original_issue = NativeEcommerceAuthority.issue_native_body_reference_binding
+
+    def tamper_body_binding(self, server_owned_reference):  # noqa: ANN001
+        binding = original_issue(self, server_owned_reference)
+        return binding.model_copy(update={"content_sha256": "0" * 64})
+
+    monkeypatch.setattr(
+        NativeEcommerceAuthority,
+        "issue_native_body_reference_binding",
+        tamper_body_binding,
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_canonical_prompt_unavailable"
 
 
 @pytest.mark.parametrize(
@@ -792,8 +914,9 @@ def test_professional_not_required_outputs_do_not_leak_body_reference(
         str(item.get("source_asset_id") or item.get("asset_id") or "")
         for item in captured[0]
     ]
-    assert source_ids.count(root_source_id) == 2
-    assert source_ids.count(face_output_id) == 2
+    expected_identity_occurrences = 1 if template_id == "ecommerce_template" else 2
+    assert source_ids.count(root_source_id) == expected_identity_occurrences
+    assert source_ids.count(face_output_id) == expected_identity_occurrences
 
 
 @pytest.mark.parametrize(

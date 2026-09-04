@@ -14,7 +14,7 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..creative_core.prompt_language import (
     product_language_allowed,
@@ -63,6 +63,9 @@ from ..scenario_packs.ecommerce.reference_projection import (
     ProductTruthAdmission,
 )
 from ..scenario_packs.ecommerce.physical_renderer_reference_plan import (
+    DOC269_MAX_REFERENCE_IMAGES,
+    NativeEcommerceBodyReferenceBinding,
+    NativeEcommerceIdentityBinding,
     PhysicalRendererReferencePlan,
 )
 from app.providers.base import ProviderRuntimeError
@@ -179,6 +182,18 @@ REFERENCE_INPUT_CONTRACT_FAILURE_CODES = frozenset(
 REFERENCE_INPUT_CONTRACT_FALLBACK_CODE = "reference_input_contract_invalid"
 
 
+class McpHandoffProvenance(BaseModel):
+    """Internal proof issued by the core consumer after handoff validation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    handoff_id: str
+    operation_id: str
+    prompt_sha256: str
+    reference_asset_hashes: list[str]
+    rendering_contract_fingerprint: str
+
+
 class GenerationRequest(BaseModel):
     asset_spec: AssetSpec | None = None
     layout_plan: LayoutPlan | None = None
@@ -191,7 +206,21 @@ class GenerationRequest(BaseModel):
         exclude=True,
         repr=False,
     )
-
+    mcp_handoff_provenance: McpHandoffProvenance | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
+    native_ecommerce_identity_binding: NativeEcommerceIdentityBinding | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
+    native_ecommerce_body_reference_binding: NativeEcommerceBodyReferenceBinding | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
 
 @dataclass(frozen=True)
 class ProviderPromptMaterialization:
@@ -230,6 +259,9 @@ def build_provider_generation_request(
     job_id: str | None = None,
     refine_round: int = 0,
     body_refresh_analysis_context: BodyRefreshAnalysisContext | None = None,
+    mcp_handoff_provenance: McpHandoffProvenance | None = None,
+    native_ecommerce_identity_binding: NativeEcommerceIdentityBinding | None = None,
+    native_ecommerce_body_reference_binding: NativeEcommerceBodyReferenceBinding | None = None,
 ) -> GenerationRequest:
     """Build the frozen request shape consumed by the production provider.
 
@@ -246,6 +278,9 @@ def build_provider_generation_request(
         condition_plan=condition_plan,
         generation_plan=generation_plan,
         body_refresh_analysis_context=body_refresh_analysis_context,
+        mcp_handoff_provenance=mcp_handoff_provenance,
+        native_ecommerce_identity_binding=native_ecommerce_identity_binding,
+        native_ecommerce_body_reference_binding=native_ecommerce_body_reference_binding,
         metadata={
             "refine_round": refine_round,
             "mock_profile": metadata.get("mock_profile", "balanced"),
@@ -299,8 +334,8 @@ def build_provider_generation_request(
                 "physical_renderer_reference_plans"
             ),
             "doc269_selected_continuation_admissions": metadata.get(
-                "doc269_selected_continuation_admissions", []
-            ),
+                "doc269_selected_continuation_admissions"
+            ) or [],
             # Professional serial anchor stages are an explicit opt-in
             # materialization policy.  Preserve the server-owned strategy and
             # stage when the canonical planning result is projected into the
@@ -968,6 +1003,15 @@ class ProductionImageGenerationProvider(GenerationProvider):
             is_deterministic=False,
         )
 
+    def _allows_admitted_non_brain_prompt(
+        self,
+        request: GenerationRequest,
+        app_request: Any | None,
+    ) -> bool:
+        """Keep the canonical Brain prompt gate closed for ordinary Providers."""
+
+        return False
+
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         # A required reference is an input contract, rather than optional
         # prompt context.  Preserve a derived failure record when local
@@ -978,7 +1022,10 @@ class ProductionImageGenerationProvider(GenerationProvider):
             app_request, provider_name, reference_assets = self._build_app_request(request)
             prompt_variables = getattr(getattr(app_request, "prompt_plan", None), "variables", None)
             prompt_source = prompt_variables.get("provider_prompt_source") if isinstance(prompt_variables, dict) else None
-            if prompt_source != "remote_brain_canonical":
+            if prompt_source != "remote_brain_canonical" and not self._allows_admitted_non_brain_prompt(
+                request,
+                app_request,
+            ):
                 raise ProviderRuntimeError(
                     "Real image generation requires one approved canonical Provider prompt from the remote Brain.",
                     provider=self.provider_name,
@@ -2346,7 +2393,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         self._assert_nonhuman_identity_reference_materialized(request, asset_plan)
         size, size_adaptation = self._resolve_provider_size(request, reference_assets)
         canonical_prompt = self._brain_signed_provider_prompt(request)
-        if self._requires_brain_signed_provider_prompt(request) and not canonical_prompt:
+        if (
+            self._requires_brain_signed_provider_prompt(request)
+            and not canonical_prompt
+            and not self._allows_admitted_non_brain_prompt(request, None)
+        ):
             # ScenarioRuntime normally rejects this earlier. Keep the
             # materializer as a second, non-bypassable boundary for every
             # normalized real-image contract; actual Provider execution has
@@ -4166,42 +4217,60 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 or any(entry.role != "product_reference" for entry in product_entries)
             ):
                 raise ValueError("product_projection_mismatch")
-            locked_references = metadata.get("professional_anchor_reference_assets")
-            if not isinstance(locked_references, list):
-                if metadata.get("ecommerce_locked_identity_authority") != "v3_product_api":
-                    locked_references = []
-                else:
-                    raise ValueError("identity_sources_missing")
-            if not locked_references and metadata.get("ecommerce_locked_identity_authority") != "v3_product_api":
-                if identity_entries:
+            native_identity_binding = request.native_ecommerce_identity_binding
+            native_body_binding = request.native_ecommerce_body_reference_binding
+            if native_identity_binding is not None:
+                if metadata.get("professional_anchor_reference_assets") not in (None, []):
                     raise ValueError("identity_plan_mismatch")
-                self._verify_doc269_selected_continuation_admission(
-                    metadata,
-                    continuation_entries,
+                self._validate_doc269_native_identity_binding(
+                    request,
+                    admission=_admission,
+                    projection=projection,
+                    plan=plan,
+                    identity_entries=identity_entries,
+                    binding=native_identity_binding,
                 )
                 locked_references = None
-            if locked_references is None:
-                expected_identity_ids = []
+                expected_identity_ids = [entry.source_id for entry in native_identity_binding.entries]
             else:
-                if (
-                    len(locked_references) != 3
-                    or any(
-                        not isinstance(item, dict)
-                        or str(item.get("role") or "").strip() != "face_reference"
-                        or str(item.get("source_type") or "").strip()
-                        != "visual_asset_library"
-                        or str(item.get("use_policy") or "").strip() != "identity"
-                        or not bool((item.get("metadata") or {}).get("doc267_locked_people_identity"))
-                        or not bool((item.get("metadata") or {}).get("canonical_output_binding"))
-                        or not bool((item.get("metadata") or {}).get("visual_asset_library_evidence"))
-                        for item in locked_references
+                if native_body_binding is not None:
+                    raise ValueError("body_binding_without_native_identity")
+                locked_references = metadata.get("professional_anchor_reference_assets")
+                if not isinstance(locked_references, list):
+                    if metadata.get("ecommerce_locked_identity_authority") != "v3_product_api":
+                        locked_references = []
+                    else:
+                        raise ValueError("identity_sources_missing")
+                if not locked_references and metadata.get("ecommerce_locked_identity_authority") != "v3_product_api":
+                    if identity_entries:
+                        raise ValueError("identity_plan_mismatch")
+                    self._verify_doc269_selected_continuation_admission(
+                        metadata,
+                        continuation_entries,
                     )
-                ):
-                    raise ValueError("identity_sources_invalid")
-                expected_identity_ids = [
-                    str(item.get("output_id") or item.get("asset_id") or "").strip()
-                    for item in locked_references
-                ]
+                    locked_references = None
+                if locked_references is None:
+                    expected_identity_ids = []
+                else:
+                    if (
+                        len(locked_references) != 3
+                        or any(
+                            not isinstance(item, dict)
+                            or str(item.get("role") or "").strip() != "face_reference"
+                            or str(item.get("source_type") or "").strip()
+                            != "visual_asset_library"
+                            or str(item.get("use_policy") or "").strip() != "identity"
+                            or not bool((item.get("metadata") or {}).get("doc267_locked_people_identity"))
+                            or not bool((item.get("metadata") or {}).get("canonical_output_binding"))
+                            or not bool((item.get("metadata") or {}).get("visual_asset_library_evidence"))
+                            for item in locked_references
+                        )
+                    ):
+                        raise ValueError("identity_sources_invalid")
+                    expected_identity_ids = [
+                        str(item.get("output_id") or item.get("asset_id") or "").strip()
+                        for item in locked_references
+                    ]
             if (
                 (locked_references is not None and len(expected_identity_ids) != 3)
                 or len(expected_identity_ids) != len(set(expected_identity_ids))
@@ -4242,6 +4311,49 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "derivative_kind": None,
                     }
                 )
+            if native_body_binding is not None:
+                self._validate_doc269_native_body_reference_binding(
+                    request,
+                    admission=_admission,
+                    projection=projection,
+                    plan=plan,
+                    binding=native_body_binding,
+                    existing_assets=assets,
+                )
+                body_path = Path(native_body_binding.file_path).resolve(strict=True)
+                assets.append(
+                    {
+                        "asset_id": f"{native_body_binding.source_id}::body_proportion_reference",
+                        "source_asset_id": native_body_binding.source_id,
+                        "role": native_body_binding.role,
+                        "source_type": native_body_binding.source_type,
+                        "provider_input_mode": "reference_image",
+                        "storage_path": str(body_path),
+                        "filename": body_path.name,
+                        "provider_reference_order": len(assets) + 1,
+                        "doc269_physical_renderer_reference_plan": False,
+                        "codex_native_server_owned_reference": True,
+                        "codex_native_reference_channel": native_body_binding.channel,
+                        "reference_truth_layer": "body_proportion_truth",
+                        "truth_layers": ["body_proportion_truth"],
+                        "body_view_kind": native_body_binding.body_view_kind,
+                        "body_reference_policy": (
+                            "body_scale_neck_shoulder_torso_limb_developmental_stage_only"
+                        ),
+                        "forbidden_inheritance_channels": [
+                            "wardrobe",
+                            "pose",
+                            "lighting",
+                            "camera",
+                            "background",
+                            "expression",
+                            "scene",
+                            "product_identity",
+                        ],
+                        "provider_reference_derivative": True,
+                        "derivative_kind": "body_proportion_reference",
+                    }
+                )
         except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
             raise ReferenceInputAdmissionError(
                 "The server-issued E-Commerce renderer reference plan could not be verified; no image request was sent.",
@@ -4260,8 +4372,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
             },
             "provider_input_plan": {
                 "operation": "image_edit_with_reference_images",
-                "reference_image_asset_ids": list(plan.reference_image_asset_ids),
-                "reference_image_count": plan.reference_image_count,
+                "reference_image_asset_ids": [item["asset_id"] for item in assets],
+                "reference_image_count": len(assets),
                 "maximum_reference_images": plan.maximum_reference_images,
                 "physical_renderer_reference_plan_digest": plan.plan_digest,
                 "physical_renderer_reference_plan": "doc269_v3_product_api",
@@ -4273,13 +4385,128 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "role": item["role"],
                         "truth_layer": item["reference_truth_layer"],
                         "truth_layers": item["truth_layers"],
-                        "derivative_kind": None,
-                        "provider_reference_derivative": False,
+                        "body_view_kind": item.get("body_view_kind"),
+                        "derivative_kind": item["derivative_kind"],
+                        "provider_reference_derivative": item["provider_reference_derivative"],
                     }
                     for item in assets
                 ],
             },
         }
+
+    def _validate_doc269_native_body_reference_binding(
+        self,
+        request: GenerationRequest,
+        *,
+        admission: ProductTruthAdmission,
+        projection: PhysicalProductReferenceProjection,
+        plan: PhysicalRendererReferencePlan,
+        binding: NativeEcommerceBodyReferenceBinding,
+        existing_assets: list[dict[str, Any]],
+    ) -> None:
+        """Validate the Native-only body input beside the frozen Doc269 plan."""
+
+        output_index = getattr(request.asset_spec, "priority", None)
+        request_job_id = str(request.metadata.get("job_id") or "").strip()
+        if (
+            binding.project_id != admission.project_id
+            or binding.job_id != admission.job_id
+            or binding.job_id != plan.job_id
+            or binding.job_id != request_job_id
+            or binding.asset_id != str(getattr(request.asset_spec, "asset_id", "") or "")
+            or type(output_index) is not int
+            or binding.output_index != output_index
+            or binding.output_index != projection.output_index
+            or binding.output_index != plan.output_index
+            or binding.plan_digest != plan.plan_digest
+            or binding.maximum_reference_images != plan.maximum_reference_images
+            or binding.maximum_reference_images != DOC269_MAX_REFERENCE_IMAGES
+            or binding.maximum_reference_images > ProductionImageGenerationProvider.max_provider_reference_images
+            or len(existing_assets) + 1 > binding.maximum_reference_images
+            or binding.source_id in {str(item.get("source_asset_id") or "") for item in existing_assets}
+            or binding.role != "body_proportion_reference"
+            or binding.channel != "body_proportion_reference"
+            or binding.source_type != "visual_asset_library"
+            or binding.body_view_kind not in {"front_full", "side_full", "rear_full"}
+        ):
+            raise ValueError("body_reference_binding_mismatch")
+        try:
+            path = Path(binding.file_path).resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            raise ValueError("body_reference_binding_mismatch") from None
+        if (
+            not path.is_file()
+            or str(path) != binding.file_path
+            or self._reference_content_fingerprint(path) != binding.content_sha256
+            or str(path)
+            in {
+                str(Path(str(item.get("storage_path") or "")).resolve())
+                for item in existing_assets
+                if str(item.get("storage_path") or "").strip()
+            }
+        ):
+            raise ValueError("body_reference_binding_mismatch")
+
+    def _validate_doc269_native_identity_binding(
+        self,
+        request: GenerationRequest,
+        *,
+        admission: ProductTruthAdmission,
+        projection: PhysicalProductReferenceProjection,
+        plan: PhysicalRendererReferencePlan,
+        identity_entries: list[Any],
+        binding: NativeEcommerceIdentityBinding,
+    ) -> None:
+        """Validate the Native host projection without using public metadata as authority."""
+
+        output_index = getattr(request.asset_spec, "priority", None)
+        request_job_id = str(request.metadata.get("job_id") or "").strip()
+        if (
+            binding.project_id != admission.project_id
+            or binding.job_id != admission.job_id
+            or binding.job_id != plan.job_id
+            or binding.job_id != request_job_id
+            or binding.asset_id != str(getattr(request.asset_spec, "asset_id", "") or "")
+            or type(output_index) is not int
+            or binding.output_index != output_index
+            or binding.output_index != projection.output_index
+            or binding.output_index != plan.output_index
+            or binding.plan_digest != plan.plan_digest
+            or binding.maximum_reference_images != plan.maximum_reference_images
+            or binding.maximum_reference_images != DOC269_MAX_REFERENCE_IMAGES
+            or binding.maximum_reference_images > ProductionImageGenerationProvider.max_provider_reference_images
+        ):
+            raise ValueError("identity_plan_mismatch")
+
+        if not identity_entries or len(binding.entries) != len(identity_entries):
+            raise ValueError("identity_plan_mismatch")
+        if len(binding.entries) > binding.maximum_reference_images:
+            raise ValueError("identity_plan_mismatch")
+
+        seen_ids: set[str] = set()
+        seen_paths: set[str] = set()
+        for bound, planned in zip(binding.entries, identity_entries, strict=True):
+            try:
+                path = Path(bound.file_path).resolve(strict=True)
+            except (OSError, RuntimeError, ValueError):
+                raise ValueError("identity_plan_mismatch") from None
+            if (
+                bound.source_id in seen_ids
+                or str(path) in seen_paths
+                or bound.source_id != planned.source_id
+                or str(path) != str(Path(planned.file_path).resolve())
+                or bound.content_sha256 != planned.content_sha256
+                or bound.role != planned.role
+                or bound.channel != planned.channel
+                or bound.source_type != planned.source_type
+                or bound.role != "face_reference"
+                or bound.channel != "people_identity"
+                or bound.source_type != "visual_asset_library"
+                or self._reference_content_fingerprint(path) != bound.content_sha256
+            ):
+                raise ValueError("identity_plan_mismatch")
+            seen_ids.add(bound.source_id)
+            seen_paths.add(str(path))
 
     @staticmethod
     def _verify_doc269_selected_continuation_admission(
@@ -6885,6 +7112,102 @@ class McpMaterializationProvider(ProductionImageGenerationProvider):
         """MCP consumes one explicit handoff; it has no Provider retry index."""
 
         return {}
+
+    def _allows_admitted_non_brain_prompt(
+        self,
+        request: GenerationRequest,
+        app_request: Any | None,
+    ) -> bool:
+        """Allow only a server-validated submitted handoff to bypass Brain.
+
+        ``_build_app_request`` writes this materialization marker only after
+        ``_existing_mcp_handoff_context`` has validated a submitted handoff.
+        Pending or malformed handoffs therefore remain subject to the normal
+        canonical-prompt gate.
+        """
+
+        raw_variables = getattr(getattr(app_request, "prompt_plan", None), "variables", None)
+        variables = raw_variables if isinstance(raw_variables, dict) else {}
+        provenance = request.mcp_handoff_provenance
+        if provenance is None:
+            return False
+
+        try:
+            handoff = self.handoff_store.get(provenance.handoff_id)
+            provenance_values = (
+                provenance.handoff_id,
+                provenance.operation_id,
+                provenance.prompt_sha256,
+                provenance.rendering_contract_fingerprint,
+            )
+            handoff_prompt = handoff.get("canonical_prompt") if isinstance(handoff, dict) else None
+            stored_reference_hashes = handoff.get("reference_asset_hashes") if isinstance(handoff, dict) else None
+            if not (
+                isinstance(handoff, dict)
+                and all(type(value) is str and value.strip() for value in provenance_values)
+                and type(handoff.get("handoff_id")) is str
+                and type(handoff.get("status")) is str
+                and type(handoff.get("operation_id")) is str
+                and type(handoff.get("prompt_sha256")) is str
+                and type(handoff_prompt) is str
+                and handoff_prompt.strip()
+                and type(handoff.get("rendering_contract_fingerprint")) is str
+                and isinstance(stored_reference_hashes, list)
+                and all(type(value) is str and value.strip() for value in stored_reference_hashes)
+                and provenance.handoff_id == handoff["handoff_id"]
+                and handoff["status"] == "submitted"
+                and provenance.operation_id == handoff["operation_id"]
+                and provenance.prompt_sha256 == handoff["prompt_sha256"]
+                and hashlib.sha256(handoff_prompt.encode("utf-8")).hexdigest() == handoff["prompt_sha256"]
+                and provenance.reference_asset_hashes == stored_reference_hashes
+                and provenance.rendering_contract_fingerprint == handoff["rendering_contract_fingerprint"]
+            ):
+                return False
+            if app_request is None:
+                return True
+            if variables.get("provider_prompt_materialization") != "v3_mcp_frozen_handoff_resume":
+                return False
+            context = variables.get("mcp_materialization_context")
+            if not isinstance(context, dict):
+                return False
+            rendering_contract = context.get("rendering_contract")
+            context_values = (
+                context.get("handoff_id"),
+                context.get("operation_id"),
+                context.get("canonical_prompt"),
+                context.get("prompt_sha256"),
+            )
+            generation_prompt = variables.get("generation_prompt")
+            provider_prompt_sha256 = variables.get("provider_prompt_sha256")
+            context_reference_hashes = context.get("reference_asset_hashes")
+            if not (
+                all(type(value) is str and value.strip() for value in context_values)
+                and isinstance(context_reference_hashes, list)
+                and all(type(value) is str and value.strip() for value in context_reference_hashes)
+                and type(generation_prompt) is str
+                and generation_prompt.strip()
+                and type(provider_prompt_sha256) is str
+                and provider_prompt_sha256.strip()
+                and isinstance(rendering_contract, dict)
+            ):
+                return False
+            return (
+                provenance.handoff_id == context["handoff_id"]
+                and provenance.operation_id == context["operation_id"]
+                and provenance.prompt_sha256 == context["prompt_sha256"]
+                and hashlib.sha256(context["canonical_prompt"].encode("utf-8")).hexdigest()
+                == context["prompt_sha256"]
+                and context["canonical_prompt"] == handoff_prompt
+                and generation_prompt == context["canonical_prompt"]
+                and provider_prompt_sha256 == context["prompt_sha256"]
+                and hashlib.sha256(generation_prompt.encode("utf-8")).hexdigest()
+                == provider_prompt_sha256
+                and provenance.reference_asset_hashes == context_reference_hashes
+                and provenance.rendering_contract_fingerprint
+                == self.handoff_store._rendering_contract_fingerprint(rendering_contract)
+            )
+        except Exception:
+            return False
 
     def __init__(self, output_store: Any | None = None, handoff_store: McpMaterializationHandoffStore | None = None) -> None:
         super().__init__(output_store=output_store)

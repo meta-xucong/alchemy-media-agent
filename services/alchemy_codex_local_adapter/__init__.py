@@ -15,6 +15,13 @@ from .contracts import (
 )
 from .facade import CodexNativeImageGenFacade
 from .native_planner import CodexNativeImageGenPlanner, PlanningOnlyGenerationRouter
+from .ecommerce_authority import (
+    NativeEcommerceAuthority,
+    NativeEcommerceAuthorityPreflight,
+    NativeEcommerceAuthorityResolver,
+    ProductApiEcommerceAuthorityReader,
+    product_api_ecommerce_authority_resolver,
+)
 from .provenance import renderer_parity_receipt
 from .professional_binding import (
     ProfessionalBindingResolution,
@@ -37,6 +44,11 @@ __all__ = [
     "NativeSpecializedImageGenPlanRequest",
     "NativeReferenceInput",
     "PlanningOnlyGenerationRouter",
+    "NativeEcommerceAuthority",
+    "NativeEcommerceAuthorityPreflight",
+    "NativeEcommerceAuthorityResolver",
+    "ProductApiEcommerceAuthorityReader",
+    "product_api_ecommerce_authority_resolver",
     "ProfessionalBindingResolution",
     "renderer_parity_receipt",
     "persistent_professional_binding_resolver",

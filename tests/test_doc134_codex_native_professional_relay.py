@@ -9,9 +9,11 @@ must fail closed.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,7 +23,10 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     ProductionImageGenerationProvider,
     build_provider_generation_request,
 )
-from alchemy_creative_agent_3_0.app.generation_router.providers import ProviderPromptMaterialization
+from alchemy_creative_agent_3_0.app.generation_router.providers import (
+    ProviderPromptMaterialization,
+    ReferenceInputAdmissionError,
+)
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest
 from alchemy_creative_agent_3_0.app.llm_brain.contracts import BrainOutputEvidenceContract
@@ -30,6 +35,13 @@ from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import (
     ECOMMERCE_PRODUCT_TRUTH_DETAIL_ROLE,
     ECOMMERCE_PRODUCT_TRUTH_SELECTION_ROLES,
+)
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.physical_renderer_reference_plan import (
+    PhysicalRendererReferencePlan,
+)
+from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.reference_projection import (
+    PhysicalProductReferenceProjection,
+    ProductTruthAdmission,
 )
 from alchemy_creative_agent_3_0.app.visual_assets import (
     CharacterCardSlot,
@@ -50,11 +62,22 @@ from alchemy_creative_agent_3_0.app.visual_assets.formal_slot_acceptance import 
 from alchemy_creative_agent_3_0.tests.professional_mode_test_support import (
     catalog_with_active_face_identity_pack,
 )
-from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
+from alchemy_creative_agent_3_0.tests.ecommerce_test_support import (
+    EcommerceRemoteBrainTestProvider,
+    ecommerce_test_authority_resolver,
+)
 from services.alchemy_codex_local_adapter.contracts import (
     CodexNativeImageGenError,
     NativeProfessionalImageGenPlanRequest,
     NativeReferenceInput,
+)
+from services.alchemy_codex_local_adapter.ecommerce_authority import (
+    NativeEcommerceAuthority,
+    NativeEcommerceAuthorityPreflight,
+    ProductApiEcommerceAuthorityReader,
+)
+from alchemy_creative_agent_3_0.app.product_api.service import (
+    ProductApiEcommerceAuthoritySnapshot,
 )
 from services.alchemy_codex_local_adapter.facade import CodexNativeImageGenFacade
 from services.alchemy_codex_local_adapter.mcp_server import TOOL_SCHEMAS, dispatch
@@ -599,6 +622,158 @@ def _provider_materializations(runtime_result) -> list[Any]:
     ]
 
 
+def test_native_canonical_materializations_projects_frozen_ecommerce_authority(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from alchemy_creative_agent_3_0.tests.test_v3_doc269_ecommerce_physical_renderer_reference_plan import (
+        _captured_default_ecommerce_request,
+    )
+
+    request, _product_ids, _face_output_ids, _projection = _captured_default_ecommerce_request(
+        tmp_path
+    )
+    admission = ProductTruthAdmission.from_mapping(
+        request.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    projections = tuple(
+        PhysicalProductReferenceProjection.from_mapping(value)
+        for _, value in sorted(
+            request.metadata["professional_ecommerce_physical_product_projections"].items(),
+            key=lambda item: int(item[0]),
+        )
+    )
+    physical_plans = tuple(
+        PhysicalRendererReferencePlan.model_validate(value)
+        for _, value in sorted(
+            request.metadata["physical_renderer_reference_plans"].items(),
+            key=lambda item: int(item[0]),
+        )
+    )
+    authority = NativeEcommerceAuthority(
+        project_id=admission.project_id,
+        job_id=admission.job_id,
+        asset_id=str(request.asset_spec.asset_id),
+        output_index=1,
+        admission=admission,
+        projection=projections[0],
+        physical_plan=physical_plans[0],
+        projections=projections,
+        physical_plans=physical_plans,
+    )
+    tampered_projection = deepcopy(authority.projection)
+    object.__setattr__(tampered_projection, "output_index", 2)
+    with pytest.raises(ValueError, match="native_ecommerce_authority_primary_record_mismatch"):
+        NativeEcommerceAuthority(
+            project_id=authority.project_id,
+            job_id=authority.job_id,
+            asset_id=authority.asset_id,
+            output_index=authority.output_index,
+            admission=authority.admission,
+            projection=tampered_projection,
+            physical_plan=authority.physical_plan,
+            projections=authority.projections,
+            physical_plans=authority.physical_plans,
+        )
+    shared_metadata = deepcopy(request.metadata)
+    for key in (
+        "professional_ecommerce_contract_authority",
+        "professional_ecommerce_product_truth_admission",
+        "professional_ecommerce_physical_product_projection",
+        "professional_ecommerce_physical_product_projections",
+        "physical_renderer_reference_plans",
+    ):
+        shared_metadata.pop(key, None)
+    shared_metadata["specialized_role_execution_plan"] = {"source": "must_not_cross_boundary"}
+    generation_plan = request.generation_plan.model_copy(
+        update={"metadata": deepcopy(shared_metadata)}
+    )
+    planning_result = SimpleNamespace(
+        metadata=deepcopy(shared_metadata),
+        creative_job=SimpleNamespace(
+            job_id=request.metadata["job_id"],
+            metadata=deepcopy(shared_metadata),
+        ),
+        series_plan=SimpleNamespace(assets=[request.asset_spec]),
+        layout_plans=[request.layout_plan],
+        prompt_compilations=[request.prompt_compilation],
+        condition_plans=[request.condition_plan],
+        generation_plans=[generation_plan],
+    )
+    captured_requests: list[Any] = []
+    original_materializer = ProductionImageGenerationProvider.materialize_final_prompt
+
+    def capture_materialization(provider, provider_request):
+        captured_requests.append(provider_request)
+        return original_materializer(provider, provider_request)
+
+    monkeypatch.setattr(
+        ProductionImageGenerationProvider,
+        "materialize_final_prompt",
+        capture_materialization,
+    )
+
+    materializations = CodexNativeImageGenPlanner._canonical_materializations(
+        planning_result,
+        ecommerce_authority_by_asset_id={
+            str(request.asset_spec.asset_id): authority,
+        },
+    )
+
+    assert len(materializations) == 1
+    assert len(captured_requests) == 1
+    projected = captured_requests[0].metadata
+    for key, value in authority.provider_metadata().items():
+        assert projected[key] == value
+    assert "specialized_role_execution_plan" not in projected
+
+    with pytest.raises(ValueError, match="frozen_professional_authority_conflict"):
+        CodexNativeImageGenPlanner._canonical_materializations(
+            planning_result,
+            metadata_overrides={
+                "professional_ecommerce_contract_authority": "forged_by_native_caller"
+            },
+            ecommerce_authority_by_asset_id={
+                str(request.asset_spec.asset_id): authority,
+            },
+        )
+
+
+def test_native_canonical_materializations_keeps_missing_ecommerce_authority_fail_closed(
+    tmp_path: Path,
+) -> None:
+    from alchemy_creative_agent_3_0.tests.test_v3_doc269_ecommerce_physical_renderer_reference_plan import (
+        _captured_default_ecommerce_request,
+    )
+
+    request, _product_ids, _face_output_ids, _projection = _captured_default_ecommerce_request(
+        tmp_path
+    )
+    metadata = deepcopy(request.metadata)
+    metadata.pop("professional_ecommerce_contract_authority", None)
+    generation_plan = request.generation_plan.model_copy(
+        update={"metadata": deepcopy(metadata)}
+    )
+    planning_result = SimpleNamespace(
+        metadata=deepcopy(metadata),
+        creative_job=SimpleNamespace(
+            job_id=request.metadata["job_id"],
+            metadata=deepcopy(metadata),
+        ),
+        series_plan=SimpleNamespace(assets=[request.asset_spec]),
+        layout_plans=[request.layout_plan],
+        prompt_compilations=[request.prompt_compilation],
+        condition_plans=[request.condition_plan],
+        generation_plans=[generation_plan],
+    )
+
+    with pytest.raises(ValueError, match="native_ecommerce_authority_missing"):
+        CodexNativeImageGenPlanner._canonical_materializations(
+            planning_result,
+            ecommerce_authority_by_asset_id={},
+        )
+
+
 def test_professional_relay_requires_server_owned_binding_and_projects_existing_frozen_plan(tmp_path: Path) -> None:
     reference = _write_png(tmp_path / "root.png")
     catalog = catalog_with_active_face_identity_pack()
@@ -643,6 +818,7 @@ def test_professional_relay_does_not_downgrade_explicit_specialist_template(tmp_
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain)),
         professional_binding_resolver=_resolver(catalog),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
     result = planner.prepare_frozen_professional_native_imagegen_plan(
         NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
@@ -886,19 +1062,27 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
     materialization_overrides: list[dict[str, Any] | None] = []
     materialization_overrides_by_asset_id: list[dict[str, dict[str, Any]] | None] = []
     materialized_reference_assets: list[dict[str, Any]] = []
     original_materializer = CodexNativeImageGenPlanner._canonical_materializations
 
-    def capture_materializations(planning_result, *, metadata_overrides=None, metadata_overrides_by_asset_id=None):
+    def capture_materializations(
+        planning_result,
+        *,
+        metadata_overrides=None,
+        metadata_overrides_by_asset_id=None,
+        ecommerce_authority_by_asset_id=None,
+    ):
         materialization_overrides.append(metadata_overrides)
         materialization_overrides_by_asset_id.append(metadata_overrides_by_asset_id)
         materializations = original_materializer(
             planning_result,
             metadata_overrides=metadata_overrides,
             metadata_overrides_by_asset_id=metadata_overrides_by_asset_id,
+            ecommerce_authority_by_asset_id=ecommerce_authority_by_asset_id,
         )
         materialized_reference_assets.extend(materializations[0].reference_assets)
         return materializations
@@ -921,8 +1105,8 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
     # The default E-Commerce fixture is a face+product compatibility path.
     # Even when a Body Silhouette exists in the active card, a frozen
     # not_required receipt must not silently admit it.
-    assert contract["admitted_reference_count"] == 5
-    assert len(result["outputs"][0]["reference_image_paths"]) == 5
+    assert contract["admitted_reference_count"] == 3
+    assert len(result["outputs"][0]["reference_image_paths"]) == 3
     assert contract["professional_identity_source_asset_ids"] == [root_source_id, output_id]
     assert contract["professional_body_proportion_requirement"] == "not_required"
     assert contract["professional_body_view_kind"] is None
@@ -944,10 +1128,7 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         output_id,
         product_ids[0],
     }
-    assert contract["admitted_reference_derivative_asset_ids"]
-    assert set(contract["admitted_reference_derivative_asset_ids"]).isdisjoint(
-        {root_source_id, output_id, *product_ids}
-    )
+    assert contract["admitted_reference_derivative_asset_ids"] == []
     assert capturing.payloads[0]["metadata"]["professional_product_model_planning"] is True
     creative_context = capturing.payloads[0]["metadata"]["ecommerce_creative_context"]
     assert "creative_risk_preflight" not in creative_context
@@ -1011,8 +1192,8 @@ def test_professional_ecommerce_plan_requires_identity_and_product_truth_refs(
         for item in product_materialized_refs
     )
     assert any(
-        item.get("reference_truth_layer") == "product_identity_truth"
-        or "product_identity_truth" in list(item.get("truth_layers") or [])
+        item.get("reference_truth_layer") == "product_truth"
+        or "product_truth" in list(item.get("truth_layers") or [])
         for item in product_materialized_refs
     )
     body_materialized_refs = [
@@ -1057,6 +1238,7 @@ def test_professional_ecommerce_poolside_pose_contract_is_frozen_and_projected(
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1215,6 +1397,7 @@ def test_professional_ecommerce_pose_contract_fault_blocks_before_materializatio
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1269,6 +1452,7 @@ def test_professional_ecommerce_age_sensitive_product_model_requires_provider_ad
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1358,6 +1542,7 @@ def test_professional_ecommerce_missing_provider_admission_receipt_blocks_before
             )
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1417,6 +1602,7 @@ def test_professional_ecommerce_identity_hint_requires_resolver_explicit_view_ch
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing,
         professional_binding_resolver=explicit_hint_resolver,
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1480,6 +1666,7 @@ def test_professional_ecommerce_full_product_pool_selection_fails_before_capacit
             ),
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1540,6 +1727,7 @@ def test_professional_ecommerce_two_selected_products_exceed_preflight_provider_
             ),
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1587,6 +1775,7 @@ def test_professional_ecommerce_two_selected_products_pass_when_materialized_cap
         *,
         metadata_overrides=None,
         metadata_overrides_by_asset_id=None,
+        ecommerce_authority_by_asset_id=None,
     ):
         nonlocal materializer_calls
         materializer_calls += 1
@@ -1656,6 +1845,7 @@ def test_professional_ecommerce_two_selected_products_pass_when_materialized_cap
             ),
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1731,6 +1921,7 @@ def test_professional_ecommerce_requires_provider_reference_budget_before_select
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing_runtime,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1745,19 +1936,44 @@ def test_professional_ecommerce_requires_provider_reference_budget_before_select
 
 
 @pytest.mark.parametrize(
-    ("selection_fault", "expected_reason"),
+    ("selection_fault", "expected_code", "expected_reason"),
     [
-        ("missing", "ecommerce_product_truth_selection_invalid"),
-        ("empty", "ecommerce_product_truth_selection_invalid"),
-        ("unknown", "ecommerce_product_truth_selection_unknown_asset"),
-        ("duplicate", "ecommerce_product_truth_selection_duplicate"),
-        ("missing_role", "ecommerce_product_truth_selection_invalid"),
-        ("unknown_role", "ecommerce_product_truth_selection_invalid"),
+        (
+            "missing",
+            "codex_native_imagegen_remote_creative_brain_image_set_plan_invalid",
+            "remote_creative_brain_image_set_plan_invalid",
+        ),
+        (
+            "empty",
+            "codex_native_imagegen_remote_creative_brain_image_set_plan_invalid",
+            "remote_creative_brain_image_set_plan_invalid",
+        ),
+        (
+            "unknown",
+            "codex_native_imagegen_planning_blocked",
+            "ecommerce_product_truth_selection_unknown_asset",
+        ),
+        (
+            "duplicate",
+            "codex_native_imagegen_planning_blocked",
+            "ecommerce_product_truth_selection_duplicate",
+        ),
+        (
+            "missing_role",
+            "codex_native_imagegen_remote_creative_brain_image_set_plan_invalid",
+            "remote_creative_brain_image_set_plan_invalid",
+        ),
+        (
+            "unknown_role",
+            "codex_native_imagegen_planning_blocked",
+            "ecommerce_product_truth_selection_invalid",
+        ),
     ],
 )
 def test_professional_ecommerce_remote_product_selection_fail_closed(
     tmp_path: Path,
     selection_fault: str,
+    expected_code: str,
     expected_reason: str,
 ) -> None:
     root_source_id = "v3_asset_root"
@@ -1790,12 +2006,13 @@ def test_professional_ecommerce_remote_product_selection_fail_closed(
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing_runtime,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
 
     assert result["status"] == "blocked"
-    assert result["code"] == "codex_native_imagegen_planning_blocked"
+    assert result["code"] == expected_code
     assert capturing_runtime.last_result is not None
     assert expected_reason in " ".join(capturing_runtime.last_result.warnings)
 
@@ -1839,6 +2056,7 @@ def test_professional_ecommerce_remote_non_detail_two_product_selection_fails_cl
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing_runtime,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -1883,8 +2101,8 @@ def test_professional_ecommerce_remote_payload_requires_product_truth_selection(
     ]
     instructions = payload["ecommerce_context_instructions"]
     normalized_instructions = " ".join(instructions.split())
-    assert "output_index must be a 1-based integer" in instructions
-    assert "evidence_dimensions must be exactly an empty list []" in instructions
+    assert "output_index must be a 1-based integer" in normalized_instructions
+    assert "evidence_dimensions must be exactly an empty list []" in normalized_instructions
     assert "product_truth_selection_role must be exactly one of" in instructions
     assert "selected_product_truth_asset_ids must be a list" in instructions
     assert "Select one product truth for ordinary lifestyle" in normalized_instructions
@@ -2080,13 +2298,11 @@ def test_professional_ecommerce_remote_payload_combines_apparel_and_product_sele
     payload = json.loads(build_remote_payload(request))
 
     evidence_schema = payload["return_schema"]["image_set_plan"]["evidence_dimensions_by_output"][0]
-    assert evidence_schema["evidence_dimensions"] == [
-        "allowed active apparel evidence profile values only; every item must be a string"
-    ]
+    assert evidence_schema["evidence_dimensions"] == []
     assert "product_truth_selection_role" in evidence_schema
     assert "selected_product_truth_asset_ids" in evidence_schema
     instructions = payload["ecommerce_context_instructions"]
-    assert "apparel_on_model_evidence_profile requests more than one output" in instructions
+    assert "apparel_on_model_evidence_profile" not in instructions
     assert "product_truth_selection_role must be exactly one of" in instructions
     assert "selected_product_truth_asset_ids must be a list" in instructions
 
@@ -2210,6 +2426,7 @@ def test_professional_ecommerce_native_planner_sends_brain_safe_provider_budget(
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing_runtime,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -2260,15 +2477,10 @@ def test_professional_ecommerce_beach_lifestyle_intent_is_preserved_in_brain_pay
 
     instructions = payload["ecommerce_context_instructions"]
     normalized_instructions = " ".join(instructions.split())
-    assert "preserve that user-owned creative" in normalized_instructions
+    assert "preserve the user-owned creative intent" in normalized_instructions
     assert "static catalogue card" in normalized_instructions
-    assert "naturally participating in the scene" in normalized_instructions
-    assert "age-appropriate joyful expression" in normalized_instructions
-    assert "beach/water interaction" in normalized_instructions
-    assert "natural walking or looking-back movement" in normalized_instructions
-    assert "back/structure garment view" in normalized_instructions
-    assert "ordinary expression" in normalized_instructions
-    assert "must not occupy the set's main emotional direction" in normalized_instructions
+    assert "naturally participating in the ordinary, age-appropriate scene" in normalized_instructions
+    assert "prompt-owned scene intent" in normalized_instructions
     serialized_payload = json.dumps(payload, ensure_ascii=False)
     assert "Avoid unsafe or playful action framing" not in serialized_payload
     assert "keep it as normal children clothing product photography" not in serialized_payload
@@ -2343,15 +2555,23 @@ def test_professional_ecommerce_n6_uses_product_truth_pool_per_output(
     planner = CodexNativeImageGenPlanner(
         runtime_factory=lambda: capturing,
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
     materialized_by_output: dict[int, list[dict[str, Any]]] = {}
     original_materializer = CodexNativeImageGenPlanner._canonical_materializations
 
-    def capture_materializations(planning_result, *, metadata_overrides=None, metadata_overrides_by_asset_id=None):
+    def capture_materializations(
+        planning_result,
+        *,
+        metadata_overrides=None,
+        metadata_overrides_by_asset_id=None,
+        ecommerce_authority_by_asset_id=None,
+    ):
         materializations = original_materializer(
             planning_result,
             metadata_overrides=metadata_overrides,
             metadata_overrides_by_asset_id=metadata_overrides_by_asset_id,
+            ecommerce_authority_by_asset_id=ecommerce_authority_by_asset_id,
         )
         for index, materialization in enumerate(materializations, start=1):
             materialized_by_output[index] = list(materialization.reference_assets)
@@ -2376,8 +2596,8 @@ def test_professional_ecommerce_n6_uses_product_truth_pool_per_output(
         assert contract["product_truth_pool_asset_ids"] == product_ids
         assert contract["selected_product_truth_asset_ids"] == expected_selected
         assert contract["admitted_product_truth_asset_ids"] == expected_selected
-        assert contract["admitted_reference_count"] == 5
-        assert len(output["reference_image_paths"]) == 5
+        assert contract["admitted_reference_count"] == 3
+        assert len(output["reference_image_paths"]) == 3
         assert contract["source_sha256"][2:] == [
             contract["product_truth_pool_source_sha256"][asset_id]
             for asset_id in expected_selected
@@ -2386,10 +2606,7 @@ def test_professional_ecommerce_n6_uses_product_truth_pool_per_output(
             item.get("source_asset_id") or item.get("asset_id")
             for item in materialized_by_output[index]
         } == {root_source_id, output_id, *expected_selected}
-        assert contract["admitted_reference_derivative_asset_ids"]
-        assert set(contract["admitted_reference_derivative_asset_ids"]).isdisjoint(
-            {root_source_id, output_id, *product_ids}
-        )
+        assert contract["admitted_reference_derivative_asset_ids"] == []
         assert all(
             omitted["asset_id"] not in expected_selected
             and omitted["reason"] == "not_selected_for_this_frozen_deliverable"
@@ -2459,6 +2676,7 @@ def test_professional_ecommerce_native_planner_blocks_invalid_product_selection_
             ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -2501,7 +2719,13 @@ def test_professional_ecommerce_native_planner_does_not_leak_unselected_product_
     captured_provider_assets: list[dict[str, Any]] = []
     original_materializer = CodexNativeImageGenPlanner._canonical_materializations
 
-    def capture_materializations(planning_result, *, metadata_overrides=None, metadata_overrides_by_asset_id=None):
+    def capture_materializations(
+        planning_result,
+        *,
+        metadata_overrides=None,
+        metadata_overrides_by_asset_id=None,
+        ecommerce_authority_by_asset_id=None,
+    ):
         per_output = metadata_overrides_by_asset_id or {}
         assert len(per_output) == 1
         captured_provider_assets.extend(next(iter(per_output.values()))["reference_assets"])
@@ -2509,6 +2733,7 @@ def test_professional_ecommerce_native_planner_does_not_leak_unselected_product_
             planning_result,
             metadata_overrides=metadata_overrides,
             metadata_overrides_by_asset_id=metadata_overrides_by_asset_id,
+            ecommerce_authority_by_asset_id=ecommerce_authority_by_asset_id,
         )
 
     monkeypatch.setattr(
@@ -2521,6 +2746,7 @@ def test_professional_ecommerce_native_planner_does_not_leak_unselected_product_
             ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())),
         ),
         professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
 
     result = planner.prepare_frozen_professional_native_imagegen_plan(request)
@@ -2642,6 +2868,7 @@ def test_professional_ecommerce_plan_fails_closed_when_binding_parts_are_missing
                 ),
             ),
             professional_binding_resolver=resolver,
+            ecommerce_authority_resolver=ecommerce_test_authority_resolver,
         )
         return planner.prepare_frozen_professional_native_imagegen_plan(request)
 
@@ -2709,6 +2936,7 @@ def test_professional_ecommerce_plan_fails_closed_when_binding_parts_are_missing
             llm_brain_adapter=V3LLMBrainAdapter(provider=EcommerceRemoteBrainTestProvider())
         ),
         professional_binding_resolver=incomplete_resolver,
+        ecommerce_authority_resolver=ecommerce_test_authority_resolver,
     )
     no_product_result = planner.prepare_frozen_professional_native_imagegen_plan(no_product_request)
     assert no_product_result["status"] == "blocked"
@@ -2730,6 +2958,207 @@ def test_professional_relay_without_resolver_and_mcp_unknown_fields_fail_closed(
             _arguments(reference, professional_mode_binding_record={"mode": "professional"})
         )
     assert exc.value.code == "codex_native_imagegen_invalid_input"
+
+
+def test_professional_ecommerce_product_model_without_authority_resolver_blocks_before_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_source_id = "v3_asset_root_without_ecommerce_authority"
+    output_id = "v3_output_front_without_ecommerce_authority"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product.png")
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    materializer_calls = 0
+
+    def fail_if_materialized(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal materializer_calls
+        materializer_calls += 1
+        raise AssertionError("missing E-Commerce authority must block before materialization")
+
+    monkeypatch.setattr(
+        CodexNativeImageGenPlanner,
+        "_canonical_materializations",
+        staticmethod(fail_if_materialized),
+    )
+    brain = EcommerceRemoteBrainTestProvider()
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: _CapturingRuntime(
+            ScenarioRuntime(
+                llm_brain_adapter=V3LLMBrainAdapter(provider=brain)
+            )
+        ),
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_ecommerce_authority_resolver_unavailable"
+    assert materializer_calls == 0
+    assert brain.requests == []
+
+
+def test_incomplete_production_authority_preflight_blocks_before_brain(
+    tmp_path: Path,
+) -> None:
+    root_source_id = "v3_asset_root_incomplete_preflight"
+    output_id = "v3_output_front_incomplete_preflight"
+    _write_root_upload_evidence(tmp_path, root_source_id=root_source_id)
+    asset, library_root = _library_with_active_front(
+        tmp_path,
+        root_source_id=root_source_id,
+        output_id=output_id,
+    )
+    product = _write_png(tmp_path / "product.png")
+    request = NativeProfessionalImageGenPlanRequest.from_mcp_arguments(
+        _arguments(
+            product,
+            template_id="ecommerce_template",
+            platform_profile="generic",
+            reference_inputs=[{"channel": "product_truth", "file_path": str(product)}],
+            people_asset_id=asset.visual_asset_id,
+            professional_identity_view_ids=["face_front"],
+        )
+    )
+    brain = EcommerceRemoteBrainTestProvider()
+
+    class IncompleteProductionResolver:
+        # A copied compatibility marker must not be enough to bypass the
+        # pre-Brain authority map; the private capability is also required.
+        legacy_test_only_post_brain_resolution = True
+
+        def preflight(self, **kwargs):  # noqa: ANN003
+            return NativeEcommerceAuthorityPreflight(
+                schema_version="native_ecommerce_authority_preflight_v1",
+                project_id=kwargs["project_id"],
+                job_id=kwargs["job_id"],
+                requested_output_count=kwargs["requested_output_count"],
+                authority_digest="0" * 64,
+            )
+
+        def __call__(self, **kwargs):  # noqa: ANN003
+            raise AssertionError("production resolver must not resolve after Brain")
+
+    planner = CodexNativeImageGenPlanner(
+        runtime_factory=lambda: _CapturingRuntime(
+            ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=brain))
+        ),
+        professional_binding_resolver=visual_asset_library_professional_binding_resolver(library_root),
+        ecommerce_authority_resolver=IncompleteProductionResolver(),
+    )
+
+    result = planner.prepare_frozen_professional_native_imagegen_plan(request)
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "codex_native_imagegen_ecommerce_authority_preflight_map_invalid"
+    assert brain.requests == []
+
+
+def test_product_api_preflight_freezes_identity_and_body_bindings_before_brain(
+    tmp_path: Path,
+) -> None:
+    from alchemy_creative_agent_3_0.tests.test_v3_doc269_ecommerce_physical_renderer_reference_plan import (
+        _captured_default_ecommerce_request,
+    )
+
+    request, _product_ids, _face_output_ids, _projection = _captured_default_ecommerce_request(
+        tmp_path
+    )
+    admission = ProductTruthAdmission.from_mapping(
+        request.metadata["professional_ecommerce_product_truth_admission"]
+    )
+    projections = tuple(
+        PhysicalProductReferenceProjection.from_mapping(value)
+        for _, value in sorted(
+            request.metadata["professional_ecommerce_physical_product_projections"].items(),
+            key=lambda item: int(item[0]),
+        )
+    )
+    physical_plans = tuple(
+        PhysicalRendererReferencePlan.model_validate(value)
+        for _, value in sorted(
+            request.metadata["physical_renderer_reference_plans"].items(),
+            key=lambda item: int(item[0]),
+        )
+    )
+    snapshot = ProductApiEcommerceAuthoritySnapshot.from_records(
+        project_id=admission.project_id,
+        job_id=admission.job_id,
+        asset_ids=(str(request.asset_spec.asset_id),),
+        admission=admission,
+        projections=projections,
+        physical_plans=physical_plans,
+    )
+    identity_references = tuple(
+        NativeReferenceInput(
+            channel="portrait_identity",
+            file_path=entry.file_path,
+            source_sha256=entry.content_sha256,
+            source_asset_id=entry.source_id,
+            server_owned=True,
+        )
+        for entry in physical_plans[0].references
+        if entry.channel == "people_identity"
+    )
+    body_path = _write_png(tmp_path / "body-preflight.png")
+    body_reference = NativeReferenceInput(
+        channel="body_proportion_reference",
+        file_path=str(body_path),
+        source_sha256=_sha256(body_path),
+        source_asset_id="body_front_preflight",
+        server_owned=True,
+        body_view_kind="front_full",
+    )
+    reader = ProductApiEcommerceAuthorityReader(
+        SimpleNamespace(get_ecommerce_authority_snapshot=lambda _job_id: snapshot)
+    )
+
+    preflight = reader.preflight(
+        project_id=admission.project_id,
+        job_id=admission.job_id,
+        requested_output_count=1,
+        server_owned_references=identity_references,
+        server_owned_body_references=(body_reference,),
+    )
+
+    assert preflight is not None
+    assert len(preflight.authorities) == 1
+    authority = preflight.authorities[0]
+    assert authority.native_identity_binding is not None
+    assert [item.body_view_kind for item in authority.native_body_reference_bindings] == [
+        "front_full"
+    ]
+
+    tampered_body = NativeReferenceInput(
+        channel="body_proportion_reference",
+        file_path=str(body_path),
+        source_sha256="0" * 64,
+        source_asset_id="body_front_preflight",
+        server_owned=True,
+        body_view_kind="front_full",
+    )
+    assert reader.preflight(
+        project_id=admission.project_id,
+        job_id=admission.job_id,
+        requested_output_count=1,
+        server_owned_references=identity_references,
+        server_owned_body_references=(tampered_body,),
+    ) is None
 
 
 def test_professional_relay_accepts_exact_persisted_timestamp_identifiers(tmp_path: Path) -> None:

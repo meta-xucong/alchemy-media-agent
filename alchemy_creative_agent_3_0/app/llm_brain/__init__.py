@@ -17,6 +17,7 @@ from .contracts import (
     BrainRunRequest,
     BrainRunResult,
     BrainUserVisibleSummary,
+    VariationExecutionReceipt,
 )
 
 __all__ = [
@@ -35,5 +36,6 @@ __all__ = [
     "BrainRunRequest",
     "BrainRunResult",
     "BrainUserVisibleSummary",
+    "VariationExecutionReceipt",
     "V3LLMBrainAdapter",
 ]

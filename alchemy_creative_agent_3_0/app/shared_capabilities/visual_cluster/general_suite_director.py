@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ...creative_core.rules import stable_id
-from .contracts import GeneralSuiteRole, GeneralSuiteRolePlan
+from .contracts import GENERAL_VARIATION_MAX_OUTPUTS, GeneralSuiteRole, GeneralSuiteRolePlan
 from .mode_role_director import ModeAwareRoleDirector, normalize_mode
 
 
@@ -27,7 +27,7 @@ class GeneralSuiteDirector:
         template_id: str | None = None,
     ) -> GeneralSuiteRolePlan:
         mode = normalize_mode(variation_mode)
-        count = max(1, min(4, int(requested_image_count or 1)))
+        count = max(1, min(GENERAL_VARIATION_MAX_OUTPUTS, int(requested_image_count or 1)))
         role_plan = self.mode_role_director.build(
             project_id=project_id,
             job_id=job_id,

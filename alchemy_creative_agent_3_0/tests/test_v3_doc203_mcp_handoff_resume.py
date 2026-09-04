@@ -15,6 +15,7 @@ from alchemy_creative_agent_3_0.app.generation_router import (
     McpMaterializationProvider,
     build_provider_generation_request,
 )
+from alchemy_creative_agent_3_0.app.generation_router.providers import McpHandoffProvenance
 from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import (
     McpMaterializationHandoffStore,
     build_body_renderer_execution_receipt,
@@ -855,6 +856,16 @@ def test_doc203_mcp_provider_consumes_explicit_handoff_not_stale_same_operation(
                 "resume_required": True,
             },
         )
+    ).model_copy(
+        update={
+            "mcp_handoff_provenance": McpHandoffProvenance(
+                handoff_id=current["handoff_id"],
+                operation_id=current["operation_id"],
+                prompt_sha256=current["prompt_sha256"],
+                reference_asset_hashes=list(current["reference_asset_hashes"]),
+                rendering_contract_fingerprint=current["rendering_contract_fingerprint"],
+            )
+        }
     )
 
     response = provider.generate(explicit_request)
@@ -864,6 +875,153 @@ def test_doc203_mcp_provider_consumes_explicit_handoff_not_stale_same_operation(
     assert record.metadata["provider_raw_summary"]["mcp_handoff_id"] == current["handoff_id"]
     assert handoffs.get(current["handoff_id"])["status"] == "output_checkpointed"
     assert handoffs.get(stale["handoff_id"])["status"] == "submitted"
+
+
+def test_doc203_mcp_without_internal_provenance_remains_brain_gated(tmp_path: Path) -> None:
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs"),
+        handoff_store=handoffs,
+    )
+    request = _minimal_request(metadata=_request_metadata())
+    request.metadata.pop("llm_brain", None)
+
+    with pytest.raises(ProviderRuntimeError, match="approved canonical Provider prompt") as failure:
+        provider.generate(request)
+
+    assert failure.value.provider_failure_retry["final_failure_code"] == (
+        "remote_creative_brain_prompt_signoff_missing"
+    )
+    assert failure.value.provider_failure_retry["fresh_upstream_requests"] == 0
+
+
+def _doc203_mcp_gate_case(tmp_path: Path, *, submitted: bool):
+    operation_id = "doc203-gate-operation"
+    prompt = "frozen MCP materialization prompt"
+    prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
+    rendering_contract = {
+        "size": "32x48",
+        "quality": "standard",
+        "output_format": "png",
+        "count": 1,
+        "api_operation": "image_generate",
+    }
+    handoffs = McpMaterializationHandoffStore(tmp_path / "handoffs")
+    provider = McpMaterializationProvider(
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs"),
+        handoff_store=handoffs,
+    )
+    handoff = handoffs.ensure_pending(
+        operation_id=operation_id,
+        prompt=prompt,
+        prompt_sha256=prompt_sha256,
+        reference_assets=[],
+        rendering_contract=rendering_contract,
+    )
+    if submitted:
+        handoffs.submit(
+            handoff["handoff_id"],
+            nonce=handoff["nonce"],
+            prompt_sha256=handoff["prompt_sha256"],
+            reference_asset_hashes=handoff["reference_asset_hashes"],
+            artifact_bytes=_png_bytes(),
+        )
+    provenance = McpHandoffProvenance(
+        handoff_id=handoff["handoff_id"],
+        operation_id=handoff["operation_id"],
+        prompt_sha256=handoff["prompt_sha256"],
+        reference_asset_hashes=list(handoff["reference_asset_hashes"]),
+        rendering_contract_fingerprint=handoff["rendering_contract_fingerprint"],
+    )
+    context = {
+        "handoff_id": handoff["handoff_id"],
+        "operation_id": handoff["operation_id"],
+        "canonical_prompt": handoff["canonical_prompt"],
+        "prompt_sha256": handoff["prompt_sha256"],
+        "reference_assets": [],
+        "reference_asset_hashes": list(handoff["reference_asset_hashes"]),
+        "rendering_contract": dict(handoff["rendering_contract"]),
+    }
+    request = _minimal_request(metadata=_request_metadata(operation_id=operation_id)).model_copy(
+        update={"mcp_handoff_provenance": provenance}
+    )
+    app_request = SimpleNamespace(
+        prompt_plan=SimpleNamespace(
+            variables={
+                "generation_prompt": handoff["canonical_prompt"],
+                "provider_prompt_sha256": handoff["prompt_sha256"],
+                "provider_prompt_materialization": "v3_mcp_frozen_handoff_resume",
+                "mcp_materialization_context": context,
+            }
+        )
+    )
+    return provider, request, app_request
+
+
+def test_doc203_mcp_valid_resume_shape_without_provenance_fails_closed(tmp_path: Path) -> None:
+    provider, request, app_request = _doc203_mcp_gate_case(tmp_path, submitted=True)
+
+    assert provider._allows_admitted_non_brain_prompt(  # noqa: SLF001
+        request.model_copy(update={"mcp_handoff_provenance": None}),
+        app_request,
+    ) is False
+
+
+def test_doc203_mcp_pending_handoff_provenance_fails_closed(tmp_path: Path) -> None:
+    provider, request, app_request = _doc203_mcp_gate_case(tmp_path, submitted=False)
+
+    assert provider._allows_admitted_non_brain_prompt(request, app_request) is False  # noqa: SLF001
+
+
+def test_doc203_mcp_tampered_provenance_or_context_fails_closed(tmp_path: Path) -> None:
+    provider, request, app_request = _doc203_mcp_gate_case(tmp_path, submitted=True)
+    tampered_request = request.model_copy(
+        update={
+            "mcp_handoff_provenance": request.mcp_handoff_provenance.model_copy(
+                update={"operation_id": "tampered-operation"}
+            )
+        }
+    )
+    assert provider._allows_admitted_non_brain_prompt(tampered_request, app_request) is False  # noqa: SLF001
+
+    variables = dict(app_request.prompt_plan.variables)
+    tampered_context = dict(variables["mcp_materialization_context"])
+    tampered_context["prompt_sha256"] = "0" * 64
+    variables["mcp_materialization_context"] = tampered_context
+    tampered_app_request = SimpleNamespace(prompt_plan=SimpleNamespace(variables=variables))
+    assert provider._allows_admitted_non_brain_prompt(request, tampered_app_request) is False  # noqa: SLF001
+
+
+def test_doc203_mcp_submitted_provenance_and_context_allow_resume(tmp_path: Path) -> None:
+    provider, request, app_request = _doc203_mcp_gate_case(tmp_path, submitted=True)
+
+    assert provider._allows_admitted_non_brain_prompt(request, app_request) is True  # noqa: SLF001
+
+
+def test_doc203_mcp_handoff_canonical_prompt_tamper_fails_closed(tmp_path: Path) -> None:
+    provider, request, app_request = _doc203_mcp_gate_case(tmp_path, submitted=True)
+    handoff_id = request.mcp_handoff_provenance.handoff_id
+    handoff = provider.handoff_store.get(handoff_id)
+    assert handoff is not None
+    tampered = dict(handoff)
+    tampered["canonical_prompt"] = f"{handoff['canonical_prompt']} tampered"
+    provider.handoff_store._write(  # noqa: SLF001
+        provider.handoff_store._record_path(handoff_id),  # noqa: SLF001
+        tampered,
+    )
+
+    assert provider._allows_admitted_non_brain_prompt(request, app_request) is False  # noqa: SLF001
+
+
+def test_doc203_mcp_context_canonical_prompt_tamper_fails_closed(tmp_path: Path) -> None:
+    provider, request, app_request = _doc203_mcp_gate_case(tmp_path, submitted=True)
+    variables = dict(app_request.prompt_plan.variables)
+    tampered_context = dict(variables["mcp_materialization_context"])
+    tampered_context["canonical_prompt"] = f"{tampered_context['canonical_prompt']} tampered"
+    variables["mcp_materialization_context"] = tampered_context
+    tampered_app_request = SimpleNamespace(prompt_plan=SimpleNamespace(variables=variables))
+
+    assert provider._allows_admitted_non_brain_prompt(request, tampered_app_request) is False  # noqa: SLF001
 
 
 def test_doc218_mcp_pending_handoff_with_stale_contract_is_superseded(tmp_path: Path) -> None:

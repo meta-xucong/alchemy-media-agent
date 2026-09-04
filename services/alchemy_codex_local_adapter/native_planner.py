@@ -68,6 +68,14 @@ from .contracts import (
 )
 from .professional_binding import ProfessionalBindingResolution
 from .provenance import native_plan_provenance
+from .ecommerce_authority import (
+    NATIVE_ECOMMERCE_AUTHORITY_METADATA_KEYS,
+    NativeEcommerceBodyReferenceBinding,
+    NativeEcommerceAuthority,
+    NativeEcommerceAuthorityPreflight,
+    NativeEcommerceAuthorityResolver,
+    is_explicit_test_only_legacy_resolver,
+)
 
 
 _GENERAL_TEMPLATE_SCENARIOS = {"general_template": "general_creative"}
@@ -89,8 +97,10 @@ _PROFESSIONAL_BODY_REQUIREMENTS = {
     "full_body_required",
 }
 _PROFESSIONAL_BODY_VIEW_KINDS = {"front_full", "side_full", "rear_full"}
+_ECOMMERCE_AUTHORITY_KEYS = tuple(NATIVE_ECOMMERCE_AUTHORITY_METADATA_KEYS)
 
 ProfessionalBindingResolver = Callable[..., ProfessionalModeBinding | ProfessionalBindingResolution | None]
+EcommerceAuthorityResolver = NativeEcommerceAuthorityResolver
 
 
 def _float_env(name: str, default: float) -> float:
@@ -218,6 +228,7 @@ class CodexNativeImageGenPlanner:
         self,
         runtime_factory: Callable[[], ScenarioRuntime] | None = None,
         professional_binding_resolver: ProfessionalBindingResolver | None = None,
+        ecommerce_authority_resolver: EcommerceAuthorityResolver | None = None,
         planning_timeout_seconds: float | None = None,
         brain_transport_timeout_seconds: float | None = None,
         planning_process_entrypoint: Callable[[dict[str, Any], Any], None] | None = None,
@@ -225,6 +236,7 @@ class CodexNativeImageGenPlanner:
         self._uses_default_runtime_factory = runtime_factory is None
         self._runtime_factory = runtime_factory or self._default_runtime
         self._professional_binding_resolver = professional_binding_resolver
+        self._ecommerce_authority_resolver = ecommerce_authority_resolver
         self._planning_process_entrypoint = (
             planning_process_entrypoint or _plan_job_process_entrypoint
         )
@@ -432,6 +444,69 @@ class CodexNativeImageGenPlanner:
                     "Professional E-Commerce planning requires the immutable root portrait and at least one reviewed Character Card identity view.",
                 )
 
+        ecommerce_authority_preflight: NativeEcommerceAuthorityPreflight | None = None
+        if professional_product_model:
+            if self._ecommerce_authority_resolver is None:
+                return self._blocked(
+                    "codex_native_imagegen_ecommerce_authority_resolver_unavailable",
+                    "Professional E-Commerce product-model planning requires an explicitly injected server-owned Product API authority resolver.",
+                )
+            try:
+                ecommerce_authority_preflight = self._ecommerce_authority_resolver.preflight(
+                    project_id=request.project_id,
+                    job_id=job_id,
+                    requested_output_count=request.requested_image_count,
+                    server_owned_references=server_owned_identity_references,
+                    server_owned_body_references=server_owned_body_references,
+                )
+            except Exception:
+                ecommerce_authority_preflight = None
+            if not isinstance(ecommerce_authority_preflight, NativeEcommerceAuthorityPreflight):
+                return self._blocked(
+                    "codex_native_imagegen_ecommerce_authority_preflight_invalid",
+                    "The server-owned Product API authority preflight could not be validated.",
+                )
+            if not ecommerce_authority_preflight.matches(
+                project_id=request.project_id,
+                job_id=job_id,
+                requested_output_count=request.requested_image_count,
+            ):
+                return self._blocked(
+                    "codex_native_imagegen_ecommerce_authority_preflight_mismatch",
+                    "The server-owned Product API authority preflight does not match this Professional E-Commerce request.",
+                )
+            legacy_test_resolver = is_explicit_test_only_legacy_resolver(
+                self._ecommerce_authority_resolver,
+                preflight=ecommerce_authority_preflight,
+            )
+            if (
+                not legacy_test_resolver
+                and len(ecommerce_authority_preflight.authorities)
+                != request.requested_image_count
+            ):
+                return self._blocked(
+                    "codex_native_imagegen_ecommerce_authority_preflight_map_invalid",
+                    "The server-owned Product API authority map must be complete before Brain planning.",
+                )
+            if not legacy_test_resolver:
+                if server_owned_identity_references and any(
+                    authority.native_identity_binding is None
+                    for authority in ecommerce_authority_preflight.authorities
+                ):
+                    return self._blocked(
+                        "codex_native_imagegen_ecommerce_authority_preflight_map_invalid",
+                        "The server-owned identity evidence must be bound before Brain planning.",
+                    )
+                if server_owned_body_references and any(
+                    len(authority.native_body_reference_bindings)
+                    != len(server_owned_body_references)
+                    for authority in ecommerce_authority_preflight.authorities
+                ):
+                    return self._blocked(
+                        "codex_native_imagegen_ecommerce_authority_preflight_map_invalid",
+                        "The server-owned body evidence must be bound before Brain planning.",
+                    )
+
         scenario_selection: dict[str, Any] = {
             "scenario_id": scenario_id,
             "parameters": {
@@ -537,6 +612,7 @@ class CodexNativeImageGenPlanner:
             metadata=metadata,
             server_owned_references=server_owned_identity_references,
             server_owned_body_references=server_owned_body_references,
+            ecommerce_authority_preflight=ecommerce_authority_preflight,
         )
         if result.get("status") == "planned_for_codex_native_imagegen":
             identity_strategy = (
@@ -940,6 +1016,7 @@ class CodexNativeImageGenPlanner:
                 "professional_body_proportion_requirement": body_contract["requirement"],
                 "professional_body_view_kind": body_contract.get("body_view_kind"),
                 "professional_body_source_asset_id": selected_body_ref.asset_id if selected_body_ref else None,
+                "server_owned_body_reference": selected_body_ref,
                 "metadata_overrides": metadata_overrides,
             }
         return projection_by_asset_id
@@ -953,7 +1030,19 @@ class CodexNativeImageGenPlanner:
         metadata: dict[str, Any],
         server_owned_references: tuple[NativeReferenceInput, ...] = (),
         server_owned_body_references: tuple[NativeReferenceInput, ...] = (),
+        ecommerce_authority_preflight: NativeEcommerceAuthorityPreflight | None = None,
     ) -> dict[str, Any]:
+        professional_product_model = (
+            isinstance(request, NativeProfessionalImageGenPlanRequest)
+            and request.template_id == "ecommerce_template"
+            and request.professional_reference_stage is None
+        )
+        if professional_product_model and self._ecommerce_authority_resolver is None:
+            return self._blocked(
+                "codex_native_imagegen_ecommerce_authority_resolver_unavailable",
+                "Professional E-Commerce product-model planning requires an explicitly injected server-owned Product API authority resolver.",
+            )
+
         runtime = None if self._uses_default_runtime_factory else self._runtime_factory()
         uploaded_assets = self._uploaded_assets(request, server_owned_references=server_owned_references)
         runtime_metadata = {
@@ -995,6 +1084,22 @@ class CodexNativeImageGenPlanner:
         if result.status != ScenarioRuntimeStatus.PLANNED or result.planning_result is None:
             return self._blocked_from_runtime(result.metadata, "Codex Native ImageGen planning was blocked before any image was created.")
 
+        if professional_product_model and ecommerce_authority_preflight is not None:
+            planned_asset_ids = tuple(
+                str(asset.asset_id) for asset in result.planning_result.series_plan.assets
+            )
+            if (
+                len(planned_asset_ids) != request.requested_image_count
+                or (
+                    ecommerce_authority_preflight.output_asset_ids
+                    and planned_asset_ids != ecommerce_authority_preflight.output_asset_ids
+                )
+            ):
+                return self._blocked(
+                    "codex_native_imagegen_ecommerce_authority_preflight_mismatch",
+                    "The frozen Product API authority output set does not match the planned E-Commerce outputs.",
+                )
+
         ledger = result.metadata.get("resolved_constraint_ledger")
         envelope = result.metadata.get("capability_execution_envelope")
         normalized = result.metadata.get("normalized_v3_job_intent")
@@ -1016,6 +1121,92 @@ class CodexNativeImageGenPlanner:
         deliverables = deliverable_plan.get("deliverables")
         if not isinstance(deliverables, list) or len(deliverables) != request.requested_image_count:
             return self._blocked("codex_native_imagegen_count_mismatch", "V3 did not freeze one template deliverable for every requested output.")
+
+        ecommerce_authority_by_asset_id: dict[str, NativeEcommerceAuthority] | None = None
+        if (
+            isinstance(request, NativeProfessionalImageGenPlanRequest)
+            and request.template_id == "ecommerce_template"
+            and request.professional_reference_stage is None
+            and self._ecommerce_authority_resolver is not None
+        ):
+            ecommerce_authority_by_asset_id = {}
+            try:
+                preflight_authorities = (
+                    ecommerce_authority_preflight.authorities
+                    if ecommerce_authority_preflight is not None
+                    else ()
+                )
+                if not is_explicit_test_only_legacy_resolver(
+                    self._ecommerce_authority_resolver,
+                    preflight=ecommerce_authority_preflight,
+                ):
+                    if len(preflight_authorities) != request.requested_image_count:
+                        raise ValueError("native_ecommerce_authority_preflight_map_invalid")
+                    authority_by_output_index = {
+                        authority.output_index: authority
+                        for authority in preflight_authorities
+                    }
+                    for expected_output_index, asset in enumerate(
+                        result.planning_result.series_plan.assets,
+                        start=1,
+                    ):
+                        output_index = getattr(asset, "priority", None)
+                        if (
+                            isinstance(output_index, bool)
+                            or not isinstance(output_index, int)
+                            or output_index != expected_output_index
+                        ):
+                            raise ValueError("native_ecommerce_authority_output_index_invalid")
+                        authority = authority_by_output_index.get(output_index)
+                        if not isinstance(authority, NativeEcommerceAuthority):
+                            raise ValueError("native_ecommerce_authority_missing")
+                        if (
+                            authority.project_id != request.project_id
+                            or authority.job_id != result.planning_result.creative_job.job_id
+                            or authority.output_index != output_index
+                            or authority.asset_id != str(asset.asset_id)
+                        ):
+                            raise ValueError("native_ecommerce_authority_asset_binding_invalid")
+                        ecommerce_authority_by_asset_id[str(asset.asset_id)] = authority
+                else:
+                    for expected_output_index, asset in enumerate(
+                        result.planning_result.series_plan.assets,
+                        start=1,
+                    ):
+                        output_index = getattr(asset, "priority", None)
+                        if (
+                            isinstance(output_index, bool)
+                            or not isinstance(output_index, int)
+                            or output_index != expected_output_index
+                        ):
+                            raise ValueError("native_ecommerce_authority_output_index_invalid")
+                        authority = self._ecommerce_authority_resolver(
+                            request=request,
+                            planning_result=result.planning_result,
+                            asset_id=str(asset.asset_id),
+                            project_id=request.project_id,
+                            job_id=result.planning_result.creative_job.job_id,
+                            output_index=output_index,
+                            server_owned_references=server_owned_references,
+                            server_owned_body_references=server_owned_body_references,
+                        )
+                        if not isinstance(authority, NativeEcommerceAuthority):
+                            raise ValueError("native_ecommerce_authority_missing")
+                        if (
+                            authority.project_id != request.project_id
+                            or authority.job_id != result.planning_result.creative_job.job_id
+                            or authority.output_index != output_index
+                        ):
+                            raise ValueError("native_ecommerce_authority_binding_invalid")
+                        if authority.asset_id != str(asset.asset_id):
+                            raise ValueError("native_ecommerce_authority_asset_binding_invalid")
+                        authority = authority.with_native_identity_binding(server_owned_references)
+                        ecommerce_authority_by_asset_id[str(asset.asset_id)] = authority
+            except Exception:
+                return self._blocked(
+                    "codex_native_imagegen_ecommerce_authority_invalid",
+                    "The server-owned Product API authority could not be validated for every Professional E-Commerce output.",
+                )
 
         outputs: list[dict[str, Any]] = []
         envelope_id = str(envelope.get("envelope_id") or "").strip()
@@ -1139,10 +1330,58 @@ class CodexNativeImageGenPlanner:
                         materialization_metadata_by_asset_id[asset_id] = dict(
                             projection.get("metadata_overrides") or {}
                         )
+            native_body_reference_binding_by_asset_id: dict[
+                str, NativeEcommerceBodyReferenceBinding
+            ] | None = None
+            if ecommerce_authority_by_asset_id is not None:
+                native_body_reference_binding_by_asset_id = {}
+                try:
+                    for asset_id, authority in ecommerce_authority_by_asset_id.items():
+                        body_projection = professional_body_projection_by_asset_id.get(asset_id)
+                        body_reference = (
+                            body_projection.get("server_owned_body_reference")
+                            if isinstance(body_projection, dict)
+                            else None
+                        )
+                        if body_reference is not None:
+                            if is_explicit_test_only_legacy_resolver(
+                                self._ecommerce_authority_resolver,
+                                preflight=ecommerce_authority_preflight,
+                            ):
+                                native_body_reference_binding_by_asset_id[asset_id] = (
+                                    authority.issue_native_body_reference_binding(body_reference)
+                                )
+                            else:
+                                body_binding = authority.native_body_reference_binding_for_view(
+                                    str(body_reference.body_view_kind or "")
+                                )
+                                if (
+                                    body_binding is None
+                                    or body_binding.source_id != body_reference.asset_id
+                                    or body_binding.file_path
+                                    != str(Path(body_reference.file_path).resolve())
+                                    or body_binding.content_sha256 != body_reference.source_sha256
+                                ):
+                                    raise ValueError("native_ecommerce_body_reference_binding_missing")
+                                native_body_reference_binding_by_asset_id[asset_id] = body_binding
+                except Exception:
+                    return self._blocked(
+                        "codex_native_imagegen_ecommerce_authority_invalid",
+                        "The server-owned Professional body reference could not be bound to the frozen E-Commerce authority.",
+                    )
+            materialization_kwargs = {
+                "metadata_overrides": materialization_metadata,
+                "metadata_overrides_by_asset_id": materialization_metadata_by_asset_id,
+            }
+            if ecommerce_authority_by_asset_id is not None:
+                materialization_kwargs["ecommerce_authority_by_asset_id"] = ecommerce_authority_by_asset_id
+                if native_body_reference_binding_by_asset_id:
+                    materialization_kwargs[
+                        "native_body_reference_binding_by_asset_id"
+                    ] = native_body_reference_binding_by_asset_id
             materializations = self._canonical_materializations(
                 result.planning_result,
-                metadata_overrides=materialization_metadata,
-                metadata_overrides_by_asset_id=materialization_metadata_by_asset_id,
+                **materialization_kwargs,
             )
         except ProviderRuntimeError as exc:
             detail = dict(getattr(exc, "detail", {}) or {})
@@ -2073,6 +2312,10 @@ class CodexNativeImageGenPlanner:
         *,
         metadata_overrides: dict[str, Any] | None = None,
         metadata_overrides_by_asset_id: dict[str, dict[str, Any]] | None = None,
+        ecommerce_authority_by_asset_id: dict[str, NativeEcommerceAuthority] | None = None,
+        native_body_reference_binding_by_asset_id: dict[
+            str, NativeEcommerceBodyReferenceBinding
+        ] | None = None,
     ) -> list[Any]:
         """Materialize every output through the exact Web Provider boundary.
 
@@ -2092,6 +2335,33 @@ class CodexNativeImageGenPlanner:
         materializations: list[Any] = []
         for asset in planning_result.series_plan.assets:
             generation_plan = generation_plans[asset.asset_id]
+            generation_metadata = (
+                generation_plan.metadata
+                if isinstance(getattr(generation_plan, "metadata", None), dict)
+                else {}
+            )
+            authority = (
+                ecommerce_authority_by_asset_id.get(str(asset.asset_id))
+                if isinstance(ecommerce_authority_by_asset_id, dict)
+                else None
+            )
+            native_body_binding = (
+                native_body_reference_binding_by_asset_id.get(str(asset.asset_id))
+                if isinstance(native_body_reference_binding_by_asset_id, dict)
+                else None
+            )
+            requires_ecommerce_authority = bool(
+                generation_metadata.get("professional_product_truth_required")
+            )
+            if (
+                ecommerce_authority_by_asset_id is not None
+                and requires_ecommerce_authority
+                and authority is None
+            ):
+                raise ValueError("native_ecommerce_authority_missing")
+            if authority is not None and authority.asset_id != str(asset.asset_id):
+                raise ValueError("native_ecommerce_authority_asset_binding_invalid")
+            authority_metadata = authority.provider_metadata() if authority is not None else {}
             asset_metadata_overrides = (
                 dict(metadata_overrides_by_asset_id.get(asset.asset_id) or {})
                 if isinstance(metadata_overrides_by_asset_id, dict)
@@ -2101,16 +2371,50 @@ class CodexNativeImageGenPlanner:
                 **(metadata_overrides or {}),
                 **asset_metadata_overrides,
             }
-            if combined_metadata_overrides:
+            if ecommerce_authority_by_asset_id is not None:
+                if any(
+                    key in combined_metadata_overrides
+                    and combined_metadata_overrides[key] is not None
+                    and (
+                        key not in authority_metadata
+                        or combined_metadata_overrides[key] != authority_metadata[key]
+                    )
+                    for key in _ECOMMERCE_AUTHORITY_KEYS
+                ):
+                    raise ValueError("frozen_professional_authority_conflict")
+                if any(
+                    key in generation_metadata
+                    and generation_metadata[key] is not None
+                    and (
+                        key not in authority_metadata
+                        or generation_metadata[key] != authority_metadata[key]
+                    )
+                    and requires_ecommerce_authority
+                    for key in _ECOMMERCE_AUTHORITY_KEYS
+                ):
+                    raise ValueError("frozen_professional_authority_conflict")
+                non_authority_overrides = {
+                    key: value
+                    for key, value in combined_metadata_overrides.items()
+                    if key not in NATIVE_ECOMMERCE_AUTHORITY_METADATA_KEYS
+                }
+                base_generation_metadata = {
+                    key: value
+                    for key, value in generation_metadata.items()
+                    if key not in NATIVE_ECOMMERCE_AUTHORITY_METADATA_KEYS
+                }
+            else:
+                # Compatibility mode is still governed by the existing
+                # Provider admission gate; preserve its server-issued fields.
+                non_authority_overrides = combined_metadata_overrides
+                base_generation_metadata = generation_metadata
+            if non_authority_overrides or authority_metadata:
                 generation_plan = generation_plan.model_copy(
                     update={
                         "metadata": {
-                            **(
-                                generation_plan.metadata
-                                if isinstance(generation_plan.metadata, dict)
-                                else {}
-                            ),
-                            **combined_metadata_overrides,
+                            **base_generation_metadata,
+                            **authority_metadata,
+                            **non_authority_overrides,
                         }
                     }
                 )
@@ -2121,15 +2425,20 @@ class CodexNativeImageGenPlanner:
                 condition_plan=conditions[asset.asset_id],
                 generation_plan=generation_plan,
                 job_id=planning_result.creative_job.job_id,
+                native_ecommerce_identity_binding=(
+                    authority.native_identity_binding if authority is not None else None
+                ),
+                native_ecommerce_body_reference_binding=native_body_binding,
             )
-            if combined_metadata_overrides:
+            if authority_metadata or combined_metadata_overrides:
                 request = request.model_copy(
                     update={
                         "metadata": {
                             **request.metadata,
+                            **authority_metadata,
                             **{
                                 key: value
-                                for key, value in combined_metadata_overrides.items()
+                                for key, value in non_authority_overrides.items()
                                 if key in {"reference_assets", "uploaded_assets"}
                             },
                         }

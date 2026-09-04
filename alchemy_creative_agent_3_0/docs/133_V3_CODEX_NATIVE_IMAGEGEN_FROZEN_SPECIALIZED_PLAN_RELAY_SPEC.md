@@ -79,6 +79,14 @@ ordinary E-Commerce ScenarioRuntime request, and requires a valid remote Brain
 result with `llm_used=true`, `fallback_used=false`, and exactly the requested
 number of whole-image directions.
 
+When Professional E-Commerce product truth is required, the embedding host
+must explicitly inject a server-owned authority resolver. The resolver returns
+the existing typed Doc263 admission, per-output projection, and Doc269 physical
+renderer plan; the public MCP payload cannot provide or construct these
+records. The relay validates their project/Job/output binding, digests, file
+hashes, order, and capacity before projecting them. Missing or invalid
+authority blocks; General and Photography never use this resolver.
+
 The relay projects precisely N canonical prompts and N reference-input
 contracts. It never returns a static suite, seller-copy default, recipe,
 semantic slot, camera/crop/scene instruction, or local retry policy. Existing

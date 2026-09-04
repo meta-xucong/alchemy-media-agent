@@ -58,6 +58,7 @@ from ..scenario_packs.ecommerce import (
     validate_professional_ecommerce_pose_contract_payload,
 )
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS, TemplateCapabilityPolicy, general_capability_policy
+from ..shared_capabilities.visual_cluster.contracts import VariationExecutionContract
 from ..visual_assets.body_silhouette_source_standard import (
     body_silhouette_mcp_materialization_prompt_findings,
 )
@@ -484,6 +485,15 @@ class V3LLMBrainAdapter:
         )
         if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
             raise BrainPromptContractInvalid("Remote Brain returned an invalid canonical provider-prompt contract.")
+        variation_execution_contract = _general_variation_execution_contract_for_request(request)
+        if variation_execution_contract is not None and not _matches_variation_execution_receipts(
+            prompts_raw,
+            expected_count=expected_count,
+            expected_contract=variation_execution_contract,
+        ):
+            raise BrainPromptContractInvalid(
+                "Remote Brain did not return the required General variation execution receipts."
+            )
         if request.metadata.get("require_lossless_user_direction") is True:
             if any(
                 not isinstance(item.get("user_direction_integrity"), dict)
@@ -617,6 +627,13 @@ class V3LLMBrainAdapter:
                 "remote_canonical_provider_prompts_received": True,
                 "canonical_provider_prompt_provider": self.provider.provider,
                 "canonical_provider_prompt_model": self.provider.model,
+                "variation_execution_contract_required": variation_execution_contract is not None,
+                "variation_execution_contract_digest": (
+                    variation_execution_contract.contract_digest
+                    if variation_execution_contract is not None
+                    else None
+                ),
+                "variation_execution_receipts_signed": variation_execution_contract is not None,
                 **({"remote_brain_transport": transport_receipt} if transport_receipt else {}),
                 "human_realism_semantic_preflight_required": semantic_preflight_required,
                 "human_realism_semantic_preflight_signed": semantic_preflight_required,
@@ -786,6 +803,16 @@ class V3LLMBrainAdapter:
             "provider_native_text_requirements": provider_native_text_requirements,
             "specialized_scenario_plan_present": specialized_plan_present,
         }
+        if (
+            scenario_id == "general_creative"
+            and template_id == "general_template"
+            and requested_count > 1
+            and metadata.get("variation_execution_contract_enforced") is True
+        ):
+            request_metadata["variation_execution_contract_enforced"] = True
+            raw_binding = metadata.get("variation_execution_contract_binding")
+            if isinstance(raw_binding, dict):
+                request_metadata["variation_execution_contract_binding"] = dict(raw_binding)
         if metadata.get("professional_product_truth_required") is not None:
             request_metadata["professional_product_truth_required"] = bool(
                 metadata.get("professional_product_truth_required")
@@ -1858,6 +1885,99 @@ def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_c
             return False
         indexes.append(index)
     return indexes == list(range(1, expected_count + 1))
+
+
+def _general_variation_execution_contract_for_request(
+    request: BrainRunRequest,
+) -> VariationExecutionContract | None:
+    """Validate the same frozen General contract before accepting receipts."""
+
+    if (
+        request.scenario_id != GENERAL_SCENARIO_ID
+        or request.template_id != GENERAL_TEMPLATE_ID
+        or request.requested_image_count <= 1
+    ):
+        return None
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    context = metadata.get("canonical_prompt_context")
+    context = context if isinstance(context, dict) else {}
+    raw_contract = context.get("variation_execution_contract")
+    if raw_contract is None:
+        if context.get("variation_execution_contract_required") is True:
+            raise BrainPromptContractInvalid(
+                "General variation execution contract is missing from the frozen context."
+            )
+        return None
+    try:
+        contract = VariationExecutionContract.model_validate(raw_contract)
+    except Exception as exc:
+        raise BrainPromptContractInvalid("General variation execution contract is invalid.") from exc
+    if (
+        not contract.contract_digest
+        or contract.contract_digest != contract.computed_digest()
+        or contract.requested_image_count != request.requested_image_count
+        or [item.output_index for item in contract.outputs]
+        != list(range(1, request.requested_image_count + 1))
+    ):
+        raise BrainPromptContractInvalid(
+            "General variation execution contract binding does not match the frozen request."
+        )
+    frozen_binding = context.get("frozen_binding")
+    frozen_contract_binding = (
+        frozen_binding.get("variation_execution_contract")
+        if isinstance(frozen_binding, dict)
+        else None
+    )
+    expected_binding = {
+        "contract_version": contract.contract_version,
+        "contract_digest": contract.contract_digest,
+    }
+    if context.get("variation_execution_contract_required") is True and not isinstance(
+        frozen_contract_binding,
+        dict,
+    ):
+        raise BrainPromptContractInvalid(
+            "General variation execution contract frozen binding is missing."
+        )
+    if frozen_contract_binding is not None and frozen_contract_binding != expected_binding:
+        raise BrainPromptContractInvalid(
+            "General variation execution contract frozen binding does not match."
+        )
+    return contract
+
+
+def _matches_variation_execution_receipts(
+    candidate: Any,
+    *,
+    expected_count: int,
+    expected_contract: VariationExecutionContract,
+) -> bool:
+    """Require one exact Brain receipt for every frozen General output."""
+
+    if not isinstance(candidate, list) or len(candidate) != expected_count:
+        return False
+    expected_keys = {
+        "contract_version",
+        "contract_digest",
+        "output_index",
+        "status",
+        "owner",
+    }
+    for expected_index, item in enumerate(candidate, start=1):
+        if not isinstance(item, dict):
+            return False
+        receipt = item.get("variation_execution_receipt")
+        if not isinstance(receipt, dict) or set(receipt) != expected_keys:
+            return False
+        if (
+            receipt.get("contract_version") != expected_contract.contract_version
+            or receipt.get("contract_digest") != expected_contract.contract_digest
+            or receipt.get("output_index") != expected_index
+            or receipt.get("status") not in {"approved", "rewritten"}
+            or receipt.get("owner") != "remote_v3_llm_brain"
+        ):
+            return False
+    return True
 
 
 def _requires_human_semantic_preflight(request: BrainRunRequest) -> bool:

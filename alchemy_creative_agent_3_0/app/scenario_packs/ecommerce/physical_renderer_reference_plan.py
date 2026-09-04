@@ -166,6 +166,110 @@ class PhysicalRendererReferencePlan(BaseModel):
         return super().model_dump(**kwargs)
 
 
+class NativeEcommerceIdentityBindingEntry(BaseModel):
+    """One server-owned People evidence item issued to the Native host."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source_id: str
+    file_path: str
+    content_sha256: str
+    role: Literal["face_reference"] = "face_reference"
+    channel: Literal["people_identity"] = "people_identity"
+    source_type: Literal["visual_asset_library"] = "visual_asset_library"
+
+    def model_post_init(self, __context: Any) -> None:
+        if not _clean(self.source_id) or not _clean(self.file_path) or not _SHA256.fullmatch(self.content_sha256):
+            raise ValueError("native_ecommerce_identity_binding_entry_invalid")
+
+
+class NativeEcommerceIdentityBinding(BaseModel):
+    """Internal, typed Native authority carrier for a single output."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["native_ecommerce_identity_binding_v1"] = (
+        "native_ecommerce_identity_binding_v1"
+    )
+    authority: Literal["native_server_owned_people_binding"] = (
+        "native_server_owned_people_binding"
+    )
+    project_id: str
+    job_id: str
+    asset_id: str
+    output_index: int = Field(ge=1)
+    plan_digest: str
+    maximum_reference_images: int = Field(ge=1)
+    entries: tuple[NativeEcommerceIdentityBindingEntry, ...]
+
+    def model_post_init(self, __context: Any) -> None:
+        if (
+            not _clean(self.project_id)
+            or not _clean(self.job_id)
+            or not _clean(self.asset_id)
+            or not _SHA256.fullmatch(self.plan_digest)
+            or not self.entries
+        ):
+            raise ValueError("native_ecommerce_identity_binding_invalid")
+        source_ids = tuple(item.source_id for item in self.entries)
+        paths = tuple(item.file_path for item in self.entries)
+        if len(source_ids) != len(set(source_ids)) or len(paths) != len(set(paths)):
+            raise ValueError("native_ecommerce_identity_binding_duplicate")
+        if len(self.entries) > self.maximum_reference_images:
+            raise ValueError("native_ecommerce_identity_binding_capacity_invalid")
+
+
+class NativeEcommerceBodyReferenceBinding(BaseModel):
+    """Internal server-owned Body Silhouette input for Native E-Commerce.
+
+    Body evidence is selected by the Professional binding resolver rather than
+    by Product API's product/identity plan.  Keeping that auxiliary input in a
+    separate typed carrier prevents the Native adapter from smuggling it
+    through mutable public metadata while leaving the Doc269 plan authoritative
+    for product truth and identity evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["native_ecommerce_body_reference_binding_v1"] = (
+        "native_ecommerce_body_reference_binding_v1"
+    )
+    authority: Literal["native_server_owned_body_binding"] = (
+        "native_server_owned_body_binding"
+    )
+    project_id: str
+    job_id: str
+    asset_id: str
+    output_index: int = Field(ge=1)
+    plan_digest: str
+    maximum_reference_images: int = Field(ge=1)
+    source_id: str
+    file_path: str
+    content_sha256: str
+    role: Literal["body_proportion_reference"] = "body_proportion_reference"
+    channel: Literal["body_proportion_reference"] = "body_proportion_reference"
+    source_type: Literal["visual_asset_library"] = "visual_asset_library"
+    body_view_kind: Literal["front_full", "side_full", "rear_full"]
+
+    def model_post_init(self, __context: Any) -> None:
+        if (
+            not all(
+                _clean(value)
+                for value in (
+                    self.project_id,
+                    self.job_id,
+                    self.asset_id,
+                    self.source_id,
+                    self.file_path,
+                )
+            )
+            or not _SHA256.fullmatch(self.plan_digest)
+            or not _SHA256.fullmatch(self.content_sha256)
+            or self.maximum_reference_images < 1
+        ):
+            raise ValueError("native_ecommerce_body_reference_binding_invalid")
+
+
 def _as_mapping(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")

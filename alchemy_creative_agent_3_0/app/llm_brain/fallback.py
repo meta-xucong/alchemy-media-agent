@@ -23,6 +23,7 @@ from ..creative_core.prompt_language import (
 )
 from ..creative_core.rules import stable_id
 from ..shared_capabilities.activation import build_task_profile_and_intent
+from ..shared_capabilities.visual_cluster.contracts import GENERAL_VARIATION_MAX_OUTPUTS
 
 
 SINGLE_FRAME_HARD_CONSTRAINT = (
@@ -36,6 +37,21 @@ SINGLE_FRAME_NEGATIVE_RULES = [
     "avoid storyboard panels",
     "avoid before-after comparison layouts",
     "avoid grids of separate images inside one output",
+]
+
+_GENERAL_VARIATION_FALLBACK_EXTENSIONS = [
+    "alternate three-quarter viewpoint with the same visual direction",
+    "side-oriented viewpoint with the same subject treatment",
+    "over-shoulder or rear-context viewpoint when suitable",
+    "closer detail framing while preserving the complete subject",
+    "wider environmental framing with the same visual hierarchy",
+    "slightly elevated camera angle with natural proportions",
+    "slightly lower camera angle with natural proportions",
+    "quiet candid moment within the requested scene",
+    "natural movement beat without changing the subject or mood",
+    "balanced negative-space composition for flexible use",
+    "alternate depth-of-field treatment with realistic lens behavior",
+    "supporting scene-context composition with the same style",
 ]
 
 
@@ -828,7 +844,7 @@ def _shot_plan(
             if isinstance(role, dict)
         ]
         if planned:
-            return planned[: max(1, min(4, count))]
+            return planned[: max(1, min(GENERAL_VARIATION_MAX_OUTPUTS, count))]
     if variation_mode == "selection_candidates":
         base = [
             "near-identical candidate with the strongest subject treatment",
@@ -861,7 +877,8 @@ def _shot_plan(
         base[1] = "same-style variation using selected project references"
     if "套图" in user_input:
         base[2] = "series companion image that expands the same story"
-    return base[: max(1, min(4, count))]
+    limit = max(1, min(GENERAL_VARIATION_MAX_OUTPUTS, count))
+    return (base + _GENERAL_VARIATION_FALLBACK_EXTENSIONS)[:limit]
 
 
 def _doc58_cluster_plans(visual_cluster: dict) -> dict[str, Any]:
@@ -897,7 +914,10 @@ def _suite_role_prompt_addons(suite_role_plan: dict, count: int) -> list[str]:
     if not isinstance(roles, list):
         return []
     additions: list[str] = []
-    for index, role in enumerate(roles[: max(1, min(4, count))], 1):
+    for index, role in enumerate(
+        roles[: max(1, min(GENERAL_VARIATION_MAX_OUTPUTS, count))],
+        1,
+    ):
         if not isinstance(role, dict):
             continue
         label = clean_text(role.get("label"), 80)

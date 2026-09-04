@@ -10,6 +10,13 @@ from .contracts import (
     ModeExecutionPolicy,
     ModeRoleRecipe,
     RoleSpecificGenerationPlan,
+    VariationAxis,
+    VariationAvoid,
+    VariationExecutionContract,
+    VariationExecutionOutput,
+    VariationKeep,
+    VariationPurpose,
+    GENERAL_VARIATION_MAX_OUTPUTS,
 )
 
 
@@ -19,6 +26,113 @@ ALLOWED_MODES = {
     "creative_exploration",
     "format_layout_adaptation",
 }
+
+_NEUTRAL_VARIATION_AXIS_MAP: dict[str, VariationAxis] = {
+    "best frame": "presentation",
+    "micro crop": "framing",
+    "expression": "expression",
+    "gaze": "attention",
+    "pose": "pose",
+    "hand placement": "gesture",
+    "crop": "framing",
+    "negative space": "layout",
+    "camera distance": "framing",
+    "subject scale": "scale",
+    "cover-safe negative space": "layout",
+    "hair or styling detail": "styling",
+    "head angle": "viewpoint",
+    "body turn": "pose",
+    "gaze direction": "attention",
+    "shoulder line": "pose",
+    "scene depth": "depth",
+    "body scale": "scale",
+    "environment interaction": "context",
+    "scale": "scale",
+    "placement": "placement",
+    "scene": "context",
+    "surface": "material",
+    "props": "context",
+    "texture": "material",
+    "material": "material",
+    "detail": "detail",
+    "angle": "viewpoint",
+    "mood": "mood",
+    "palette": "palette",
+    "styling": "styling",
+    "art direction": "concept",
+    "light": "mood",
+    "depth": "depth",
+    "shape": "composition",
+    "vertical crop": "layout",
+    "top/bottom space": "layout",
+    "square crop": "layout",
+    "balanced subject": "composition",
+    "wide crop": "layout",
+    "side negative space": "placement",
+    "tight crop": "framing",
+}
+
+_NEUTRAL_MUST_KEEP_MAP = {
+    "same recognizable person direction": "subject_identity",
+    "same body identity direction": "subject_identity",
+    "prompt-directed hair, wardrobe, and lighting unless those channels are explicitly locked": "user_intent",
+    "same product shape, material, color, proportions, and label position": "subject_identity",
+    "same product identity": "subject_identity",
+    "same lighting language": "style_direction",
+    "same core subject direction": "subject_identity",
+    "same style language": "style_direction",
+    "same lighting and palette family": "style_direction",
+}
+
+_NEUTRAL_AVOID_DRIFT_MAP = {
+    "do not create a collage": "collage_layout",
+    "do not duplicate the exact same still": "duplicate_still",
+}
+
+_NEUTRAL_PURPOSE_MAP: dict[str, VariationPurpose] = {
+    "candidate_best_frame": "primary_presentation",
+    "cover_hero": "primary_presentation",
+    "hero_subject": "primary_presentation",
+    "candidate_expression_shift": "alternate_view",
+    "candidate_pose_shift": "alternate_view",
+    "subject_focus": "detail_focus",
+    "detail_focus": "detail_focus",
+    "detail_or_material_closeup": "detail_focus",
+    "candidate_crop_shift": "format_adaptation",
+    "alternate_angle": "alternate_view",
+    "side_or_three_quarter_angle": "alternate_view",
+    "wide_context": "context_expansion",
+    "wide_scene_or_context": "context_expansion",
+    "context_scene": "context_expansion",
+    "concept_clean_bright": "creative_direction",
+    "concept_editorial": "creative_direction",
+    "concept_cinematic": "creative_direction",
+    "concept_minimal_or_graphic": "creative_direction",
+    "vertical_cover": "format_adaptation",
+    "square_feed": "format_adaptation",
+    "horizontal_banner": "format_adaptation",
+    "tight_crop_or_detail": "format_adaptation",
+    "layout_safe_cover": "format_adaptation",
+}
+
+_GENERAL_VARIATION_EXTENSION_AXES = (
+    "angle",
+    "body turn",
+    "gaze direction",
+    "scene depth",
+    "placement",
+    "detail",
+    "material",
+    "styling",
+    "mood",
+    "palette",
+    "art direction",
+    "shape",
+    "gesture",
+    "negative space",
+    "camera distance",
+    "subject scale",
+)
 
 
 class ModeAwareRoleDirector:
@@ -39,13 +153,16 @@ class ModeAwareRoleDirector:
     ) -> RoleSpecificGenerationPlan:
         normalized_mode = normalize_mode(mode)
         normalized_subject = _normalize_subject_type(subject_type)
-        count = max(1, min(4, int(requested_image_count or 1)))
+        count = max(1, min(GENERAL_VARIATION_MAX_OUTPUTS, int(requested_image_count or 1)))
         policy = self._policy(normalized_mode, has_identity_anchor=has_identity_anchor)
-        raw_recipes = self._recipe_dicts(
-            mode=normalized_mode,
-            subject_type=normalized_subject,
-            scenario_id=scenario_id,
-        )[:count]
+        raw_recipes = _expanded_recipe_dicts(
+            self._recipe_dicts(
+                mode=normalized_mode,
+                subject_type=normalized_subject,
+                scenario_id=scenario_id,
+            ),
+            count,
+        )
         # Doc128: the General mode director owns only neutral role structure.
         # Historical casebook overlays remain readable in old records but must
         # not add static camera/light/prompt atoms to a new job.
@@ -100,6 +217,62 @@ class ModeAwareRoleDirector:
                 "mode_role_director": True,
             },
         )
+
+    def build_variation_execution_contract(
+        self,
+        *,
+        role_plan: RoleSpecificGenerationPlan,
+        scenario_id: str | None,
+        template_id: str | None,
+    ) -> VariationExecutionContract | None:
+        """Project only neutral variation semantics for a General Brain run.
+
+        The source plan remains useful for local history and compatibility, but
+        its role recipe, camera, crop, and prompt fields must not cross the
+        Brain boundary.  This projection intentionally runs before later
+        compatibility layers add local prompt guidance to the role plan.
+        """
+
+        if str(scenario_id or "").strip() != "general_creative":
+            return None
+        if str(template_id or "").strip() != "general_template":
+            return None
+        requested_count = max(
+            1,
+            min(GENERAL_VARIATION_MAX_OUTPUTS, int(role_plan.requested_image_count or 1)),
+        )
+        if requested_count <= 1 or len(role_plan.role_recipes) < requested_count:
+            return None
+
+        outputs: list[VariationExecutionOutput] = []
+        for recipe in role_plan.role_recipes[:requested_count]:
+            axes = _neutral_variation_axes(recipe.variation_axes)
+            purpose = _variation_purpose(recipe.role_key, recipe.metadata, axes)
+            must_keep = _neutral_semantic_rules(recipe.must_keep_rules, mapping=_NEUTRAL_MUST_KEEP_MAP, limit=6)
+            avoid_drift = _neutral_semantic_rules(recipe.must_not_rules, mapping=_NEUTRAL_AVOID_DRIFT_MAP, limit=8)
+            if not (purpose or axes or must_keep or avoid_drift):
+                return None
+            outputs.append(
+                VariationExecutionOutput(
+                    output_index=recipe.index,
+                    output_purpose=purpose,
+                    variation_axes=axes,
+                    must_keep=must_keep,
+                    avoid_drift=avoid_drift,
+                )
+            )
+        try:
+            contract = VariationExecutionContract(
+                contract_version="v3_general_variation_execution_v1",
+                mode=role_plan.mode,
+                requested_image_count=requested_count,
+                preserve_subject=True,
+                preserve_style=True,
+                outputs=outputs,
+            )
+            return contract.bind_digest()
+        except ValueError:
+            return None
 
     def review(
         self,
@@ -294,6 +467,76 @@ class ModeAwareRoleDirector:
             ),
             "reason_codes": _dedupe(issue_codes),
         }
+
+
+def _variation_purpose(
+    role_key: str,
+    metadata: dict[str, Any] | None,
+    axes: list[VariationAxis],
+) -> VariationPurpose:
+    purpose = _NEUTRAL_PURPOSE_MAP.get(role_key)
+    if purpose is None and isinstance(metadata, dict):
+        purpose = _NEUTRAL_PURPOSE_MAP.get(str(metadata.get("variation_base_role_key") or ""))
+    if purpose is None:
+        purpose = "format_adaptation" if "layout" in axes else "alternate_view"
+    return purpose
+
+
+def _variation_signature(recipe: dict[str, Any]) -> tuple[VariationPurpose, tuple[VariationAxis, ...]]:
+    axes = _neutral_variation_axes(recipe.get("variation_axes"))
+    return _variation_purpose(
+        str(recipe.get("role_key") or ""),
+        recipe.get("metadata") if isinstance(recipe.get("metadata"), dict) else None,
+        axes,
+    ), tuple(axes)
+
+
+def _expanded_recipe_dicts(
+    recipes: list[dict[str, Any]],
+    requested_count: int,
+) -> list[dict[str, Any]]:
+    """Extend the neutral role catalog without adding scenario-specific rules.
+
+    The historical catalog has four canonical duties.  Larger batches keep
+    those duties as a repeating base while adding only orthogonal neutral
+    variation axes, so the Brain still owns the actual camera, pose, scene,
+    and rendering decisions.
+    """
+
+    if requested_count <= 0 or not recipes:
+        return []
+    base = [dict(recipe) for recipe in recipes]
+    expanded = [dict(recipe) for recipe in base[:requested_count]]
+    if len(expanded) >= requested_count:
+        return expanded
+    signatures = {_variation_signature(recipe) for recipe in expanded}
+    for index in range(len(expanded) + 1, requested_count + 1):
+        source = dict(base[(index - 1) % len(base)])
+        source_role_key = str(source.get("role_key") or "variation")
+        base_axes = _string_list(source.get("variation_axes"))
+        chosen: dict[str, Any] | None = None
+        for first_axis in _GENERAL_VARIATION_EXTENSION_AXES:
+            for second_axis in (None, *_GENERAL_VARIATION_EXTENSION_AXES):
+                additions = [first_axis] if second_axis is None else [first_axis, second_axis]
+                candidate = dict(source)
+                candidate["role_key"] = f"{source_role_key}_variant_{index}"
+                candidate["label"] = f"{source.get('label') or 'Image'} variation {index}"
+                candidate["variation_axes"] = list(dict.fromkeys([*base_axes, *additions]))
+                candidate["metadata"] = {
+                    **(dict(source.get("metadata") or {})),
+                    "variation_base_role_key": source_role_key,
+                }
+                signature = _variation_signature(candidate)
+                if signature not in signatures and signature[1]:
+                    chosen = candidate
+                    signatures.add(signature)
+                    break
+            if chosen is not None:
+                break
+        if chosen is None:
+            raise ValueError("general variation role catalog cannot cover requested image count")
+        expanded.append(chosen)
+    return expanded
 
 
 def normalize_mode(mode: str | None) -> str:
@@ -630,3 +873,24 @@ def _dedupe(values: Any) -> list[str]:
             seen.add(text)
             result.append(text)
     return result
+
+
+def _neutral_semantic_rules(
+    values: Any,
+    *,
+    mapping: dict[str, str],
+    limit: int,
+) -> list[VariationKeep | VariationAvoid]:
+    """Map legacy evidence to closed neutral semantics without copying it."""
+
+    projected = [mapping.get(" ".join(value.lower().split()), "") for value in _string_list(values)]
+    return _dedupe(projected)[:limit]
+
+
+def _neutral_variation_axes(values: Any) -> list[VariationAxis]:
+    axes: list[VariationAxis] = []
+    for value in _string_list(values):
+        axis = _NEUTRAL_VARIATION_AXIS_MAP.get(" ".join(value.lower().split()))
+        if axis and axis not in axes:
+            axes.append(axis)
+    return axes[:6]

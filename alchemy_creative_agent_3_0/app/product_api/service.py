@@ -32,7 +32,11 @@ from ..creative_core.doc281_output_plan_binding import (
     issue_doc281_output_plan_binding,
 )
 from ..generation_router import GenerationRouter, ProductionImageGenerationProvider, safe_runtime_execution_budget
-from ..generation_router.providers import McpMaterializationProvider, build_provider_generation_request
+from ..generation_router.providers import (
+    McpHandoffProvenance,
+    McpMaterializationProvider,
+    build_provider_generation_request,
+)
 from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
 from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
@@ -95,7 +99,7 @@ from ..shared_capabilities.visual_cluster import (
     VisionOutputInspector,
     reference_channel_retry_patch,
 )
-from ..shared_capabilities.visual_cluster.contracts import ReviewEvidencePlan
+from ..shared_capabilities.visual_cluster.contracts import ReviewEvidencePlan, VariationExecutionContract
 from ..shared_capabilities.visual_cluster.human_photorealism import (
     HUMAN_REALISM_REVIEW_DIMENSIONS,
     normalize_human_realism_issue_code,
@@ -616,6 +620,203 @@ def _failed_artifact_expired(record: "ProductJobRecord", *, now: datetime | None
     return current >= expires_at
 
 
+_ECOMMERCE_AUTHORITY_SNAPSHOT_SCHEMA = "v3_product_api_ecommerce_authority_snapshot_v1"
+
+
+def _ecommerce_authority_snapshot_digest(
+    *,
+    schema_version: str,
+    project_id: str,
+    job_id: str,
+    requested_output_count: int,
+    asset_ids: tuple[str, ...],
+    admission: ProductTruthAdmission,
+    projections: tuple[PhysicalProductReferenceProjection, ...],
+    physical_plans: tuple[PhysicalRendererReferencePlan, ...],
+) -> str:
+    payload = {
+        "schema_version": schema_version,
+        "project_id": project_id,
+        "job_id": job_id,
+        "requested_output_count": requested_output_count,
+        "asset_ids": list(asset_ids),
+        "admission": admission.model_dump(),
+        "projections": [item.model_dump() for item in projections],
+        "physical_plans": [item.model_dump(mode="json") for item in physical_plans],
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ProductApiEcommerceAuthoritySnapshot:
+    """Typed Product API authority retained outside request/result metadata.
+
+    The request and planning metadata still carry compatibility projections for
+    older readers.  Native authority consumers use this snapshot instead, so a
+    mutable metadata copy cannot become the source of Product Truth.
+    """
+
+    schema_version: str
+    project_id: str
+    job_id: str
+    requested_output_count: int
+    asset_ids: tuple[str, ...]
+    admission: ProductTruthAdmission
+    projections: tuple[PhysicalProductReferenceProjection, ...]
+    physical_plans: tuple[PhysicalRendererReferencePlan, ...]
+    authority_digest: str
+
+    @classmethod
+    def from_records(
+        cls,
+        *,
+        project_id: str,
+        job_id: str,
+        asset_ids: tuple[str, ...],
+        admission: ProductTruthAdmission,
+        projections: tuple[PhysicalProductReferenceProjection, ...],
+        physical_plans: tuple[PhysicalRendererReferencePlan, ...],
+    ) -> "ProductApiEcommerceAuthoritySnapshot":
+        requested_output_count = len(asset_ids)
+        schema_version = _ECOMMERCE_AUTHORITY_SNAPSHOT_SCHEMA
+        authority_digest = _ecommerce_authority_snapshot_digest(
+            schema_version=schema_version,
+            project_id=project_id,
+            job_id=job_id,
+            requested_output_count=requested_output_count,
+            asset_ids=asset_ids,
+            admission=admission,
+            projections=projections,
+            physical_plans=physical_plans,
+        )
+        return cls(
+            schema_version=schema_version,
+            project_id=project_id,
+            job_id=job_id,
+            requested_output_count=requested_output_count,
+            asset_ids=asset_ids,
+            admission=admission,
+            projections=projections,
+            physical_plans=physical_plans,
+            authority_digest=authority_digest,
+        )
+
+    @classmethod
+    def from_payload(cls, value: Any) -> "ProductApiEcommerceAuthoritySnapshot":
+        expected_keys = {
+            "schema_version",
+            "project_id",
+            "job_id",
+            "requested_output_count",
+            "asset_ids",
+            "admission",
+            "projections",
+            "physical_plans",
+            "authority_digest",
+        }
+        if not isinstance(value, dict) or set(value) != expected_keys:
+            raise ValueError("product_api_ecommerce_authority_snapshot_shape_invalid")
+        asset_ids = value["asset_ids"]
+        raw_projections = value["projections"]
+        raw_physical_plans = value["physical_plans"]
+        if (
+            not isinstance(asset_ids, list)
+            or any(not isinstance(item, str) for item in asset_ids)
+            or not isinstance(raw_projections, list)
+            or not isinstance(raw_physical_plans, list)
+        ):
+            raise ValueError("product_api_ecommerce_authority_snapshot_shape_invalid")
+        admission = ProductTruthAdmission.from_mapping(value["admission"])
+        projections = tuple(
+            PhysicalProductReferenceProjection.from_mapping(item)
+            for item in raw_projections
+        )
+        physical_plans = tuple(
+            PhysicalRendererReferencePlan.model_validate(item)
+            for item in raw_physical_plans
+        )
+        return cls(
+            schema_version=value["schema_version"],
+            project_id=value["project_id"],
+            job_id=value["job_id"],
+            requested_output_count=value["requested_output_count"],
+            asset_ids=tuple(asset_ids),
+            admission=admission,
+            projections=projections,
+            physical_plans=physical_plans,
+            authority_digest=value["authority_digest"],
+        )
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema_version != _ECOMMERCE_AUTHORITY_SNAPSHOT_SCHEMA
+            or not isinstance(self.project_id, str)
+            or not self.project_id.strip()
+            or not isinstance(self.job_id, str)
+            or not self.job_id.strip()
+            or not isinstance(self.requested_output_count, int)
+            or isinstance(self.requested_output_count, bool)
+            or not 1 <= self.requested_output_count <= 16
+            or not isinstance(self.asset_ids, tuple)
+            or len(self.asset_ids) != self.requested_output_count
+            or len(self.asset_ids) != len(set(self.asset_ids))
+            or any(not isinstance(item, str) or not item.strip() for item in self.asset_ids)
+            or not isinstance(self.admission, ProductTruthAdmission)
+            or not isinstance(self.projections, tuple)
+            or not isinstance(self.physical_plans, tuple)
+            or len(self.projections) != self.requested_output_count
+            or len(self.physical_plans) != self.requested_output_count
+            or not isinstance(self.authority_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", self.authority_digest)
+        ):
+            raise ValueError("product_api_ecommerce_authority_snapshot_shape_invalid")
+        expected_indexes = tuple(range(1, self.requested_output_count + 1))
+        if (
+            self.admission.project_id != self.project_id
+            or self.admission.job_id != self.job_id
+            or tuple(item.output_index for item in self.projections) != expected_indexes
+            or tuple(item.output_index for item in self.physical_plans) != expected_indexes
+            or any(item.job_id != self.job_id for item in self.projections)
+            or any(item.job_id != self.job_id for item in self.physical_plans)
+        ):
+            raise ValueError("product_api_ecommerce_authority_snapshot_binding_invalid")
+        for projection, physical_plan in zip(self.projections, self.physical_plans, strict=True):
+            projection.validate_against(self.admission)
+            if (
+                physical_plan.job_id != self.job_id
+                or physical_plan.output_index != projection.output_index
+                or physical_plan.projection_digest != projection.projection_digest
+            ):
+                raise ValueError("product_api_ecommerce_authority_snapshot_plan_invalid")
+        expected_digest = _ecommerce_authority_snapshot_digest(
+            schema_version=self.schema_version,
+            project_id=self.project_id,
+            job_id=self.job_id,
+            requested_output_count=self.requested_output_count,
+            asset_ids=self.asset_ids,
+            admission=self.admission,
+            projections=self.projections,
+            physical_plans=self.physical_plans,
+        )
+        if self.authority_digest != expected_digest:
+            raise ValueError("product_api_ecommerce_authority_snapshot_digest_invalid")
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "project_id": self.project_id,
+            "job_id": self.job_id,
+            "requested_output_count": self.requested_output_count,
+            "asset_ids": list(self.asset_ids),
+            "admission": self.admission.model_dump(),
+            "projections": [item.model_dump() for item in self.projections],
+            "physical_plans": [item.model_dump(mode="json") for item in self.physical_plans],
+            "authority_digest": self.authority_digest,
+        }
+
+
 @dataclass
 class ProductJobRecord:
     request: CreateCreativeJobRequest
@@ -627,6 +828,7 @@ class ProductJobRecord:
     capability_run: CapabilityRunResult | None = None
     selected_result: SelectedResult | None = None
     lifecycle: JobLifecycleRecord | None = None
+    ecommerce_authority_snapshot: ProductApiEcommerceAuthoritySnapshot | None = None
     balance_estimate: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=_utc_now_iso)
@@ -947,6 +1149,13 @@ class PersistentProductJobStore(InMemoryProductJobStore):
                     if isinstance(payload.get("lifecycle"), dict)
                     else None
                 ),
+                ecommerce_authority_snapshot=(
+                    ProductApiEcommerceAuthoritySnapshot.from_payload(
+                        payload["ecommerce_authority_snapshot"]
+                    )
+                    if isinstance(payload.get("ecommerce_authority_snapshot"), dict)
+                    else None
+                ),
                 balance_estimate=dict(payload.get("balance_estimate") or {}),
                 warnings=[str(item) for item in payload.get("warnings") or []],
                 created_at=str(payload.get("created_at") or _utc_now_iso()),
@@ -971,6 +1180,11 @@ class PersistentProductJobStore(InMemoryProductJobStore):
             "capability_run": _model_json(record.capability_run),
             "selected_result": _model_json(record.selected_result),
             "lifecycle": _model_json(record.lifecycle),
+            "ecommerce_authority_snapshot": (
+                record.ecommerce_authority_snapshot.to_payload()
+                if record.ecommerce_authority_snapshot is not None
+                else None
+            ),
             "balance_estimate": dict(record.balance_estimate),
             "warnings": list(record.warnings),
             "created_at": record.created_at,
@@ -1026,6 +1240,18 @@ class V3ProductApiService:
         """Use the same certified image-edit capacity as final rendering."""
 
         return ProductionImageGenerationProvider.configured_reference_image_capacity()
+
+    _VARIATION_EXECUTION_RUNTIME_METADATA = frozenset(
+        {
+            "variation_execution_contract",
+            "variation_execution_contract_binding",
+            "variation_execution_contract_enforced",
+            "variation_execution_mode",
+            "variation_execution_requested_image_count",
+            "variation_execution_suite_direction_authoritative",
+            "variation_execution_role_binding",
+        }
+    )
 
     def __init__(
         self,
@@ -1708,9 +1934,10 @@ class V3ProductApiService:
         }
         if activation_metadata:
             create_request.metadata = {**dict(create_request.metadata), **activation_metadata}
+        ecommerce_authority_snapshot: ProductApiEcommerceAuthoritySnapshot | None = None
         if planning_result is not None:
             self._bind_ecommerce_locked_identity_authority(create_request)
-            self._bind_ecommerce_physical_projections(
+            ecommerce_authority_snapshot = self._bind_ecommerce_physical_projections(
                 create_request,
                 planning_result=planning_result,
                 runtime_metadata=runtime_result.metadata,
@@ -1739,6 +1966,7 @@ class V3ProductApiService:
             planning_result=planning_result,
             scenario_resolution=runtime_result.scenario_resolution,
             capability_run=runtime_result.capability_run,
+            ecommerce_authority_snapshot=ecommerce_authority_snapshot,
             balance_estimate=estimate,
             warnings=list(runtime_result.warnings),
         )
@@ -2590,6 +2818,18 @@ class V3ProductApiService:
 
         record = self.job_store.get(job_id)
         return None if record is not None and _failed_artifact_expired(record) else record
+
+    def get_ecommerce_authority_snapshot(
+        self,
+        job_id: str,
+    ) -> ProductApiEcommerceAuthoritySnapshot | None:
+        """Return the Product API's typed authority, never a metadata projection."""
+
+        record = self.get_job_record(job_id)
+        if record is None:
+            return None
+        snapshot = record.ecommerce_authority_snapshot
+        return snapshot if isinstance(snapshot, ProductApiEcommerceAuthoritySnapshot) else None
 
     def is_failed_artifact_expired(self, job_id: str) -> bool:
         """Read-only projection hook for Project Mode output visibility."""
@@ -4170,6 +4410,15 @@ class V3ProductApiService:
             condition_plan=condition,
             generation_plan=frozen_generation_plan,
             job_id=record.job_id,
+            mcp_handoff_provenance=McpHandoffProvenance(
+                handoff_id=handoff_id,
+                operation_id=str(handoff.get("operation_id") or "").strip(),
+                prompt_sha256=str(handoff.get("prompt_sha256") or "").strip(),
+                reference_asset_hashes=list(handoff.get("reference_asset_hashes") or []),
+                rendering_contract_fingerprint=str(
+                    handoff.get("rendering_contract_fingerprint") or ""
+                ).strip(),
+            ),
         )
         handoff_contract = dict(handoff.get("rendering_contract") or {})
         if handoff_contract.get("body_silhouette_mcp_materialization_channel_contract") != (
@@ -4258,6 +4507,15 @@ class V3ProductApiService:
                 condition_plan=condition,
                 generation_plan=frozen_generation_plan.model_copy(update={"metadata": plan_metadata}),
                 job_id=record.job_id,
+                mcp_handoff_provenance=McpHandoffProvenance(
+                    handoff_id=handoff_id,
+                    operation_id=str(handoff.get("operation_id") or "").strip(),
+                    prompt_sha256=str(handoff.get("prompt_sha256") or "").strip(),
+                    reference_asset_hashes=list(handoff.get("reference_asset_hashes") or []),
+                    rendering_contract_fingerprint=str(
+                        handoff.get("rendering_contract_fingerprint") or ""
+                    ).strip(),
+                ),
             )
             expected_reference_hashes = self.mcp_materialization_store._reference_hashes(
                 list(generation_request.metadata.get("reference_assets") or [])
@@ -13258,7 +13516,7 @@ class V3ProductApiService:
             "doc73_auto_identity_anchor_receipt",
             "doc73_auto_identity_anchor_reference",
         }
-    )
+    ) | _VARIATION_EXECUTION_RUNTIME_METADATA
 
     _NON_REUSABLE_SERVER_OWNED_RUNTIME_METADATA = frozenset(
         {
@@ -14092,6 +14350,11 @@ class V3ProductApiService:
                 raise ValueError("trusted_capability_plan_reuse_source_not_found")
             source_metadata = {
                 "capability_plan_provenance": snapshot.get("capability_plan_provenance"),
+                **{
+                    key: snapshot[key]
+                    for key in self._VARIATION_EXECUTION_RUNTIME_METADATA
+                    if key in snapshot
+                },
             }
             source_plan = snapshot.get("capability_activation_plan")
         if not isinstance(source_plan, dict):
@@ -14120,6 +14383,10 @@ class V3ProductApiService:
                 or str(source_provenance.get("plan_fingerprint") or "") != source_fingerprint
             ):
                 raise ValueError("trusted_capability_plan_reuse_source_provenance_mismatch")
+        metadata = self._trusted_variation_execution_metadata(
+            metadata,
+            source_metadata,
+        )
         metadata["capability_plan_provenance"] = {
             "authority": "v3_product_api",
             "issued_for_job_id": "pending_product_job",
@@ -14130,6 +14397,55 @@ class V3ProductApiService:
             "reuse_kind": "amendment" if allowed_amendment and not same_source_plan else "continuation",
         }
         request.metadata = metadata
+
+    @classmethod
+    def _trusted_variation_execution_metadata(
+        cls,
+        metadata: dict[str, Any],
+        source_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep Variation bindings from the verified parent, never the child request."""
+
+        cleaned = {
+            key: value
+            for key, value in metadata.items()
+            if key not in cls._VARIATION_EXECUTION_RUNTIME_METADATA
+        }
+        source_variation = {
+            key: source_metadata[key]
+            for key in cls._VARIATION_EXECUTION_RUNTIME_METADATA
+            if key in source_metadata
+        }
+        if not source_variation:
+            return cleaned
+        required = {
+            "variation_execution_contract",
+            "variation_execution_contract_binding",
+            "variation_execution_contract_enforced",
+            "variation_execution_mode",
+            "variation_execution_requested_image_count",
+            "variation_execution_suite_direction_authoritative",
+        }
+        if not required.issubset(source_variation):
+            raise ValueError("trusted_variation_execution_contract_invalid")
+        try:
+            contract = VariationExecutionContract.model_validate(source_variation["variation_execution_contract"])
+        except Exception as exc:
+            raise ValueError("trusted_variation_execution_contract_invalid") from exc
+        expected_binding = {
+            "contract_version": contract.contract_version,
+            "contract_digest": contract.contract_digest,
+        }
+        if (
+            source_variation["variation_execution_contract_binding"] != expected_binding
+            or source_variation["variation_execution_contract_enforced"] is not True
+            or source_variation["variation_execution_mode"] != contract.mode
+            or source_variation["variation_execution_requested_image_count"] != contract.requested_image_count
+            or source_variation["variation_execution_suite_direction_authoritative"] is not True
+        ):
+            raise ValueError("trusted_variation_execution_contract_invalid")
+        cleaned.update(source_variation)
+        return cleaned
 
     def _bind_capability_plan_provenance(self, request: CreateCreativeJobRequest, job_id: str) -> None:
         """Persist a server-issued binding after a root or child plan is known."""
@@ -14541,11 +14857,11 @@ class V3ProductApiService:
         runtime_metadata: dict[str, Any],
         job_id: str,
         doc270_source_library_enabled: bool = False,
-    ) -> None:
+    ) -> ProductApiEcommerceAuthoritySnapshot | None:
         metadata = dict(request.metadata or {})
         raw_admission = metadata.get("professional_ecommerce_product_truth_admission")
         if not isinstance(raw_admission, dict):
-            return
+            return None
         try:
             admission = ProductTruthAdmission.from_mapping(raw_admission)
         except ValueError as exc:
@@ -14718,6 +15034,47 @@ class V3ProductApiService:
                 ),
                 **doc270_receipt_metadata,
             }
+
+        ordered_assets = sorted(
+            planning_result.series_plan.assets,
+            key=lambda item: item.priority,
+        )
+        expected_asset_priorities = tuple(
+            item.priority for item in ordered_assets
+        )
+        expected_output_indexes = tuple(range(1, len(ordered_assets) + 1))
+        if (
+            not ordered_assets
+            or expected_asset_priorities != expected_output_indexes
+            or len(projections) != len(ordered_assets)
+            or set(projections) != {str(index) for index in expected_output_indexes}
+            or set(physical_renderer_reference_plans)
+            != {str(index) for index in expected_output_indexes}
+        ):
+            # Keep the existing Product API job contract unchanged for legacy
+            # planning fixtures whose runtime output set is not yet aligned
+            # with the physical E-Commerce plan.  Such a record has no Native
+            # authority snapshot and therefore fails closed at the Native
+            # preflight boundary instead of being reconstructed from metadata.
+            return None
+        typed_projections = tuple(
+            PhysicalProductReferenceProjection.from_mapping(projections[str(index)])
+            for index in expected_output_indexes
+        )
+        typed_physical_plans = tuple(
+            PhysicalRendererReferencePlan.model_validate(
+                physical_renderer_reference_plans[str(index)]
+            )
+            for index in expected_output_indexes
+        )
+        return ProductApiEcommerceAuthoritySnapshot.from_records(
+            project_id=admission.project_id,
+            job_id=job_id,
+            asset_ids=tuple(str(item.asset_id) for item in ordered_assets),
+            admission=admission,
+            projections=typed_projections,
+            physical_plans=typed_physical_plans,
+        )
 
     @staticmethod
     def _apply_doc270_ecommerce_view_activation_selection(

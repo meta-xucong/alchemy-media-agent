@@ -53,6 +53,7 @@ from .contracts import (
     StrongReferenceBinding,
     SubjectIdentityCard,
     SubjectContinuityAssetPackage,
+    VariationExecutionContract,
     VisualCapabilityClusterResult,
     VisualConsistencyGuardResult,
     VisualGrammarProfile,
@@ -340,6 +341,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     if cluster.role_specific_generation_plan is not None
                     else {}
                 ),
+                "variation_execution_contract": (
+                    cluster.variation_execution_contract.model_dump(mode="json")
+                    if cluster.variation_execution_contract is not None
+                    else {}
+                ),
                 "mode_differentiation_review": (
                     cluster.mode_differentiation_review.model_dump(mode="json")
                     if cluster.mode_differentiation_review is not None
@@ -607,6 +613,18 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             allow_product_language=allow_product_language,
         )
         subject_type = self._subject_type_from_policy(template_policy, allow_product_language=allow_product_language)
+        runtime_variation_contract = self._variation_execution_contract_from_runtime(capability_input)
+        requested_count = (
+            runtime_variation_contract.requested_image_count
+            if runtime_variation_contract is not None
+            else self._requested_image_count(capability_input, project_context)
+        )
+        runtime_variation_role_binding = (
+            self._variation_role_binding_from_runtime(capability_input)
+            if runtime_variation_contract is not None
+            else None
+        )
+        runtime_general_contract_scope = runtime_variation_contract is not None
         project_id = str(project_context.get("project_id") or "") or None
         if subject_continuity_active:
             identity_drift_guard = self.identity_drift_guard.build(
@@ -822,8 +840,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             anchors=project_identity_anchors,
             strong_bindings=strong_bindings,
         ) if subject_continuity_active else None
-        requested_count = self._requested_image_count(capability_input, project_context)
-        variation_mode = self._effective_variation_mode(capability_input, project_context)
+        variation_mode = (
+            runtime_variation_contract.mode
+            if runtime_variation_contract is not None
+            else self._effective_variation_mode(capability_input, project_context)
+        )
         human_subject_type = self._human_subject_type_from_brain_profile(
             capability_input,
             fallback_subject_type=subject_type,
@@ -885,15 +906,30 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                 user_input=capability_input.user_input,
                 variation_mode=variation_mode,
                 requested_image_count=requested_count,
-                has_identity_anchor=bool(project_identity_anchors),
-                subject_type=subject_type,
+                has_identity_anchor=(
+                    runtime_variation_role_binding["has_identity_anchor"]
+                    if runtime_variation_role_binding is not None
+                    else bool(project_identity_anchors)
+                ),
+                subject_type=(
+                    runtime_variation_role_binding["subject_type"]
+                    if runtime_variation_role_binding is not None
+                    else subject_type
+                ),
                 scenario_id=capability_input.scenario_id,
-                template_id=str(project_context.get("template_id") or capability_input.metadata.get("template_id") or ""),
+                template_id=(
+                    "general_template"
+                    if runtime_general_contract_scope
+                    else str(project_context.get("template_id") or capability_input.metadata.get("template_id") or "")
+                ),
             )
             if suite_direction_active
             else self._inactive_suite_role_plan(capability_input, project_id, variation_mode, requested_count)
         )
         role_specific_plan = self._role_specific_generation_plan_from_suite(suite_role_plan)
+        variation_execution_contract: VariationExecutionContract | None = (
+            runtime_variation_contract if suite_direction_active else None
+        )
         role_specific_plan = self._apply_human_photorealism_to_role_plan(role_specific_plan, human_photorealism)
         role_specific_plan = self._apply_strong_reference_closure_to_role_plan(
             role_specific_plan,
@@ -1195,6 +1231,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             project_identity_anchors=project_identity_anchors,
             strong_reference_continuation_plan=strong_reference_plan,
             general_suite_role_plan=suite_role_plan,
+            variation_execution_contract=variation_execution_contract,
             mode_execution_policy=role_specific_plan.policy,
             role_specific_generation_plan=role_specific_plan,
             mode_differentiation_review=mode_review,
@@ -1839,6 +1876,34 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             template_id=None,
             has_identity_anchor=False,
         )
+
+    @staticmethod
+    def _variation_role_binding_from_runtime(
+        capability_input: CapabilityInput,
+    ) -> dict[str, Any] | None:
+        """Read only the runtime's typed role facts for the bound General path."""
+
+        metadata = capability_input.metadata
+        if (
+            capability_input.scenario_id != "general_creative"
+            or str(metadata.get("resolved_scenario_id") or "").strip() != "general_creative"
+            or str(metadata.get("resolved_template_id") or "").strip() != "general_template"
+            or metadata.get("variation_execution_contract_enforced") is not True
+        ):
+            return None
+        raw = metadata.get("variation_execution_role_binding")
+        if not isinstance(raw, dict) or raw.get("source") != "runtime_typed_reference_facts":
+            return None
+        subject_type = str(raw.get("subject_type") or "").strip().lower()
+        if subject_type not in {"generic", "character", "product"}:
+            raise ValueError("general variation execution role binding is invalid")
+        has_identity_anchor = raw.get("has_identity_anchor")
+        if not isinstance(has_identity_anchor, bool):
+            raise ValueError("general variation execution role binding is invalid")
+        return {
+            "subject_type": subject_type,
+            "has_identity_anchor": has_identity_anchor,
+        }
 
     def _apply_human_photorealism_to_reference_plan(
         self,
@@ -3486,19 +3551,24 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
     ) -> tuple[HumanIdentityAnchorProfile, HumanNaturalVariationPlan]:
         scenario_parameters = _as_dict(capability_input.metadata.get("scenario_parameters"))
         project_metadata = _as_dict(project_context.get("metadata"))
-        requested_count = self._safe_int(
-            capability_input.metadata.get("requested_image_count")
-            or scenario_parameters.get("requested_image_count")
-            or project_metadata.get("requested_image_count"),
-            default=1,
-        )
-        variation_mode = (
-            capability_input.metadata.get("effective_variation_mode")
-            or scenario_parameters.get("effective_variation_mode")
-            or capability_input.metadata.get("variation_mode")
-            or scenario_parameters.get("variation_mode")
-            or "delivery_suite"
-        )
+        runtime_variation_contract = self._variation_execution_contract_from_runtime(capability_input)
+        if runtime_variation_contract is not None:
+            requested_count = runtime_variation_contract.requested_image_count
+            variation_mode = runtime_variation_contract.mode
+        else:
+            requested_count = self._safe_int(
+                capability_input.metadata.get("requested_image_count")
+                or scenario_parameters.get("requested_image_count")
+                or project_metadata.get("requested_image_count"),
+                default=1,
+            )
+            variation_mode = (
+                capability_input.metadata.get("effective_variation_mode")
+                or scenario_parameters.get("effective_variation_mode")
+                or capability_input.metadata.get("variation_mode")
+                or scenario_parameters.get("variation_mode")
+                or "delivery_suite"
+            )
         return self.human_variation_policy.build(
             user_input=capability_input.user_input,
             project_id=str(project_context.get("project_id") or "") or None,
@@ -3512,7 +3582,91 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             reference_policy_package=reference_policy_package,
         )
 
+    def _variation_execution_contract_from_runtime(
+        self,
+        capability_input: CapabilityInput,
+        requested_count: int | None = None,
+    ) -> VariationExecutionContract | None:
+        """Reuse the runtime-bound contract; never rebuild it from local context."""
+
+        metadata = capability_input.metadata if isinstance(capability_input.metadata, dict) else {}
+        resolved_scenario_id = str(metadata.get("resolved_scenario_id") or "").strip()
+        resolved_template_id = str(metadata.get("resolved_template_id") or "").strip()
+        raw_contract = metadata.get("variation_execution_contract")
+        expected_count = requested_count
+        if expected_count is None:
+            expected_count = metadata.get("variation_execution_requested_image_count")
+        if expected_count is None:
+            expected_count = metadata.get("requested_image_count")
+        if expected_count is None:
+            expected_count = _as_dict(metadata.get("scenario_parameters")).get("requested_image_count")
+        if expected_count is None and isinstance(raw_contract, dict):
+            expected_count = raw_contract.get("requested_image_count")
+        if isinstance(expected_count, bool):
+            raise ValueError("general variation execution requested image count is invalid")
+        try:
+            expected_count = int(expected_count or 1)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("general variation execution requested image count is invalid") from exc
+        in_general_scope = (
+            capability_input.scenario_id == "general_creative"
+            and resolved_scenario_id == "general_creative"
+            and resolved_template_id == "general_template"
+            and expected_count > 1
+        )
+        if not in_general_scope:
+            return None
+        if metadata.get("variation_execution_contract_enforced") is not True:
+            if metadata.get("brain_owned_forward_execution") is True:
+                raise ValueError("general variation execution contract is missing")
+            return None
+        raw_plan = metadata.get("capability_activation_plan")
+        if isinstance(raw_plan, dict):
+            activation_mode = str(raw_plan.get("activation_mode") or "").strip().lower()
+            suite_direction_active = "suite_direction" in set(raw_plan.get("dependency_order") or [])
+            if activation_mode != "enforced" or not suite_direction_active:
+                if activation_mode in {"legacy", "shadow"}:
+                    return None
+                raise ValueError("general variation suite direction is not active")
+        if not isinstance(raw_contract, dict):
+            raise ValueError("general variation execution contract is missing")
+        try:
+            contract = VariationExecutionContract.model_validate(raw_contract)
+        except Exception as exc:
+            raise ValueError("general variation execution contract is invalid") from exc
+        if (
+            not contract.contract_digest
+            or contract.contract_digest != contract.computed_digest()
+            or contract.requested_image_count != expected_count
+            or [item.output_index for item in contract.outputs]
+            != list(range(1, expected_count + 1))
+        ):
+            raise ValueError("general variation execution contract binding mismatch")
+        bound_mode = metadata.get("variation_execution_mode")
+        bound_count = metadata.get("variation_execution_requested_image_count")
+        if not isinstance(bound_mode, str) or bound_mode.strip() != contract.mode:
+            raise ValueError("general variation execution mode binding mismatch")
+        if isinstance(bound_count, bool):
+            raise ValueError("general variation execution requested image count binding mismatch")
+        try:
+            normalized_bound_count = int(bound_count)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("general variation execution requested image count binding mismatch") from exc
+        if normalized_bound_count != contract.requested_image_count:
+            raise ValueError("general variation execution requested image count binding mismatch")
+        binding = metadata.get("variation_execution_contract_binding")
+        if (
+            not isinstance(binding, dict)
+            or binding.get("contract_version") != contract.contract_version
+            or binding.get("contract_digest") != contract.contract_digest
+        ):
+            raise ValueError("general variation execution contract frozen binding mismatch")
+        return contract
+
     def _requested_image_count(self, capability_input: CapabilityInput, project_context: dict[str, Any]) -> int:
+        runtime_variation_contract = self._variation_execution_contract_from_runtime(capability_input)
+        if runtime_variation_contract is not None:
+            return runtime_variation_contract.requested_image_count
         scenario_parameters = _as_dict(capability_input.metadata.get("scenario_parameters"))
         project_metadata = _as_dict(project_context.get("metadata"))
         explicit_count = (
@@ -3532,6 +3686,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         return self._safe_int(default_by_mode.get(mode, 1), default=1)
 
     def _effective_variation_mode(self, capability_input: CapabilityInput, project_context: dict[str, Any]) -> str:
+        runtime_variation_contract = self._variation_execution_contract_from_runtime(capability_input)
+        if runtime_variation_contract is not None:
+            return runtime_variation_contract.mode
         scenario_parameters = _as_dict(capability_input.metadata.get("scenario_parameters"))
         project_metadata = _as_dict(project_context.get("metadata"))
         value = (

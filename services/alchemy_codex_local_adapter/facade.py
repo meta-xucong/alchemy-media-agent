@@ -13,6 +13,10 @@ from .contracts import (
     NativeSpecializedImageGenPlanRequest,
 )
 from .native_planner import CodexNativeImageGenPlanner
+from .ecommerce_authority import (
+    NativeEcommerceAuthorityResolver,
+    product_api_ecommerce_authority_resolver,
+)
 from .professional_binding import persistent_professional_binding_resolver
 from .professional_binding import visual_asset_library_professional_binding_resolver
 
@@ -26,11 +30,15 @@ class CodexNativeImageGenFacade:
         enabled: bool = False,
         planner: CodexNativeImageGenPlanner | None = None,
         professional_binding_resolver=None,
+        ecommerce_authority_resolver: NativeEcommerceAuthorityResolver | None = None,
+        product_api_service=None,
         professional_asset_catalog_root=None,
     ) -> None:
         self.enabled = bool(enabled)
         if planner is not None and (
             professional_binding_resolver is not None
+            or ecommerce_authority_resolver is not None
+            or product_api_service is not None
             or professional_asset_catalog_root is not None
         ):
             raise ValueError("planner and Professional binding configuration are mutually exclusive")
@@ -38,6 +46,10 @@ class CodexNativeImageGenFacade:
             self._planner = planner
         else:
             resolver = professional_binding_resolver
+            if ecommerce_authority_resolver is not None and product_api_service is not None:
+                raise ValueError("ecommerce authority resolver and Product API service are mutually exclusive")
+            if product_api_service is not None:
+                ecommerce_authority_resolver = product_api_ecommerce_authority_resolver(product_api_service)
             if resolver is None and professional_asset_catalog_root is not None:
                 from pathlib import Path
 
@@ -48,6 +60,7 @@ class CodexNativeImageGenFacade:
                     resolver = persistent_professional_binding_resolver(catalog_root)
             self._planner = CodexNativeImageGenPlanner(
                 professional_binding_resolver=resolver,
+                ecommerce_authority_resolver=ecommerce_authority_resolver,
             )
 
     def prepare_native_imagegen_plan(self, request: NativeImageGenPlanRequest) -> dict:

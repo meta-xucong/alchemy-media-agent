@@ -919,7 +919,13 @@ def test_provider_request_factory_preserves_size_provenance() -> None:
     assert request.metadata["requested_image_size_source"] == "remote_brain_user_intent"
 
 
-def test_provider_request_factory_carries_official_image_options_to_materialization(tmp_path) -> None:
+def test_provider_request_factory_carries_official_image_options_to_materialization(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    # This test inspects the provider request shape; give the production
+    # selector an explicit test credential so it is independent of .env.
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
+
     base = _generation_request()
     base.generation_plan.metadata["provider_image_options"] = {
         "size": "2048x1152",

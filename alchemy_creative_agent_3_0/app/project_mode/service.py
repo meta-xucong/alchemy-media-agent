@@ -5824,6 +5824,19 @@ class V3ProjectModeService:
             "job_id": parent_job_id,
             "capability_activation_plan": dict(anchor.get("frozen_capability_activation_plan") or {}),
             "capability_plan_provenance": dict(metadata.get("capability_plan_provenance") or {}),
+            **{
+                key: metadata[key]
+                for key in (
+                    "variation_execution_contract",
+                    "variation_execution_contract_binding",
+                    "variation_execution_contract_enforced",
+                    "variation_execution_mode",
+                    "variation_execution_requested_image_count",
+                    "variation_execution_suite_direction_authoritative",
+                    "variation_execution_role_binding",
+                )
+                if key in metadata
+            },
         }
 
     def _capability_plan_amendment_enabled(self) -> bool:
