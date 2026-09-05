@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, ValidationInfo, field_validator
 
 from ..public_api_guardrails import reject_low_level_controls
 from ..schemas.models import V3BaseModel
@@ -427,13 +427,13 @@ class CreateProjectJobRequest(ProjectModeBase):
 
     @field_validator("user_input", "template_id")
     @classmethod
-    def clean_optional_text(cls, value: str | None) -> str | None:
+    def clean_optional_text(cls, value: str | None, info: ValidationInfo) -> str | None:
         if value is None:
             return value
         cleaned = value.strip()
         if not cleaned and value is not None:
             raise ValueError("text fields must not be empty")
-        return cleaned
+        return value if info.field_name == "user_input" else cleaned
 
     @field_validator("uploaded_asset_ids", "suite_slot_request")
     @classmethod

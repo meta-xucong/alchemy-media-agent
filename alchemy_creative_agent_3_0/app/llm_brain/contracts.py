@@ -409,10 +409,9 @@ class BrainRunRequest(V3BaseModel):
     @field_validator("user_input")
     @classmethod
     def user_input_must_not_be_empty(cls, value: str) -> str:
-        cleaned = " ".join(str(value or "").split())
-        if not cleaned:
+        if not value.strip():
             raise ValueError("user_input is required")
-        return cleaned
+        return value
 
 
 class BrainRunResult(V3BaseModel):

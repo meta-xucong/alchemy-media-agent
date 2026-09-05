@@ -212,14 +212,19 @@ def test_doc184_character_card_later_stages_keep_professional_quality_contract()
         expression["professional_face_identity_quality_contract"]["expression_framing_contract"]["baseline"]
         == "active_face_front_winner"
     )
-    assert body["professional_face_identity_quality_contract"]["scope"] == "character_card_body_silhouette"
-    assert (
-        body["professional_face_identity_quality_contract"]["body_silhouette_contract"]
-        == "preserve_identity_scale_and_age_appropriate_body_proportion"
-    )
     assert expression["professional_face_identity_quality_contract"]["contract_version"] == (
-        body["professional_face_identity_quality_contract"]["contract_version"]
+        "professional_face_identity_quality_v2"
     )
+    assert "professional_face_identity_quality_contract" not in body
+    body_contract = body["professional_body_silhouette_source_contract"]
+    assert body_contract["scope"] == "character_card_body_silhouette_only"
+    assert body_contract["owner"] == "professional_character_card_body_silhouette"
+    assert (
+        body_contract["contract_version"] == "professional_body_silhouette_source_contract_v1"
+    )
+    assert body_contract["source_standard_contract"]["scope"] == "body_silhouette_only"
+    assert body_contract["face_identity_reference_scope"] == "identity_continuity_only"
+    assert body_contract["non_body_channels"] == "unspecified"
 
 
 def test_doc184_generation_request_derives_scope_only_from_character_card_view_scope() -> None:
@@ -778,14 +783,15 @@ def test_doc184_face_review_rejects_commercial_clarity_below_bar() -> None:
 
 
 def test_doc189_face_review_accepts_commercial_refined_identity_card() -> None:
-    from alchemy_creative_agent_3_0.tests.test_v3_doc162_product_anchor_pack_host import _SharedProductService
+    from alchemy_creative_agent_3_0.tests.test_v3_doc162_product_anchor_pack_host import _StandardFrontProfileSharedProductService
 
-    service = _SharedProductService()
+    service = _StandardFrontProfileSharedProductService()
     host = ProductApiAnchorPackPreparationHost(service)  # type: ignore[arg-type]
     job = service.create_professional_anchor_preparation_job(
         {"user_input": PREPARATION_INTENT},
         view_role="standard_front",
         reference_evidence_ids=["root_doc184"],
+        capture_scope=CAPTURE_SCOPE,
     )
     service.generate_job(job.job_id, {})
     inspection = service.jobs[job.job_id].generation_result.metadata[
@@ -889,6 +895,7 @@ def test_doc189_review_contract_calibrates_commercial_refined_realism() -> None:
     }
     contract = active_review_contract(metadata)
     prompt = _enforced_inspection_prompt(
+        metadata=metadata,
         user_goal=PREPARATION_INTENT,
         template_id="professional_character_card",
         reference_policy={},

@@ -6037,7 +6037,7 @@ def test_doc245_product_api_public_warnings_sanitize_provider_error_text() -> No
     assert "OpenAI image reference generation failed" not in joined
     assert "raw provider body" not in joined
     assert "image_edit_invalid_request_unattributed" in joined
-    assert "asset packaged with reject recommendation" in warnings
+    assert "asset packaged with reject recommendation" not in joined
 
 
 def test_doc245_body_refresh_fail_closed_without_cross_view_positive_evidence() -> None:

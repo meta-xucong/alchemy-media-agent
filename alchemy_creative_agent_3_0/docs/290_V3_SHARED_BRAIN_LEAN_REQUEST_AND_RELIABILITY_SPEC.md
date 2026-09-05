@@ -1,16 +1,17 @@
 # Doc290 - V3 共享 Brain 请求减负与可靠性优化开发规范
 
-状态：正式开发规范；运行代码尚未实施，性能和真实出图尚未验收。
+状态：正式开发规范；A 固定基线已独审符合，B 最小补丁已固定，主控同版 C 选定离线矩阵 951 项全部通过、无 skip。独审收尾待结论，性能和真实出图尚未验收，D/E 未授权、未运行。
 
-审计基线：`542d01fc1f9fcfcf3203d722b1c1a249f9e78a65`，2026-09-06。
+初版审计基线：`542d01fc1f9fcfcf3203d722b1c1a249f9e78a65`，2026-09-06。
 适用层：V3 共享基础能力及其现有 Brain 适配器；普通版与专业版共同适用。
-本轮交付：方案审计与开发文档，不包含运行代码、模型切换、真实调用、GitHub 推送或 VPS 部署。
+初版交付（历史）：仅方案审计与开发文档，当时运行代码尚未实施，不包含模型切换、真实调用、GitHub 推送或 VPS 部署。
+当前交付：A 基线、B 最小实现和 C 选定离线复验，详见第 10 节；本轮未推送运行代码、未部署 VPS，不宣称 timeout 已根治或 Doc290 总目标完成。
 
 ## 1. 目标与结论
 
 总目标：在不改变现有架构、用户意图、成片效果和证据权威的前提下，减少 Brain 的重复输入与无效输出负担，降低规划失败概率，使普通版和专业版使用同一套可诊断、有限时、无本地创意替代的链路。
 
-本阶段目标：明确最小修改边界、尚缺证据、兼容规则和验收方法，供后续开发逐阶段执行。文档审计通过不等于超时问题已解决或产品已稳定。
+初版文档阶段目标：明确最小修改边界、尚缺证据、兼容规则和验收方法，供后续开发逐阶段执行。文档审计通过不等于超时问题已解决或产品已稳定。
 
 **审计结论：方向合理，但原提案不能直接实施。** 应先测量正常入口的真实请求，再在已有紧凑规划与最终 Prompt 签发流程内去重；不能另造一层压缩服务、删除必需收据、盲目缩短时限，或以更换模型掩盖协议问题。
 
@@ -257,3 +258,104 @@ Human Realism 的美感、表情、材质、参考所有权和风格保真不得
 每次审核固定提交或文件 SHA，结论采用“符合 / 不符合 / 证据不足”。发现删用户意图、删必需收据、专业规则泄漏、额外 LLM、扩大重试或修改 bridge/Sub2API，立即发出 `AUDIT_FIX_REQUIRED`，暂停受影响阶段。修改后复审对应部分，不沿用旧版批准。
 
 阶段完成报告必须写：影响范围、验证方法及结果、提交 SHA、push 状态、未验收项和下一阶段。当前文档完成后的下一步是阶段 A，不是直接换模型、缩短超时或发布 VPS。
+
+## 10. 2026-09-06 阶段 A/B 与定向 C 证据
+
+本节仅追加实施记录，不替代第 7-9 节的质量、真实验收或集成闸门。
+
+### 10.1 基线、授权与范围
+
+- 基线为 `00de0734ae22c1d5c37eb641af73aa04622a24a0`，开发 worktree 为 `D:\AI\w\doc290-brain-lean-request`，分支为 `codex/doc290-brain-lean-request`。截至本次送审快照，未 commit、push、集成或部署。
+- 阶段 A 测试固定 SHA256 为 `AB62A01D4F7115CA504294F85963DE8E19F9F4B50734264AF7CD3554DE7C2277`。开发者实测 12 passed / 6 failed，主控复跑相同版本 12 passed / 6 failed，6 个 red 为三个正常场景的原文折叠与重复表情规则。Rawls 对该固定 A 版本给出符合后，主控授权 B。
+- B 的运行时修改仅有五文件：`llm_brain/prompts.py` 和 `llm_brain`、`product_api`、`scenario_runtime`、`project_mode` 四个 `contracts.py`。其余为新增 Doc290 测试、本节，以及经单独授权的 Doc184 三处测试适配、Doc245 一处公开 warning 断言，总计九文件。
+- compact plan 仅删除 user 的表情规则副本，system 全文保留；finalizer 表情规则及 Body 的既有隔离分支不变。E-Commerce 仅在 dedicated finalizer 的 frozen context 已包含同值时省略顶层副本；metadata-only 历史 fallback 保留，旧广义 payload 路径不改。
+- 没有改 schema 字段、返回契约、模型、超时、max_tokens、恢复次数、Provider 路由、审美/Review 阈值、正式 slot 或专业交付权威。没有新抽象、依赖、LLM 阶段、创意 fallback 或外部调用。
+
+### 10.2 正常入口与字节测量
+
+复用已有 General 单图、General 三图和专业 E-Commerce 正常 Project Mode fixture，经过 `post_project_job -> Product API -> ScenarioRuntime -> Brain adapter -> provider`。保留完整 eligible catalog、preactivation、policy、冻结 ledger/envelope 及 Doc269/281/289 绑定；在 `httpx.HTTPTransport.handle_request` 替换 transport，捕获真实序列化消息和 HTTP body，通过真实 SSE 收集与契约校验。返回内容来自既有确定性合法 Brain fixture，不能当成上游创意或成片质量证据。专业 fixture 沿用其隔离的来源与 activation 设置，不构成真实 E31/专业正式 slot 验收。
+
+正常案例各为 plan/finalizer 一次 dispatch；实际捕获模型为 `deepseek-v4-pro`，`max_tokens=8000`，单次上限 300 秒，共享预算 520 秒，未修改这些设置。下表 A/B 为 UTF-8 字节，字符为 B 实测：
+
+| 案例/阶段 | system 字节 A=B / 字符 B | user JSON 字节 A / B | user 字符 B | HTTP body 字节 A / B | 框架+schema 字节 B / 占比 | return schema / 逐图 schema 字节 B |
+| --- | --- | --- | --- | --- | --- | --- |
+| General 单图 plan | 21480 / 21476 | 13039 / 11776 | 9428 | 38789 / 37615 | 26366 / 0.7928 | 3103 / 2 |
+| General 单图 finalizer | 5359 / 5359 | 29721 / 29909 | 20521 | 50459 / 50833 | 8978 / 0.2546 | 370 / 338 |
+| General 三图 plan | 21480 / 21476 | 14997 / 13734 | 11386 | 40889 / 39715 | 26990 / 0.7665 | 3103 / 2 |
+| General 三图 finalizer | 5359 / 5359 | 65281 / 65649 | 56229 | 88469 / 89005 | 17759 / 0.2501 | 1366 / 1334 |
+| 专业 E-Commerce plan | 21480 / 21476 | 21210 / 19947 | 17601 | 47495 / 46321 | 28104 / 0.6784 | 3744 / 606 |
+| 专业 E-Commerce finalizer | 5359 / 5359 | 82486 / 77900 | 68494 | 106797 / 102033 | 17927 / 0.2153 | 1053 / 1021 |
+
+该 HTTPX 版本的外层 body 使用 ASCII 转义，因此 body 字符数等于 body 字节数。框架占比仅计 system 和顶层 instructions/string contracts/schema，不把 frozen context 的事实全部算作说明；逐图 schema 为实际数组 JSON 字节，General plan 的空数组为 2 字节。测试打印逐字段值的 JSON 字节、请求 SHA256 和 schema SHA256，不输出原始请求或密钥。六份 schema SHA256 与 A 一致，必要签发字段和批准收据不变。
+
+关键字段的 B JSON 值字节：三类 `user_input` 分别为 3881、3906、3901，finalizer 的 `protected_user_direction` 与对应原文完全相同；catalog 均为 2066；finalizer frozen context 分别为 18104、45013、57082；电商 factual context 值为 4982。动态 ID、临时目录长度和原文保真修复会影响绝对大小，以上仅是本次观察，不是性能断言或新的截断上限。
+
+减负断言使用同一真实 capture 的成对 body：只重新加入 A 已确认的副本，其他字段、system、schema 均逐项相同，不使用两次独立运行的总大小差来证明收益。
+
+| 删除的重复项 | 保留权威 | 同 body 的 user JSON 减少 | 同 body 的 HTTP body 减少 |
+| --- | --- | --- | --- |
+| 三案例 compact plan 的 `human_expression_authenticity_instructions`，原文 1307 B | 同阶段 system 全文，finalizer 的适用规则另行保留 | 每例 1357 B | 每例 1361 B |
+| 电商 finalizer 顶层 `ecommerce_creative_context` | `frozen_render_context.ecommerce_creative_context`，并保留 context instructions | 5014 B | 5354 B |
+
+未取得 tokenizer/上游 usage，token 未测也未估算。字节去重不是延迟、可靠性、p95 或美感改善的证据，pytest 用时也不是上游调用耗时。
+
+### 10.3 四层保真与历史兼容
+
+责任模型为同字段输入保真链：`CreateProjectJobRequest -> CreateCreativeJobRequest -> ScenarioRuntimeRequest -> BrainRunRequest`。A 中前三层会 strip 首尾，Brain 层还会将内部空白折叠；B 只检查非空后返回原 value，不在 adapter 绕开验证。测试覆盖首尾空格/换行、tab、CRLF、引号、中英文长输入、末尾硬条件、赋值校验及 JSON 保存重载。Project 的省略/None 仍允许，空白文本与错误类型仍拒绝，`template_id` 仍归一化，其他三个模型仍要求非空字符串。
+
+原文现在原样进入持久化 request、runtime job identity 输入、规划与签发 user 消息及 `protected_user_direction`。未改 `stable_id`、runtime job ID、source command identity、来源选择缓存算法或 canonical prompt 校验。对于过去被 trim 的首尾空白，新请求的 identity 输入可能与旧版不同；不能承诺所有旧 ID 不变。Doc281 等既有 command-direction 归一化仍由原 owner 维护，不属于本补丁的字段改写。
+
+历史测试用隔离的真实服务规划记录保存重载：旧的规范化文本、frozen Brain、计划/指纹和 provenance 原样保留；按保存文本精确继续时，复用已签 canonical prompts，零新增 Brain dispatch。新增首尾空白或内部 tab 的不同文本被既有 `professional_anchor_stage_plan_source_mismatch` 拒绝，不为兼容放宽匹配、清缓存、迁移旧记录或重新签发。正常三案例的含首尾空白 request 也通过真实 `PersistentProductJobStore` 保存重载，冻结数据和 provenance 不变。
+
+### 10.4 恢复与离线验证
+
+组合测试仅在同一 transport fixture 安排响应，使用既有 provider/adapter/runtime 恢复逻辑，没有测试用调度器或 runtime 重试修改：
+
+- 成功序列：plan 的 invalid JSON -> 合法 JSON 缺 `visual_task_profile` -> invalid JSON -> 合法 plan；finalizer 的 invalid JSON -> 空 canonical prompt 列表 -> invalid JSON -> 合法签发。实测 8 次 HTTP dispatch、4 次 provider.run，每个 run 的 transport receipt 为 2 attempts；所有重答保留原文及相同冻结请求/context，正常结束为 planned。
+- 固定时钟从 1000 开始，共享 deadline 始终为 1520；每次消耗 60 秒时，dispatch 剩余预算为 `[520,460,400,340,280,220,160,100]`，实际 HTTP read timeout 受剩余预算约束，跨序列化、语义恢复及签发不重置。
+- 每次消耗 110 秒时，实测仅 5 次 HTTP dispatch、3 次 provider.run；剩余预算为 `[520,410,300,190,80]`，第五次 malformed JSON 后真实 provider 抛出 `BrainExecutionBudgetExceeded`，不会产生第六次 dispatch，job blocked 且没有 planning result/图片生成，公开剩余预算为零。
+- 边界观察：既有 Product API 公开 `remote_error_class` allowlist 列 `budget_exceeded`，未列 runtime 的 `execution_budget_exhausted`，故不能在公开字段上断言该内部枚举。测试在 provider owner 直接验证异常，同时断言公开 blocked 与预算为零。该既有投影差异已报告主控，本次不修改或豁免其后续归因。
+
+所有执行 cwd 均为开发 worktree。使用 Python `C:\Users\T14S\AppData\Local\Programs\Python\Python312\python.exe` 和主控离线 runner `D:\AI\Alchemy Media Agent System\.controlled-validation\doc290-brain-lean-request-20260906\run_offline_pytest.py`；后者在 import 前隔离 dotenv/凭据/auth 与存储、禁止非 loopback 网络。新增 fixture 还显式隔离 provider env、mock HTTP transport 并禁止图片生成，不用全局 remote=false 代替正常真实入口。各次 `--basetemp` 为仓库外 `$env:TEMP` 下独立 GUID 目录，禁用 pytest cache。
+
+修正后的复现写法：每次运行前设置 `$testTemp = Join-Path $env:TEMP ("doc290-" + [guid]::NewGuid().ToString("N"))`。统一执行前缀为 `& $python -B $runner -q -p no:cacheprovider`，结尾为 `--tb=short "--basetemp=$testTemp"`。本地安全 runner 只识别 `--basetemp=VALUE` 单参数形式，不使用参数名和值分开的形式；本次仅更正文档复现写法，不表示重新执行了测试。中间测试选择及已报告的实际结果如下：
+
+| 测试选择，均在 `alchemy_creative_agent_3_0/tests/` | 实际结果 | 退出码 |
+| --- | --- | --- |
+| Doc290 修复前 `-k 'four_model or project_optional or outer_whitespace or metadata_only_history'` | 24 passed / 16 failed / 20 deselected，7.43s；均为预期责任点 red | 1 |
+| Doc290 修复前 `-k combined_recovery` | 2 failed / 58 deselected，10.75s；attempt/deadline 已通过，原文保真 red | 1 |
+| `test_v3_doc290_brain_lean_request_contract.py`，最终完整运行加 `-s` | 61 passed，71.13s | 0 |
+| `test_v3_doc184_character_card_face_capture_scope.py test_v3_doc245_body_formal_slot_receipt_seam.py` | 195 passed，3.57s | 0 |
+| `test_v3_schemas.py test_v3_scenario_runtime_and_product_api.py test_v3_project_mode.py test_v3_product_api_minimal_ux.py` | 124 passed，15.39s | 0 |
+| 主控对相同五个 runtime 补丁复跑 Brain adapter / timeout / Doc162 | 主控报告 71 passed，4.63s；非开发者重复执行 | 0 |
+
+编写过程中首次 focused 为 57 passed / 3 failed：两项发现 E-Commerce 条件误加到旧广义 builder，一项是测试读取 blocked job 的空 planning result；前者已恢复旧广义路径并仅修 dedicated finalizer，后者改查实际 owner。随后为 59 passed / 1 failed，该项为上述公开枚举取证假设。最终 61 项完整绿灯对应纠正后的测试与代码，不沿用这些中间版本。
+
+### 10.5 阶段状态与待验收项
+
+前次送审状态（历史），当前状态见 §10.6：A 固定版已独审符合；B 最小实现和本节列出的定向 C 验证已完成，九文件完整 SHA256 清单随送审消息冻结，等待 Rawls 对 B 固定版独审。其他消费者矩阵和集成态复验由主控维护，不把先前 main baseline 自动当作新补丁的全量通过。
+
+尚未运行真实 Provider/Brain/MCP/ImageGen、真实 E31、专业 Character Card 正式 slot、成片并排美感评估、生产历史失败重放、真实耗时对照、VPS 或发布验收；阶段 D/E 未授权且未执行。不得把本节的离线字节减少或测试通过称为真实性能改善、可靠性提升、产品就绪或 Doc290 总目标完成。
+
+### 10.6 主控同版最终 C 复验与收尾状态
+
+主控报告：针对已固定的八个 Python runtime/tests 文件完成选定 C 矩阵复验，合计 **951 passed，无 skip**。以下为主控实际结果，不是开发者在本次文档收尾中重复执行：
+
+| 复验组 | 通过数 | 用时 |
+| --- | --- | --- |
+| 新 Doc290 测试 | 61 | 70.23s |
+| Core Brain adapter / timeout / Doc162 | 71 | 4.63s |
+| 11 组消费者 | 141 | 11.81s |
+| Doc153 + Doc245 + Doc196 formal | 235 | 5.12s |
+| Doc269 + Doc281 + variation + Photography + E-Commerce scope | 122 | 28.77s |
+| Native Doc130 / Doc133 / Doc134 | 109 | 13.31s |
+| Body 两套 + Doc175 + Doc277 | 88 | 10.13s，2 个 FastAPI 警告 |
+| Schema / API / Project / minimal UX | 124 | 16.98s |
+
+主控另报告：八个 Python 文件 `py_compile`、`diffcheck` 均为 exit 0。八文件 SHA256 与上一固定检查点一致，本次只更新本文件的状态和复验记录，不修改 runtime、测试、政策或矩阵门槛。
+
+第 10.4 节的开发者 195 项兼容结果属于此前检查点。补回 Expression 版本断言后的 Doc184/Doc245 开发者复跑曾被中断，未取得完整退出码，不作为通过证据；该验证缺口现由主控同版的 141 项消费者及 235 项 formal 复验覆盖，包含最终固定的 Doc184/Doc245 测试。
+
+主控恢复后再次实际复核 Doc184 SHA256 为 `56FBC66DEEFB43438CE7FF1125F0CFFA07ABA69F8C29D5BEA6365116B02855E2`，确认其中包含 Expression 版本断言，与送审固定 SHA 一致，无证据漂移。
+
+当前状态：A 已独审符合，B 补丁固定，C 选定离线矩阵通过；独审收尾仍待结论，不提前宣告最终闸门通过。真实 D/E 未授权、未运行，本轮未 push 运行代码、未部署 VPS。离线通过和请求冗余减少不证明 timeout 根治、真实性能/可靠性改善或成片效果无回归；第 7-9 节的真实验收与集成标准保持不变。

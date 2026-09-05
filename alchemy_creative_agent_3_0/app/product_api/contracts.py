@@ -93,10 +93,9 @@ class CreateCreativeJobRequest(ProductApiBase):
     @field_validator("user_input")
     @classmethod
     def user_input_must_not_be_empty(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
+        if not value.strip():
             raise ValueError("user_input is required")
-        return cleaned
+        return value
 
     @field_validator("uploaded_asset_ids")
     @classmethod

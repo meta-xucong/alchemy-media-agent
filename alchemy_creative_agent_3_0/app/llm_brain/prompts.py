@@ -775,7 +775,6 @@ def _compact_remote_creative_payload(
         },
         "capability_catalog": _compact_remote_capability_catalog(request.capability_catalog),
         "capability_activation_instructions": CAPABILITY_ACTIVATION_INSTRUCTIONS,
-        "human_expression_authenticity_instructions": HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS,
     }
     variation_contract = _compact_general_variation_execution_contract(request)
     if variation_contract:
@@ -1906,7 +1905,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     if not isinstance(ecommerce_context, dict):
         ecommerce_context = request.metadata.get("ecommerce_creative_context")
     if isinstance(ecommerce_context, dict) and ecommerce_context:
-        payload["ecommerce_creative_context"] = ecommerce_context
+        if payload["frozen_render_context"].get("ecommerce_creative_context") != ecommerce_context:
+            payload["ecommerce_creative_context"] = ecommerce_context
         payload["ecommerce_context_instructions"] = ECOMMERCE_CONTEXT_INSTRUCTIONS
     if isinstance(anchor_view_recovery, dict):
         payload["professional_anchor_view_contract_recovery"] = dict(anchor_view_recovery)
