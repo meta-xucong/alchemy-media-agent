@@ -4918,6 +4918,23 @@ function mobileV3PlanningOperation(project = mobileV3State.currentProject) {
     : null;
 }
 
+function mobileV3PlanningFailureMessage(operation) {
+  const code = String(operation?.failure_code || "").trim().toLowerCase();
+  if (code === "remote_brain_unavailable" || code === "remote_provider_unavailable" || code === "remote_provider_error") {
+    return "共享创意大脑暂时不可用，图像请求尚未发送。项目已保留，请稍后重试。";
+  }
+  if (code === "remote_brain_unauthorized") {
+    return "共享创意大脑连接未通过认证，图像请求尚未发送。请检查运行配置后再试。";
+  }
+  if (code === "remote_contract_invalid" || code === "remote_prompt_signoff_unavailable" || code === "remote_creative_brain_prompt_signoff_invalid") {
+    return "共享创意规划没有返回可用的正式方案，图像请求尚未发送。项目已保留，请稍后重试。";
+  }
+  if (code === "planning_job_blocked") {
+    return "本次规划已安全停止，图像请求尚未发送。项目已保留，请检查需求后再试。";
+  }
+  return "规划已在图像请求发送前停止，尚未发送图像请求。";
+}
+
 async function recoverMobileV3PlannedJob(projectId, { shouldContinue = null } = {}) {
   const maxAttempts = 240;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -5833,14 +5850,14 @@ function renderMobileV3ProjectCurrentOperation(project = mobileV3State.currentPr
     mobileV3State.progressStageKey = "failed";
     setMobileV3Progress(
       "failed",
-      "规划已在图像请求发送前停止，尚未发送图像请求。",
+      mobileV3PlanningFailureMessage(planningOperation),
     );
     openMobileSurface("v3-project-detail");
     node.hidden = false;
     node.innerHTML = `
       <div>
         <strong>本次规划未完成</strong>
-        <span>规划已在图像请求发送前停止，尚未发送图像请求；项目历史已保留，也不会自动重复提交。请检查需求和参考后再决定下一步。</span>
+        <span>${mobileV3PlanningFailureMessage(planningOperation)}项目历史已保留，也不会自动重复提交。请检查需求和参考后再决定下一步。</span>
       </div>
       <button class="button primary compact" type="button" data-mobile-v3-project-action="review_project_request">查看项目需求</button>
     `;

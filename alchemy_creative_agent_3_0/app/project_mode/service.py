@@ -2850,10 +2850,12 @@ class V3ProjectModeService:
             current = self._doc277_current_planning_operation(project)
             if current is None or current["state"] != "planning" or current["operation_id"] != clean_operation_id:
                 raise ValueError("doc277_planning_operation_not_pending")
-            if str(job_id or "").strip():
+            clean_job_id = str(job_id or "").strip()
+            clean_failure_code = str(failure_code or "").strip() or "planning_unavailable"
+            if clean_job_id:
                 self._issue_doc279_transparent_predecessor_receipt(
                     project_id,
-                    str(job_id).strip(),
+                    clean_job_id,
                 )
             no_job_e32_projection: dict[str, str] | None = None
             if (
@@ -2888,26 +2890,35 @@ class V3ProjectModeService:
                 "terminal": True,
                 "pending": False,
                 "next_actions": [{"id": "review_project_request"}],
+                **(
+                    {
+                        "job_id": clean_job_id,
+                        "failure_code": clean_failure_code,
+                    }
+                    if clean_job_id
+                    else {}
+                ),
             }
             now = _utc_now_iso()
+            failed_identity = {
+                "project_id": project.project_id,
+                "operation_id": clean_operation_id,
+                "record_kind": "failed",
+                "failure_code": clean_failure_code,
+                **({"job_id": clean_job_id} if clean_job_id else {}),
+            }
             self.project_store.append_private_record(
                 project.project_id,
                 _DOC277_PRIVATE_PLANNING_NAMESPACE,
                 {
                     "schema_version": "doc277_project_planning_operation_v1",
                     "record_kind": "failed",
-                    "identity_digest": self._doc277_digest(
-                        {
-                            "project_id": project.project_id,
-                            "operation_id": clean_operation_id,
-                            "record_kind": "failed",
-                            "failure_code": str(failure_code or "").strip() or "planning_unavailable",
-                        }
-                    ),
+                    "identity_digest": self._doc277_digest(failed_identity),
                     "project_id": project.project_id,
                     "operation_id": clean_operation_id,
-                    "failure_code": str(failure_code or "").strip() or "planning_unavailable",
+                    "failure_code": clean_failure_code,
                     "created_at": now,
+                    **({"job_id": clean_job_id} if clean_job_id else {}),
                     **(
                         {
                             "doc279_e32_no_job_operation_projection": (
@@ -12022,13 +12033,42 @@ class V3ProjectModeService:
             }
         if "failed" not in terminal_kinds:
             return None
-        return {
+        operation = {
             "operation_id": operation_id,
             "state": "planning_failed",
             "terminal": True,
             "pending": False,
             "next_actions": [{"id": "review_project_request"}],
         }
+        failed_record = next(
+            (
+                record
+                for record in reversed(records)
+                if record.get("record_kind") == "failed"
+                and record.get("project_id") == project.project_id
+                and record.get("operation_id") == operation_id
+            ),
+            None,
+        )
+        if not isinstance(failed_record, dict):
+            return operation
+        record_job_id = str(failed_record.get("job_id") or "").strip()
+        if not record_job_id or record_job_id not in project.job_ids:
+            return operation
+        record_failure_code = str(failed_record.get("failure_code") or "").strip()
+        expected_identity = {
+            "project_id": project.project_id,
+            "operation_id": operation_id,
+            "record_kind": "failed",
+            "failure_code": record_failure_code or "planning_unavailable",
+            "job_id": record_job_id,
+        }
+        if failed_record.get("identity_digest") != self._doc277_digest(expected_identity):
+            return operation
+        operation["job_id"] = record_job_id
+        if record_failure_code:
+            operation["failure_code"] = record_failure_code
+        return operation
 
     def _doc277_planning_has_terminal_job_after(self, project: ProjectRecord) -> bool:
         """Detect a terminal Job created after a still-open planning operation."""

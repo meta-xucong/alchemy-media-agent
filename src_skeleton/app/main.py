@@ -627,6 +627,50 @@ def _v3_is_ecommerce_opaque_hold_response(response: object, *, job_id: str) -> b
     )
 
 
+_V3_JOB_BOUND_PLANNING_FAILURE_CODES = frozenset(
+    {
+        "planning_job_blocked",
+        "remote_brain_unavailable",
+        "remote_brain_unauthorized",
+        "remote_contract_invalid",
+        "remote_prompt_signoff_unavailable",
+        "remote_provider_error",
+        "remote_provider_unavailable",
+        "remote_output_count_mismatch",
+        "remote_brain_skipped",
+        "remote_creative_brain_required",
+        "remote_creative_brain_prompt_signoff_invalid",
+        "remote_creative_brain_prompt_signoff_unavailable",
+        "remote_creative_brain_prompt_signoff_missing",
+        "remote_creative_brain_image_set_plan_invalid",
+        "remote_creative_brain_image_set_missing",
+        "remote_creative_brain_required_for_template",
+    }
+)
+
+
+def _v3_blocked_planning_failure_code(response: object, *, job_id: str) -> str:
+    """Keep a trusted Job-bound Brain failure visible without opening a fallback path."""
+
+    if not str(job_id or "").strip() or not isinstance(response, dict):
+        return "planning_preflight_blocked"
+    metadata = response.get("metadata")
+    if not isinstance(metadata, dict):
+        return "planning_job_blocked"
+    lifecycle = metadata.get("generation_lifecycle_failure")
+    outcome = metadata.get("remote_creative_brain_outcome")
+    candidates = []
+    if isinstance(lifecycle, dict):
+        candidates.extend((lifecycle.get("failure_code"), lifecycle.get("reason_code")))
+    if isinstance(outcome, dict):
+        candidates.append(outcome.get("reason_code"))
+    for candidate in candidates:
+        clean_candidate = str(candidate or "").strip()
+        if clean_candidate in _V3_JOB_BOUND_PLANNING_FAILURE_CODES:
+            return clean_candidate
+    return "planning_job_blocked"
+
+
 def _run_v3_project_planning_background(
     project_id: str,
     operation_id: str,
@@ -643,7 +687,7 @@ def _run_v3_project_planning_background(
                 v3_route_handlers.fail_project_planning_operation,
                 project_id,
                 operation_id,
-                failure_code="planning_preflight_blocked",
+                failure_code=_v3_blocked_planning_failure_code(response, job_id=job_id),
                 job_id=job_id or None,
                 ecommerce_opaque_hold_response=_v3_is_ecommerce_opaque_hold_response(
                     response,

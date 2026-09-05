@@ -319,6 +319,83 @@ def test_doc277_background_planning_failure_closes_without_creating_a_job(monkey
     assert project["project"]["job_ids"] == []
 
 
+def test_doc277_background_brain_failure_preserves_job_bound_terminal_projection(monkeypatch) -> None:
+    handlers = V3ProductRouteHandlers(
+        service=V3ProductApiService(),
+        project_store=InMemoryProjectStore(),
+    )
+    monkeypatch.setattr(app_main, "v3_route_handlers", handlers)
+    queued: list[tuple[object, tuple[object, ...]]] = []
+    monkeypatch.setattr(
+        app_main._v3_planning_executor,
+        "submit",
+        lambda fn, *args: queued.append((fn, args)),
+    )
+    job_id = "job_doc277_remote_brain_unavailable"
+
+    def blocked_job(project_id: str, _payload: dict) -> dict:
+        project = handlers.project_service.project_store.get_project(project_id)
+        project.job_ids.append(job_id)
+        handlers.project_service.project_store.save_project(project)
+        return {
+            "job_id": job_id,
+            "status": "blocked",
+            "metadata": {
+                "generation_lifecycle_failure": {
+                    "schema_version": "v3_generation_lifecycle_failure_v1",
+                    "status": "blocked",
+                    "failure_family": "remote_creative_brain",
+                    "failure_code": "remote_brain_unavailable",
+                    "reason_code": "remote_brain_unavailable",
+                    "provider_request_started": False,
+                },
+            },
+        }
+
+    monkeypatch.setattr(handlers, "post_project_job", blocked_job)
+
+    client = TestClient(app_main.app)
+    project_id = client.post(
+        "/api/v3/creative-agent/projects",
+        json={"user_goal": "Create one clean commercial portrait."},
+    ).json()["project"]["project_id"]
+    response = client.post(
+        f"/api/v3/creative-agent/projects/{project_id}/jobs",
+        json={
+            "user_input": "Create one clean commercial portrait.",
+            "template_id": "general_template",
+            "auto_generate": {"quality_mode": "standard", "metadata": {"require_real_images": True}},
+        },
+    )
+    assert response.status_code == 200
+    assert len(queued) == 1
+
+    worker, arguments = queued.pop()
+    worker(*arguments)
+
+    project = client.get(f"/api/v3/creative-agent/projects/{project_id}").json()
+    operation = project["metadata"]["current_operation"]
+    assert operation["state"] == "planning_failed"
+    assert operation["job_id"] == job_id
+    assert operation["failure_code"] == "remote_brain_unavailable"
+    assert project["project"]["job_ids"] == [job_id]
+    failed_records = handlers.project_service.project_store.list_private_records(
+        project_id,
+        "doc277_project_planning_operations",
+    )
+    assert any(
+        item.get("record_kind") == "failed"
+        and item.get("job_id") == job_id
+        and item.get("failure_code") == "remote_brain_unavailable"
+        for item in failed_records
+    )
+    with app_main._v3_background_planning_operations_lock:
+        app_main._v3_background_planning_operations.pop(
+            f"{project_id}:{operation['operation_id']}",
+            None,
+        )
+
+
 def _planning_failed_project() -> dict:
     return {
         "project_id": "doc277-project",
@@ -399,5 +476,53 @@ def test_doc277_mobile_terminal_planning_never_shows_preparing_or_retries() -> N
 
             page.locator("[data-mobile-v3-project-action='review_project_request']").click()
             assert page.evaluate("window.__doc263Requests.filter((item) => item.method === 'POST').length") == 0
+        finally:
+            browser.close()
+
+
+def test_doc277_brain_failure_projection_has_specific_desktop_and_mobile_copy() -> None:
+    project = _planning_failed_project()
+    project["job_ids"] = ["job_doc277_remote_brain_unavailable"]
+    project["metadata"]["current_operation"].update(
+        {
+            "job_id": "job_doc277_remote_brain_unavailable",
+            "failure_code": "remote_brain_unavailable",
+        }
+    )
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            desktop = _browser_page(browser, html_path=DESKTOP_HTML, script_path=DESKTOP_JS)
+            desktop.evaluate(
+                """
+                (project) => {
+                  v3State.currentProject = project;
+                  v3State.currentJob = null;
+                  v3State.selectedScenario = 'general_creative';
+                  v3State.templateCatalogStatus = 'ready';
+                  v3State.templates = [{ template_id: 'general_template', project_can_create_jobs: true }];
+                  renderV3ProjectNextActions();
+                }
+                """,
+                project,
+            )
+            assert "共享创意大脑暂时不可用" in desktop.locator("#v3ProjectNextActions").inner_text()
+
+            mobile = _browser_page(browser, html_path=MOBILE_HTML, script_path=MOBILE_JS)
+            mobile.evaluate(
+                """
+                (project) => {
+                  ensureMobileLayers();
+                  setupMobileV3Adapter();
+                  mobileV3State.currentProject = project;
+                  mobileV3State.projects = [project];
+                  mobileV3State.currentJob = null;
+                  mobileV3State.selectedTemplate = 'general_template';
+                  renderMobileV3ProjectCurrentOperation(project);
+                }
+                """,
+                project,
+            )
+            assert "共享创意大脑暂时不可用" in mobile.locator("#mobileV3ProjectCurrentOperation").inner_text()
         finally:
             browser.close()
