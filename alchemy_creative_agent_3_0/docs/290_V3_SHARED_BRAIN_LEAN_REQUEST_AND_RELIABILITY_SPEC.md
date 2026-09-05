@@ -125,13 +125,13 @@ Human Realism 的美感、表情、材质、参考所有权和风格保真不得
 
 继续采用 Doc288：单次 Brain 默认 300 秒、最大 360 秒，共享准备预算默认 520 秒，Native MCP 规划父边界默认 540 秒；显式配置及派生预算按该文档执行。传输可用窗口不得超过共享剩余预算，不回退到 210 秒，不自动延长，也不预先改成更短的数值。
 
-首轮不调整 `max_tokens`、流式模式、重试次数、模型或网关路由。先记录现有值和实际调用树，避免同时改变多个变量。已知的 provider JSON 重答与 adapter 语义重答是不同边界，不能各称“一次”就推断整个流程最多一次重试。
+保持 `max_tokens`、流式模式、模型和网关路由不变。传输恢复必须是同一冻结请求内的有界恢复，不能演变成跨任务或跨阶段的通用重试。已知的 provider JSON 重答、瞬态传输恢复与 adapter 语义重答是不同边界，不能各称“一次”就推断整个流程最多一次重试。
 
 基线调用图有以下条件上界，必须保留并在阶段 A 验证，而不是增加一个全局重试器：
 
 | 层 | 基线行为 |
 | --- | --- |
-| Provider 序列化恢复 | 每次 `provider.run` 最多两次 remote attempt，第二次用于既有 JSON/明确输出截断恢复；不是 HTTP/超时通用重试 |
+| Provider 恢复 | 每次 `provider.run` 最多两次 remote attempt：第二次只能用于既有 JSON/明确输出截断恢复，或用于明确可重试的瞬态 HTTP/连接/读取/单次超时；两类恢复不得叠加 |
 | 规划语义重答 | strict contract 拒收后最多再调用一次 `provider.run`，该阶段理论最多四次 attempt |
 | Canonical finalizer | 特定 anchor-view 缺失或 `BrainPromptContractInvalid` 可触发一次重答，该阶段理论最多四次 attempt |
 | Professional capture re-sign | 满足现有 capture-continuity 条件时另有独立签发，理论最多两次 attempt；不是新增恢复，也不是所有专业任务必经 |
@@ -149,7 +149,7 @@ Human Realism 的美感、表情、材质、参考所有权和风格保真不得
 | 最终签发不通过 | 具体回执与完整 Prompt 的校验结果 | 保留原责任层，不绕过 finalizer 直达图像 Provider |
 | 共享预算耗尽 | 剩余预算、此前调用累计、终态分类 | 停止新 Brain 和图像请求；不得后台继续同一未受控调用 |
 
-规划失败后不得再对 blocked Job 调用 generate 来“探一下”，更不能把由此产生的第二次错误算成独立业务重试。解析失败、预算耗尽、无输出和像素复核未通过必须分开统计。本规范不增加任何自动生图或质量重试。
+规划失败后不得再对 blocked Job 调用 generate 来“探一下”，更不能把由此产生的第二次错误算成独立业务重试。解析失败、预算耗尽、无输出和像素复核未通过必须分开统计。瞬态 Brain 恢复只发生在同一次 `provider.run` 内，不能重试图像请求、Job、review 或质量结果。
 
 ## 6. 修改范围
 
@@ -157,7 +157,7 @@ Human Realism 的美感、表情、材质、参考所有权和风格保真不得
 
 仅当测量或失败回归证明有必要时，允许在既有 `adapter.py` / `providers.py` 中修正紧邻的字段传递或补充脱敏计时；不得借机改业务结果类型、恢复算法或模型选择。若需修改 runtime、公开 schema、Native 调用边界或专业模块权威，先提交具体调用链证据和修订范围，独立审计后才能开发。
 
-明确不在范围：新压缩服务、新 LLM 阶段、复杂路由器、模型自动切换、场景规则库、Review 阈值、身份/产品门禁、图像 Provider 参数、Slot 语义、前端重构、自动重试策略、V1/V2、Veyra/Sub2API、部署配置和历史数据清理。
+明确不在范围：新压缩服务、新 LLM 阶段、复杂路由器、模型自动切换、场景规则库、Review 阈值、身份/产品门禁、图像 Provider 参数、Slot 语义、前端重构、无界或跨任务自动重试策略、V1/V2、Veyra/Sub2API、部署配置和历史数据清理。
 
 ## 7. 实施阶段与闸门
 
@@ -216,7 +216,7 @@ Human Realism 的美感、表情、材质、参考所有权和风格保真不得
 | 专业隔离 | E-Commerce 产品真值/Doc269/E31 不变；Photography 保留角色；Character Card Face/Expression/Body 的正式 slot 权威不变；General 不加载专业交付表 |
 | 输出契约 | 必需字段、空列表、optional 条件、审批和逐图数量正确；缺失/交换/伪造签发仍失败；不能由服务端补语义 approval |
 | 冻结与生命周期 | 同一合法 checkpoint 复用；来源/命令变化不得错用旧结果；blocked plan 不再 dispatch；旧历史只读和新运行契约均正确 |
-| 传输与恢复 | HTTP错误、慢 content、reasoning-only、EOF/DONE、length、invalid JSON、语义拒绝、取消、预算耗尽；不叠加新重试或重置 deadline |
+| 传输与恢复 | HTTP错误、慢 content、reasoning-only、EOF/DONE、length、invalid JSON、语义拒绝、取消、预算耗尽；瞬态传输恢复最多一次且不重置 deadline，不把鉴权/策略/契约错误当作瞬态 |
 | 跨入口 | HTTP 与 Native MCP 使用一致共享契约；无 mock/兼容路径误入真实生成；本地与模拟 VPS 环境显式配置不污染 fixtures |
 
 优先复用以下现有回归文件，新增 Doc290 测试只补本规范新增的请求等价性和负担指标，不另造一套生成测试框架：
@@ -359,3 +359,31 @@ Human Realism 的美感、表情、材质、参考所有权和风格保真不得
 主控恢复后再次实际复核 Doc184 SHA256 为 `56FBC66DEEFB43438CE7FF1125F0CFFA07ABA69F8C29D5BEA6365116B02855E2`，确认其中包含 Expression 版本断言，与送审固定 SHA 一致，无证据漂移。
 
 当前状态：A 已独审符合，B 补丁固定，C 选定离线矩阵通过；独审收尾仍待结论，不提前宣告最终闸门通过。真实 D/E 未授权、未运行，本轮未 push 运行代码、未部署 VPS。离线通过和请求冗余减少不证明 timeout 根治、真实性能/可靠性改善或成片效果无回归；第 7-9 节的真实验收与集成标准保持不变。
+
+## 10.7 2026-09-06 瞬态 Brain 传输恢复修订
+
+VPS 只读诊断发现：容器、模型、密钥和 `https://aiself.vip` 网关均可用；小请求的
+Chat Completions 探针成功。对同一失败 Job 的完整 Brain 请求做无写入复放时，现有
+代码经过一次既有 JSON 序列化恢复后成功，但耗时约 215 秒；历史同项目失败记录均
+在 Brain 阶段以 `remote_brain_unavailable` 终止，预算仍有剩余。这证明问题是长请求
+偶发的瞬态上游/传输失败被统一投影，而不是模型名、Sub2API 余额或图像 Provider
+故障。
+
+因此对第 5 节增加一个最小例外，且仅限以下边界：
+
+- 同一冻结 `BrainRunRequest` 内，`provider.run` 首次遇到 408/409/425/429/500/502/503/504、
+  已知连接/读取/写入/协议传输异常或 `BrainTransportTimeoutError` 时，只再调用一次；
+- 只有调用已经处于共享 Brain execution scope 时才允许该恢复；第二次调用使用同一
+  模型、同一消息、同一阶段和剩余共享预算，不重置 520 秒逻辑预算；
+- 401/403、参数/策略/契约/JSON 错误、预算耗尽和不支持的协议不重试；JSON 恢复与
+  瞬态恢复不能叠加；失败仍保持 fail-closed，不进入图像请求；
+- 成功回执只增加脱敏的 `transient_recovery_attempted/succeeded` 标记，不能携带原始
+  错误、URL、凭据、Prompt 或图片数据。该机制不是 Job、图像 Provider、Review 或
+  质量重试，也不触碰 V1/V2、Veyra/Sub2API。
+
+本次实现与验证在独立 worktree `codex/v3-brain-transient-recovery` 完成，修改范围为
+`llm_brain/providers.py`、本测试文件和本规范；无 VPS 写入。新增回归覆盖 502 同请求
+恢复、401 不重试、共享预算内超时恢复；Brain/adapter/timeout/Doc290/Doc162/Doc175
+共 157 项通过，跨 General、Project API、来源/延续、Doc269/Doc281、Photography 与
+E-Commerce Provider 矩阵另 271 项通过。真实 Provider/图像生成和 VPS 部署仍未在该
+补丁上执行，不能把离线绿灯写成生产已发布或永久可用。

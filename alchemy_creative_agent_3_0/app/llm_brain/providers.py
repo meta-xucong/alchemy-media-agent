@@ -399,12 +399,14 @@ class V3LLMBrainProvider:
             return False
 
     def run(self, request: BrainRunRequest) -> dict[str, Any]:
-        """Run one Brain decision, with one serialization-only remote recovery.
+        """Run one Brain decision with bounded transport and JSON recovery.
 
         A malformed JSON reply is not an accepted creative decision.  The
         recovery therefore asks the same remote Brain to re-answer the same
         frozen request once; it never locally repairs JSON, reconstructs a
-        prompt, changes a reference, or starts an image operation.
+        prompt, changes a reference, or starts an image operation.  A
+        transient transport/upstream failure gets the same one bounded retry,
+        but only while the existing shared execution budget still has time.
         """
 
         self._ensure_budget_available()
@@ -448,6 +450,23 @@ class V3LLMBrainProvider:
                     json_parse_completed=getattr(recovery_error, "json_parse_completed", False),
                     json_failure_kind=getattr(recovery_error, "json_failure_kind", "unknown"),
                 ) from recovery_error
+        except BrainProviderError as first_error:
+            if not _is_retryable_transient_provider_error(first_error):
+                raise
+            # Keep the shared logical deadline authoritative.  A retry must
+            # never reset the budget or turn an auth/contract failure into a
+            # second remote call.
+            if _ACTIVE_EXECUTION_BUDGET.get() is None:
+                raise
+            self._ensure_budget_available()
+            recovered = self._run_remote_attempt(runner, request, json_recovery=False)
+            return _with_transport_receipt(
+                recovered,
+                attempts=2,
+                json_recovery_attempted=False,
+                transient_recovery_attempted=True,
+                execution_budget=self.execution_budget_receipt(),
+            )
 
     def _run_remote_attempt(self, runner: Any, request: BrainRunRequest, *, json_recovery: bool) -> dict[str, Any]:
         timeout_seconds = self._effective_timeout_seconds(request)
@@ -993,6 +1012,41 @@ def _is_transport_timeout_exception(error: BaseException) -> bool:
     return "timeout" in name and module.startswith(("httpx", "httpcore", "openai"))
 
 
+_RETRYABLE_TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+
+
+def _is_retryable_transient_provider_error(error: BaseException) -> bool:
+    """Allow one retry only for known transient transport/upstream failures."""
+
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+
+    for item in chain:
+        if isinstance(item, (BrainExecutionBudgetExceeded, BrainPromptContractInvalid, BrainInvalidJsonResponse)):
+            return False
+        if isinstance(item, BrainTransportTimeoutError):
+            return True
+        for candidate in (
+            getattr(item, "status_code", None),
+            getattr(getattr(item, "response", None), "status_code", None),
+        ):
+            if isinstance(candidate, int) and not isinstance(candidate, bool):
+                return candidate in _RETRYABLE_TRANSIENT_HTTP_STATUS_CODES
+        module = str(item.__class__.__module__ or "").lower()
+        name = str(item.__class__.__name__ or "").lower()
+        if module.startswith(("httpx", "httpcore", "openai")) and any(
+            token in name
+            for token in ("connecterror", "connectionerror", "networkerror", "readerror", "writeerror", "protocolerror")
+        ):
+            return True
+    return False
+
+
 def _chat_completions_url(base_url: str | None) -> str:
     base = str(base_url or "").rstrip("/")
     if not base:
@@ -1224,17 +1278,22 @@ def _with_transport_receipt(
     *,
     attempts: int,
     json_recovery_attempted: bool,
+    transient_recovery_attempted: bool = False,
     execution_budget: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attach only safe transport provenance for adapter/job audit projection."""
 
     result = dict(payload)
-    result[_TRANSPORT_RECEIPT_KEY] = {
+    receipt = {
         "attempts": attempts,
         "json_serialization_recovery_attempted": json_recovery_attempted,
         "json_serialization_recovery_succeeded": json_recovery_attempted,
         **({"execution_budget": dict(execution_budget)} if execution_budget else {}),
     }
+    if transient_recovery_attempted:
+        receipt["transient_recovery_attempted"] = True
+        receipt["transient_recovery_succeeded"] = True
+    result[_TRANSPORT_RECEIPT_KEY] = receipt
     return result
 
 
@@ -1256,6 +1315,13 @@ def pop_transport_receipt(payload: dict[str, Any]) -> dict[str, Any]:
         "json_serialization_recovery_attempted": attempted,
         "json_serialization_recovery_succeeded": succeeded,
     }
+    transient_attempted = raw.get("transient_recovery_attempted")
+    transient_succeeded = raw.get("transient_recovery_succeeded")
+    if transient_attempted is not None or transient_succeeded is not None:
+        if transient_attempted is not True or transient_succeeded is not True:
+            return {}
+        receipt["transient_recovery_attempted"] = True
+        receipt["transient_recovery_succeeded"] = True
     execution_budget = raw.get("execution_budget")
     if isinstance(execution_budget, dict):
         logical_budget_seconds = execution_budget.get("logical_budget_seconds")
