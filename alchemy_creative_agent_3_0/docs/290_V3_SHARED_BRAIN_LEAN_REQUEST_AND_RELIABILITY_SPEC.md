@@ -402,3 +402,14 @@ Sub2API 鉴权，而是 ScenarioRuntime 已产生的运行时错误枚举没有�
 现在只对明确的状态码文本或明确的网关/连接瞬时短语再尝试一次；仍使用同一冻结请求、
 同一共享预算，不重试 401/403、契约/JSON/内容策略/预算错误，也不触碰图像 Provider、
 V1/V2 或 Sub2API。新增回归覆盖包装型 502 与公开错误分类保真。
+
+### 10.9 2026-09-06 Brain 输出容量修订
+
+同一 VPS Job 的冻结 Brain 请求在默认 `max_tokens=8000` 下连续两次收到
+`truncated_response`，而只把内存中的同一请求上限提高到 `12000` 后单次完整返回；
+共享 520 秒执行预算仍有余量，说明责任点是输出容量而不是模型鉴权、图像 Provider
+或 Sub2API 路由。Foundation Provider 的默认 `V3_LLM_BRAIN_MAX_TOKENS` 与安全上限
+因此统一为 `12000`；显式环境值仍可在 `512..12000` 内覆盖。该修订不增加 Brain
+阶段、不扩大重试次数、不改 Prompt 权威、不改图片 Provider，也不修改 V1/V2 或
+Veyra/Sub2API。`BrainOutputTruncated.safe_metadata()` 现在同时沿 plan 与 finalizer
+适配器边界向上保留，使未来仍然失败时能区分输出截断与普通不可用。

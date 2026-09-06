@@ -357,11 +357,11 @@ class V3LLMBrainProvider:
         )
         # A compact V3 plan can still need substantial output allowance when a
         # reasoning-capable remote model accounts for its private deliberation
-        # before returning the complete JSON contract.  The old 4200-token
+        # before returning the complete JSON contract.  The old 8000-token
         # default truncated otherwise valid plans at the transport boundary.
         # This is an output-capacity setting only: it neither changes frozen
         # evidence nor permits local JSON/prompt reconstruction.
-        self.max_tokens = _int_env("V3_LLM_BRAIN_MAX_TOKENS", 8000)
+        self.max_tokens = _int_env("V3_LLM_BRAIN_MAX_TOKENS", 12000)
 
     @contextmanager
     def execution_scope(self):
@@ -1199,7 +1199,7 @@ def _float_env(name: str, default: float) -> float:
 
 def _int_env(name: str, default: int) -> int:
     try:
-        return max(512, min(8000, int(os.getenv(name, str(default)))))
+        return max(512, min(12000, int(os.getenv(name, str(default)))))
     except ValueError:
         return default
 

@@ -1668,7 +1668,7 @@ def _remote_brain_serialization_failure(exc: Exception) -> dict[str, Any]:
 
     for item in _exception_chain(exc):
         if isinstance(item, BrainOutputTruncated):
-            return {}
+            return item.safe_metadata()
         if isinstance(item, BrainInvalidJsonResponse):
             return item.safe_metadata()
     return {}

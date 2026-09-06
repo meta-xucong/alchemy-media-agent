@@ -24,7 +24,7 @@ prompt defect.
 
 1. A real-image job still requires a complete remote Brain result.  The
    remote Brain remains the only author of a canonical renderer prompt.
-2. Default `V3_LLM_BRAIN_MAX_TOKENS` is `8000`.  It gives a
+2. Default `V3_LLM_BRAIN_MAX_TOKENS` is `12000`.  It gives a
    reasoning-capable remote model enough output capacity to complete the
    compact JSON contract after its private deliberation.  An explicit operator
    environment value remains authoritative and is bounded to the documented
@@ -54,7 +54,7 @@ prompt defect.
 
 `test_v3_llm_brain_adapter.py` proves all of the following:
 
-1. the default complete-plan output budget is `8000`;
+1. the default complete-plan output budget is `12000`;
 2. one `finish_reason=length` response can use Doc145's same-request recovery;
 3. two such responses stop after exactly two calls with
    `BrainOutputTruncated`;

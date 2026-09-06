@@ -1079,7 +1079,18 @@ def test_required_remote_truncated_response_is_not_reported_as_json_decode(monke
     assert result.fallback_used is True
     assert result.audit["creative_fallback_executed"] is False
     assert result.audit["remote_provider_error_class"] == "truncated_response"
-    assert "remote_brain_serialization_failure" not in result.audit
+    assert result.audit["remote_brain_serialization_failure"] == {
+        "schema_version": "v3_brain_truncated_response_v1",
+        "stage": "plan",
+        "transport_error_class": "truncated_response",
+        "error_family": "output_truncated",
+        "json_failure_kind": "output_truncated",
+        "attempts": 2,
+        "json_serialization_recovery_attempted": True,
+        "json_serialization_recovery_succeeded": False,
+        "json_parse_started": True,
+        "json_parse_completed": False,
+    }
     assert "remote_image_set_validation_audit" not in result.audit
 
 
@@ -1429,7 +1440,7 @@ def test_remote_brain_default_output_budget_allows_complete_reasoning_contract(m
 
     provider = V3LLMBrainProvider()
 
-    assert provider.max_tokens == 8000
+    assert provider.max_tokens == 12000
 
 
 def test_remote_brain_uses_declared_deepseek_brain_not_openai_image_gateway(monkeypatch) -> None:
@@ -1748,7 +1759,7 @@ def test_remote_brain_recovers_one_output_token_truncation_without_local_repair(
     assert result["_alchemy_brain_transport"]["attempts"] == 2
     assert len(calls) == 2
     assert calls[0]["payload"]["messages"][1] == calls[1]["payload"]["messages"][1]
-    assert all(call["payload"]["max_tokens"] == 8000 for call in calls)
+    assert all(call["payload"]["max_tokens"] == 12000 for call in calls)
 
 
 def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> None:

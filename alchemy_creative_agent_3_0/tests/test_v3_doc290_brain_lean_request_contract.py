@@ -316,7 +316,7 @@ def test_doc290_normal_entry_dispatch_baseline(captured_entry):
         # Exact original-to-dispatch fidelity has a separate red regression.
         assert capture["user"]["user_input"] == state.requests[capture["attempt"] - 1].user_input
         assert capture["body"]["model"] == "deepseek-v4-pro"
-        assert capture["body"]["max_tokens"] == 8000
+        assert capture["body"]["max_tokens"] == 12000
         assert capture["body"]["stream"] is True
         assert capture["body"]["response_format"] == {"type": "json_object"}
     assert state.provider.timeout == 300
