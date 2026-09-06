@@ -194,6 +194,31 @@ def _malformed_remote_outcome() -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize(
+    "remote_error_class",
+    (
+        "execution_budget_exhausted",
+        "upstream_http_error",
+        "invalid_response",
+        "truncated_response",
+        "content_policy",
+        "canceled",
+    ),
+)
+def test_public_remote_brain_projection_preserves_runtime_error_class(remote_error_class: str) -> None:
+    projected = V3ProductApiService._public_remote_brain_lifecycle_outcome(
+        {
+            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "state": "blocked",
+            "reason_code": "remote_brain_unavailable",
+            "outcome_class": "remote_provider_error",
+            "remote_error_class": remote_error_class,
+        }
+    )
+
+    assert projected["remote_error_class"] == remote_error_class
+
+
 def _provider_no_pixel_retry_summary() -> dict[str, object]:
     return {
         "executed_count": 0,

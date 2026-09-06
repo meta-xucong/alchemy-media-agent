@@ -387,3 +387,18 @@ Chat Completions 探针成功。对同一失败 Job 的完整 Brain 请求做无
 共 157 项通过，跨 General、Project API、来源/延续、Doc269/Doc281、Photography 与
 E-Commerce Provider 矩阵另 271 项通过。真实 Provider/图像生成和 VPS 部署仍未在该
 补丁上执行，不能把离线绿灯写成生产已发布或永久可用。
+
+### 10.8 2026-09-06 失败分类投影与包装型瞬时错误修订
+
+VPS 对最新失败 Job 的只读复核确认：请求已进入 Product API 并在 Brain 规划阶段
+停止，但公开生命周期投影只保留了 `remote_brain_unavailable`。原因不是模型或
+Sub2API 鉴权，而是 ScenarioRuntime 已产生的运行时错误枚举没有完整进入 Product API
+的安全白名单；因此 `upstream_http_error`、`invalid_response`、
+`execution_budget_exhausted` 等诊断事实会被静默丢弃。修订同步补齐这组既有、无原文
+和凭据的枚举，保持闭合白名单和 fail-closed 行为，不把任意字符串直接公开。
+
+另一个边界修订是：部分 OpenAI-compatible 网关把 HTTP 502/503 或网关暂时不可用包装
+成普通 `BrainProviderError`，使原有基于异常类型/状态属性的瞬时恢复无法识别。Provider
+现在只对明确的状态码文本或明确的网关/连接瞬时短语再尝试一次；仍使用同一冻结请求、
+同一共享预算，不重试 401/403、契约/JSON/内容策略/预算错误，也不触碰图像 Provider、
+V1/V2 或 Sub2API。新增回归覆盖包装型 502 与公开错误分类保真。

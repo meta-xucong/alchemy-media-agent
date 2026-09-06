@@ -110,3 +110,26 @@ def test_timeout_gets_one_retry_without_resetting_shared_budget(monkeypatch) -> 
     assert calls == 2
     assert result["_alchemy_brain_transport"]["transient_recovery_attempted"] is True
     assert result["_alchemy_brain_transport"]["execution_budget"]["logical_budget_seconds"] == 20.0
+
+
+def test_wrapped_upstream_status_message_gets_one_retry(monkeypatch) -> None:
+    _configure_brain(monkeypatch)
+    calls = 0
+
+    def fake_stream(**kwargs):  # noqa: ANN003
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise BrainProviderError("remote brain provider failed: upstream status code 502")
+        return '{"remote": true}'
+
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    monkeypatch.setattr(brain_providers, "_collect_openai_chat_completion_stream", fake_stream)
+    provider = V3LLMBrainProvider()
+    with provider.execution_scope():
+        result = provider.run(BrainRunRequest(user_input="Create one natural portrait."))
+
+    assert result["remote"] is True
+    assert calls == 2
+    assert result["_alchemy_brain_transport"]["transient_recovery_succeeded"] is True

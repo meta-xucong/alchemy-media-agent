@@ -7,6 +7,7 @@ from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 import json
 import os
+import re
 import threading
 import time
 from typing import Any
@@ -1014,6 +1015,19 @@ def _is_transport_timeout_exception(error: BaseException) -> bool:
 
 _RETRYABLE_TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
+_RETRYABLE_TRANSIENT_PROVIDER_MESSAGE_PATTERNS = (
+    re.compile(
+        r"\b(?:http|status|error|upstream)\s*(?:code|status)?\s*[:=]?\s*"
+        r"(?:408|409|425|429|500|502|503|504)\b",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:bad gateway|gateway timeout|service unavailable|temporarily unavailable|"
+        r"connection reset|connection aborted|remote protocol error)\b",
+        flags=re.IGNORECASE,
+    ),
+)
+
 
 def _is_retryable_transient_provider_error(error: BaseException) -> bool:
     """Allow one retry only for known transient transport/upstream failures."""
@@ -1043,6 +1057,9 @@ def _is_retryable_transient_provider_error(error: BaseException) -> bool:
             token in name
             for token in ("connecterror", "connectionerror", "networkerror", "readerror", "writeerror", "protocolerror")
         ):
+            return True
+        message = str(item or "")
+        if any(pattern.search(message) for pattern in _RETRYABLE_TRANSIENT_PROVIDER_MESSAGE_PATTERNS):
             return True
     return False
 
