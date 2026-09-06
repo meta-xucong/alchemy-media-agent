@@ -314,7 +314,7 @@ Human Realism 的美感、表情、材质、参考所有权和风格保真不得
 - 成功序列：plan 的 invalid JSON -> 合法 JSON 缺 `visual_task_profile` -> invalid JSON -> 合法 plan；finalizer 的 invalid JSON -> 空 canonical prompt 列表 -> invalid JSON -> 合法签发。实测 8 次 HTTP dispatch、4 次 provider.run，每个 run 的 transport receipt 为 2 attempts；所有重答保留原文及相同冻结请求/context，正常结束为 planned。
 - 固定时钟从 1000 开始，共享 deadline 始终为 1520；每次消耗 60 秒时，dispatch 剩余预算为 `[520,460,400,340,280,220,160,100]`，实际 HTTP read timeout 受剩余预算约束，跨序列化、语义恢复及签发不重置。
 - 每次消耗 110 秒时，实测仅 5 次 HTTP dispatch、3 次 provider.run；剩余预算为 `[520,410,300,190,80]`，第五次 malformed JSON 后真实 provider 抛出 `BrainExecutionBudgetExceeded`，不会产生第六次 dispatch，job blocked 且没有 planning result/图片生成，公开剩余预算为零。
-- 边界观察：既有 Product API 公开 `remote_error_class` allowlist 列 `budget_exceeded`，未列 runtime 的 `execution_budget_exhausted`，故不能在公开字段上断言该内部枚举。测试在 provider owner 直接验证异常，同时断言公开 blocked 与预算为零。该既有投影差异已报告主控，本次不修改或豁免其后续归因。
+- 历史边界观察：既有 Product API 公开 `remote_error_class` allowlist 曾列 `budget_exceeded`，未列 runtime 的 `execution_budget_exhausted`，因此当时不能在公开字段上断言该内部枚举。该投影差异已在 §10.8 的最小修订中补齐；provider owner 仍保留对内部异常的直接断言。
 
 所有执行 cwd 均为开发 worktree。使用 Python `C:\Users\T14S\AppData\Local\Programs\Python\Python312\python.exe` 和主控离线 runner `D:\AI\Alchemy Media Agent System\.controlled-validation\doc290-brain-lean-request-20260906\run_offline_pytest.py`；后者在 import 前隔离 dotenv/凭据/auth 与存储、禁止非 loopback 网络。新增 fixture 还显式隔离 provider env、mock HTTP transport 并禁止图片生成，不用全局 remote=false 代替正常真实入口。各次 `--basetemp` 为仓库外 `$env:TEMP` 下独立 GUID 目录，禁用 pytest cache。
 
