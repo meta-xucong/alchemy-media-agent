@@ -464,6 +464,7 @@ def test_doc290_expression_authority_survives_in_system_and_finalizer(captured_e
     plan = captured_entry.captures[0]
     rule = HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS
     assert plan["system"].count(rule) == 1
+    assert plan["user"].get("human_expression_authenticity_instructions") is None
     assert captured_entry.captures[1]["user"]["human_expression_authenticity_instructions"] == rule
     print("DOC290_DUPLICATE " + _json({
         "case": captured_entry.case,
@@ -471,6 +472,83 @@ def test_doc290_expression_authority_survives_in_system_and_finalizer(captured_e
         "remove_candidate": "user.human_expression_authenticity_instructions",
         "retain": "system.HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS",
         "identical_text_bytes": _bytes(rule),
+    }))
+
+
+def _doc290_human_realism_guidance(*, applies: bool) -> dict:
+    return {
+        "applies": applies,
+        "subject_type": "person" if applies else "generic",
+        "realism_level": "photographic" if applies else "not_applicable",
+        "metadata": {
+            "human_subject_kind": "person",
+            "universal_rendering_profile": {
+                "skin_specularity": "matte",
+                "skin_texture": "natural_nonuniform",
+                "surface_materiality": "camera_observed_human_material",
+            },
+        },
+        "semantic_contract": {
+            "rendering_goal": "photographic_real_person",
+            "photographic_material_requirement": "camera_observed_human_materiality",
+            "physical_coherence": "real_camera_human_material",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "scenario_id", "template_id", "applies"),
+    (
+        ("general_human", "general_creative", "general_template", True),
+        ("ecommerce_human", "ecommerce", "ecommerce_template", True),
+        ("photography_human", "photography", "photography_template", True),
+        ("general_no_human", "general_creative", "general_template", False),
+    ),
+)
+def test_doc290_planning_human_realism_bridge_is_conditional_and_scenario_neutral(
+    case, scenario_id, template_id, applies
+):
+    original = f"Keep the exact {case} scene, style, mood, and composition.\n\tLiteral copy."
+    request = BrainRunRequest(
+        user_input=original,
+        stage="plan",
+        scenario_id=scenario_id,
+        template_id=template_id,
+        requested_image_count=1,
+        shared_capabilities={
+            "visual_cluster": {
+                "human_photorealism_guidance": _doc290_human_realism_guidance(applies=applies),
+            },
+        },
+        metadata={"require_real_images": True},
+    )
+    plan = json.loads(build_remote_payload(request))
+    contract = plan["human_realism_execution_contract"]
+    bridge = plan.get("human_realism_execution_contract_instructions")
+
+    assert plan["user_input"] == original
+    assert contract["applies"] is applies
+    if not applies:
+        assert contract == {"applies": False}
+        assert bridge is None
+        return
+
+    assert isinstance(bridge, str)
+    assert bridge.startswith("When human_realism_execution_contract.applies is true")
+    assert "semantic_contract" in bridge
+    assert "universal_rendering_profile" in bridge
+    assert "user_input authoritative" in bridge
+    assert "do not emit the contract" in bridge
+    assert "checklist" in bridge
+    assert bridge != HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS
+    lowered = bridge.lower()
+    assert all(term not in lowered for term in ("kidswear", "ancient", "adult", "campaign"))
+    print("DOC290_HUMAN_REALISM_BRIDGE " + _json({
+        "case": case,
+        "applies": contract["applies"],
+        "user_input_preserved": plan["user_input"] == original,
+        "scenario_neutral": True,
+        "expression_rule_in_planning_user": "human_expression_authenticity_instructions" in plan,
     }))
 
 

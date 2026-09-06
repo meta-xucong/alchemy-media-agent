@@ -413,3 +413,42 @@ V1/V2 或 Sub2API。新增回归覆盖包装型 502 与公开错误分类保真�
 阶段、不扩大重试次数、不改 Prompt 权威、不改图片 Provider，也不修改 V1/V2 或
 Veyra/Sub2API。`BrainOutputTruncated.safe_metadata()` 现在同时沿 plan 与 finalizer
 适配器边界向上保留，使未来仍然失败时能区分输出截断与普通不可用。
+
+## 10.10 2026-09-06 Human-realism planning-context restoration addendum
+
+### 10.10.1 Scope and observed mismatch
+
+本修订只处理共享 Brain 的**规划阶段上下文完整性**。同一纯文生图项目、同一
+`gpt-image-2` 路由和同一 `neutral_real_camera` 能力下，近期输出仍可成功落盘，
+但与历史成片相比出现更明显的均匀磨皮、塑料感和 AI 脸；这不是 Provider 失败，
+也不是前端、Review、存储或身份绑定故障。历史与近期记录均显示用户原始提示词未
+被截断，且近期单图请求不经过多图 variation contract。
+
+### 10.10.2 Authority and minimal correction model
+
+`HUMAN_EXPRESSION_AUTHENTICITY_INSTRUCTIONS` 的 system/finalizer 权威保持不变，
+不得把整段表达规则重新复制回 planning user payload；否则会违反本规范既有的
+去重契约。修复只允许在现有 `_compact_human_realism_execution_contract(...)`
+的共享能力边界内补足规划阶段所需的**紧凑语义上下文**，由同一 Brain 请求一次性
+消费。它必须：
+
+- 保留用户原始 prompt 原文及其场景、氛围、光线、构图和风格意图；
+- 只表达通用的人体材质、皮肤纹理、真实镜头和反塑料渲染约束；
+- 不添加古风、儿童、成人群像或其他场景专属分支，不重写用户意图；
+- 不新增 Brain 阶段、Provider 参数、Review 门槛、自动重试或历史图继承；
+- 不重复既有 expression authority，不暴露私有 source、项目 ID 或凭据。
+
+因此本修订的预期是恢复规划上下文的稳定性，而不是保证每次随机输出相同，亦不
+把 Review 分数当作生成前的硬闭锁。生成成功后仍由既有 Review/人工复核决定交付。
+
+### 10.10.3 Bounded implementation and acceptance
+
+允许修改范围仅为：`app/llm_brain/prompts.py`、对应 Brain contract regression
+tests，以及本规范。测试必须证明 planning request 仍保留原始 prompt、只出现一份
+expression authority、共享 human-realism semantic contract 在应有能力下存在，且
+General、E-Commerce、Photography 和无人物场景不会获得场景专属规则。不得修改
+Provider、Review、Storage、V1/V2、Veyra/Sub2API 或 VPS 配置。
+
+验收顺序：先通过 focused Brain prompt/contract tests，再通过受影响的 Brain adapter
+和消费者矩阵，最后才允许另行授权真实 Provider 或 VPS 验证。本附录通过不代表
+GitHub、VPS 或真实图像生成已经验收。
