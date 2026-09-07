@@ -2054,20 +2054,31 @@ async def _proxy_v2_request(path: str, request: Request) -> Response:
     headers = _v2_proxy_request_headers(request)
     body = await request.body()
     timeout = httpx.Timeout(settings.v2_api_proxy_timeout_seconds, connect=8.0)
-    try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            upstream = await client.request(
-                request.method,
+    attempts = 2 if request.method.upper() in {"GET", "HEAD", "OPTIONS"} else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                upstream = await client.request(
+                    request.method,
+                    target_url,
+                    content=body,
+                    headers=headers,
+                )
+            break
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "V2 API proxy failed for %s (attempt %s/%s): %s: %s",
                 target_url,
-                content=body,
-                headers=headers,
+                attempt,
+                attempts,
+                type(exc).__name__,
+                exc,
             )
-    except httpx.HTTPError as exc:
-        logger.warning("V2 API proxy failed for %s: %s", target_url, exc)
-        raise HTTPException(
-            status_code=502,
-            detail={"code": "v2_proxy_unavailable", "message": "V2 local API is not reachable."},
-        ) from exc
+            if attempt >= attempts:
+                raise HTTPException(
+                    status_code=502,
+                    detail={"code": "v2_proxy_unavailable", "message": "V2 local API is not reachable."},
+                ) from exc
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
