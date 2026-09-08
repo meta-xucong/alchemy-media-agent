@@ -14,7 +14,6 @@ FORBIDDEN_APP_MARKERS = [
     "custom_media_agent_docs",
     ".media_storage",
     "/api/v1",
-    "/v1/",
     "v1_thinking",
 ]
 
