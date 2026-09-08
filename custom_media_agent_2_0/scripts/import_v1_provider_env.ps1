@@ -136,7 +136,7 @@ if (-not $v2.ContainsKey("V2_IMAGE_GENERATION_PROVIDER") -or -not $v2["V2_IMAGE_
 }
 
 if (-not $v2.ContainsKey("V2_ALLOW_MOCK_FALLBACK")) {
-    $v2["V2_ALLOW_MOCK_FALLBACK"] = "true"
+    $v2["V2_ALLOW_MOCK_FALLBACK"] = "false"
 }
 if (-not $v2.ContainsKey("V2_CLAUDE_ORCHESTRATOR_ENABLED") -or -not $v2["V2_CLAUDE_ORCHESTRATOR_ENABLED"] -or $Force) {
     $hasClaudeBase = ($v2.ContainsKey("ANTHROPIC_BASE_URL") -and $v2["ANTHROPIC_BASE_URL"]) -or ($v2.ContainsKey("V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL") -and $v2["V2_CLAUDE_ORCHESTRATOR_FALLBACK_BASE_URL"])

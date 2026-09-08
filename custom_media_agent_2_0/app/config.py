@@ -126,7 +126,9 @@ class Settings:
     gemini_image_model: str = "gemini-2.5-flash-image"
     gemini_image_generation_enabled: bool = False
     gemini_image_timeout_seconds: float = 900.0
-    allow_mock_fallback: bool = True
+    # Mock output is a test-only explicit provider.  A production failure must
+    # remain visible instead of being turned into a successful placeholder job.
+    allow_mock_fallback: bool = False
     persist_image_history: bool = True
     claude_orchestrator_enabled: bool = False
     claude_orchestrator_cli: str = "claude"
@@ -319,7 +321,7 @@ def load_settings() -> Settings:
         gemini_image_generation_enabled=os.getenv("V2_GEMINI_IMAGE_GENERATION_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
         gemini_image_timeout_seconds=float(os.getenv("V2_GEMINI_IMAGE_TIMEOUT_SECONDS", "900")),
-        allow_mock_fallback=os.getenv("V2_ALLOW_MOCK_FALLBACK", "true").lower() in {"1", "true", "yes", "on"},
+        allow_mock_fallback=os.getenv("V2_ALLOW_MOCK_FALLBACK", "false").lower() in {"1", "true", "yes", "on"},
         persist_image_history=os.getenv("V2_PERSIST_IMAGE_HISTORY", "true").lower() in {"1", "true", "yes", "on"},
         claude_orchestrator_enabled=os.getenv("V2_CLAUDE_ORCHESTRATOR_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
