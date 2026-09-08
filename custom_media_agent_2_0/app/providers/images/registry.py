@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 
 from app.config import settings
-from app.providers.images.base import V2ImageProvider, V2ImageProviderCapabilities
+from app.providers.images.base import (
+    V2ImageProvider,
+    V2ImageProviderCapabilities,
+    V2ImageProviderNotConfiguredError,
+)
 from app.providers.images.doubao_image import V2DoubaoImageProvider
 from app.providers.images.gemini_image import V2GeminiImageProvider
 from app.providers.images.mock import V2MockImageProvider
@@ -34,7 +38,13 @@ async def get_v2_image_provider(provider_hint: str | None = None) -> V2ImageProv
         capabilities = await provider.capabilities()
         if capabilities.configured:
             return provider
-    return providers["mock_image"]
+    if settings.allow_mock_fallback:
+        return providers["mock_image"]
+    raise V2ImageProviderNotConfiguredError(
+        "No configured live V2 image provider is available.",
+        provider="v2_provider_selection",
+        detail={"requested_provider": requested, "mock_fallback": False},
+    )
 
 
 async def list_v2_image_provider_capabilities() -> list[V2ImageProviderCapabilities]:

@@ -53,7 +53,18 @@ async def create_running_image_job(request: CreateImageJobRequest) -> ImageJob:
                 created_at=now,
             )
         )
-    provider = await get_v2_image_provider(request.provider_hint)
+    try:
+        provider = await get_v2_image_provider(request.provider_hint)
+    except V2ImageProviderError as exc:
+        return _save_job(
+            _failed_job(
+                request,
+                provider_id=exc.provider or "v2_provider_selection",
+                error=exc,
+                job_id=new_id("job"),
+                created_at=now,
+            )
+        )
     job = ImageJob(
         job_id=new_id("job"),
         run_id=request.run_id,
@@ -92,7 +103,18 @@ async def create_image_job(
                 created_at=created_at,
             )
         )
-    provider = await get_v2_image_provider(request.provider_hint)
+    try:
+        provider = await get_v2_image_provider(request.provider_hint)
+    except V2ImageProviderError as exc:
+        return _save_job(
+            _failed_job(
+                request,
+                provider_id=exc.provider or "v2_provider_selection",
+                error=exc,
+                job_id=job_id,
+                created_at=created_at,
+            )
+        )
     if not repository.get_image_job(job_id):
         repository.save_image_job(
             ImageJob(

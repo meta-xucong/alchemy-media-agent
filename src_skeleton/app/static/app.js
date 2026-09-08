@@ -13349,7 +13349,7 @@ function v2EffectiveImageProvider(settings = v2State.modelSettings || {}) {
   if (configured === "mock_image" && settings.persisted) return "mock_image";
   const liveProvider = v2PreferredLiveImageProvider(settings);
   if (liveProvider) return liveProvider;
-  return "mock_image";
+  return "auto";
 }
 
 function v2RequestedImageProvider(settings = v2State.modelSettings || {}) {
