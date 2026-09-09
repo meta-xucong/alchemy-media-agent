@@ -156,6 +156,41 @@ class ProjectReferenceAsset(V3BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class GeneralGenerationPreferences(V3BaseModel):
+    """Server-resolved, browser-safe General generation choices."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    variation_mode: str | None = None
+    effective_variation_mode: str | None = None
+    inferred_variation_mode: str | None = None
+    variation_mode_source: str | None = None
+    requested_image_count: int | None = Field(default=None, ge=1)
+    requested_image_size: str | None = None
+
+
+class PhotographyGenerationPreferences(V3BaseModel):
+    """Server-resolved, browser-safe Photography choices."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    selected_mode_id: str | None = None
+    selected_preset_id: str | None = None
+    scene_domain: str | None = None
+    reference_role: str | None = None
+    requested_image_count: int | None = Field(default=None, ge=1)
+    requested_image_size: str | None = None
+
+
+class ProjectGenerationPreferences(V3BaseModel):
+    """Durable public projection of the latest per-template job choices."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    general: GeneralGenerationPreferences | None = None
+    photography: PhotographyGenerationPreferences | None = None
+
+
 class ProjectFeedbackRecord(V3BaseModel):
     feedback_id: str
     project_id: str
@@ -335,6 +370,7 @@ class ProjectMemorySummary(V3BaseModel):
     visible_output_count: int = 0
     confirmed_style_chips: list[str] = Field(default_factory=list)
     selected_asset_count: int = 0
+    generation_preferences: ProjectGenerationPreferences | None = None
     job_count: int = 0
     # This is intentionally only the terminal/active lifecycle state. Recent
     # project cards need to distinguish an in-progress request from a safely
@@ -360,6 +396,7 @@ class ProjectRecord(V3BaseModel):
     rejected_direction_notes: list[str] = Field(default_factory=list)
     timeline_refs: list[str] = Field(default_factory=list)
     job_ids: list[str] = Field(default_factory=list)
+    generation_preferences: ProjectGenerationPreferences | None = None
     photographer_profile_bindings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     latest_context: ProjectContextPackage | None = None
     reference_assets: list[ProjectReferenceAsset] = Field(default_factory=list)

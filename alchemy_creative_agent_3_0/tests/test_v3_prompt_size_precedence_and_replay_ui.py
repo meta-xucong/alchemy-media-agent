@@ -225,11 +225,12 @@ def test_terminal_retry_payload_includes_generated_jobs_without_visible_images()
     assert '"generated", "selected", "ready", "blocked", "failed", "not_found"' in mobile
 
 
-def test_desktop_continuation_defaults_to_one_image() -> None:
+def test_desktop_continuation_preserves_project_image_count() -> None:
     desktop = (ROOT / "src_skeleton" / "app" / "static" / "app.js").read_text(encoding="utf-8")
 
     assert "function setV3ContinuationGenerationDefaults()" in desktop
-    assert "supported.includes(1) ? 1" in desktop
+    assert "stored?.general?.requested_image_count" in desktop
+    assert "supported.includes(2) ? 2" in desktop
     continuation = desktop.split('if (action === "continue_same_style")', 1)[1].split(
         'if (action === "upload_reference_continue")', 1
     )[0]

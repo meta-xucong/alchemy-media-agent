@@ -12342,14 +12342,29 @@ class V3ProductApiService:
 
     def _selected_assets(self, result: PlanningResult, request: SelectResultRequest) -> list[PackagedAsset]:
         assets = result.asset_pack.assets
-        if request.selected_candidate_id:
+        candidate_ids = {
+            str(value).strip()
+            for value in request.selected_candidate_ids
+            if str(value).strip()
+        }
+        asset_ids = {
+            str(value).strip()
+            for value in request.selected_asset_ids
+            if str(value).strip()
+        }
+        if candidate_ids or asset_ids:
+            # Selection is a union: a UI may send candidate ids, asset ids,
+            # or both while restoring a multi-branch choice.  The old
+            # candidate-first branch silently discarded asset-only members of
+            # a mixed selection.
             return [
                 asset
                 for asset in assets
-                if asset.metadata.get("selected_candidate_id") == request.selected_candidate_id
+                if (
+                    str(asset.metadata.get("selected_candidate_id") or "").strip() in candidate_ids
+                    or asset.asset_id in asset_ids
+                )
             ]
-        if request.selected_asset_id:
-            return [asset for asset in assets if asset.asset_id == request.selected_asset_id]
         return list(assets)
 
     def _memory_update_for_selection(

@@ -163,8 +163,38 @@ class GenerateJobRequest(ProductApiBase):
 class SelectResultRequest(ProductApiBase):
     selected_candidate_id: str | None = None
     selected_asset_id: str | None = None
+    selected_candidate_ids: list[str] = Field(default_factory=list)
+    selected_asset_ids: list[str] = Field(default_factory=list)
     apply_memory_update: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_selection_ids(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        for singular_key, plural_key in (
+            ("selected_candidate_id", "selected_candidate_ids"),
+            ("selected_asset_id", "selected_asset_ids"),
+        ):
+            plural = payload.get(plural_key)
+            if plural is None:
+                plural = []
+            if isinstance(plural, list):
+                values = list(plural)
+            else:
+                values = plural
+            singular = payload.get(singular_key)
+            if singular is not None and isinstance(values, list):
+                values.insert(0, singular)
+            payload[plural_key] = values
+        return payload
+
+    @field_validator("selected_candidate_ids", "selected_asset_ids")
+    @classmethod
+    def clean_selection_ids(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if str(item).strip()))
 
 
 class V3AssetUploadStatusValue(StrEnum):

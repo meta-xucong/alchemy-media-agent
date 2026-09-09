@@ -61,6 +61,19 @@ const productionPortalHomeUrl = "https://aiself.vip/";
 const v2ApiBase = window.ALCHEMY_V2_API_BASE || `${window.location.origin}/api/v2`;
 const v2MediaDisplayBase = window.ALCHEMY_V2_MEDIA_BASE || (isLocalAlchemyHost() ? "http://127.0.0.1:8020/api/v2" : v2ApiBase);
 const v3ApiBase = window.ALCHEMY_V3_API_BASE || `${window.location.origin}/api/v3/creative-agent`;
+const v3CanonicalVariationModes = Object.freeze([
+  "auto",
+  "selection_candidates",
+  "delivery_suite",
+  "creative_exploration",
+  "format_layout_adaptation",
+]);
+const v3VariationModeAliases = Object.freeze({
+  similar_options: "selection_candidates",
+  suite_expansion: "delivery_suite",
+  layout_adaptation: "format_layout_adaptation",
+  format_adaptation: "format_layout_adaptation",
+});
 const v3ProjectStorageKey = "alchemy_v3_project_history_v1";
 const v3HistoryStorageKey = "alchemy_v3_job_history_v1";
 const veyraTokenStorageKey = "alchemy_veyra_access_token";
@@ -2630,6 +2643,15 @@ function renderV3ScenarioState() {
       renderV3GeneralSummary(null);
     }
   }
+  // Reapply the restored canonical mode after scenario rendering.  Restoring
+  // state alone is insufficient: the button projection otherwise keeps the
+  // initial "auto" visual even while the payload uses another mode.
+  setV3VariationMode(v3State.selectedVariationMode || "auto");
+  if (els.v3CountInput && Number.isFinite(Number(v3State.generationCount))) {
+    // setV3Preset() synchronizes the count control too; seed the DOM with the
+    // project value first so stale HTML cannot overwrite a restored count.
+    els.v3CountInput.value = String(v3State.generationCount);
+  }
   setV3Preset(v3State.selectedPreset);
   syncV3GenerationCountControl();
 }
@@ -2775,8 +2797,7 @@ function setV3Preset(presetId) {
 }
 
 function setV3VariationMode(mode) {
-  const allowed = new Set(["auto", "selection_candidates", "delivery_suite", "creative_exploration", "format_layout_adaptation"]);
-  v3State.selectedVariationMode = allowed.has(mode) ? mode : "auto";
+  v3State.selectedVariationMode = v3CanonicalVariationMode(mode);
   document.querySelectorAll("[data-v3-variation-mode]").forEach((button) => {
     const active = button.dataset.v3VariationMode === v3State.selectedVariationMode;
     button.classList.toggle("active", active);
@@ -2784,20 +2805,34 @@ function setV3VariationMode(mode) {
   });
 }
 
-function inferV3VariationMode(text) {
+function v3CanonicalVariationMode(mode) {
+  const value = String(mode || "").trim().toLowerCase();
+  const canonical = v3VariationModeAliases[value] || value;
+  return v3CanonicalVariationModes.includes(canonical) ? canonical : "auto";
+}
+
+function inferV3VariationMode(text, { requestedCount = null, hasReference = false, selectedSize = "" } = {}) {
   const value = String(text || "").toLowerCase();
-  if (/(尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|layout|format|ratio|size|crop|adapt)/i.test(value)) {
+  const count = Number.parseInt(String(requestedCount ?? v3State.generationCount ?? ""), 10);
+  const multipleImagesRequested = Number.isFinite(count) && count > 1;
+  const referencePresent = Boolean(hasReference);
+  const sizePresent = Boolean(String(selectedSize || "").trim());
+  if (/(尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|留白|裁切|裁剪|layout|format|ratio|size|crop|adapt)/i.test(value)) {
     return "format_layout_adaptation";
   }
-  if (/(探索|创意|方向|不同风格|多种风格|大胆|概念|explore|creative|direction|concept|mood)/i.test(value)) {
+  if (/(探索|不同方向|不同概念|尝试新风格|不同风格|多种风格|explore|different directions|different concepts|try new styles|different styles|new concepts)/i.test(value)) {
     return "creative_exploration";
   }
-  if (/(套图|一组|系列|组图|延展|扩展|series|suite|set|extend|campaign)/i.test(value)) {
+  if (/(沿.{0,12}方向.{0,12}(一组|系列|套图)|套图|一组|系列|组图|延展|扩展|\b(series|suite|set|extend|campaign)\b)/i.test(value)) {
     return "delivery_suite";
   }
   if (/(相似|备选|多给|挑选|同一|同款|不同姿势|不同角度|similar|alternative|same person|same product|different pose|different angle)/i.test(value)) {
     return "selection_candidates";
   }
+  if (multipleImagesRequested || referencePresent) {
+    return "selection_candidates";
+  }
+  if (sizePresent) return "format_layout_adaptation";
   return "delivery_suite";
 }
 
@@ -2809,7 +2844,147 @@ function v3VariationModeLabel(mode) {
     creative_exploration: "创意探索模式",
     format_layout_adaptation: "尺寸/版式适配模式",
   };
-  return labels[mode] || labels.auto;
+  return labels[v3CanonicalVariationMode(mode)] || labels.auto;
+}
+
+function v3ProjectWithResponsePreferences(project, payload = null) {
+  if (!project || typeof project !== "object") return project;
+  const existing = project.generation_preferences;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) return project;
+  const responseMetadata = payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
+  const preferences = payload?.generation_preferences && typeof payload.generation_preferences === "object"
+    ? payload.generation_preferences
+    : responseMetadata.generation_preferences;
+  return preferences && typeof preferences === "object" && !Array.isArray(preferences)
+    ? { ...project, generation_preferences: preferences }
+    : project;
+}
+
+function applyV3GenerationPreferences(project = v3State.currentProject) {
+  const metadata = project?.metadata && typeof project.metadata === "object" ? project.metadata : {};
+  const stored = project?.generation_preferences && typeof project.generation_preferences === "object"
+    ? project.generation_preferences
+    : metadata.generation_preferences && typeof metadata.generation_preferences === "object"
+      ? metadata.generation_preferences
+      : {};
+  const general = stored.general && typeof stored.general === "object" ? stored.general : {};
+  const photography = stored.photography && typeof stored.photography === "object" ? stored.photography : {};
+  const scenarioId = v3ScenarioForTemplate(project?.primary_template_id || project?.template_id || "general_template");
+  const legacyVariationMode = metadata.variation_mode || metadata.effective_variation_mode || "auto";
+  const generalVariationMode = v3CanonicalVariationMode(
+    general.general_variation_mode
+      || stored.general_variation_mode
+      || general.variation_mode
+      || stored.variation_mode
+      || legacyVariationMode,
+  );
+  if (scenarioId === "general_creative") {
+    v3State.selectedVariationMode = generalVariationMode;
+  }
+
+  const presetCandidates = [
+    photography.photography_selected_mode,
+    stored.photography_selected_mode,
+    photography.photography_preset,
+    stored.photography_preset,
+    photography.selected_mode_id,
+    stored.selected_mode_id,
+    photography.selected_preset_id,
+    stored.selected_preset_id,
+    metadata.selected_mode_id,
+    metadata.selected_preset_id,
+  ];
+  const validPhotographyPresets = new Set(["single_hero", "reference_reshoot", "professional_set"]);
+  const restoredPreset = presetCandidates.find((value) => validPhotographyPresets.has(String(value || "").trim()));
+  if (scenarioId === "photography") {
+    const preset = restoredPreset || "single_hero";
+    v3State.selectedPreset = preset;
+    v3State.presetByScenario.photography = preset;
+    const allowedScenes = new Set(["portrait", "landscape", "still_life", "animal"]);
+    const scene = String(
+      photography.photography_scene
+        || stored.photography_scene
+        || photography.scene_domain
+        || stored.scene_domain
+        || metadata.scene_domain
+        || "portrait",
+    ).trim();
+    v3State.selectedPhotographyScene = allowedScenes.has(scene) ? scene : "portrait";
+    const roleCandidates = [
+      photography.photography_reference_role,
+      stored.photography_reference_role,
+      photography.reference_role,
+      stored.reference_role,
+      metadata.photography_reference_role,
+    ];
+    const allowedRoles = new Set([
+      "face_reference",
+      "nonhuman_identity_reference",
+      "background_reference",
+      "subject_reference",
+    ]);
+    const role = roleCandidates.find((value) => allowedRoles.has(String(value || "").trim()));
+    v3State.selectedPhotographyReferenceRole = role || {
+      portrait: "face_reference",
+      landscape: "background_reference",
+      still_life: "subject_reference",
+      animal: "nonhuman_identity_reference",
+    }[v3State.selectedPhotographyScene];
+  }
+
+  const countCandidates = [
+    stored.requested_count,
+    stored.requested_image_count,
+    general.requested_count,
+    general.requested_image_count,
+    photography.requested_count,
+    photography.requested_image_count,
+    metadata.requested_image_count,
+  ];
+  const restoredCount = countCandidates
+    .map((value) => Number.parseInt(String(value ?? ""), 10))
+    .find((value) => Number.isFinite(value) && value > 0);
+  v3State.generationCount = restoredCount || (scenarioId === "photography"
+    ? (v3State.selectedPreset === "professional_set" ? 3 : 1)
+    : 2);
+  const allowedSizes = new Set(["1024x1536", "1024x1024", "1536x1024"]);
+  const restoredSize = [
+    stored.requested_image_size,
+    general.requested_image_size,
+    photography.requested_image_size,
+    metadata.requested_image_size,
+  ].find((value) => allowedSizes.has(String(value || "").trim()));
+  if (restoredSize) v3State.selectedSize = String(restoredSize).trim();
+}
+
+function v3GenerationPreferencesPayload(scenarioId, count, { hasReference = false, selectedSize = v3State.selectedSize } = {}) {
+  if (scenarioId === "general_creative") {
+    const variationMode = v3CanonicalVariationMode(v3State.selectedVariationMode || "auto");
+    const inferredMode = inferV3VariationMode(els.v3PromptInput?.value || "", {
+      requestedCount: count,
+      hasReference,
+      selectedSize,
+    });
+    return {
+      variation_mode: variationMode,
+      inferred_variation_mode: inferredMode,
+      effective_variation_mode: variationMode !== "auto" ? variationMode : inferredMode,
+      variation_mode_source: variationMode === "auto" ? "auto" : "manual",
+      requested_image_count: count,
+      requested_image_size: selectedSize || null,
+    };
+  }
+  if (scenarioId === "photography") {
+    return {
+      photography_selected_mode: v3State.selectedPreset,
+      photography_preset: v3State.selectedPreset,
+      photography_scene: v3State.selectedPhotographyScene,
+      photography_reference_role: v3State.selectedPhotographyReferenceRole,
+      requested_image_count: count,
+      requested_image_size: selectedSize || null,
+    };
+  }
+  return undefined;
 }
 
 async function loadV3Projects({ silent = false, force = false, loadMore = false } = {}) {
@@ -3211,7 +3386,8 @@ async function createV3Project() {
         },
       },
     });
-    v3State.currentProject = payload.project || null;
+    v3State.currentProject = v3ProjectWithResponsePreferences(payload.project || null, payload);
+    applyV3GenerationPreferences(v3State.currentProject);
     syncV3ProjectOutputsFromPayload(payload);
     if (Array.isArray(payload.templates) && payload.templates.length) {
       v3State.templates = payload.templates;
@@ -6489,7 +6665,7 @@ function handleV3ProjectActionClick(event) {
     if (els.v3PromptInput) {
       els.v3PromptInput.value = v3State.selectedScenario === "ecommerce"
         ? `参考这个项目已确认的商品信息和画面方向，继续制作一张完整商品图片。${goal ? ` 目标：${goal}` : ""}`
-        : `保持这个项目已选图片的风格，继续生成一张新的商业视觉图。${goal ? ` 目标：${goal}` : ""}`;
+        : els.v3PromptInput.value.trim() || goal || "继续生成图片。";
       els.v3PromptInput.focus();
     }
     openV3ProjectSubpage("compose");
@@ -8531,7 +8707,8 @@ async function openV3Project(projectId) {
     if (!detailIsCurrent()) return;
     if (summaryResult.status !== "fulfilled") throw summaryResult.reason;
     const payload = summaryResult.value;
-    v3State.currentProject = payload.project || null;
+    v3State.currentProject = v3ProjectWithResponsePreferences(payload.project || null, payload);
+    applyV3GenerationPreferences(v3State.currentProject);
     if (!detailIsCurrent()) return;
     setV3WorkspaceMode(
       v3ProjectUsesProfessionalWorkspace(v3State.currentProject) ? "professional" : "standard",
@@ -8553,6 +8730,7 @@ async function openV3Project(projectId) {
     const projectTemplateId = v3ProjectTemplateId(v3State.currentProject);
     if (!projectTemplateId) throw new Error("项目类型暂时无法确认");
     v3State.selectedTemplate = projectTemplateId;
+    applyV3GenerationPreferences(v3State.currentProject);
     v3State.activeProjectStep = "compose";
     saveV3ProjectSnapshot(v3State.currentProject);
     if (els.v3PromptInput) {
@@ -9051,7 +9229,12 @@ function setV3ContinuationGenerationDefaults() {
   const fixedCount = v3FixedGenerationCountForSelectedScenario();
   const scenarioId = v3State.selectedScenario || "general_creative";
   const supported = v3DeclaredGenerationCounts(v3TemplateIdForScenario(scenarioId));
-  const count = fixedCount ?? (supported.includes(1) ? 1 : supported[0] || 1);
+  const stored = v3State.currentProject?.generation_preferences;
+  const storedCount = scenarioId === "general_creative"
+    ? stored?.general?.requested_image_count ?? stored?.requested_image_count
+    : stored?.photography?.requested_image_count ?? stored?.requested_image_count;
+  const fallback = supported.includes(2) ? 2 : supported[0] || 1;
+  const count = fixedCount ?? v3BoundedGenerationCount(storedCount ?? v3State.generationCount ?? fallback, scenarioId);
   v3State.generationCount = count;
   if (els.v3CountInput) els.v3CountInput.value = String(count);
   syncV3GenerationCountControl();
@@ -9247,9 +9430,24 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
   const brandName = (els.v3BrandNameInput?.value || "").trim();
   const brandTone = (els.v3BrandToneInput?.value || "").trim();
   const generationSettings = v3CurrentGenerationSettings();
-  const selectedVariationMode = scenarioId === "general_creative" ? (v3State.selectedVariationMode || "auto") : "";
-  const inferredVariationMode = scenarioId === "general_creative" ? inferV3VariationMode(userInput) : "";
+  const selectedVariationMode = scenarioId === "general_creative"
+    ? v3CanonicalVariationMode(v3State.selectedVariationMode || "auto")
+    : "";
+  const hasReferenceForVariation = Boolean(
+    uploadedAssets.length || v3UsefulReferenceItems(v3State.currentProject).length,
+  );
+  const inferredVariationMode = scenarioId === "general_creative"
+    ? inferV3VariationMode(userInput, {
+        requestedCount: generationSettings.count,
+        hasReference: hasReferenceForVariation,
+        selectedSize: generationSettings.size,
+      })
+    : "";
   const effectiveVariationMode = selectedVariationMode && selectedVariationMode !== "auto" ? selectedVariationMode : inferredVariationMode;
+  const generationPreferences = v3GenerationPreferencesPayload(scenarioId, generationSettings.count, {
+    hasReference: hasReferenceForVariation,
+    selectedSize: generationSettings.size,
+  });
   const advancedReferenceControls = v3AdvancedReferenceControlsPayloadForScenario(scenarioId);
   const ecommerceCopyLocale = scenarioId === "ecommerce" ? v3EcommerceCopyLocaleValue() : "";
   const ecommerceApprovedLiteralCopy = scenarioId === "ecommerce" ? (els.v3EcommerceApprovedCopyInput?.value || "").trim() : "";
@@ -9272,11 +9470,13 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
     throw new Error("请等待摄影师档案加载完成后再生成。 ");
   }
   const selectedPhotographerProfileId = photographerProfile?.profile_id || "general_photography";
-  const hasReference = uploadedAssets.length > 0;
-  if (scenarioId === "photography" && v3State.selectedPreset === "reference_reshoot" && !hasReference) {
+  const hasUploadedReference = uploadedAssets.length > 0;
+  const existingPhotographyReferences = v3UsefulReferenceItems(v3State.currentProject);
+  const hasPhotographyReference = hasUploadedReference || existingPhotographyReferences.length > 0;
+  if (scenarioId === "photography" && v3State.selectedPreset === "reference_reshoot" && !hasPhotographyReference) {
     throw new Error("参考重拍需要先上传一张参考图。 ");
   }
-  if (scenarioId === "photography" && v3State.selectedPhotographyScene === "animal" && hasReference
+  if (scenarioId === "photography" && v3State.selectedPhotographyScene === "animal" && hasPhotographyReference
     && v3State.selectedPhotographyReferenceRole !== "nonhuman_identity_reference") {
     throw new Error("动物或宠物身份参考必须选择“动物/宠物身份参考”。 ");
   }
@@ -9300,6 +9500,7 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
       continuation_mode: scenarioId === "general_creative" ? effectiveVariationMode : undefined,
       variation_mode_source: scenarioId === "general_creative" ? (selectedVariationMode === "auto" ? "auto" : "manual") : undefined,
       variation_mode_label: scenarioId === "general_creative" ? v3VariationModeLabel(effectiveVariationMode) : undefined,
+      generation_preferences: generationPreferences,
       brand_or_project_name: brandName || undefined,
       visual_tone: brandTone || undefined,
       requested_image_count: generationSettings.count,
@@ -9316,7 +9517,7 @@ function buildV3JobPayload(uploadedAssets = v3State.uploadedAssets) {
           : undefined
       ),
       scene_domain: scenarioId === "photography" ? v3State.selectedPhotographyScene : undefined,
-      photography_reference_role: scenarioId === "photography" && hasReference ? v3State.selectedPhotographyReferenceRole : undefined,
+      photography_reference_role: scenarioId === "photography" && hasPhotographyReference ? v3State.selectedPhotographyReferenceRole : undefined,
       has_product_reference: scenarioId === "ecommerce" ? hasProductReference : undefined,
       ecommerce_text_to_image_fallback: scenarioId === "ecommerce" ? !hasProductReference : undefined,
       ecommerce_copy_locale: ecommerceCopyLocale || undefined,
@@ -9405,6 +9606,7 @@ async function createV3Job() {
         effective_variation_mode: payload.metadata.effective_variation_mode,
         continuation_mode: payload.metadata.continuation_mode,
         variation_mode_source: payload.metadata.variation_mode_source,
+        generation_preferences: payload.metadata.generation_preferences,
         has_product_reference: payload.metadata.has_product_reference,
         ecommerce_text_to_image_fallback: payload.metadata.ecommerce_text_to_image_fallback,
       },

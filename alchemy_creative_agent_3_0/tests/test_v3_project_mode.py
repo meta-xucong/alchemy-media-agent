@@ -1239,7 +1239,7 @@ def test_selected_output_creates_active_generated_reference_and_selection_state(
     assert selected["context"]["selected_reference_assets"]
 
 
-def test_general_project_keeps_one_forced_continuation_reference(tmp_path) -> None:
+def test_general_project_preserves_multiple_selected_continuation_references(tmp_path) -> None:
     handlers = _project_handlers_with_certified_review(tmp_path)
     project = handlers.post_projects({"user_goal": "Create a premium social cover"})["project"]
 
@@ -1271,26 +1271,29 @@ def test_general_project_keeps_one_forced_continuation_reference(tmp_path) -> No
     context = handlers.get_project_context(project["project_id"])
 
     assert first_output_id != second_output_id
-    assert [ref["output_id"] for ref in second_selected["project"]["selected_output_refs"]] == [second_output_id]
+    assert [ref["output_id"] for ref in second_selected["project"]["selected_output_refs"]] == [
+        first_output_id,
+        second_output_id,
+    ]
     states = {
         item["output_id"]: item["selection_state"]
         for item in second_selected["project"]["selected_output_states"]
     }
-    assert states[first_output_id] == "unselected"
+    assert states[first_output_id] == "selected"
     assert states[second_output_id] == "selected"
     active_generated = [
         ref
         for ref in second_selected["project"]["reference_assets"]
         if ref["source_type"] == "generated_selected" and ref["status"] == "active"
     ]
-    assert [ref["created_from_output_id"] for ref in active_generated] == [second_output_id]
-    assert len(context["selected_output_assets"]) == 1
-    assert len(context["selected_reference_assets"]) == 1
-    assert len(context["strong_reference_bindings"]) == 1
-    assert context["metadata"]["general_forced_reference_count"] == 1
+    assert [ref["created_from_output_id"] for ref in active_generated] == [first_output_id, second_output_id]
+    assert len(context["selected_output_assets"]) == 2
+    assert len(context["selected_reference_assets"]) == 2
+    assert len(context["strong_reference_bindings"]) == 2
+    assert context["metadata"]["general_forced_reference_count"] == 2
 
 
-def test_general_context_collapses_legacy_multiple_forced_references(tmp_path) -> None:
+def test_general_context_preserves_legacy_multiple_selected_references(tmp_path) -> None:
     handlers = _project_handlers_with_output_store(tmp_path)
     project = handlers.post_projects({"user_goal": "Create a premium social cover"})["project"]
     project_record = handlers.project_service._require_project(project["project_id"])
@@ -1343,10 +1346,10 @@ def test_general_context_collapses_legacy_multiple_forced_references(tmp_path) -
 
     context = handlers.get_project_context(project_record.project_id)
 
-    assert [ref["output_id"] for ref in context["selected_output_assets"]] == [first.output_id]
-    assert [item["output_id"] for item in context["selected_reference_assets"]] == [first.output_id]
-    assert [item["output_id"] for item in context["strong_reference_bindings"]] == [first.output_id]
-    assert context["metadata"]["general_forced_reference_count"] == 1
+    assert [ref["output_id"] for ref in context["selected_output_assets"]] == [first.output_id, second.output_id]
+    assert [item["output_id"] for item in context["selected_reference_assets"]] == [first.output_id, second.output_id]
+    assert [item["output_id"] for item in context["strong_reference_bindings"]] == [first.output_id, second.output_id]
+    assert context["metadata"]["general_forced_reference_count"] == 2
 
 
 def test_portrait_selection_becomes_strong_identity_reference(tmp_path) -> None:

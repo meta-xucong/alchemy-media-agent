@@ -2657,12 +2657,25 @@ function createMobileSheet({ id, title, eyebrow, footerLabel, targets }) {
 const mobileV3ApiBase = window.ALCHEMY_V3_API_BASE || `${window.location.origin}/api/v3/creative-agent`;
 const mobileV3ProjectsCacheKey = "alchemy_mobile_v3_projects_v1";
 const mobileV3OutputsCacheKey = "alchemy_mobile_v3_outputs_v1";
+const mobileV3CanonicalVariationModes = Object.freeze([
+  "auto",
+  "selection_candidates",
+  "delivery_suite",
+  "creative_exploration",
+  "format_layout_adaptation",
+]);
+const MOBILE_V3_VARIATION_MODE_ALIASES = Object.freeze({
+  similar_options: "selection_candidates",
+  suite_expansion: "delivery_suite",
+  layout_adaptation: "format_layout_adaptation",
+  format_adaptation: "format_layout_adaptation",
+});
 const mobileV3State = {
   initialized: false,
   loaded: false,
   loading: false,
   busy: false,
-  generationCount: 1,
+  generationCount: 2,
   selectedSize: "",
   selectedMode: "auto",
   files: [],
@@ -3446,11 +3459,16 @@ function appendMobileV3ProjectItems(existingItems, incomingItems) {
 }
 
 function mobileV3ProjectWithResponseMetadata(project, payload) {
-  if (!project || !payload?.metadata || typeof payload.metadata !== "object") return project;
-  const metadata = payload.metadata;
+  if (!project) return project;
+  const metadata = payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
+  const responsePreferences = payload?.generation_preferences && typeof payload.generation_preferences === "object"
+    ? payload.generation_preferences
+    : metadata.generation_preferences && typeof metadata.generation_preferences === "object"
+      ? metadata.generation_preferences
+      : null;
   const hasEcommerceView = metadata.ecommerce_project_view && typeof metadata.ecommerce_project_view === "object";
   const hasCurrentOperation = Object.prototype.hasOwnProperty.call(metadata, "current_operation");
-  if (!hasEcommerceView && !hasCurrentOperation) return project;
+  if (!hasEcommerceView && !hasCurrentOperation && !responsePreferences) return project;
   const nextMetadata = { ...(project.metadata || {}) };
   if (hasEcommerceView) nextMetadata.ecommerce_project_view = metadata.ecommerce_project_view;
   if (hasCurrentOperation && metadata.current_operation && typeof metadata.current_operation === "object") {
@@ -3458,7 +3476,88 @@ function mobileV3ProjectWithResponseMetadata(project, payload) {
   } else if (hasCurrentOperation || hasEcommerceView) {
     delete nextMetadata.current_operation;
   }
-  return { ...project, metadata: nextMetadata };
+  return {
+    ...project,
+    ...(responsePreferences && !project.generation_preferences
+      ? { generation_preferences: responsePreferences }
+      : {}),
+    metadata: nextMetadata,
+  };
+}
+
+function applyMobileV3GenerationPreferences(project = mobileV3State.currentProject) {
+  const stored = project?.generation_preferences && typeof project.generation_preferences === "object"
+    ? project.generation_preferences
+    : {};
+  const general = stored.general && typeof stored.general === "object" ? stored.general : {};
+  const photography = stored.photography && typeof stored.photography === "object" ? stored.photography : {};
+  const legacyVariationMode = project?.metadata?.variation_mode
+    || project?.metadata?.effective_variation_mode
+    || "auto";
+  const mode = mobileV3CanonicalVariationMode(
+    general.general_variation_mode
+      || stored.general_variation_mode
+      || general.variation_mode
+      || stored.variation_mode
+      || legacyVariationMode
+      || "auto",
+  );
+  mobileV3State.selectedMode = mode;
+  const presets = [
+    photography.photography_selected_mode,
+    stored.photography_selected_mode,
+    photography.photography_preset,
+    stored.photography_preset,
+    photography.selected_mode_id,
+    stored.selected_mode_id,
+    photography.selected_preset_id,
+    stored.selected_preset_id,
+  ];
+  const allowedPresets = new Set(["single_hero", "reference_reshoot", "professional_set"]);
+  const preset = presets.find((value) => allowedPresets.has(String(value || "").trim()));
+  if (preset) mobileV3State.selectedPhotographyMode = String(preset).trim();
+  const scenes = new Set(["portrait", "landscape", "still_life", "animal"]);
+  const scene = String(
+    photography.photography_scene
+      || stored.photography_scene
+      || photography.scene_domain
+      || stored.scene_domain
+      || "portrait",
+  ).trim();
+  if (scenes.has(scene)) mobileV3State.selectedPhotographyScene = scene;
+  const roles = new Set([
+    "face_reference",
+    "nonhuman_identity_reference",
+    "background_reference",
+    "subject_reference",
+  ]);
+  const role = String(
+    photography.photography_reference_role
+      || stored.photography_reference_role
+      || photography.reference_role
+      || stored.reference_role
+      || "",
+  ).trim();
+  if (roles.has(role)) mobileV3State.selectedPhotographyReferenceRole = role;
+  const restoredCount = [
+    stored.requested_count,
+    stored.requested_image_count,
+    general.requested_count,
+    general.requested_image_count,
+    photography.requested_count,
+    photography.requested_image_count,
+  ]
+    .map((value) => Number.parseInt(String(value ?? ""), 10))
+    .find((value) => Number.isFinite(value) && value > 0);
+  if (restoredCount) mobileV3State.generationCount = restoredCount;
+  const allowedSizes = new Set(["1024x1536", "1024x1024", "1536x1024"]);
+  const restoredSize = [
+    stored.requested_image_size,
+    general.requested_image_size,
+    photography.requested_image_size,
+    project?.metadata?.requested_image_size,
+  ].find((value) => allowedSizes.has(String(value || "").trim()));
+  if (restoredSize) mobileV3State.selectedSize = String(restoredSize).trim();
 }
 
 async function loadMobileV3Projects({ silent = true, force = false, loadMore = false } = {}) {
@@ -4132,9 +4231,14 @@ function handleMobileV3Click(event) {
   }
 }
 
+function mobileV3CanonicalVariationMode(mode) {
+  const value = String(mode || "").trim().toLowerCase();
+  const canonical = MOBILE_V3_VARIATION_MODE_ALIASES[value] || value;
+  return mobileV3CanonicalVariationModes.includes(canonical) ? canonical : "auto";
+}
+
 function setMobileV3Mode(mode) {
-  const allowed = new Set(["auto", "similar_options", "suite_expansion", "creative_exploration", "layout_adaptation"]);
-  mobileV3State.selectedMode = allowed.has(mode) ? mode : "auto";
+  mobileV3State.selectedMode = mobileV3CanonicalVariationMode(mode);
   document.querySelectorAll("[data-mobile-v3-mode]").forEach((button) => {
     const active = button.dataset.mobileV3Mode === mobileV3State.selectedMode;
     button.classList.toggle("active", active);
@@ -4171,10 +4275,9 @@ function mobileV3ActiveTemplateId() {
 
 function mobileV3SupportedGenerationCounts(templateId = mobileV3ActiveTemplateId()) {
   if (templateId === "ecommerce_template") return [...mobileV3EcommerceExactCountContract];
-  // The mobile photography entry remains unavailable today.  Keep its future
-  // professional-set contract independent of the E-Commerce count choices.
+  // Photography owns its own count contract; it must not inherit E-Commerce counts.
   if (templateId === "photographer_template") {
-    return mobileV3State.selectedPreset === "professional_set" ? [3] : [1];
+    return mobileV3State.selectedPhotographyMode === "professional_set" ? [3] : [1];
   }
   return [1, 2, 3, 4];
 }
@@ -4232,7 +4335,8 @@ function setMobileV3PhotographyScene(sceneId) {
 }
 
 function setMobileV3PhotographyMode(mode) {
-  mobileV3State.selectedPhotographyMode = mode === "professional_set" ? "professional_set" : "single_hero";
+  const allowed = new Set(["single_hero", "reference_reshoot", "professional_set"]);
+  mobileV3State.selectedPhotographyMode = allowed.has(mode) ? mode : "single_hero";
   renderMobileV3PhotographyControls();
 }
 
@@ -4465,6 +4569,7 @@ async function createMobileV3ProjectFromHome() {
       },
     });
     const project = mobileV3ProjectWithResponseMetadata(payload.project || payload, payload);
+    applyMobileV3GenerationPreferences(project);
     mobileV3State.projects = [project, ...mobileV3State.projects.filter((item) => item.project_id !== project.project_id)];
     mobileV3State.loaded = true;
     renderMobileV3ProjectCards();
@@ -4678,22 +4783,24 @@ function mobileV3TemplateIdForScenario(scenarioId) {
   return "general_template";
 }
 
-function mobileV3BackendVariationMode(mode, prompt = "") {
-  const map = {
-    similar_options: "selection_candidates",
-    suite_expansion: "delivery_suite",
-    creative_exploration: "creative_exploration",
-    layout_adaptation: "format_layout_adaptation",
-  };
-  if (mode && mode !== "auto") return map[mode] || "delivery_suite";
-  return mobileV3InferVariationMode(prompt);
+function mobileV3BackendVariationMode(mode, prompt = "", options = {}) {
+  const canonical = mobileV3CanonicalVariationMode(mode);
+  if (canonical !== "auto") return canonical;
+  return mobileV3InferVariationMode(prompt, options);
 }
 
-function mobileV3InferVariationMode(prompt) {
+function mobileV3InferVariationMode(prompt, { requestedCount = null, hasReference = false, selectedSize = "" } = {}) {
   const text = String(prompt || "").toLowerCase();
-  if (/(尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|layout|format|ratio|size|crop|adapt)/i.test(text)) return "format_layout_adaptation";
-  if (/(探索|创意|方向|不同风格|多种风格|大胆|概念|explore|creative|direction|concept|mood)/i.test(text)) return "creative_exploration";
+  const count = Number.parseInt(String(requestedCount ?? mobileV3State.generationCount ?? ""), 10);
+  const multipleImagesRequested = Number.isFinite(count) && count > 1;
+  const referencePresent = Boolean(hasReference);
+  const sizePresent = Boolean(String(selectedSize || "").trim());
+  if (/(尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|留白|裁切|裁剪|layout|format|ratio|size|crop|adapt)/i.test(text)) return "format_layout_adaptation";
+  if (/(探索|不同方向|不同概念|尝试新风格|不同风格|多种风格|explore|different directions|different concepts|try new styles|different styles|new concepts)/i.test(text)) return "creative_exploration";
+  if (/(沿.{0,12}方向.{0,12}(一组|系列|套图)|套图|一组|系列|组图|延展|扩展|\b(series|suite|set|extend|campaign)\b)/i.test(text)) return "delivery_suite";
   if (/(相似|备选|多给|挑选|同一|同款|不同姿势|不同角度|similar|alternative|same person|same product|different pose|different angle)/i.test(text)) return "selection_candidates";
+  if (multipleImagesRequested || referencePresent) return "selection_candidates";
+  if (sizePresent) return "format_layout_adaptation";
   return "delivery_suite";
 }
 
@@ -4704,7 +4811,7 @@ function mobileV3VariationModeLabel(mode) {
     creative_exploration: "创意探索",
     format_layout_adaptation: "尺寸/版式适配",
   };
-  return labels[mode] || "自动判断";
+  return labels[mobileV3CanonicalVariationMode(mode)] || "自动判断";
 }
 
 function mobileV3FileFingerprint(file) {
@@ -4808,20 +4915,50 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   if (!projectTemplateId) throw new Error("项目类型还没有确认。请返回项目列表重新打开。 ");
   const scenarioId = mobileV3ScenarioForTemplate(projectTemplateId);
   const templateId = mobileV3TemplateIdForScenario(scenarioId);
-  {
-  const count = mobileV3BoundedCount(
-    document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1,
-    project.primary_template_id || mobileV3State.selectedTemplate || "general_template",
-  );
   if (templateId !== projectTemplateId) throw new Error("项目类型与当前页面不一致。请重新打开项目。 ");
-  }
-  const count = scenarioId === "photography"
+  const requestedCount = scenarioId === "photography"
     ? (mobileV3State.selectedPhotographyMode === "professional_set" ? 3 : 1)
-    : mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
-  const selectedMode = mobileV3State.selectedMode || "auto";
-  const inferredMode = scenarioId === "general_creative" ? mobileV3InferVariationMode(userInput) : "";
-  const effectiveMode = scenarioId === "general_creative" ? mobileV3BackendVariationMode(selectedMode, userInput) : "";
+    : mobileV3BoundedCount(
+        document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1,
+        project.primary_template_id || mobileV3State.selectedTemplate || "general_template",
+      );
+  const count = requestedCount;
+  const selectedMode = mobileV3CanonicalVariationMode(mobileV3State.selectedMode || "auto");
   const size = mobileV3State.selectedSize || "";
+  const existingReferences = mobileV3UsefulReferences(mobileV3State.currentProject);
+  const hasReferenceForVariation = Boolean(
+    uploadedAssets.length || existingReferences.length,
+  );
+  const variationInferenceOptions = {
+    requestedCount: count,
+    hasReference: hasReferenceForVariation,
+    selectedSize: size,
+  };
+  const inferredMode = scenarioId === "general_creative"
+    ? mobileV3InferVariationMode(userInput, variationInferenceOptions)
+    : "";
+  const effectiveMode = scenarioId === "general_creative"
+    ? mobileV3BackendVariationMode(selectedMode, userInput, variationInferenceOptions)
+    : "";
+  const generationPreferences = scenarioId === "general_creative"
+    ? {
+        variation_mode: selectedMode,
+        inferred_variation_mode: inferredMode,
+        effective_variation_mode: effectiveMode,
+        variation_mode_source: selectedMode === "auto" ? "auto" : "manual",
+        requested_image_count: count,
+        requested_image_size: size || null,
+      }
+    : scenarioId === "photography"
+      ? {
+          photography_selected_mode: mobileV3State.selectedPhotographyMode,
+          photography_preset: mobileV3State.selectedPhotographyMode,
+          photography_scene: mobileV3State.selectedPhotographyScene,
+          photography_reference_role: mobileV3State.selectedPhotographyReferenceRole,
+          requested_image_count: count,
+          requested_image_size: size || null,
+        }
+      : undefined;
   const advancedReferenceControls = ["general_creative", "ecommerce"].includes(scenarioId)
     ? mobileV3AdvancedReferenceControlsPayload()
     : undefined;
@@ -4843,6 +4980,10 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   if (scenarioId === "photography" && !photographerProfile) {
     throw new Error("请等待摄影师档案加载完成后再生成。 ");
   }
+  const hasPhotographyReference = Boolean(uploadedAssets.length || existingReferences.length);
+  if (scenarioId === "photography" && mobileV3State.selectedPhotographyMode === "reference_reshoot" && !hasPhotographyReference) {
+    throw new Error("参考重拍需要先上传一张参考图。 ");
+  }
   return {
     user_input: userInput,
     template_id: templateId,
@@ -4855,12 +4996,15 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
       frontend_surface: "mobile_v3_project_mode",
       interaction_style: "mobile_project_card",
       advanced_reference_controls: advancedReferenceControls,
+      selected_mode_id: scenarioId === "photography" ? mobileV3State.selectedPhotographyMode : undefined,
+      selected_preset_id: scenarioId === "photography" ? mobileV3State.selectedPhotographyMode : undefined,
       variation_mode: scenarioId === "general_creative" ? selectedMode : undefined,
       inferred_variation_mode: scenarioId === "general_creative" ? inferredMode : undefined,
       effective_variation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
       continuation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
       variation_mode_source: scenarioId === "general_creative" ? (selectedMode === "auto" ? "auto" : "manual") : undefined,
       variation_mode_label: scenarioId === "general_creative" ? mobileV3VariationModeLabel(effectiveMode) : undefined,
+      generation_preferences: generationPreferences,
       requested_image_count: count,
       requested_image_size: size || undefined,
       requested_aspect_label: mobileV3SizeLabel(size),
@@ -4878,7 +5022,7 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
           : undefined
       ),
       scene_domain: scenarioId === "photography" ? mobileV3State.selectedPhotographyScene : undefined,
-      photography_reference_role: scenarioId === "photography" && uploadedAssets.length ? mobileV3State.selectedPhotographyReferenceRole : undefined,
+      photography_reference_role: scenarioId === "photography" && hasPhotographyReference ? mobileV3State.selectedPhotographyReferenceRole : undefined,
       reference_files: uploadedAssets.map((asset) => ({
         asset_id: asset.asset_id,
         name: asset.filename,
@@ -4901,6 +5045,7 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
         effective_variation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
         continuation_mode: scenarioId === "general_creative" ? effectiveMode : undefined,
         variation_mode_source: scenarioId === "general_creative" ? (selectedMode === "auto" ? "auto" : "manual") : undefined,
+        generation_preferences: generationPreferences,
       },
     },
   };
@@ -4947,6 +5092,7 @@ async function recoverMobileV3PlannedJob(projectId, { shouldContinue = null } = 
       if (String(project?.project_id || "") !== String(projectId || "")) continue;
       if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
       mobileV3State.currentProject = project;
+      applyMobileV3GenerationPreferences(project);
       if (!mobileV3GenerationSessionOwns(shouldContinue)) return { operation: null, job: null };
       mobileV3MergeProjectOutputs(projectId, payload?.metadata?.project_outputs || []);
       const operation = mobileV3PlanningOperation(project);
@@ -5227,6 +5373,7 @@ function openMobileV3ProjectGallery(project) {
     mobileV3State.selectedResult = null;
   }
   mobileV3State.currentProject = project;
+  applyMobileV3GenerationPreferences(project);
   mobileV3State.activeGalleryProjectId = project?.project_id || "";
   renderMobileV3ProjectGallery(project);
   openMobileSurface("v3-gallery", document.querySelector("#mobileV3ProjectGrid"));
@@ -5284,6 +5431,7 @@ function openMobileV3ProjectDetail(project, { openComposer = false } = {}) {
     mobileV3State.selectedResult = null;
   }
   mobileV3State.currentProject = project;
+  applyMobileV3GenerationPreferences(project);
   clearMobileV3PendingUploads({ render: true });
   const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
   if (!templateId) {
@@ -5448,6 +5596,7 @@ async function refreshMobileV3ProjectDetail(projectId, options = {}) {
   const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
   if (!templateId) throw new Error("项目类型还没有确认，无法安全继续生成");
   mobileV3State.currentProject = project;
+  applyMobileV3GenerationPreferences(project);
   mobileV3State.selectedTemplate = templateId;
   const previewPayload = previewResult.status === "fulfilled" ? previewResult.value : null;
   const previewItems = Array.isArray(previewPayload?.items) ? previewPayload.items : [];
@@ -5499,6 +5648,7 @@ async function syncMobileV3ProjectDetailFull(projectId, { detailEpoch = null, sh
   if (String(project?.project_id || "") !== requestedProjectId) return false;
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;
   mobileV3State.currentProject = project;
+  applyMobileV3GenerationPreferences(project);
   const templateId = String(project?.primary_template_id || project?.template_id || "").trim();
   if (!templateId) throw new Error("项目类型还没有确认，无法安全继续生成");
   if (!mobileV3ProjectDetailRequestIsCurrent(requestedProjectId, requestEpoch, shouldContinue)) return false;

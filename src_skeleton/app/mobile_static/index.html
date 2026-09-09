@@ -1277,6 +1277,7 @@
                 </label>
                 <div class="mobile-summary-grid v3-mobile-photo-mode-grid" aria-label="摄影作品数量">
                   <button class="mobile-entry-card active" data-mobile-v3-photography-mode="single_hero" type="button"><span>单张作品</span><strong>完成 1 张摄影作品</strong></button>
+                  <button class="mobile-entry-card" data-mobile-v3-photography-mode="reference_reshoot" type="button"><span>参考重拍</span><strong>保留参考主体，重新拍摄一张</strong></button>
                   <button class="mobile-entry-card" data-mobile-v3-photography-mode="professional_set" type="button"><span>三张专业套图</span><strong>主作品、环境场景、细节/瞬间</strong></button>
                 </div>
                 <label class="field">
@@ -1296,28 +1297,32 @@
                   <span>智能选择</span>
                   <strong>自动判断</strong>
                 </button>
-                <button class="mobile-entry-card" data-mobile-v3-mode="similar_options" type="button">
+                <button class="mobile-entry-card" data-mobile-v3-mode="selection_candidates" type="button">
                   <span>相似备选</span>
                   <strong>多给几个相似选择</strong>
                 </button>
-                <button class="mobile-entry-card" data-mobile-v3-mode="suite_expansion" type="button">
+                <button class="mobile-entry-card" data-mobile-v3-mode="delivery_suite" type="button">
                   <span>套图扩展</span>
                   <strong>沿同方向做一组图</strong>
                 </button>
-                <button class="mobile-entry-card" data-mobile-v3-mode="layout_adaptation" type="button">
+                <button class="mobile-entry-card" data-mobile-v3-mode="format_layout_adaptation" type="button">
                   <span>尺寸适配</span>
                   <strong>换画幅和版式</strong>
+                </button>
+                <button class="mobile-entry-card" data-mobile-v3-mode="creative_exploration" type="button">
+                  <span>创意探索</span>
+                  <strong>尝试不同创意方向</strong>
                 </button>
               </div>
 
               <div class="lab-control-row v3-mobile-generation-controls">
                 <label class="control-block">
-                  <span>生成数量 <strong id="mobileV3CountValue">1</strong> 张</span>
+                  <span>生成数量 <strong id="mobileV3CountValue">2</strong> 张</span>
                   <select id="mobileV3CountInput" aria-label="生成数量">
-                    <option value="1" selected>1</option>
-                    <option value="2">2</option>
+                    <option value="1">1</option>
+                    <option value="2" selected>2</option>
+                    <option value="3">3</option>
                     <option value="4">4</option>
-                    <option value="7">7</option>
                   </select>
                 </label>
                 <div class="control-block">

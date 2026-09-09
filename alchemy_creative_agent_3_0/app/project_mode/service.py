@@ -63,6 +63,7 @@ from .contracts import (
     GENERAL_TEMPLATE_ID,
     CreateProjectJobRequest,
     CreateProjectRequest,
+    GeneralGenerationPreferences,
     EcommerceSlotAttemptSummary,
     EcommerceSlotContinuationRequest,
     EcommerceSlotContinuationResponse,
@@ -93,6 +94,8 @@ from .contracts import (
     ProjectFeedbackType,
     ProjectListResponse,
     ProjectMemorySummary,
+    ProjectGenerationPreferences,
+    PhotographyGenerationPreferences,
     ProjectOutputSelectionStateValue,
     ProjectOutputStateRequest,
     ProjectReferenceAsset,
@@ -2704,6 +2707,7 @@ class V3ProjectModeService:
             visible_output_count=0,
             confirmed_style_chips=self._style_chips(project),
             selected_asset_count=len(selected_refs),
+            generation_preferences=project.generation_preferences,
             job_count=len(project.job_ids),
             latest_job_status=None,
             last_action_label="项目已创建",
@@ -2781,6 +2785,18 @@ class V3ProjectModeService:
                     "created_at": now,
                 },
             }
+            generation_preferences = self._generation_preferences_for_job(
+                template_id=template_manifest.template_id,
+                request=normalized_request,
+                scenario_selection={},
+                scenario_parameters={},
+            )
+            if generation_preferences is not None:
+                # Planning may intentionally stop before Product creates a
+                # job. The browser still needs the exact mode/count/size
+                # choices on reopen, so persist this safe projection at the
+                # planning boundary rather than waiting for job materialization.
+                project.generation_preferences = generation_preferences
             project.updated_at = now
             self.project_store.save_project(project)
             return public_operation
@@ -4068,11 +4084,15 @@ class V3ProjectModeService:
         )
         project.metadata["advanced_reference_controls"] = dict(advanced_reference_controls)
         project.metadata["doc90_advanced_reference_controls"] = bool(advanced_reference_controls)
+        context_generation_overrides = dict(job_request.metadata or {})
+        if template_manifest.template_id == GENERAL_TEMPLATE_ID:
+            context_generation_overrides.update(self._general_variation_contract(job_request.metadata))
         context = self._build_context(
             project,
             continuation_instruction=job_request.user_input,
             template_id=template_manifest.template_id,
             commerce_profile=commerce_profile,
+            generation_overrides=context_generation_overrides,
         )
         doc73_auto_identity_anchor_transport = self._doc73_auto_identity_anchor_transport(project)
         context_snapshot = context.model_dump(mode="json")
@@ -4222,6 +4242,16 @@ class V3ProjectModeService:
             and status.metadata["current_operation"].get("state") == "needs_input"
         ):
             supersedes_job_id = None
+        generation_preferences = self._generation_preferences_for_job(
+            template_id=template_manifest.template_id,
+            request=job_request,
+            scenario_selection=scenario_selection,
+            scenario_parameters=scenario_parameters,
+        )
+        if generation_preferences is not None:
+            # A remote planning boundary may return without a job_id; the
+            # user must still reopen the project with the same mode and count.
+            project.generation_preferences = generation_preferences
         bound_context_snapshot = status.metadata.get("project_context_snapshot")
         if not isinstance(bound_context_snapshot, dict):
             bound_context_snapshot = context_snapshot
@@ -5059,6 +5089,8 @@ class V3ProjectModeService:
             current_status,
             selected_candidate_id=str(payload.get("selected_candidate_id") or "").strip() or None,
             selected_asset_id=str(payload.get("selected_asset_id") or "").strip() or None,
+            selected_candidate_ids=self._selection_id_set(payload.get("selected_candidate_ids")),
+            selected_asset_ids=self._selection_id_set(payload.get("selected_asset_ids")),
         )
         if not preflight_refs:
             return self._selection_hold_response(
@@ -5094,73 +5126,7 @@ class V3ProjectModeService:
                 message="这张图的真实输出还不能安全读取，因此不会用其它图片替代它继续生成。",
                 unresolved_refs=unresolved_refs,
             )
-        if template_id == GENERAL_TEMPLATE_ID:
-            # General V3 uses one forced continuation image. Older projects
-            # may still contain several selected refs, so close those refs at
-            # the selection boundary while retaining their output history.
-            refs = refs[:1]
         now = _utc_now_iso()
-        if template_id == GENERAL_TEMPLATE_ID:
-            retained_ids = {
-                str(value or "").strip()
-                for value in (
-                    refs[0].output_id,
-                    refs[0].asset_id,
-                    refs[0].candidate_id,
-                    refs[0].output_ref_id,
-                )
-                if str(value or "").strip()
-            }
-            previous_refs = list(project.selected_output_refs)
-            project.selected_output_refs = [
-                existing
-                for existing in previous_refs
-                if retained_ids.intersection(
-                    {
-                        str(value or "").strip()
-                        for value in (
-                            existing.output_id,
-                            existing.asset_id,
-                            existing.candidate_id,
-                            existing.output_ref_id,
-                        )
-                        if str(value or "").strip()
-                    }
-                )
-            ]
-            for existing in previous_refs:
-                existing_ids = {
-                    str(value or "").strip()
-                    for value in (
-                        existing.output_id,
-                        existing.asset_id,
-                        existing.candidate_id,
-                        existing.output_ref_id,
-                    )
-                    if str(value or "").strip()
-                }
-                if retained_ids.intersection(existing_ids):
-                    continue
-                self._set_output_state(
-                    project,
-                    existing,
-                    ProjectOutputSelectionStateValue.UNSELECTED,
-                    now,
-                    note="General V3 only keeps one forced continuation reference.",
-                )
-            for reference in project.reference_assets:
-                if reference.source_type != ProjectReferenceSourceType.GENERATED_SELECTED:
-                    continue
-                reference_ids = {
-                    str(value or "").strip()
-                    for value in (
-                        reference.asset_ref_id,
-                        reference.created_from_output_id,
-                    )
-                    if str(value or "").strip()
-                }
-                if not retained_ids.intersection(reference_ids):
-                    reference.status = ProjectReferenceStatus.INACTIVE
         existing_ref_ids = {ref.output_ref_id for ref in project.selected_output_refs}
         project.selected_output_refs.extend([ref for ref in refs if ref.output_ref_id not in existing_ref_ids])
         for ref in refs:
@@ -5202,22 +5168,35 @@ class V3ProjectModeService:
         status: ProductJobStatus,
         request_payload: dict[str, Any],
     ) -> SelectionResponse:
+        selected_candidate_ids = self._selection_id_set(request_payload.get("selected_candidate_ids"))
+        selected_asset_ids = self._selection_id_set(request_payload.get("selected_asset_ids"))
         selected_candidate_id = str(request_payload.get("selected_candidate_id") or "").strip()
         selected_asset_id = str(request_payload.get("selected_asset_id") or "").strip()
+        if selected_candidate_id:
+            selected_candidate_ids.add(selected_candidate_id)
+        if selected_asset_id:
+            selected_asset_ids.add(selected_asset_id)
         candidates = list(status.candidates)
         assets = list(status.asset_series)
-        if selected_candidate_id:
-            candidates = [candidate for candidate in candidates if candidate.candidate_id == selected_candidate_id]
-            candidate_asset_ids = {candidate.asset_id for candidate in candidates}
-            assets = [asset for asset in assets if asset.asset_id in candidate_asset_ids]
-        elif selected_asset_id:
-            assets = [asset for asset in assets if asset.asset_id == selected_asset_id]
-            asset_candidate_ids = {asset.selected_candidate_id for asset in assets if asset.selected_candidate_id}
+        if selected_candidate_ids or selected_asset_ids:
+            # Candidate and asset ids are two identifiers for the same
+            # selection surface. A mixed request is a union, so restoring one
+            # identifier kind must never discard valid members of the other.
             candidates = [
                 candidate
                 for candidate in candidates
-                if candidate.asset_id == selected_asset_id
-                or (asset_candidate_ids and candidate.candidate_id in asset_candidate_ids)
+                if candidate.candidate_id in selected_candidate_ids
+                or candidate.asset_id in selected_asset_ids
+            ]
+            candidate_ids = {candidate.candidate_id for candidate in candidates if candidate.candidate_id}
+            candidate_asset_ids = {candidate.asset_id for candidate in candidates if candidate.asset_id}
+            assets = [
+                asset
+                for asset in assets
+                if asset.asset_id in selected_asset_ids
+                or asset.asset_id in candidate_asset_ids
+                or asset.selected_candidate_id in selected_candidate_ids
+                or asset.selected_candidate_id in candidate_ids
             ]
         selected_result = SelectedResult(
             selected_candidate_ids=[candidate.candidate_id for candidate in candidates if candidate.candidate_id],
@@ -5254,6 +5233,16 @@ class V3ProjectModeService:
                 "restored_from_output_store": True,
             },
         )
+
+    @staticmethod
+    def _selection_id_set(value: Any) -> set[str]:
+        if isinstance(value, (list, tuple, set)):
+            values = value
+        elif value is None:
+            values = []
+        else:
+            values = [value]
+        return {str(item).strip() for item in values if str(item).strip()}
 
     def template_cards(self) -> list[TemplateCard]:
         return self.template_registry.list_cards()
@@ -7872,6 +7861,80 @@ class V3ProjectModeService:
             "variation_mode_source": source,
         }
 
+    def _generation_preferences_for_job(
+        self,
+        *,
+        template_id: str,
+        request: CreateProjectJobRequest,
+        scenario_selection: dict[str, Any],
+        scenario_parameters: dict[str, Any],
+    ) -> ProjectGenerationPreferences | None:
+        """Persist only the safe, user-facing choices needed to reopen a project.
+
+        Job metadata remains the immutable request record.  This projection is
+        deliberately smaller: it contains no prompt, provider, path, review,
+        or capability-plan data and is the sole browser-facing source for
+        restoring the mode controls after a project reload.
+        """
+
+        metadata = dict(request.metadata or {})
+        if template_id == GENERAL_TEMPLATE_ID:
+            contract = self._general_variation_contract(metadata)
+            general = GeneralGenerationPreferences(
+                variation_mode=contract.get("variation_mode"),
+                effective_variation_mode=contract.get("effective_variation_mode"),
+                inferred_variation_mode=contract.get("inferred_variation_mode"),
+                variation_mode_source=contract.get("variation_mode_source"),
+                requested_image_count=_bounded_requested_image_count(
+                    scenario_parameters.get("requested_image_count")
+                    or metadata.get("requested_image_count")
+                ),
+                requested_image_size=(
+                    str(
+                        scenario_parameters.get("requested_image_size")
+                        or metadata.get("requested_image_size")
+                        or ""
+                    ).strip()
+                    or None
+                ),
+            )
+            return ProjectGenerationPreferences(general=general)
+        if template_id == PHOTOGRAPHER_TEMPLATE_ID:
+            mode = str(
+                scenario_selection.get("mode_id")
+                or metadata.get("selected_mode_id")
+                or metadata.get("selected_preset_id")
+                or "single_hero"
+            ).strip()
+            photography = PhotographyGenerationPreferences(
+                selected_mode_id=mode or None,
+                selected_preset_id=mode or None,
+                scene_domain=str(
+                    scenario_parameters.get("scene_domain")
+                    or metadata.get("scene_domain")
+                    or ""
+                ).strip() or None,
+                reference_role=str(
+                    metadata.get("photography_reference_role")
+                    or metadata.get("reference_role")
+                    or ""
+                ).strip() or None,
+                requested_image_count=_bounded_requested_image_count(
+                    scenario_parameters.get("requested_image_count")
+                    or metadata.get("requested_image_count")
+                ),
+                requested_image_size=(
+                    str(
+                        scenario_parameters.get("requested_image_size")
+                        or metadata.get("requested_image_size")
+                        or ""
+                    ).strip()
+                    or None
+                ),
+            )
+            return ProjectGenerationPreferences(photography=photography)
+        return None
+
     def _advanced_reference_controls_for_template(
         self,
         *,
@@ -9037,6 +9100,7 @@ class V3ProjectModeService:
         template_id: str | None = None,
         commerce_profile: ProjectCommerceProfile | None = None,
         owner_user_id: int | None = None,
+        generation_overrides: dict[str, Any] | None = None,
     ) -> ProjectContextPackage:
         now = _utc_now_iso()
         effective_template_id = template_id or project.primary_template_id or GENERAL_TEMPLATE_ID
@@ -9113,14 +9177,6 @@ class V3ProjectModeService:
                 )
         selected_refs_for_context = list(selected_refs)
         active_generated_references_for_context = list(active_generated_references)
-        if effective_template_id == GENERAL_TEMPLATE_ID:
-            (
-                selected_refs_for_context,
-                active_generated_references_for_context,
-            ) = self._general_single_forced_reference_inputs(
-                selected_refs,
-                active_generated_references,
-            )
         active_avoid_notes = [
             feedback.plain_text
             for feedback in project.feedback_records
@@ -9129,6 +9185,33 @@ class V3ProjectModeService:
         ]
         negative_notes = list(dict.fromkeys([*project.rejected_direction_notes, *active_avoid_notes]))
         tone = self._style_chips(project)
+        context_generation_metadata = dict(project.metadata or {})
+        persisted_preferences = project.generation_preferences
+        if persisted_preferences is not None and persisted_preferences.general is not None:
+            general_preferences = persisted_preferences.general
+            if (
+                general_preferences.requested_image_count is not None
+                and (not generation_overrides or "requested_image_count" not in generation_overrides)
+            ):
+                context_generation_metadata["requested_image_count"] = general_preferences.requested_image_count
+            if (
+                general_preferences.variation_mode is not None
+                and (not generation_overrides or "variation_mode" not in generation_overrides)
+            ):
+                context_generation_metadata["variation_mode"] = general_preferences.variation_mode
+            if (
+                general_preferences.effective_variation_mode is not None
+                and (not generation_overrides or "effective_variation_mode" not in generation_overrides)
+            ):
+                context_generation_metadata["effective_variation_mode"] = general_preferences.effective_variation_mode
+        if generation_overrides:
+            context_generation_metadata.update(
+                {
+                    key: value
+                    for key, value in generation_overrides.items()
+                    if value is not None
+                }
+            )
         version = stable_id(
             "project_context",
             project.project_id,
@@ -9138,6 +9221,10 @@ class V3ProjectModeService:
             continuation_instruction,
             effective_template_id,
             effective_commerce_profile.updated_at if effective_commerce_profile else None,
+            context_generation_metadata.get("variation_mode"),
+            context_generation_metadata.get("effective_variation_mode"),
+            context_generation_metadata.get("requested_image_count"),
+            context_generation_metadata.get("requested_image_size"),
         )
         metadata: dict[str, Any] = {
             "source": PROJECT_API_SOURCE,
@@ -9167,6 +9254,22 @@ class V3ProjectModeService:
                 len(selected_refs_for_context),
                 len(active_generated_references_for_context),
             )
+            # Keep the current request's normalized visual contract inside
+            # the context snapshot as well as at Job metadata root. Central
+            # Brain reads project-context metadata on several compatibility
+            # paths; leaving these fields only on the later Job payload lets a
+            # stale/default mode win when the snapshot is reused.
+            for key in (
+                "variation_mode",
+                "effective_variation_mode",
+                "inferred_variation_mode",
+                "variation_mode_source",
+                "requested_image_count",
+                "requested_image_size",
+            ):
+                value = context_generation_metadata.get(key)
+                if value is not None:
+                    metadata[key] = value
         selected_visual_references = self._selected_visual_references(
             project,
             effective_template_id,
@@ -9227,7 +9330,7 @@ class V3ProjectModeService:
             project=project,
             template_id=effective_template_id,
             continuation_instruction=continuation_instruction,
-            metadata={**project.metadata, "requested_image_count": project.metadata.get("requested_image_count")},
+            metadata=context_generation_metadata,
         )
         batch_identity_diversity_review = self._project_batch_identity_diversity_review(
             project=project,
@@ -9298,36 +9401,14 @@ class V3ProjectModeService:
         selected_refs: list[OutputRef],
         active_generated_references: list[dict[str, Any]],
     ) -> tuple[list[OutputRef], list[dict[str, Any]]]:
-        """Keep one server-selected continuation reference for General V3."""
+        """Compatibility shim: preserve every exact active General reference.
 
-        if selected_refs:
-            primary_ref = selected_refs[0]
-            primary_ids = {
-                str(value or "").strip()
-                for value in (
-                    primary_ref.output_id,
-                    primary_ref.asset_id,
-                    primary_ref.candidate_id,
-                    primary_ref.output_ref_id,
-                )
-                if str(value or "").strip()
-            }
-            for item in active_generated_references:
-                generated_ids = {
-                    str(value or "").strip()
-                    for value in (
-                        item.get("output_id"),
-                        item.get("created_from_output_id"),
-                        item.get("asset_ref_id"),
-                        item.get("asset_id"),
-                        item.get("reference_id"),
-                    )
-                    if str(value or "").strip()
-                }
-                if primary_ids.intersection(generated_ids):
-                    return [primary_ref], [item]
-            return [primary_ref], []
-        return [], active_generated_references[:1]
+        The old helper name is retained for legacy callers, but General V3 no
+        longer silently truncates user-selected branches to the first image.
+        Reference resolution has already enforced materialized-output truth.
+        """
+
+        return list(selected_refs), list(active_generated_references)
 
     def _selected_visual_references(
         self,
@@ -9956,15 +10037,34 @@ class V3ProjectModeService:
         unique: list[dict[str, Any]] = []
         for item in references:
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-            identity = str(
-                item.get("source_integrity_id")
-                or metadata.get("source_integrity_id")
-                or item.get("output_id")
-                or item.get("asset_id")
-                or item.get("asset_ref_id")
-                or item.get("reference_id")
-                or ""
-            )
+            source_type = str(item.get("source_type") or "").strip().lower()
+            # A user can deliberately select several generated candidates that
+            # happen to have the same content hash (and retries can materialize
+            # the same pixels under different output records).  Generated
+            # outputs are therefore distinct by their durable output identity;
+            # content integrity is only a fallback.  Uploaded references keep
+            # hash-based de-duplication because they do not have output
+            # lineage and duplicate uploads should not multiply provider refs.
+            if source_type in {"selected_output", "generated_output", "generated_selected", "selected_candidate", "selected_asset"}:
+                identity = str(
+                    item.get("output_id")
+                    or item.get("asset_id")
+                    or item.get("asset_ref_id")
+                    or item.get("source_integrity_id")
+                    or metadata.get("source_integrity_id")
+                    or item.get("reference_id")
+                    or ""
+                )
+            else:
+                identity = str(
+                    item.get("source_integrity_id")
+                    or metadata.get("source_integrity_id")
+                    or item.get("asset_id")
+                    or item.get("asset_ref_id")
+                    or item.get("reference_id")
+                    or item.get("output_id")
+                    or ""
+                )
             if not identity or identity in seen:
                 continue
             seen.add(identity)
@@ -10021,6 +10121,7 @@ class V3ProjectModeService:
             visible_output_count=len(visible_output_items),
             confirmed_style_chips=self._style_chips(project),
             selected_asset_count=len(selected_refs),
+            generation_preferences=project.generation_preferences,
             job_count=len(project.job_ids),
             latest_job_status=self._latest_project_job_status(
                 project,
@@ -11741,11 +11842,15 @@ class V3ProjectModeService:
             selected_asset_ids.add(selected_asset_id)
         refs: list[OutputRef] = []
         now = _utc_now_iso()
+        has_selection_filter = bool(selected_candidate_ids or selected_asset_ids)
+        selected_candidates: list[Any] = []
         for candidate in status.candidates:
-            if selected_candidate_ids and candidate.candidate_id not in selected_candidate_ids:
+            if has_selection_filter and not (
+                candidate.candidate_id in selected_candidate_ids
+                or candidate.asset_id in selected_asset_ids
+            ):
                 continue
-            if selected_asset_ids and candidate.asset_id not in selected_asset_ids:
-                continue
+            selected_candidates.append(candidate)
             refs.append(
                 OutputRef(
                     output_ref_id=stable_id("output_ref", project.project_id, status.job_id, candidate.candidate_id),
@@ -11763,25 +11868,36 @@ class V3ProjectModeService:
                     metadata={"recommendation": candidate.recommendation},
                 )
             )
-        if not refs:
-            for asset in status.asset_series:
-                if selected_asset_ids and asset.asset_id not in selected_asset_ids:
-                    continue
-                refs.append(
-                    OutputRef(
-                        output_ref_id=stable_id("output_ref", project.project_id, status.job_id, asset.asset_id),
-                        source_type="selected_asset",
-                        project_id=project.project_id,
-                        job_id=status.job_id,
-                        asset_id=asset.asset_id,
-                        output_id=asset.output_id,
-                        preview_url=asset.preview_url or asset.preview_uri,
-                        thumbnail_url=asset.thumbnail_url,
-                        download_url=asset.download_url,
-                        selection_reason="user selected for project continuation",
-                        selected_at=now,
-                    )
+        selected_candidate_asset_ids = {
+            candidate.asset_id for candidate in selected_candidates if candidate.asset_id
+        }
+        for asset in status.asset_series:
+            if has_selection_filter and not (
+                asset.asset_id in selected_asset_ids
+                or asset.asset_id in selected_candidate_asset_ids
+                or asset.selected_candidate_id in selected_candidate_ids
+            ):
+                continue
+            # A candidate ref is authoritative when the same output was
+            # selected through a candidate id. Add an asset ref only for an
+            # asset-only branch (including legacy records with no candidate).
+            if asset.asset_id in selected_candidate_asset_ids:
+                continue
+            refs.append(
+                OutputRef(
+                    output_ref_id=stable_id("output_ref", project.project_id, status.job_id, asset.asset_id),
+                    source_type="selected_asset",
+                    project_id=project.project_id,
+                    job_id=status.job_id,
+                    asset_id=asset.asset_id,
+                    output_id=asset.output_id,
+                    preview_url=asset.preview_url or asset.preview_uri,
+                    thumbnail_url=asset.thumbnail_url,
+                    download_url=asset.download_url,
+                    selection_reason="user selected for project continuation",
+                    selected_at=now,
                 )
+            )
         resolved: list[OutputRef] = []
         unresolved: list[dict[str, Any]] = []
         for ref in refs:
