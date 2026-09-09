@@ -6096,6 +6096,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             if isinstance(item, dict)
             and type(item.get("output_index")) is int
             and item.get("output_index") == output_index
+            and isinstance(item.get("prompt"), str)
             and item.get("review_status") == "approved"
             and (
                 not integrity_required
@@ -6141,9 +6142,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
         # Character-card slot-delta prompts intentionally have a narrower
         # scope and are governed by their slot receipt instead of the
         # complete user-direction receipt.
-        return not bool(
-            audit.get("character_card_slot_delta_recovery_used")
-            or audit.get("reference_led_slot_delta_decision_required")
+        return not (
+            audit.get("character_card_slot_delta_recovery_used") is True
+            or audit.get("reference_led_slot_delta_decision_required") is True
         )
 
     @staticmethod

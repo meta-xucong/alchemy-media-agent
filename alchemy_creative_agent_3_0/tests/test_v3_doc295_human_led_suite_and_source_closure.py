@@ -404,3 +404,56 @@ def test_doc295_provider_selector_rejects_duplicate_output_receipts() -> None:
     provider = ProductionImageGenerationProvider(output_store=SimpleNamespace())
 
     assert provider._brain_signed_provider_prompt(request) == ""  # noqa: SLF001
+
+
+@pytest.mark.parametrize("bad_prompt", [123, ["not", "a", "prompt"], None])
+def test_doc295_provider_selector_rejects_non_string_canonical_prompt(bad_prompt) -> None:
+    record = {
+        "output_index": 1,
+        "prompt": bad_prompt,
+        "review_status": "approved",
+        "user_direction_integrity": {
+            "contract_version": "v3_user_direction_integrity_v1",
+            "status": "preserved",
+            "owner": "remote_v3_llm_brain",
+        },
+    }
+    request = SimpleNamespace(
+        metadata={
+            "require_real_images": True,
+            "llm_brain": {"canonical_provider_prompts": [record]},
+        },
+        generation_plan=SimpleNamespace(metadata={"output_index": 0}),
+    )
+
+    provider = ProductionImageGenerationProvider(output_store=SimpleNamespace())
+
+    assert provider._brain_signed_provider_prompt(request) == ""  # noqa: SLF001
+    assert provider._brain_user_direction_integrity(request) == {}  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "audit_key",
+    ["character_card_slot_delta_recovery_used", "reference_led_slot_delta_decision_required"],
+)
+def test_doc295_provider_does_not_coerce_string_slot_delta_flags(audit_key: str) -> None:
+    record = {
+        "output_index": 1,
+        "prompt": "A complete canonical direction with the requested scene.",
+        "review_status": "approved",
+    }
+    request = SimpleNamespace(
+        metadata={
+            "require_real_images": True,
+            "llm_brain": {
+                "canonical_provider_prompts": [record],
+                "audit": {audit_key: "false"},
+            },
+        },
+        generation_plan=SimpleNamespace(metadata={"output_index": 0}),
+    )
+
+    provider = ProductionImageGenerationProvider(output_store=SimpleNamespace())
+
+    assert provider._brain_signed_provider_prompt(request) == ""  # noqa: SLF001
+    assert provider._brain_user_direction_integrity(request) == {}  # noqa: SLF001
