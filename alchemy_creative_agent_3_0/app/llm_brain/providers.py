@@ -525,9 +525,22 @@ class V3LLMBrainProvider:
             raise BrainExecutionBudgetExceeded(
                 "remote Brain logical execution budget exhausted before another remote decision"
             )
+        # ``_call_with_timeout`` may grant one bounded progress grace window
+        # when a streaming response is still producing semantic content.  A
+        # real-image plan must pay for that grace from its own stage window;
+        # otherwise the nominal timeout cap can still cross the finalizer
+        # handoff floor and leave the canonical sign-off with a partial
+        # budget.  Keep the existing grace behavior, but make it budget-
+        # neutral for the later stage.
+        progress_grace_reserve = min(_STREAM_PROGRESS_GRACE_SECONDS, base_timeout)
+        stage_timeout_budget = available_for_stage - progress_grace_reserve
+        if finalizer_reserve and stage_timeout_budget < BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS:
+            raise BrainExecutionBudgetExceeded(
+                "remote Brain logical execution budget must preserve the canonical finalizer handoff window"
+            )
         # A non-zero timeout is required by all supported transports.  The
         # value is still bounded by the remaining logical preparation budget.
-        return max(0.1, min(base_timeout, available_for_stage))
+        return max(0.1, min(base_timeout, stage_timeout_budget if finalizer_reserve else available_for_stage))
 
     def _run_openai_compatible(
         self,

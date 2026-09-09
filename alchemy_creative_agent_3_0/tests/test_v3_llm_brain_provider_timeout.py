@@ -562,15 +562,61 @@ def test_real_image_plan_retry_preserves_canonical_finalizer_handoff_window() ->
         timeout = provider._effective_timeout_seconds(request)
     finally:
         _ACTIVE_EXECUTION_BUDGET.reset(token)
-    assert 45.0 <= timeout <= 55.0
+    # The 30-second progress grace is part of the plan's stage window, so
+    # the returned hard timeout must leave both grace and the 220-second
+    # canonical finalizer handoff untouched.
+    assert 15.0 <= timeout <= 25.0
 
-    exhausted_budget = _BrainExecutionBudget(total_seconds=520.0, started_at=time.perf_counter() - 305.0)
+    exhausted_budget = _BrainExecutionBudget(total_seconds=520.0, started_at=time.perf_counter() - 291.0)
     token = _ACTIVE_EXECUTION_BUDGET.set(exhausted_budget)
     try:
         with pytest.raises(BrainExecutionBudgetExceeded, match="handoff window"):
             provider._effective_timeout_seconds(request)
     finally:
         _ACTIVE_EXECUTION_BUDGET.reset(token)
+
+
+def test_real_image_provider_run_does_not_retry_after_plan_budget_reaches_handoff_window() -> None:
+    provider = object.__new__(V3LLMBrainProvider)
+    provider.provider = "openai"
+    provider.timeout = 300.0
+    provider.max_tokens = 12000
+    provider.calls = 0
+
+    def fake_openai_call(request: BrainRunRequest, *, json_recovery: bool = False):
+        provider.calls += 1
+        assert not json_recovery
+        if provider.calls == 1:
+            budget = _ACTIVE_EXECUTION_BUDGET.get()
+            assert budget is not None
+            # Model a single transient plan timeout consuming the available
+            # plan window without sleeping in the regression test.
+            object.__setattr__(budget, "started_at", time.perf_counter() - 301.0)
+            raise BrainTransportTimeoutError(
+                stage=request.stage,
+                timeout_seconds=20.0,
+                elapsed_ms=20_000,
+                timeout_phase="read_timeout",
+            )
+        return {"image_set_plan": {"image_count": 1, "shot_plan": ["complete"]}}
+
+    provider._run_openai_compatible = fake_openai_call
+    request = BrainRunRequest(
+        user_input="Prepare a real image.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"require_real_images": True},
+    )
+    budget = _BrainExecutionBudget(total_seconds=520.0, started_at=time.perf_counter())
+    token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    try:
+        with pytest.raises(BrainExecutionBudgetExceeded, match="handoff window"):
+            provider.run(request)
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(token)
+    assert provider.calls == 1
 
 
 def test_finalizer_receives_the_remaining_budget_without_plan_reservation() -> None:

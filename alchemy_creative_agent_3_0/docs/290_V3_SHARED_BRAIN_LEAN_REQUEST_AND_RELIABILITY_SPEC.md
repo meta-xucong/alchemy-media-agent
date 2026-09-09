@@ -128,6 +128,8 @@ Human Realism 的美感、表情、材质、参考所有权和风格保真不得
 对于需要真实图像的两阶段准备，默认预算中的 `BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS` 同时是
 canonical finalizer 的最低交接窗口。`plan` 的瞬态传输恢复只能使用扣除该窗口后的剩余时间；当剩余时间不足以再发起一个有意义的最小传输窗口时，停止本阶段，不得用第二次 `plan` 尝试借走 finalizer 的时间。进入 `provider_prompt_finalize` 后，该交接窗口归 finalizer 使用，不再重复扣除。普通兼容规划没有后续签发阶段时不启用这项保留。该规则不改变默认总预算、单次超时、重试次数或 fail-closed 门禁，只修正两阶段共享预算的阶段归属。
 
+流式响应的有限 progress grace 也属于 `plan` 自身的阶段预算：它必须从 `plan` 可用窗口中预留，不能在交接线之外追加。这样即使上游在输出有效语义时触发一次 grace，plan 仍不会侵占 canonical finalizer 的最低窗口。
+
 保持 `max_tokens`、流式模式、模型和网关路由不变。传输恢复必须是同一冻结请求内的有界恢复，不能演变成跨任务或跨阶段的通用重试。已知的 provider JSON 重答、瞬态传输恢复与 adapter 语义重答是不同边界，不能各称“一次”就推断整个流程最多一次重试。
 
 基线调用图有以下条件上界，必须保留并在阶段 A 验证，而不是增加一个全局重试器：
