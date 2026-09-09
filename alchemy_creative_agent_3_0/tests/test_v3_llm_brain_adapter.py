@@ -1527,6 +1527,7 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     assert payload["model"] == "deepseek-primary"
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["temperature"] == 0
+    assert payload["reasoning_effort"] == "low"
 
 
 def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch) -> None:

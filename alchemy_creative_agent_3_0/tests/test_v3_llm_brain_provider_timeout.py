@@ -435,6 +435,36 @@ def test_openai_chat_stream_collector_returns_complete_json_and_marks_trace(monk
     assert trace["complete_response_observed"] is True
 
 
+def test_openai_chat_stream_collector_keeps_reasoning_out_of_final_json(monkeypatch) -> None:
+    _install_fake_httpx(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"role":"assistant"}}]}',
+            'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}',
+            'data: {"choices":[{"delta":{"reasoning_content":" continues"}}]}',
+            'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}',
+            "data: [DONE]",
+        ],
+    )
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    try:
+        text = _collect_openai_chat_completion_stream(
+            url="https://brain.example/v1/chat/completions",
+            api_key="redacted",
+            payload={"stream": True},
+            timeout_seconds=120,
+        )
+    finally:
+        _ACTIVE_TRANSPORT_TRACE.reset(token)
+
+    assert json.loads(text) == {"ok": True}
+    assert trace["reasoning_content_observed"] is True
+    assert trace["reasoning_chunk_count"] == 2
+    assert trace["first_content_observed"] is True
+    assert trace["complete_response_observed"] is True
+
+
 def test_openai_chat_stream_collector_rejects_incomplete_stream(monkeypatch) -> None:
     _install_fake_httpx(
         monkeypatch,

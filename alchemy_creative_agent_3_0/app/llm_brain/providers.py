@@ -331,6 +331,12 @@ class V3LLMBrainProvider:
         self.provider = _env("V3_LLM_BRAIN_PROVIDER") or _preferred_provider()
         self.provider = self.provider.strip().lower()
         self.model = _env("V3_LLM_BRAIN_MODEL") or _default_model(self.provider)
+        # Aiself's OpenAI-compatible DeepSeek route exposes private reasoning
+        # before the final JSON content. Keep that route responsive by using
+        # its supported low-effort control by default. This is only a
+        # transport setting: reasoning is never copied into the renderer
+        # prompt, and callers can explicitly choose another supported effort.
+        self.reasoning_effort = _configured_reasoning_effort(self.provider)
         self.timeout = max(
             BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
             min(
@@ -660,6 +666,9 @@ class V3LLMBrainProvider:
                 "max_tokens": self.max_tokens,
                 "stream": True,
             }
+            reasoning_effort = getattr(self, "reasoning_effort", None)
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
             text = _collect_openai_chat_completion_stream(
                 url=_chat_completions_url(base_url),
                 api_key=api_key,
@@ -896,6 +905,8 @@ def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:
         "last_event": "created",
         "response_started": False,
         "first_content_observed": False,
+        "reasoning_content_observed": False,
+        "reasoning_chunk_count": 0,
         "complete_response_observed": False,
         "json_parse_started": False,
         "json_parse_completed": False,
@@ -917,6 +928,10 @@ def _mark_transport_event(event: str) -> None:
     if normalized == "first_content_observed":
         trace["response_started"] = True
         trace["first_content_observed"] = True
+    if normalized == "reasoning_content_observed":
+        trace["response_started"] = True
+        trace["reasoning_content_observed"] = True
+        trace["reasoning_chunk_count"] = int(trace.get("reasoning_chunk_count") or 0) + 1
     if normalized == "complete_response_observed":
         trace["complete_response_observed"] = True
     if normalized == "json_parse_started":
@@ -1138,7 +1153,21 @@ def _collect_openai_chat_completion_stream(
                         ):
                             raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
                         delta = choice.get("delta") if isinstance(choice, dict) else None
-                        content = delta.get("content") if isinstance(delta, dict) else None
+                        reasoning_content = _stream_delta_text(delta, "reasoning_content")
+                        if reasoning_content:
+                            trace = _ACTIVE_TRANSPORT_TRACE.get()
+                            first_reasoning_observed = not bool(
+                                isinstance(trace, dict) and trace.get("reasoning_content_observed")
+                            )
+                            _mark_transport_event("reasoning_content_observed")
+                            if first_reasoning_observed:
+                                record_stage_event(
+                                    "brain_provider",
+                                    "stream_reasoning_content_observed",
+                                    stage=str(trace.get("stage") or "unknown") if isinstance(trace, dict) else None,
+                                    extra={"reasoning_content_observed": True},
+                                )
+                        content = _stream_delta_text(delta, "content")
                         if content:
                             _mark_transport_event("first_content_observed")
                             record_stage_event("brain_provider", "stream_first_content_observed")
@@ -1155,6 +1184,25 @@ def _collect_openai_chat_completion_stream(
             json_parse_completed=False,
         )
     return "".join(chunks)
+
+
+def _stream_delta_text(delta: Any, key: str) -> str:
+    """Read text from string or structured OpenAI-compatible delta parts."""
+
+    if not isinstance(delta, dict):
+        return ""
+    value = delta.get(key)
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "".join(parts)
 
 
 def _openai_client_kwargs(*, api_key: str, base_url: str | None, **extra: Any) -> dict[str, Any]:
@@ -1202,6 +1250,21 @@ def _int_env(name: str, default: int) -> int:
         return max(512, min(12000, int(os.getenv(name, str(default)))))
     except ValueError:
         return default
+
+
+_SUPPORTED_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max", "xhigh"})
+
+
+def _configured_reasoning_effort(provider: str) -> str | None:
+    """Return the supported effort control without sending invalid disable values."""
+
+    configured = _env("V3_LLM_BRAIN_REASONING_EFFORT")
+    if configured is None:
+        return "low" if provider == "deepseek" else None
+    normalized = configured.strip().lower()
+    if normalized in {"", "default", "provider"}:
+        return None
+    return normalized if normalized in _SUPPORTED_REASONING_EFFORTS else None
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:
