@@ -25,6 +25,7 @@ V3_UNIFIED_PROMPT_MAX_LENGTH_POLICY_RECOVERY: Final = 1
 V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV: Final = "v3_brain_source_projection_v1"
 V3_BRAIN_SOURCE_PROJECTION_FINALIZER_STAGE: Final = "provider_prompt_finalize"
 V3_BRAIN_CAPABILITY_GUIDANCE_CONTRACT_REV: Final = "v3_brain_capability_guidance_v1"
+V3_BRAIN_PROTECTED_CONSTRAINTS_CONTRACT_REV: Final = "v3_brain_protected_constraints_v1"
 
 _V3_BRAIN_CAPABILITY_GUIDANCE_STAGES: frozenset[str] = frozenset(
     {
@@ -202,6 +203,34 @@ def build_brain_capability_guidance(
     }
 
 
+def build_brain_protected_constraint_projection(
+    *,
+    prompt_guidance: Mapping[str, Any],
+    image_set_plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project non-negotiable rendering constraints into a salient Brain channel.
+
+    These facts already belong to the user/frozen planning contract.  The
+    explicit projection prevents a natural-language finalizer from replacing
+    numeric framing, crop, body-completeness, landmark, or negative rules with
+    a broad quality summary while still allowing the final prompt to remain
+    one coherent renderer direction rather than a checklist.
+    """
+
+    guidance = dict(prompt_guidance)
+    plan = dict(image_set_plan)
+    return {
+        "contract_version": V3_BRAIN_PROTECTED_CONSTRAINTS_CONTRACT_REV,
+        "semantic_coverage": "complete",
+        "hard_constraints": _normalized_text_list(guidance.get("hard_constraints")),
+        "composition_rules": _normalized_text_list(plan.get("composition_rules")),
+        "quality_bar": _normalized_text_list(plan.get("quality_bar")),
+        "layout_notes": _normalized_text_list(guidance.get("layout_notes")),
+        "style_notes": _normalized_text_list(guidance.get("style_notes")),
+        "negative_constraints": _normalized_text_list(guidance.get("negative_prompt_addons")),
+    }
+
+
 def with_brain_source_projection_digest(source_projection: Mapping[str, Any]) -> dict[str, Any]:
     """Return a source package with its stable server-owned digest attached."""
 
@@ -223,6 +252,10 @@ def build_brain_source_projection(
     plan = dict(image_set_plan)
     guidance = dict(prompt_guidance)
     capability_guidance = dict(capability_guidance or {})
+    protected_constraint_projection = build_brain_protected_constraint_projection(
+        prompt_guidance=guidance,
+        image_set_plan=plan,
+    )
     binding_facts = dict(binding_facts or {})
     projected_guidance_and_plan = {
         "prompt_guidance": guidance,
@@ -234,6 +267,9 @@ def build_brain_source_projection(
         "planning_result_digest": _canonical_value_sha256(binding_facts.get("planning_result")),
         "prompt_guidance_image_set_digest": _canonical_value_sha256(projected_guidance_and_plan),
         "capability_guidance_digest": _canonical_value_sha256(capability_guidance),
+        "protected_constraint_projection_digest": _canonical_value_sha256(
+            protected_constraint_projection
+        ),
         "active_capability_contract_digest": _canonical_value_sha256(
             binding_facts.get("active_capability_contracts", [])
         ),
@@ -263,6 +299,7 @@ def build_brain_source_projection(
             "prompt_guidance": guidance,
             "image_set_plan": plan,
             "capability_guidance": capability_guidance,
+            "protected_constraint_projection": protected_constraint_projection,
             "source_binding": source_binding,
             "per_output_directions": directions,
         }

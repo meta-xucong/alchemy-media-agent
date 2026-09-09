@@ -555,10 +555,16 @@ class V3LLMBrainAdapter:
                 "binding_digest",
             }
             # Historical frozen projections predate the capability guidance
-            # extension.  They remain readable, while every fresh projection
-            # must carry the new digest and its Brain-visible source package.
+            # and protected-constraint extensions. They remain readable,
+            # while every fresh projection carries both Brain-visible source
+            # packages and their binding digests.
             if isinstance(source_projection, Mapping) and "capability_guidance" in source_projection:
                 expected_source_binding_keys.add("capability_guidance_digest")
+            if (
+                isinstance(source_projection, Mapping)
+                and "protected_constraint_projection" in source_projection
+            ):
+                expected_source_binding_keys.add("protected_constraint_projection_digest")
             if (
                 not isinstance(source_projection, Mapping)
                 or source_projection.get("contract_version") != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV

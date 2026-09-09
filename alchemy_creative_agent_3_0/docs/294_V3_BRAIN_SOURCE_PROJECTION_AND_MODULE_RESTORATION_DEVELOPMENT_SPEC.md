@@ -1,6 +1,6 @@
 # Doc294 V3 Brain Source Projection and Module Restoration Development Specification
 
-**Status:** implementation complete in the isolated feature worktree; focused audit passed; integrated acceptance pending
+**Status:** capability-source repair integrated; protected-constraint preservation follow-up in progress
 
 **Contract revision:** `v3_brain_source_projection_v1`
 
@@ -195,6 +195,7 @@ user request + frozen facts
   -> existing shared capability execution
   -> complete typed Brain source package
        (prompt_guidance + image_set_plan + capability_guidance
+        + protected_constraint_projection
         + active contracts + ownership/reference/context facts)
   -> one server-owned source projection with output binding/digest
   -> Brain canonical finalizer
@@ -217,6 +218,7 @@ For each output, the source binding must include:
 - Brain planning result digest;
 - projected prompt-guidance/image-set digest;
 - capability-guidance digest;
+- protected-constraint projection digest;
 - active capability contract digest;
 - reference/channel ownership digest where applicable;
 - policy revision and finalizer stage;
@@ -235,6 +237,16 @@ output binding, semantic coverage, and all approval decisions; the runtime
 does not infer or approve those fields and continues to reject any mismatch.
 This is backward-compatible for historical records because it changes only
 the fresh request guidance and leaves the returned receipt contract unchanged.
+
+The protected-constraint projection is a salient, typed view of the existing
+`prompt_guidance.hard_constraints`, `image_set_plan.composition_rules` and
+related quality/layout/style/negative fields. It is not a second prompt author
+and it does not permit runtime keyword checks. Its purpose is to keep explicit
+numeric framing, crop/body completeness, camera/depth, scene landmarks and
+negative requirements from being generalized away during a natural-language
+Brain rewrite. Brain must integrate each applicable item into the complete
+prompt before declaring semantic coverage complete; historical projections
+without this optional extension remain readable.
 
 ## 8. Minimal implementation plan
 
@@ -323,6 +335,9 @@ authority model; do not weaken semantic requirements.
 - [x] `image_set_plan` fields are inventoried.
 - [x] Active capability generation and negative directions are projected as
   typed `capability_guidance` rather than local renderer text.
+- [x] Hard, composition, quality, layout, style and negative constraints are
+  projected as typed `protected_constraint_projection` rather than relying on
+  a generic semantic-coverage claim.
 - [x] Shared capability contracts are inventoried.
 - [x] Reference/channel ownership is inventoried separately from Human Realism.
 - [x] Product truth and apparel facts remain server-frozen.
@@ -344,7 +359,9 @@ authority model; do not weaken semantic requirements.
 
 1. Full `prompt_guidance` and full `image_set_plan` survive into the finalizer
    context with the same semantic values and a stable digest; active module
-   directions survive in `capability_guidance` with its own binding digest.
+   directions survive in `capability_guidance` with its own binding digest;
+   explicit hard/composition constraints survive in
+   `protected_constraint_projection` with its own binding digest.
 2. Missing, stale, swapped, malformed or cross-output source envelopes fail
    closed before Provider request.
 3. Internal IDs and contract keys are not emitted as renderer wording.

@@ -10,11 +10,13 @@ import pytest
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompt_policy import (
     V3_BRAIN_CAPABILITY_GUIDANCE_CONTRACT_REV,
+    V3_BRAIN_PROTECTED_CONSTRAINTS_CONTRACT_REV,
     V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
     V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
     brain_source_projection_sha256,
     brain_source_projection_binding_sha256,
     build_brain_capability_guidance,
+    build_brain_protected_constraint_projection,
     build_brain_source_projection_receipt,
     build_brain_source_projection,
     validate_brain_source_projection_receipt,
@@ -140,6 +142,16 @@ def test_projection_digest_covers_all_brain_guidance_and_image_plan_fields() -> 
     projection = _projection()
     assert projection["source_digest"] == brain_source_projection_sha256(projection)
     assert projection["capability_guidance"] == _capability_guidance()
+    assert projection["protected_constraint_projection"] == {
+        "contract_version": V3_BRAIN_PROTECTED_CONSTRAINTS_CONTRACT_REV,
+        "semantic_coverage": "complete",
+        "hard_constraints": ["preserve the declared aspect"],
+        "composition_rules": ["preserve subject hierarchy"],
+        "quality_bar": ["credible photographic materiality"],
+        "layout_notes": ["keep the subject readable"],
+        "style_notes": ["real lens rendering"],
+        "negative_constraints": ["avoid synthetic skin"],
+    }
     assert set(projection["prompt_guidance"]) == {
         "optimized_direction",
         "visual_direction_addons",
@@ -221,11 +233,34 @@ def test_capability_guidance_is_bound_into_source_and_binding_digests() -> None:
     )
 
 
+def test_protected_constraints_are_projected_and_bound_without_authoring_prose() -> None:
+    projection = _projection()
+    expected = build_brain_protected_constraint_projection(
+        prompt_guidance=projection["prompt_guidance"],
+        image_set_plan=projection["image_set_plan"],
+    )
+    assert projection["protected_constraint_projection"] == expected
+    assert projection["source_binding"]["protected_constraint_projection_digest"]
+    changed = deepcopy(projection)
+    changed["protected_constraint_projection"]["composition_rules"] = [
+        "preserve the full subject and the declared left-side shelf share"
+    ]
+    changed["source_binding"]["protected_constraint_projection_digest"] = "changed"
+    changed["source_binding"]["binding_digest"] = brain_source_projection_binding_sha256(
+        changed["source_binding"]
+    )
+    changed["source_digest"] = brain_source_projection_sha256(changed)
+    assert changed["source_digest"] != projection["source_digest"]
+    assert changed["source_binding"]["binding_digest"] != projection["source_binding"]["binding_digest"]
+
+
 def test_historical_projection_without_capability_guidance_remains_readable() -> None:
     projection = _projection()
     historical = deepcopy(projection)
     historical.pop("capability_guidance")
     historical["source_binding"].pop("capability_guidance_digest")
+    historical.pop("protected_constraint_projection")
+    historical["source_binding"].pop("protected_constraint_projection_digest")
     historical["source_binding"]["binding_digest"] = brain_source_projection_binding_sha256(
         historical["source_binding"]
     )
@@ -262,6 +297,10 @@ def test_payload_exposes_complete_source_projection_and_typed_receipt_schema() -
         )["receipt_digest"],
     }
     assert "complete server-owned Brain semantic source" in payload["remote_response_contract"]
+    assert "protected_constraint_projection" in payload["remote_response_contract"]
+    assert "every non-empty hard_constraints and composition_rules item" in payload[
+        "remote_response_contract"
+    ]
 
 
 def test_valid_source_projection_receipts_bind_each_output_index() -> None:
