@@ -58,6 +58,12 @@ from ..visual_assets.body_proportion_evidence_profile import (
     BodyRefreshAnalysisContext,
     require_current_body_refresh_analysis_context,
 )
+from ..llm_brain.prompt_policy import (
+    V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+    V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_SAFE_UTF8_BYTES,
+    V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS,
+    validate_unified_prompt_record,
+)
 from ..scenario_packs.ecommerce.reference_projection import (
     PhysicalProductReferenceProjection,
     ProductTruthAdmission,
@@ -2412,7 +2418,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
             )
         generation_prompt = self._generation_prompt(request, reference_assets, asset_plan=asset_plan)
         if canonical_prompt:
-            self._assert_canonical_prompt_fits_transport(generation_prompt)
+            self._assert_canonical_prompt_fits_transport(generation_prompt, request=request)
         protected_user_direction = self._provider_user_direction(request)
         image_options = self._provider_image_options(request)
         output_format = str(image_options.get("output_format") or "png").strip().lower()
@@ -5948,11 +5954,52 @@ class ProductionImageGenerationProvider(GenerationProvider):
         except (ImportError, TypeError, ValueError):
             return 0
 
-    def _assert_canonical_prompt_fits_transport(self, prompt: str) -> None:
+    def _assert_canonical_prompt_fits_transport(
+        self,
+        prompt: str,
+        *,
+        request: GenerationRequest | None = None,
+    ) -> None:
         """Fail closed instead of compacting a Brain-signed renderer prompt."""
 
-        limit = self._transport_prompt_char_cap() or self.max_provider_prompt_chars or self.provider_prompt_target_chars
-        if len(prompt) <= limit:
+        llm_brain = request.metadata.get("llm_brain") if request is not None else None
+        llm_brain = llm_brain if isinstance(llm_brain, dict) else {}
+        audit = llm_brain.get("audit") if isinstance(llm_brain.get("audit"), dict) else {}
+        unified_policy = audit.get("unified_prompt_compression_policy_revision") == V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV
+        configured_limit = self._transport_prompt_char_cap()
+        if unified_policy:
+            if configured_limit and configured_limit < V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS:
+                raise ProviderRuntimeError(
+                    "The selected image route cannot satisfy the unified canonical prompt contract.",
+                    provider=self.provider_name,
+                    detail={
+                        "failure_code": "canonical_provider_prompt_transport_capability_unsupported",
+                        "fallback": "blocked",
+                        "configured_transport_limit_chars": configured_limit,
+                        "required_transport_limit_chars": V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS,
+                    },
+                )
+            limit = V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS
+        else:
+            limit = configured_limit or self.max_provider_prompt_chars or self.provider_prompt_target_chars
+        try:
+            prompt_utf8_bytes = len(str(prompt).encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ProviderRuntimeError(
+                "The approved canonical Provider prompt is not valid UTF-8.",
+                provider=self.provider_name,
+                detail={
+                    "failure_code": "canonical_provider_prompt_invalid_utf8",
+                    "fallback": "blocked",
+                    "prompt_chars": len(str(prompt)),
+                },
+            ) from exc
+        safe_utf8_limit = (
+            V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_SAFE_UTF8_BYTES
+            if unified_policy and limit == V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS
+            else limit * 4
+        )
+        if len(prompt) <= limit and prompt_utf8_bytes <= safe_utf8_limit:
             return
         raise ProviderRuntimeError(
             "The approved canonical Provider prompt exceeds the configured transport limit.",
@@ -5961,7 +6008,9 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 "failure_code": "canonical_provider_prompt_exceeds_transport_limit",
                 "fallback": "blocked",
                 "prompt_chars": len(prompt),
+                "prompt_utf8_bytes": prompt_utf8_bytes,
                 "transport_limit_chars": limit,
+                "transport_safe_utf8_bytes": safe_utf8_limit,
             },
         )
 
@@ -6007,6 +6056,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         records = llm_brain.get("canonical_provider_prompts")
         if not isinstance(records, list):
             return ""
+        audit = llm_brain.get("audit") if isinstance(llm_brain.get("audit"), dict) else {}
+        unified_policy_required = (
+            audit.get("unified_prompt_compression_policy_revision")
+            == V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV
+        )
         generation_metadata = (
             request.generation_plan.metadata if isinstance(request.generation_plan.metadata, dict) else {}
         )
@@ -6024,7 +6078,11 @@ class ProductionImageGenerationProvider(GenerationProvider):
         ]
         if len(matches) != 1:
             return ""
-        return " ".join(str(matches[0].get("prompt") or "").split())
+        if unified_policy_required:
+            valid, _reason, _decision = validate_unified_prompt_record(matches[0], required=True)
+            if not valid:
+                return ""
+        return str(matches[0].get("prompt") or "")
 
     @staticmethod
     def _requires_brain_signed_provider_prompt(request: GenerationRequest) -> bool:

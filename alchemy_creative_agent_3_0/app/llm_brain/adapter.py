@@ -26,6 +26,18 @@ from .contracts import (
     BrainRunRequest,
     BrainRunResult,
 )
+from .prompt_policy import (
+    V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
+    V3_UNIFIED_PROMPT_MAX_LENGTH_POLICY_RECOVERY,
+    V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+    V3_UNIFIED_PROMPT_COMPRESSION_TARGET_MAX_CHARS,
+    V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS,
+    V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS,
+    brain_source_projection_sha256,
+    brain_source_projection_binding_sha256,
+    validate_brain_source_projection_receipt,
+    validate_unified_prompt_record,
+)
 from .fallback import build_fallback_result, build_remote_required_result, build_skipped_result
 from .finalizer_lifecycle import (
     REMOTE_BRAIN_FINALIZER_LIFECYCLE_FAILURE_CODES,
@@ -485,6 +497,91 @@ class V3LLMBrainAdapter:
         )
         if not _matches_canonical_provider_prompt_cardinality(prompts_raw, expected_count=expected_count):
             raise BrainPromptContractInvalid("Remote Brain returned an invalid canonical provider-prompt contract.")
+        unified_prompt_policy_required = (
+            request.metadata.get("unified_prompt_compression_policy_revision")
+            == V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV
+        )
+        unified_prompt_compression_decisions: list[str] = []
+        if unified_prompt_policy_required:
+            for item in prompts_raw:
+                if not isinstance(item, dict):
+                    raise BrainPromptContractInvalid(
+                        "Remote Brain returned an invalid unified canonical prompt record."
+                    )
+                valid, reason, decision = validate_unified_prompt_record(item, required=True)
+                if not valid:
+                    raise BrainPromptContractInvalid(
+                        f"Remote Brain returned an invalid unified prompt contract: {reason}."
+                    )
+                unified_prompt_compression_decisions.append(decision)
+        brain_source_projection_required = request.metadata.get("brain_source_projection_required") is True
+        brain_source_projection_receipts: list[str] = []
+        if brain_source_projection_required:
+            expected_source_digest = str(request.metadata.get("brain_source_projection_digest") or "").lower()
+            expected_contract_version = str(
+                request.metadata.get("brain_source_projection_contract_version") or ""
+            )
+            expected_binding_digest = str(
+                request.metadata.get("brain_source_projection_binding_digest") or ""
+            ).lower()
+            expected_count = request.requested_image_count
+            if (
+                expected_contract_version != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
+                or len(expected_source_digest) != 64
+                or len(expected_binding_digest) != 64
+            ):
+                raise BrainPromptContractInvalid("Remote Brain source projection binding is not frozen.")
+            canonical_context = request.metadata.get("canonical_prompt_context")
+            source_projection = (
+                canonical_context.get("brain_source_projection")
+                if isinstance(canonical_context, Mapping)
+                else None
+            )
+            source_binding = (
+                source_projection.get("source_binding")
+                if isinstance(source_projection, Mapping)
+                else None
+            )
+            if (
+                not isinstance(source_projection, Mapping)
+                or source_projection.get("contract_version") != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
+                or str(source_projection.get("source_digest") or "").lower() != expected_source_digest
+                or brain_source_projection_sha256(source_projection) != expected_source_digest
+                or source_projection.get("requested_image_count") != expected_count
+                or not isinstance(source_binding, Mapping)
+                or set(source_binding)
+                != {
+                    "contract_version",
+                    "user_intent_digest",
+                    "planning_result_digest",
+                    "prompt_guidance_image_set_digest",
+                    "active_capability_contract_digest",
+                    "reference_channel_ownership_digest",
+                    "frozen_runtime_binding_digest",
+                    "policy_revision",
+                    "finalizer_stage",
+                    "binding_digest",
+                }
+                or source_binding.get("contract_version") != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
+                or source_binding.get("binding_digest") != expected_binding_digest
+                or brain_source_projection_binding_sha256(source_binding) != expected_binding_digest
+            ):
+                raise BrainPromptContractInvalid("Remote Brain source projection context binding is invalid.")
+            for output_index, item in enumerate(prompts_raw, start=1):
+                if not isinstance(item, dict):
+                    raise BrainPromptContractInvalid("Remote Brain returned an invalid source projection record.")
+                valid, reason = validate_brain_source_projection_receipt(
+                    item,
+                    required=True,
+                    expected_digest=expected_source_digest,
+                    expected_output_index=output_index,
+                    expected_requested_image_count=expected_count,
+                )
+                if not valid:
+                    raise BrainPromptContractInvalid(
+                        f"Remote Brain returned an invalid source projection binding: {reason}."
+                    )
+                brain_source_projection_receipts.append("valid")
         variation_execution_contract = _general_variation_execution_contract_for_request(request)
         if variation_execution_contract is not None and not _matches_variation_execution_receipts(
             prompts_raw,
@@ -625,6 +722,42 @@ class V3LLMBrainAdapter:
             prompts,
             {
                 "remote_canonical_provider_prompts_received": True,
+                "unified_prompt_compression_policy_revision": (
+                    V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV
+                    if unified_prompt_policy_required
+                    else None
+                ),
+                "unified_prompt_compression_threshold_chars": (
+                    V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS
+                    if unified_prompt_policy_required
+                    else None
+                ),
+                "unified_prompt_compression_target_max_chars": (
+                    V3_UNIFIED_PROMPT_COMPRESSION_TARGET_MAX_CHARS
+                    if unified_prompt_policy_required
+                    else None
+                ),
+                "unified_prompt_transport_required_hard_limit_chars": (
+                    V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS
+                    if unified_prompt_policy_required
+                    else None
+                ),
+                "unified_prompt_max_length_policy_recovery": (
+                    V3_UNIFIED_PROMPT_MAX_LENGTH_POLICY_RECOVERY
+                    if unified_prompt_policy_required
+                    else None
+                ),
+                "unified_prompt_compression_decisions": unified_prompt_compression_decisions,
+                "brain_source_projection_required": brain_source_projection_required,
+                "brain_source_projection_contract_version": (
+                    V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV if brain_source_projection_required else None
+                ),
+                "brain_source_projection_binding_digest": (
+                    str(request.metadata.get("brain_source_projection_binding_digest") or "")
+                    if brain_source_projection_required
+                    else None
+                ),
+                "brain_source_projection_receipts": brain_source_projection_receipts,
                 "canonical_provider_prompt_provider": self.provider.provider,
                 "canonical_provider_prompt_model": self.provider.model,
                 "variation_execution_contract_required": variation_execution_contract is not None,

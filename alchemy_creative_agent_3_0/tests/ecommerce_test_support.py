@@ -13,6 +13,7 @@ from typing import Any
 
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
+from alchemy_creative_agent_3_0.app.llm_brain.prompt_policy import build_brain_source_projection_receipt
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.scenario_packs.ecommerce.physical_renderer_reference_plan import (
@@ -620,6 +621,11 @@ class EcommerceRemoteBrainTestProvider:
             if slot_delta_type == "body_pose"
             else None
         )
+        source_projection = context.get("brain_source_projection") if isinstance(context, dict) else None
+        source_projection_required = (
+            request.metadata.get("brain_source_projection_required") is True
+            and isinstance(source_projection, dict)
+        )
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -636,6 +642,21 @@ class EcommerceRemoteBrainTestProvider:
                     )
                 ),
                 "review_status": "approved",
+                "prompt_status": "complete",
+                "semantic_coverage": "complete",
+                "compression_decision": "none",
+                "compression_receipt": None,
+                **(
+                    {
+                        "source_projection_receipt": build_brain_source_projection_receipt(
+                            source_projection,
+                            output_index=index,
+                            requested_image_count=count,
+                        )
+                    }
+                    if source_projection_required
+                    else {}
+                ),
                 **(
                     {
                         "variation_execution_receipt": {

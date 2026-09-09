@@ -11,6 +11,7 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
     ReferenceInputAdmissionError,
     build_provider_generation_request,
 )
+from alchemy_creative_agent_3_0.app.llm_brain.prompt_policy import build_brain_source_projection_receipt
 from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import VisionOutputInspector
@@ -25,6 +26,20 @@ from alchemy_creative_agent_3_0.app.schemas import (
 )
 from app.schemas import ImageGenerationResult, ImagePromptPlan
 from app.providers.base import ProviderRuntimeError, ProviderNotConfiguredError
+
+
+def _source_projection_receipt_for_request(request, output_index: int) -> dict:
+    context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else None
+    projection = context.get("brain_source_projection") if isinstance(context, dict) else None
+    if request.metadata.get("brain_source_projection_required") is not True or not isinstance(projection, dict):
+        return {}
+    return {
+        "source_projection_receipt": build_brain_source_projection_receipt(
+            projection,
+            output_index=output_index,
+            requested_image_count=request.requested_image_count,
+        )
+    }
 
 
 def _png_base64(width: int = 96, height: int = 72) -> str:
@@ -107,6 +122,10 @@ def _generation_request(reference_path: Path | None = None) -> GenerationRequest
                         "output_index": 1,
                         "prompt": "premium ecommerce product hero image on a clean bright background",
                         "review_status": "approved",
+                        "prompt_status": "complete",
+                        "semantic_coverage": "complete",
+                        "compression_decision": "none",
+                        "compression_receipt": None,
                     }
                 ],
             },
@@ -189,6 +208,10 @@ def _human_generation_request() -> GenerationRequest:
                         "output_index": 1,
                         "prompt": "East Asian summer portrait photo with clean cool daylight",
                         "review_status": "approved",
+                        "prompt_status": "complete",
+                        "semantic_coverage": "complete",
+                        "compression_decision": "none",
+                        "compression_receipt": None,
                     }
                 ],
             },
@@ -205,7 +228,15 @@ def _set_remote_canonical_prompt(request: GenerationRequest, prompt: str) -> Non
             "llm_used": True,
             "fallback_used": False,
             "canonical_provider_prompts": [
-                {"output_index": 1, "prompt": prompt, "review_status": "approved"}
+                {
+                    "output_index": 1,
+                    "prompt": prompt,
+                    "review_status": "approved",
+                    "prompt_status": "complete",
+                    "semantic_coverage": "complete",
+                    "compression_decision": "none",
+                    "compression_receipt": None,
+                }
             ],
         }
     )
@@ -1917,6 +1948,11 @@ def test_product_api_real_generation_uses_injected_output_store(tmp_path, monkey
                                 "and coherent photographic detail."
                             ),
                             "review_status": "approved",
+                            "prompt_status": "complete",
+                            "semantic_coverage": "complete",
+                            "compression_decision": "none",
+                            "compression_receipt": None,
+                            **_source_projection_receipt_for_request(request, index),
                             **receipt,
                             **decision_receipt,
                             **presence_receipt,
@@ -2152,6 +2188,11 @@ def test_product_api_persisted_real_generation_requirement_cannot_downgrade_to_m
                                 "and coherent photographic detail."
                             ),
                             "review_status": "approved",
+                            "prompt_status": "complete",
+                            "semantic_coverage": "complete",
+                            "compression_decision": "none",
+                            "compression_receipt": None,
+                            **_source_projection_receipt_for_request(request, index),
                             **receipt,
                             **decision_receipt,
                             **presence_receipt,

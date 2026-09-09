@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
+from alchemy_creative_agent_3_0.app.llm_brain.prompt_policy import build_brain_source_projection_receipt
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.vision_inspector import VisionOutputInspector
@@ -123,6 +124,11 @@ class PhotographyRemoteBrainTestProvider:
             == "holistic_person_and_situation_resolution"
             and presence_requirement.get("owner") == "remote_v3_llm_brain"
         )
+        source_projection = canonical_context.get("brain_source_projection") if isinstance(canonical_context, dict) else None
+        source_projection_required = (
+            request.metadata.get("brain_source_projection_required") is True
+            and isinstance(source_projection, dict)
+        )
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -131,6 +137,21 @@ class PhotographyRemoteBrainTestProvider:
                     "rendering that respects the user's request and frozen reference truth."
                 ),
                 "review_status": "approved",
+                "prompt_status": "complete",
+                "semantic_coverage": "complete",
+                "compression_decision": "none",
+                "compression_receipt": None,
+                **(
+                    {
+                        "source_projection_receipt": build_brain_source_projection_receipt(
+                            source_projection,
+                            output_index=index,
+                            requested_image_count=count,
+                        )
+                    }
+                    if source_projection_required
+                    else {}
+                ),
                 **(
                     {
                         "user_direction_integrity": {

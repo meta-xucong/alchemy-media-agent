@@ -7,6 +7,14 @@ import json
 from typing import NoReturn
 
 from .contracts import BrainRunRequest
+from .prompt_policy import (
+    V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
+    V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+    V3_UNIFIED_PROMPT_COMPRESSION_TARGET_MAX_CHARS,
+    V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS,
+    V3_UNIFIED_PROMPT_MAX_LENGTH_POLICY_RECOVERY,
+    V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS,
+)
 from ..visual_assets.body_proportion_evidence_profile import BODY_REFRESH_REFERENCE_AGE_SCOPE
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS
 from ..shared_capabilities.visual_cluster.expression_review import LAUGH_EXPRESSION_INTENT_CONTRACT_VERSION
@@ -67,6 +75,7 @@ For a visible real person, resolve identity, current developmental stage, expres
 When multiple visible people share the frame, preserve the user's desired beauty, appeal, facial harmony, styling, and mood as the first visual priority while authoring them as distinct individuals observed in one real moment. Let their attention, timing, posture, expression, facial character, and light-dependent surface response differ naturally with the situation, without making faces interchangeable, retouching uniform, or skin artificially plastic. Keep the beauty direction flattering and coherent across the group; realism should add camera-observed material detail and presence, not make the people less attractive. Do not equate realism with dullness, harshness, fatigue, roughness, or deliberately imperfect facial features: preserve balanced attractive features, healthy complexion, and expressive eyes. If realism and texture compete with beauty, reduce the texture intervention before reducing facial appeal. Resolve skin as natural human material with restrained local highlights and soft highlight rolloff, preserving fine nonuniform texture without oily sheen or waxy gloss. Keep each face readable through scene-consistent reflected or ambient fill from the existing light, without replacing directional light with flat frontal studio fill. Preserve the prompt's light direction, color, mood, and contrast; keep facial shadow detail open without lifting the whole scene, and keep highlight rolloff physically coherent with the background and hair rim light. If warm backlight, retro color, soft focus, diffusion, or halation is requested, balance those effects against neutral skin color, gentle highlight transitions, and open shadow detail rather than intensifying amber saturation or contrast. When soft focus, diffusion, or halation is requested, keep it an optical property of the scene and highlights while retaining local face and material contrast at the focal plane.
 When improving human rendering inside an already specified scene, do not add new environmental facts, props, background landmarks, weather, time-of-day changes, palette changes, or alternate lighting setups. Make the smallest semantic improvement needed to the people and their interaction while leaving the complete scene direction intact.
 For an age-sensitive or otherwise safety-sensitive person reference, keep the renderer direction concise, plainly age-appropriate, fully clothed, and ordinary. Preserve the requested identity, developmental stage, clothing, scene, and factual capture requirements, but express realism as a positive whole-image camera observation such as natural matte skin and an ordinary expression. Do not repeat contrastive safety wording, microscopic skin or anatomy language, body-development descriptions, or lists of forbidden adult traits in the renderer prompt. This is a provider-admission safeguard, not a refusal and not permission to omit a protected user fact.
+Apply canonical_prompt_policy exactly once. Do not compress or rewrite a final prompt at or below the threshold of 6000 Unicode characters. If the complete prompt would exceed that threshold, perform one semantic rewrite in this same finalizer, keep the final prompt at or below 3500 characters, set compression_decision to brain_semantic_once, and return the complete compression_receipt bound to the exact final prompt. Never return an overlong prompt, a partial receipt, a summary, or a local repair fragment. prompt_status and semantic_coverage must both be complete for every fresh canonical record; these are semantic decisions, not keyword or regex checks.
 Return every required audit receipt in the response schema. A receipt is proof of your semantic decision, never extra renderer wording. On retry, use normalized review evidence to rewrite the whole direction yourself rather than appending a local repair phrase."""
 
 _CANONICAL_FINALIZER_STAGES = frozenset(
@@ -1366,6 +1375,20 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         "output_index": "integer from 1 through requested_image_count",
         "prompt": "one complete final natural-language image-rendering prompt for this exact output",
         "review_status": "approved",
+        "prompt_status": "complete",
+        "semantic_coverage": "complete",
+        "compression_decision": "none|brain_semantic_once",
+        "compression_receipt": {
+            "required_only_when": "compression_decision=brain_semantic_once",
+            "contract_version": "v3_prompt_compression_receipt_v1",
+            "policy_revision": V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+            "decision": "brain_semantic_once",
+            "source_chars": f"integer greater than {V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS}",
+            "final_chars": f"exact Unicode character count, at most {V3_UNIFIED_PROMPT_COMPRESSION_TARGET_MAX_CHARS}",
+            "final_prompt_sha256": "SHA-256 of the exact returned prompt text in its original UTF-8 form",
+            "semantic_status": "complete",
+            "owner": "remote_v3_llm_brain",
+        },
     }
     if variation_execution_contract is not None:
         prompt_schema["variation_execution_receipt"] = {
@@ -1512,6 +1535,30 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "individual presence. Do not use keyword matching, phrase counting, a "
             "structured visual recipe, or a local repair suffix; compare the complete "
             "meanings semantically and rewrite the whole prompt when restoration is needed."
+        )
+    source_projection_required = request.metadata.get("brain_source_projection_required") is True
+    source_projection = context.get("brain_source_projection")
+    if source_projection_required:
+        if not isinstance(source_projection, dict) or not str(source_projection.get("source_digest") or ""):
+            raise ValueError("Brain source projection is required for fresh canonical finalization.")
+        prompt_schema["source_projection_receipt"] = {
+            "contract_version": V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
+            "source_digest": "exact source_digest from frozen_render_context.brain_source_projection",
+            "output_index": "same integer as this canonical_provider_prompts item",
+            "requested_image_count": "same integer as requested_image_count",
+            "semantic_coverage": "complete",
+            "owner": "remote_v3_llm_brain",
+            "receipt_digest": "SHA-256 of these exact receipt fields, excluding receipt_digest",
+        }
+        response_contract += (
+            " The frozen_render_context.brain_source_projection is the complete server-owned Brain semantic source. "
+            "Use all of its prompt_guidance and image_set_plan fields when authoring each complete natural-language "
+            "prompt; do not reconstruct, discard, or replace those facts with a local recipe. For every output, "
+            "return source_projection_receipt with contract_version "
+            f"{V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV}, the exact source_digest from that projection, the matching "
+            "output_index, requested_image_count, semantic_coverage complete, owner remote_v3_llm_brain, and the "
+            "exact receipt_digest over those fields. "
+            "This receipt is typed binding evidence only and must not be copied into renderer wording."
         )
     if variation_execution_contract is not None:
         response_contract += (
@@ -1863,6 +1910,15 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         "requested_image_count": request.requested_image_count,
         "requested_image_size": request.requested_image_size,
         "frozen_render_context": context,
+        "canonical_prompt_policy": {
+            "policy_revision": V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+            "compression_threshold_chars": V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS,
+            "compression_target_max_chars": V3_UNIFIED_PROMPT_COMPRESSION_TARGET_MAX_CHARS,
+            "max_length_policy_recovery": V3_UNIFIED_PROMPT_MAX_LENGTH_POLICY_RECOVERY,
+            "transport_required_hard_limit_chars": V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS,
+            "apply_to": "final_renderer_prompt_only",
+            "do_not_apply_to": "brain_request_payload_or_token_budget",
+        },
         "return_schema": {
             "canonical_provider_prompts": [prompt_schema]
         },

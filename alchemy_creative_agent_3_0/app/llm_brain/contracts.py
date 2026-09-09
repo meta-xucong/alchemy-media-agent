@@ -18,6 +18,12 @@ from ..shared_capabilities.activation import (
     VisualTaskProfile,
     general_capability_policy,
 )
+from .prompt_policy import (
+    V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
+    V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS,
+    V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+    V3_UNIFIED_PROMPT_COMPRESSION_TARGET_MAX_CHARS,
+)
 
 
 # Transport-only Brain limits.  The per-call window is deliberately smaller
@@ -306,6 +312,57 @@ class VariationExecutionReceipt(V3BaseModel):
         return value
 
 
+class BrainPromptCompressionReceipt(V3BaseModel):
+    """Brain-owned evidence for the one allowed semantic prompt rewrite."""
+
+    contract_version: Literal["v3_prompt_compression_receipt_v1"]
+    policy_revision: Literal[V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV]
+    decision: Literal["brain_semantic_once"]
+    source_chars: StrictInt = Field(gt=V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS)
+    final_chars: StrictInt = Field(gt=0, le=V3_UNIFIED_PROMPT_COMPRESSION_TARGET_MAX_CHARS)
+    final_prompt_sha256: str
+    semantic_status: Literal["complete"]
+    owner: Literal["remote_v3_llm_brain"]
+
+    @field_validator("final_prompt_sha256")
+    @classmethod
+    def validate_final_prompt_sha256_shape(cls, value: str) -> str:
+        value = str(value or "").lower()
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("prompt compression receipt digest must be a SHA-256 hex digest")
+        return value
+
+
+class BrainSourceProjectionReceipt(V3BaseModel):
+    """Brain-owned binding to the complete server-projected semantic source."""
+
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    contract_version: Literal[V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV]
+    source_digest: str = Field(min_length=64, max_length=64)
+    output_index: StrictInt = Field(ge=1)
+    requested_image_count: StrictInt = Field(ge=1)
+    semantic_coverage: Literal["complete"]
+    owner: Literal["remote_v3_llm_brain"]
+    receipt_digest: str = Field(min_length=64, max_length=64)
+
+    @field_validator("source_digest")
+    @classmethod
+    def validate_source_digest_shape(cls, value: str) -> str:
+        value = str(value or "").lower()
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("Brain source projection digest must be a SHA-256 hex digest")
+        return value
+
+    @field_validator("receipt_digest")
+    @classmethod
+    def validate_receipt_digest_shape(cls, value: str) -> str:
+        value = str(value or "").lower()
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("Brain source projection receipt digest must be a SHA-256 hex digest")
+        return value
+
+
 class BrainCanonicalProviderPrompt(V3BaseModel):
     """One Brain-signed, renderer-ready prompt for a frozen output.
 
@@ -318,6 +375,13 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     output_index: int = Field(ge=1)
     prompt: str
     review_status: Literal["approved"] = "approved"
+    # New unified policy fields are optional for historical records.  Fresh
+    # runtime requests enable their validation explicitly in the adapter.
+    prompt_status: Literal["complete"] | None = None
+    semantic_coverage: Literal["complete"] | None = None
+    compression_decision: Literal["none", "brain_semantic_once"] | None = None
+    compression_receipt: BrainPromptCompressionReceipt | None = None
+    source_projection_receipt: BrainSourceProjectionReceipt | None = None
     # General multi-image only. Optional keeps single-image, specialized, and
     # historical canonical prompt records readable.
     variation_execution_receipt: VariationExecutionReceipt | None = None
@@ -352,10 +416,13 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     @field_validator("prompt")
     @classmethod
     def prompt_must_be_complete_text(cls, value: str) -> str:
-        cleaned = " ".join(str(value or "").split())
-        if len(cleaned) < 24:
+        # Validate meaningful content without rewriting the signed renderer
+        # text.  Exact whitespace belongs to the Brain receipt and must reach
+        # the Provider unchanged.
+        text = str(value or "")
+        if len(" ".join(text.split())) < 24:
             raise ValueError("canonical provider prompt is required")
-        return cleaned
+        return text
 
 
 class BrainUserVisibleSummary(V3BaseModel):

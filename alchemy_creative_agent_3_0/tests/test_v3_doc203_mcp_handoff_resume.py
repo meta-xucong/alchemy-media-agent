@@ -22,6 +22,7 @@ from alchemy_creative_agent_3_0.app.generation_router.mcp_materialization import
 )
 from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.fallback import build_fallback_result
+from alchemy_creative_agent_3_0.app.llm_brain.prompt_policy import build_brain_source_projection_receipt
 from alchemy_creative_agent_3_0.app.product_api.anchor_pack_host import ProductApiAnchorPackPreparationHost
 from alchemy_creative_agent_3_0.app.product_api.contracts import (
     CreateCreativeJobRequest,
@@ -168,6 +169,8 @@ class _LocalBrainProvider:
             "confidence": 0.99,
             "evidence": [],
         }
+        canonical_context = request.metadata.get("canonical_prompt_context") if isinstance(request.metadata, dict) else None
+        source_projection = canonical_context.get("brain_source_projection") if isinstance(canonical_context, dict) else None
         payload["canonical_provider_prompts"] = [
             {
                 "output_index": index,
@@ -176,6 +179,22 @@ class _LocalBrainProvider:
                     "preserving the submitted handoff identity and reference contract."
                 ),
                 "review_status": "approved",
+                "prompt_status": "complete",
+                "semantic_coverage": "complete",
+                "compression_decision": "none",
+                "compression_receipt": None,
+                **(
+                    {
+                        "source_projection_receipt": build_brain_source_projection_receipt(
+                            source_projection,
+                            output_index=index,
+                            requested_image_count=count,
+                        )
+                    }
+                    if request.metadata.get("brain_source_projection_required") is True
+                    and isinstance(source_projection, dict)
+                    else {}
+                ),
                 "semantic_preflight_status": "approved",
                 "human_naturalness_decision": {
                     "contract_version": "v3_human_naturalness_decision_v1",

@@ -66,15 +66,20 @@ RAW_INPUTS = (' \n  Keep two  spaces.\n ', 'Keep\tA\t\tB.', '\r\n"A & B"\r\nSeco
 GATE_A_BASELINE = {
     "general_single": {
         "plan": (21480, 13039, 38789, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
-        "provider_prompt_finalize": (5359, 29721, 50459, "e4dfac5dc14e6530531d3688b1463ef675f700c9afc0b6fab21c8941e44dc29d"),
+        # Doc293 adds the semantic-completeness and compression-receipt fields
+        # to the finalizer response schema; Gate A request-body measurements
+        # remain the historical comparison baseline.
+        # Doc294 adds the typed Brain source-projection receipt to the fresh
+        # finalizer schema; transport invariants remain otherwise unchanged.
+        "provider_prompt_finalize": (5359, 29721, 50459, "957dafdfe2056df1512d545594d85bdbda4cb643e962084bb4a19d4a785f0d9a"),
     },
     "general_multi": {
         "plan": (21480, 14997, 40889, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
-        "provider_prompt_finalize": (5359, 65281, 88469, "78895211b672218b07c4440705148b8c9522ab6e30b2a6f00a7783928b6894e7"),
+        "provider_prompt_finalize": (5359, 65281, 88469, "9e30f9a88dbf0bb86d2ffe77c5b004ce7ec0c56cf93446ba859f946e7d2efcef"),
     },
     "professional_ecommerce": {
         "plan": (21480, 21210, 47495, "5c485b5493ae3538fe006292cf296adde4e1a3d464fd01d0964c7dab33badd5b"),
-        "provider_prompt_finalize": (5359, 82486, 106797, "925ef671fe72a676adaa3ad4b070c1654fb89d3904e9c51877d3821077625704"),
+        "provider_prompt_finalize": (5359, 82486, 106797, "7e18c160f5fda5969f98c3df5963db43fc4b90432a663811d2a8af42318516b3"),
     },
 }
 

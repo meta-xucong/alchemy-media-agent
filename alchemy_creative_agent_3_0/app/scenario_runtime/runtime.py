@@ -15,6 +15,12 @@ from ..llm_brain import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunR
 from ..llm_brain.fallback import build_remote_required_result
 from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
 from ..llm_brain.stage_trace import record_stage_event
+from ..llm_brain.prompt_policy import (
+    V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
+    V3_BRAIN_SOURCE_PROJECTION_FINALIZER_STAGE,
+    V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+    build_brain_source_projection,
+)
 from ..llm_brain.providers import (
     BrainDevelopmentalPresenceDecisionMissing,
     BrainExecutionBudgetExceeded,
@@ -1285,7 +1291,8 @@ class ScenarioRuntime:
     ) -> BrainRunResult:
         """Bounded prompt recovery for reference-led Character Card face slots.
 
-        This is not a general local creative fallback.  It is allowed only for
+        This is not a general local creative fallback and is outside the
+        ordinary Doc293 Brain finalizer path.  It is allowed only for
         later Face Identity card slots whose identity, age, crop and reference
         chain are already frozen by Professional metadata.  The recovered text
         is a minimal slot delta; generated pixels still go through the same
@@ -2603,7 +2610,22 @@ class ScenarioRuntime:
                     "frozen_binding": dict(canonical_prompt_context.get("frozen_binding") or {}),
                 }
 
-        signing_metadata: dict[str, Any] = {"canonical_prompt_context": canonical_prompt_context}
+        signing_metadata: dict[str, Any] = {
+            "canonical_prompt_context": canonical_prompt_context,
+            "unified_prompt_compression_policy_revision": V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+            "brain_source_projection_required": True,
+            "brain_source_projection_contract_version": V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
+            "brain_source_projection_digest": str(
+                (canonical_prompt_context.get("brain_source_projection") or {}).get("source_digest") or ""
+            ),
+            "brain_source_projection_binding_digest": str(
+                ((canonical_prompt_context.get("brain_source_projection") or {}).get("source_binding") or {}).get(
+                    "binding_digest"
+                )
+                or ""
+            ),
+            "brain_source_projection_requested_image_count": expected,
+        }
         # The complete renderer prompt must preserve the user's full direction.
         # Character Card slot deltas intentionally own a narrower prompt scope.
         if not canonical_prompt_context.get("character_card_slot_delta_target"):
@@ -2837,6 +2859,19 @@ class ScenarioRuntime:
                     "stage": "provider_prompt_professional_capture_resign",
                     "metadata": {
                         "canonical_prompt_context": capture_context,
+                        "unified_prompt_compression_policy_revision": V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+                        "brain_source_projection_required": True,
+                        "brain_source_projection_contract_version": V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
+                        "brain_source_projection_digest": str(
+                            (capture_context.get("brain_source_projection") or {}).get("source_digest") or ""
+                        ),
+                        "brain_source_projection_binding_digest": str(
+                            ((capture_context.get("brain_source_projection") or {}).get("source_binding") or {}).get(
+                                "binding_digest"
+                            )
+                            or ""
+                        ),
+                        "brain_source_projection_requested_image_count": expected,
                         "candidate_canonical_provider_prompts": [
                             item.model_dump(mode="json") for item in prompts
                         ],
@@ -3068,6 +3103,39 @@ class ScenarioRuntime:
             "owner": "remote_v3_llm_brain",
             "frozen_binding": dict(frozen_binding),
         }
+
+    @staticmethod
+    def _json_safe_projection_value(value: Any) -> Any:
+        """Keep lightweight historical Brain fixtures usable by source projection.
+
+        Production Brain results are Pydantic models and use their canonical
+        JSON dump.  A few legacy contract tests intentionally use simple
+        namespace-shaped stand-ins; projecting those values is compatibility
+        plumbing, not a second semantic author.
+        """
+
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            return model_dump(mode="json")
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        enum_value = getattr(value, "value", None)
+        if enum_value is not None and isinstance(enum_value, (str, int, float, bool)):
+            return enum_value
+        if isinstance(value, dict):
+            return {
+                str(key): ScenarioRuntime._json_safe_projection_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple, set)):
+            return [ScenarioRuntime._json_safe_projection_value(item) for item in value]
+        attributes = getattr(value, "__dict__", None)
+        if isinstance(attributes, dict):
+            return {
+                str(key): ScenarioRuntime._json_safe_projection_value(item)
+                for key, item in attributes.items()
+            }
+        return str(value)
 
     @staticmethod
     def _canonical_prompt_context(
@@ -3465,6 +3533,33 @@ class ScenarioRuntime:
                     "owner": "remote_v3_llm_brain",
                     "frozen_binding": dict(context.get("frozen_binding") or {}),
                 }
+        # This is the sole server-owned bridge from the complete planning
+        # result into final prompt authorship.  Build it after every typed
+        # ownership/capability fact has been projected so the digest binds the
+        # actual frozen source, not an earlier partial context snapshot.
+        planning_result = ScenarioRuntime._json_safe_projection_value(brain_result)
+        planning_result.pop("canonical_provider_prompts", None)
+        context["brain_source_projection"] = build_brain_source_projection(
+            requested_image_count=effective_image_count,
+            prompt_guidance=ScenarioRuntime._json_safe_projection_value(
+                getattr(brain_result, "prompt_guidance", {})
+            ),
+            image_set_plan=ScenarioRuntime._json_safe_projection_value(
+                getattr(brain_result, "image_set_plan", {})
+            ),
+            binding_facts={
+                "user_intent": context.get("protected_user_intent"),
+                "planning_result": planning_result,
+                "active_capability_contracts": context.get("active_semantic_capability_contracts", []),
+                "reference_channel_ownership": {
+                    "reference_bindings": context.get("reference_bindings", []),
+                    "decision": context.get("reference_channel_ownership_decision", {}),
+                },
+                "frozen_runtime_binding": context.get("frozen_binding", {}),
+                "policy_revision": V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+                "finalizer_stage": V3_BRAIN_SOURCE_PROJECTION_FINALIZER_STAGE,
+            },
+        )
         return context
 
     @staticmethod
