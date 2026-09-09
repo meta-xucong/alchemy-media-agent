@@ -31,6 +31,7 @@ _SAFE_EXTRA_KEYS = {
     "first_content_observed",
     "reasoning_content_observed",
     "reasoning_chunk_count",
+    "semantic_progress_event_count",
     "complete_response_observed",
     "json_parse_started",
     "json_parse_completed",

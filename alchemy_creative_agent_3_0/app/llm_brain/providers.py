@@ -331,11 +331,10 @@ class V3LLMBrainProvider:
         self.provider = _env("V3_LLM_BRAIN_PROVIDER") or _preferred_provider()
         self.provider = self.provider.strip().lower()
         self.model = _env("V3_LLM_BRAIN_MODEL") or _default_model(self.provider)
-        # Aiself's OpenAI-compatible DeepSeek route exposes private reasoning
-        # before the final JSON content. Keep that route responsive by using
-        # its supported low-effort control by default. This is only a
-        # transport setting: reasoning is never copied into the renderer
-        # prompt, and callers can explicitly choose another supported effort.
+        # A provider-specific reasoning control is opt-in. The collector can
+        # observe private reasoning without changing the model's creative
+        # decision policy; transport compatibility must not silently change
+        # the reasoning behavior of every DeepSeek route.
         self.reasoning_effort = _configured_reasoning_effort(self.provider)
         self.timeout = max(
             BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
@@ -859,7 +858,7 @@ def _call_with_timeout(
         now = time.perf_counter()
         remaining = deadline - now
         if remaining <= 0.0:
-            current_progress = int((trace or {}).get("progress_event_count") or 0)
+            current_progress = int((trace or {}).get("semantic_progress_event_count") or 0)
             if current_progress > observed_progress and current_progress and now < maximum_deadline:
                 observed_progress = current_progress
                 deadline = min(maximum_deadline, now + progress_grace_seconds)
@@ -878,7 +877,7 @@ def _call_with_timeout(
                 elapsed_ms=int(round((time.perf_counter() - started) * 1000)),
             )
         thread.join(timeout=min(0.25, remaining))
-        current_progress = int((trace or {}).get("progress_event_count") or 0)
+        current_progress = int((trace or {}).get("semantic_progress_event_count") or 0)
         if current_progress > observed_progress:
             observed_progress = current_progress
             deadline = min(maximum_deadline, max(deadline, time.perf_counter() + progress_grace_seconds))
@@ -911,6 +910,7 @@ def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:
         "json_parse_started": False,
         "json_parse_completed": False,
         "progress_event_count": 0,
+        "semantic_progress_event_count": 0,
     }
 
 
@@ -920,9 +920,8 @@ def _mark_transport_event(event: str) -> None:
         return
     normalized = str(event or "").strip().lower()
     trace["last_event"] = normalized
-    if normalized in {"complete_response_observed", "json_parse_started", "json_parse_completed"}:
+    if normalized in {"json_parse_started", "json_parse_completed"}:
         trace["response_started"] = True
-        trace["first_content_observed"] = True
     if normalized == "response_started":
         trace["response_started"] = True
     if normalized == "first_content_observed":
@@ -939,6 +938,11 @@ def _mark_transport_event(event: str) -> None:
     if normalized == "json_parse_completed":
         trace["json_parse_started"] = True
         trace["json_parse_completed"] = True
+    if normalized == "semantic_progress":
+        trace["semantic_progress_event_count"] = int(
+            trace.get("semantic_progress_event_count") or 0
+        ) + 1
+        trace["last_semantic_progress_at"] = time.perf_counter()
     if normalized in {"stream_chunk_observed", "stream_progress"}:
         trace["progress_event_count"] = int(trace.get("progress_event_count") or 0) + 1
         trace["last_progress_at"] = time.perf_counter()
@@ -1160,6 +1164,7 @@ def _collect_openai_chat_completion_stream(
                                 isinstance(trace, dict) and trace.get("reasoning_content_observed")
                             )
                             _mark_transport_event("reasoning_content_observed")
+                            _mark_transport_event("semantic_progress")
                             if first_reasoning_observed:
                                 record_stage_event(
                                     "brain_provider",
@@ -1170,6 +1175,7 @@ def _collect_openai_chat_completion_stream(
                         content = _stream_delta_text(delta, "content")
                         if content:
                             _mark_transport_event("first_content_observed")
+                            _mark_transport_event("semantic_progress")
                             record_stage_event("brain_provider", "stream_first_content_observed")
                             chunks.append(str(content))
                 finally:
@@ -1256,11 +1262,11 @@ _SUPPORTED_REASONING_EFFORTS = frozenset({"low", "medium", "high", "max", "xhigh
 
 
 def _configured_reasoning_effort(provider: str) -> str | None:
-    """Return the supported effort control without sending invalid disable values."""
+    """Return only an explicitly configured, supported effort control."""
 
     configured = _env("V3_LLM_BRAIN_REASONING_EFFORT")
     if configured is None:
-        return "low" if provider == "deepseek" else None
+        return None
     normalized = configured.strip().lower()
     if normalized in {"", "default", "provider"}:
         return None

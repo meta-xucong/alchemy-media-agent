@@ -210,6 +210,113 @@ class _ProgressingHttpClient:
         return self.response
 
 
+class _DelayedReasoningStreamResponse:
+    def __init__(self):
+        self.closed = threading.Event()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        self.closed.set()
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self):
+        lines = [
+            'data: {"choices":[{"delta":{"reasoning_content":[{"text":"first"}]}}]}',
+            'data: {"choices":[{"delta":{"reasoning_content":" second"}}]}',
+            'data: {"choices":[{"delta":{"content":[{"text":"{\\"ok\\":true}"}]}}]}',
+            "data: [DONE]",
+        ]
+        for index, line in enumerate(lines):
+            if self.closed.is_set():
+                return
+            yield line
+            if index < len(lines) - 1:
+                time.sleep(0.08)
+
+
+class _DelayedReasoningHttpClient:
+    response = None
+
+    def __init__(self, *, timeout):
+        self.timeout = timeout
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        if self.response is not None:
+            self.response.close()
+
+    def stream(self, method, url, *, headers, json):
+        type(self).response = _DelayedReasoningStreamResponse()
+        self.response = type(self).response
+        return self.response
+
+
+class _NoiseBlockingStreamResponse:
+    def __init__(self):
+        self.closed = threading.Event()
+        self.finished = threading.Event()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        self.closed.set()
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self):
+        for _ in range(20):
+            if self.closed.is_set():
+                self.finished.set()
+                return
+            yield 'data: {"choices":[{"delta":{"role":"assistant"}}]}'
+            time.sleep(0.02)
+        self.closed.wait(5.0)
+        self.finished.set()
+
+
+class _NoiseBlockingHttpClient:
+    response = None
+
+    def __init__(self, *, timeout):
+        self.timeout = timeout
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def close(self):
+        if self.response is not None:
+            self.response.close()
+
+    def stream(self, method, url, *, headers, json):
+        type(self).response = _NoiseBlockingStreamResponse()
+        self.response = type(self).response
+        return self.response
+
+
 class _FakeHttpxReadTimeout(RuntimeError):
     __module__ = "httpx"
 
@@ -273,6 +380,18 @@ def _install_progressing_httpx(monkeypatch) -> type[_ProgressingHttpClient]:
     return _ProgressingHttpClient
 
 
+def _install_delayed_reasoning_httpx(monkeypatch) -> type[_DelayedReasoningHttpClient]:
+    fake_httpx = types.SimpleNamespace(Timeout=_FakeTimeout, Client=_DelayedReasoningHttpClient)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+    return _DelayedReasoningHttpClient
+
+
+def _install_noise_blocking_httpx(monkeypatch) -> type[_NoiseBlockingHttpClient]:
+    fake_httpx = types.SimpleNamespace(Timeout=_FakeTimeout, Client=_NoiseBlockingHttpClient)
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+    return _NoiseBlockingHttpClient
+
+
 def _install_timeout_httpx(monkeypatch) -> type[_TimeoutHttpClient]:
     fake_httpx = types.SimpleNamespace(Timeout=_FakeTimeout, Client=_TimeoutHttpClient)
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
@@ -329,6 +448,63 @@ def test_brain_timeout_allows_active_stream_progress_with_bounded_grace(monkeypa
 
     assert json.loads(result["text"]) == {"ok": True}
     assert trace["progress_event_count"] == 4
+    assert trace["semantic_progress_event_count"] == 3
+
+
+def test_brain_timeout_allows_delayed_reasoning_until_content_within_budget(monkeypatch) -> None:
+    _install_delayed_reasoning_httpx(monkeypatch)
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    trace_token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    budget = _BrainExecutionBudget(total_seconds=0.5, started_at=time.perf_counter())
+    budget_token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    try:
+        result = _call_with_timeout(
+            lambda: {"text": _collect_openai_chat_completion_stream(
+                url="https://brain.example/v1/chat/completions",
+                api_key="redacted",
+                payload={"stream": True},
+                timeout_seconds=0.1,
+            )},
+            timeout_seconds=0.1,
+            trace=trace,
+        )
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(budget_token)
+        _ACTIVE_TRANSPORT_TRACE.reset(trace_token)
+
+    assert json.loads(result["text"]) == {"ok": True}
+    assert trace["reasoning_content_observed"] is True
+    assert trace["reasoning_chunk_count"] == 2
+    assert trace["first_content_observed"] is True
+    assert trace["semantic_progress_event_count"] == 3
+
+
+def test_transport_noise_does_not_extend_semantic_progress_grace(monkeypatch) -> None:
+    _install_noise_blocking_httpx(monkeypatch)
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    trace_token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    started = time.perf_counter()
+    try:
+        with pytest.raises(BrainTransportTimeoutError):
+            _call_with_timeout(
+                lambda: _collect_openai_chat_completion_stream(
+                    url="https://brain.example/v1/chat/completions",
+                    api_key="redacted",
+                    payload={"stream": True},
+                    timeout_seconds=0.1,
+                ),
+                timeout_seconds=0.1,
+                trace=trace,
+            )
+    finally:
+        _ACTIVE_TRANSPORT_TRACE.reset(trace_token)
+
+    assert time.perf_counter() - started < 0.3
+    assert trace["progress_event_count"] > 0
+    assert trace["semantic_progress_event_count"] == 0
+    assert trace["first_content_observed"] is False
+    assert _NoiseBlockingHttpClient.response is not None
+    assert _NoiseBlockingHttpClient.response.finished.wait(0.5)
 
 
 def test_brain_progress_grace_cannot_cross_logical_execution_budget() -> None:
@@ -339,7 +515,7 @@ def test_brain_progress_grace_cannot_cross_logical_execution_budget() -> None:
     def continuously_progressing_call():
         try:
             while not stop.is_set():
-                trace["progress_event_count"] += 1
+                trace["semantic_progress_event_count"] += 1
                 time.sleep(0.02)
         finally:
             finished.set()
@@ -462,6 +638,32 @@ def test_openai_chat_stream_collector_keeps_reasoning_out_of_final_json(monkeypa
     assert trace["reasoning_content_observed"] is True
     assert trace["reasoning_chunk_count"] == 2
     assert trace["first_content_observed"] is True
+    assert trace["complete_response_observed"] is True
+
+
+def test_openai_chat_stream_reasoning_only_never_marks_content(monkeypatch) -> None:
+    _install_fake_httpx(
+        monkeypatch,
+        [
+            'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}',
+            "data: [DONE]",
+        ],
+    )
+    trace = _new_transport_trace(stage="plan", json_recovery=False)
+    token = _ACTIVE_TRANSPORT_TRACE.set(trace)
+    try:
+        text = _collect_openai_chat_completion_stream(
+            url="https://brain.example/v1/chat/completions",
+            api_key="redacted",
+            payload={"stream": True},
+            timeout_seconds=120,
+        )
+    finally:
+        _ACTIVE_TRANSPORT_TRACE.reset(token)
+
+    assert text == ""
+    assert trace["reasoning_content_observed"] is True
+    assert trace["first_content_observed"] is False
     assert trace["complete_response_observed"] is True
 
 

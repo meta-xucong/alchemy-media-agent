@@ -1527,7 +1527,21 @@ def test_declared_deepseek_brain_uses_remote_chat_completions_transport(monkeypa
     assert payload["model"] == "deepseek-primary"
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["temperature"] == 0
-    assert payload["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in payload
+
+
+def test_reasoning_effort_is_explicit_and_supported_only(monkeypatch) -> None:
+    from alchemy_creative_agent_3_0.app.llm_brain import providers as brain_providers
+
+    monkeypatch.delenv("V3_LLM_BRAIN_REASONING_EFFORT", raising=False)
+    assert brain_providers._configured_reasoning_effort("deepseek") is None  # noqa: SLF001
+
+    monkeypatch.setenv("V3_LLM_BRAIN_REASONING_EFFORT", "low")
+    assert brain_providers._configured_reasoning_effort("deepseek") == "low"  # noqa: SLF001
+
+    for value in ("none", "minimal", "invalid"):
+        monkeypatch.setenv("V3_LLM_BRAIN_REASONING_EFFORT", value)
+        assert brain_providers._configured_reasoning_effort("deepseek") is None  # noqa: SLF001
 
 
 def test_openai_brain_negotiates_chat_when_gateway_rejects_responses(monkeypatch) -> None:

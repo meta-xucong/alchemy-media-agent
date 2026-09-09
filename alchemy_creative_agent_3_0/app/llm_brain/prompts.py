@@ -14,6 +14,7 @@ from .prompt_policy import (
     V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS,
     V3_UNIFIED_PROMPT_MAX_LENGTH_POLICY_RECOVERY,
     V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_HARD_LIMIT_CHARS,
+    build_brain_source_projection_receipt,
 )
 from ..visual_assets.body_proportion_evidence_profile import BODY_REFRESH_REFERENCE_AGE_SCOPE
 from ..shared_capabilities.activation import REFERENCE_CHANNEL_IDS
@@ -1541,6 +1542,14 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
     if source_projection_required:
         if not isinstance(source_projection, dict) or not str(source_projection.get("source_digest") or ""):
             raise ValueError("Brain source projection is required for fresh canonical finalization.")
+        source_projection_receipt_digests = {
+            str(output_index): build_brain_source_projection_receipt(
+                source_projection,
+                output_index=output_index,
+                requested_image_count=request.requested_image_count,
+            )["receipt_digest"]
+            for output_index in range(1, request.requested_image_count + 1)
+        }
         prompt_schema["source_projection_receipt"] = {
             "contract_version": V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
             "source_digest": "exact source_digest from frozen_render_context.brain_source_projection",
@@ -1548,7 +1557,7 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "requested_image_count": "same integer as requested_image_count",
             "semantic_coverage": "complete",
             "owner": "remote_v3_llm_brain",
-            "receipt_digest": "SHA-256 of these exact receipt fields, excluding receipt_digest",
+            "receipt_digest": "copy exact value from source_projection_receipt_digest_by_output_index",
         }
         response_contract += (
             " The frozen_render_context.brain_source_projection is the complete server-owned Brain semantic source. "
@@ -1557,7 +1566,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
             "return source_projection_receipt with contract_version "
             f"{V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV}, the exact source_digest from that projection, the matching "
             "output_index, requested_image_count, semantic_coverage complete, owner remote_v3_llm_brain, and the "
-            "exact receipt_digest over those fields. "
+            "exact receipt_digest from the supplied source_projection_receipt_digest_by_output_index for that "
+            "output_index; copy that opaque binding value exactly instead of recalculating it. "
             "This receipt is typed binding evidence only and must not be copied into renderer wording."
         )
     if variation_execution_contract is not None:
@@ -1924,6 +1934,8 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         },
         "remote_response_contract": response_contract,
     }
+    if source_projection_required:
+        payload["source_projection_receipt_digest_by_output_index"] = source_projection_receipt_digests
     if request.metadata.get("require_lossless_user_direction") is True:
         payload["protected_user_direction"] = request.user_input
         payload["user_direction_contract"] = (

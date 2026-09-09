@@ -226,6 +226,15 @@ These fields prove which source was handed to Brain. They do not claim that a
 keyword appeared in the prompt. Semantic coverage remains a Brain decision, and
 the runtime only rejects missing, stale, malformed or mismatched bindings.
 
+The `receipt_digest` is deterministic integrity material, not a semantic
+approval decision. For fresh finalization, the server may precompute the
+expected digest for each output index and pass it as an opaque echo value in
+the finalizer request. Brain still owns the complete prompt, source digest,
+output binding, semantic coverage, and all approval decisions; the runtime
+does not infer or approve those fields and continues to reject any mismatch.
+This is backward-compatible for historical records because it changes only
+the fresh request guidance and leaves the returned receipt contract unchanged.
+
 ## 8. Minimal implementation plan
 
 ### Phase 0: pre-development inventory

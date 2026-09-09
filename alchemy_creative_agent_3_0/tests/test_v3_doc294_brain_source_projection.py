@@ -138,6 +138,18 @@ def test_payload_exposes_complete_source_projection_and_typed_receipt_schema() -
     assert projected == projection
     schema = payload["return_schema"]["canonical_provider_prompts"][0]
     assert schema["source_projection_receipt"]["contract_version"] == V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
+    assert payload["source_projection_receipt_digest_by_output_index"] == {
+        "1": build_brain_source_projection_receipt(
+            projection,
+            output_index=1,
+            requested_image_count=2,
+        )["receipt_digest"],
+        "2": build_brain_source_projection_receipt(
+            projection,
+            output_index=2,
+            requested_image_count=2,
+        )["receipt_digest"],
+    }
     assert "complete server-owned Brain semantic source" in payload["remote_response_contract"]
 
 
