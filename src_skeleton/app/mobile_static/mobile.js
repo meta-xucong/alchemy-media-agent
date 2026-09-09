@@ -3478,7 +3478,7 @@ function mobileV3ProjectWithResponseMetadata(project, payload) {
   }
   return {
     ...project,
-    ...(responsePreferences && !project.generation_preferences
+    ...(responsePreferences
       ? { generation_preferences: responsePreferences }
       : {}),
     metadata: nextMetadata,
@@ -3486,13 +3486,36 @@ function mobileV3ProjectWithResponseMetadata(project, payload) {
 }
 
 function applyMobileV3GenerationPreferences(project = mobileV3State.currentProject) {
-  const stored = project?.generation_preferences && typeof project.generation_preferences === "object"
+  const metadata = project?.metadata && typeof project.metadata === "object" ? project.metadata : {};
+  const metadataPreferences = metadata.generation_preferences && typeof metadata.generation_preferences === "object"
+    ? metadata.generation_preferences
+    : {};
+  const projectPreferences = project?.generation_preferences && typeof project.generation_preferences === "object"
     ? project.generation_preferences
     : {};
+  const stored = {
+    ...metadataPreferences,
+    ...projectPreferences,
+    general: {
+      ...(metadataPreferences.general || {}),
+      ...(projectPreferences.general || {}),
+    },
+    photography: {
+      ...(metadataPreferences.photography || {}),
+      ...(projectPreferences.photography || {}),
+    },
+  };
   const general = stored.general && typeof stored.general === "object" ? stored.general : {};
   const photography = stored.photography && typeof stored.photography === "object" ? stored.photography : {};
-  const legacyVariationMode = project?.metadata?.variation_mode
-    || project?.metadata?.effective_variation_mode
+  const scenarioId = mobileV3ScenarioForTemplate(project?.primary_template_id || project?.template_id || "general_template");
+  mobileV3State.selectedMode = "auto";
+  mobileV3State.selectedPhotographyMode = "single_hero";
+  mobileV3State.selectedPhotographyScene = "portrait";
+  mobileV3State.selectedPhotographyReferenceRole = "face_reference";
+  mobileV3State.generationCount = scenarioId === "photography" ? 1 : 2;
+  mobileV3State.selectedSize = "";
+  const legacyVariationMode = metadata.variation_mode
+    || metadata.effective_variation_mode
     || "auto";
   const mode = mobileV3CanonicalVariationMode(
     general.general_variation_mode
@@ -3555,9 +3578,9 @@ function applyMobileV3GenerationPreferences(project = mobileV3State.currentProje
     stored.requested_image_size,
     general.requested_image_size,
     photography.requested_image_size,
-    project?.metadata?.requested_image_size,
+    metadata.requested_image_size,
   ].find((value) => allowedSizes.has(String(value || "").trim()));
-  if (restoredSize) mobileV3State.selectedSize = String(restoredSize).trim();
+  mobileV3State.selectedSize = restoredSize ? String(restoredSize).trim() : "";
 }
 
 async function loadMobileV3Projects({ silent = true, force = false, loadMore = false } = {}) {
@@ -4919,7 +4942,9 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
   const requestedCount = scenarioId === "photography"
     ? (mobileV3State.selectedPhotographyMode === "professional_set" ? 3 : 1)
     : mobileV3BoundedCount(
-        document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1,
+        Number.isFinite(Number.parseInt(String(mobileV3State.generationCount ?? ""), 10))
+          ? mobileV3State.generationCount
+          : document.querySelector("#mobileV3CountInput")?.value || 1,
         project.primary_template_id || mobileV3State.selectedTemplate || "general_template",
       );
   const count = requestedCount;
@@ -4951,10 +4976,10 @@ function buildMobileV3JobPayload(uploadedAssets = mobileV3State.uploadedAssets) 
       }
     : scenarioId === "photography"
       ? {
-          photography_selected_mode: mobileV3State.selectedPhotographyMode,
-          photography_preset: mobileV3State.selectedPhotographyMode,
-          photography_scene: mobileV3State.selectedPhotographyScene,
-          photography_reference_role: mobileV3State.selectedPhotographyReferenceRole,
+          selected_mode_id: mobileV3State.selectedPhotographyMode,
+          selected_preset_id: mobileV3State.selectedPhotographyMode,
+          scene_domain: mobileV3State.selectedPhotographyScene,
+          reference_role: mobileV3State.selectedPhotographyReferenceRole,
           requested_image_count: count,
           requested_image_size: size || null,
         }
@@ -5132,7 +5157,11 @@ async function generateMobileV3Job() {
   }
   const count = scenarioId === "photography"
     ? (mobileV3State.selectedPhotographyMode === "professional_set" ? 3 : 1)
-    : mobileV3BoundedCount(document.querySelector("#mobileV3CountInput")?.value || mobileV3State.generationCount || 1);
+    : mobileV3BoundedCount(
+        Number.isFinite(Number.parseInt(String(mobileV3State.generationCount ?? ""), 10))
+          ? mobileV3State.generationCount
+          : document.querySelector("#mobileV3CountInput")?.value || 1,
+      );
   try {
     setMobileV3Busy(true);
     setMobileV3Progress("uploading", mobileV3State.files.length ? "正在上传参考图" : "正在准备项目上下文");

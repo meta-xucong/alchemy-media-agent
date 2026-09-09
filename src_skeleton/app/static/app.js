@@ -2849,8 +2849,6 @@ function v3VariationModeLabel(mode) {
 
 function v3ProjectWithResponsePreferences(project, payload = null) {
   if (!project || typeof project !== "object") return project;
-  const existing = project.generation_preferences;
-  if (existing && typeof existing === "object" && !Array.isArray(existing)) return project;
   const responseMetadata = payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
   const preferences = payload?.generation_preferences && typeof payload.generation_preferences === "object"
     ? payload.generation_preferences
@@ -2862,14 +2860,29 @@ function v3ProjectWithResponsePreferences(project, payload = null) {
 
 function applyV3GenerationPreferences(project = v3State.currentProject) {
   const metadata = project?.metadata && typeof project.metadata === "object" ? project.metadata : {};
-  const stored = project?.generation_preferences && typeof project.generation_preferences === "object"
+  const metadataPreferences = metadata.generation_preferences && typeof metadata.generation_preferences === "object"
+    ? metadata.generation_preferences
+    : {};
+  const projectPreferences = project?.generation_preferences && typeof project.generation_preferences === "object"
     ? project.generation_preferences
-    : metadata.generation_preferences && typeof metadata.generation_preferences === "object"
-      ? metadata.generation_preferences
-      : {};
+    : {};
+  const stored = {
+    ...metadataPreferences,
+    ...projectPreferences,
+    general: {
+      ...(metadataPreferences.general || {}),
+      ...(projectPreferences.general || {}),
+    },
+    photography: {
+      ...(metadataPreferences.photography || {}),
+      ...(projectPreferences.photography || {}),
+    },
+  };
   const general = stored.general && typeof stored.general === "object" ? stored.general : {};
   const photography = stored.photography && typeof stored.photography === "object" ? stored.photography : {};
   const scenarioId = v3ScenarioForTemplate(project?.primary_template_id || project?.template_id || "general_template");
+  v3State.selectedVariationMode = "auto";
+  v3State.selectedSize = "";
   const legacyVariationMode = metadata.variation_mode || metadata.effective_variation_mode || "auto";
   const generalVariationMode = v3CanonicalVariationMode(
     general.general_variation_mode
@@ -2954,7 +2967,7 @@ function applyV3GenerationPreferences(project = v3State.currentProject) {
     photography.requested_image_size,
     metadata.requested_image_size,
   ].find((value) => allowedSizes.has(String(value || "").trim()));
-  if (restoredSize) v3State.selectedSize = String(restoredSize).trim();
+  v3State.selectedSize = restoredSize ? String(restoredSize).trim() : "";
 }
 
 function v3GenerationPreferencesPayload(scenarioId, count, { hasReference = false, selectedSize = v3State.selectedSize } = {}) {
@@ -2976,10 +2989,10 @@ function v3GenerationPreferencesPayload(scenarioId, count, { hasReference = fals
   }
   if (scenarioId === "photography") {
     return {
-      photography_selected_mode: v3State.selectedPreset,
-      photography_preset: v3State.selectedPreset,
-      photography_scene: v3State.selectedPhotographyScene,
-      photography_reference_role: v3State.selectedPhotographyReferenceRole,
+      selected_mode_id: v3State.selectedPreset,
+      selected_preset_id: v3State.selectedPreset,
+      scene_domain: v3State.selectedPhotographyScene,
+      reference_role: v3State.selectedPhotographyReferenceRole,
       requested_image_count: count,
       requested_image_size: selectedSize || null,
     };
@@ -9279,8 +9292,10 @@ function syncV3GenerationCountControl() {
 function v3CurrentGenerationSettings() {
   const fixedCount = v3FixedGenerationCountForSelectedScenario();
   const scenarioId = v3State.selectedScenario || "general_creative";
-  const count = fixedCount ?? v3BoundedGenerationCount(els.v3CountInput?.value || v3State.generationCount || 2, scenarioId);
-  const size = v3State.selectedSize || document.querySelector("[data-v3-size].active")?.dataset.v3Size || "";
+  const stateCount = Number.parseInt(String(v3State.generationCount ?? ""), 10);
+  const countSource = Number.isFinite(stateCount) ? stateCount : els.v3CountInput?.value || 2;
+  const count = fixedCount ?? v3BoundedGenerationCount(countSource, scenarioId);
+  const size = String(v3State.selectedSize || "");
   v3State.generationCount = count;
   v3State.selectedSize = size;
   if (els.v3CountInput) {

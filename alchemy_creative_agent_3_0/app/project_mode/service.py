@@ -139,6 +139,22 @@ from .templates import ProjectTemplateManifest, ProjectTemplateRegistry
 ECOMMERCE_PRODUCT_UPLOAD_ROLES = {"product_reference", "subject_reference"}
 PROJECT_PRODUCT_REFERENCE_ROLES = {"product", *ECOMMERCE_PRODUCT_UPLOAD_ROLES}
 _PROJECT_LIST_CURSOR_SCHEMA = "v3_project_list_cursor_v1"
+_GENERAL_VARIATION_MODES = frozenset(
+    {
+        "auto",
+        "selection_candidates",
+        "delivery_suite",
+        "creative_exploration",
+        "format_layout_adaptation",
+    }
+)
+_GENERAL_VARIATION_MODE_ALIASES = {
+    "similar_options": "selection_candidates",
+    "suite_expansion": "delivery_suite",
+    "creative_explore": "creative_exploration",
+    "layout_adaptation": "format_layout_adaptation",
+    "format_adaptation": "format_layout_adaptation",
+}
 
 
 def _project_listing_key(project: ProjectRecord) -> tuple[str, str, str]:
@@ -4085,8 +4101,22 @@ class V3ProjectModeService:
         project.metadata["advanced_reference_controls"] = dict(advanced_reference_controls)
         project.metadata["doc90_advanced_reference_controls"] = bool(advanced_reference_controls)
         context_generation_overrides = dict(job_request.metadata or {})
-        if template_manifest.template_id == GENERAL_TEMPLATE_ID:
-            context_generation_overrides.update(self._general_variation_contract(job_request.metadata))
+        general_variation_contract = (
+            self._general_variation_contract(
+                job_request.metadata,
+                user_input=user_input,
+                requested_count=job_request.metadata.get("requested_image_count"),
+                has_reference=bool(
+                    uploaded_asset_ids
+                    or self._project_has_active_reference(project)
+                ),
+                selected_size=job_request.metadata.get("requested_image_size"),
+            )
+            if template_manifest.template_id == GENERAL_TEMPLATE_ID
+            else {}
+        )
+        if general_variation_contract:
+            context_generation_overrides.update(general_variation_contract)
         context = self._build_context(
             project,
             continuation_instruction=job_request.user_input,
@@ -4113,11 +4143,6 @@ class V3ProjectModeService:
             advanced_reference_controls=advanced_reference_controls,
         )
         scenario_parameters = dict(scenario_selection.get("parameters") or {})
-        general_variation_contract = (
-            self._general_variation_contract(job_request.metadata)
-            if template_manifest.template_id == GENERAL_TEMPLATE_ID
-            else {}
-        )
         if general_variation_contract:
             scenario_parameters = {**scenario_parameters, **general_variation_contract}
         project_job_sequence = len(project.job_ids) + 1
@@ -4252,6 +4277,7 @@ class V3ProjectModeService:
             # A remote planning boundary may return without a job_id; the
             # user must still reopen the project with the same mode and count.
             project.generation_preferences = generation_preferences
+            status.metadata["generation_preferences"] = generation_preferences.model_dump(mode="json")
         bound_context_snapshot = status.metadata.get("project_context_snapshot")
         if not isinstance(bound_context_snapshot, dict):
             bound_context_snapshot = context_snapshot
@@ -4266,6 +4292,21 @@ class V3ProjectModeService:
                 "project_job_sequence": project_job_sequence,
                 "scenario_pack_id": template_manifest.scenario_pack_id,
                 "scenario_parameters": scenario_selection.get("parameters") or {},
+                # Return the same normalized contract that was used for the
+                # context and Product payload.  Reopen/replay clients may
+                # only retain this status response before the next project
+                # summary refresh.
+                **general_variation_contract,
+                **(
+                    {"requested_image_count": scenario_parameters["requested_image_count"]}
+                    if "requested_image_count" in scenario_parameters
+                    else {}
+                ),
+                **(
+                    {"requested_image_size": scenario_parameters["requested_image_size"]}
+                    if "requested_image_size" in scenario_parameters
+                    else {}
+                ),
                 "selected_mode_id": scenario_selection.get("mode_id"),
                 "selected_preset_id": scenario_selection.get("preset_id"),
                 "project_context_version": context.context_version,
@@ -7718,7 +7759,18 @@ class V3ProjectModeService:
                 "preset_id": None,
                 "parameters": {key: value for key, value in parameters.items() if value is not None},
             }
-        variation_contract = self._general_variation_contract(request.metadata)
+        variation_contract = self._general_variation_contract(
+            request.metadata,
+            user_input=request.user_input,
+            requested_count=request.metadata.get("requested_image_count"),
+            has_reference=bool(
+                request.uploaded_asset_ids
+                or context.selected_reference_assets
+                or context.selected_output_assets
+                or context.uploaded_reference_assets
+            ),
+            selected_size=request.metadata.get("requested_image_size"),
+        )
         parameters = {
             "project_context_version": context.context_version,
             "use_project_context": request.use_project_context,
@@ -7798,7 +7850,19 @@ class V3ProjectModeService:
             "project_context": context_snapshot,
         }
         if manifest.template_id == GENERAL_TEMPLATE_ID:
-            base.update(self._general_variation_contract(request.metadata))
+            base.update(
+                self._general_variation_contract(
+                    request.metadata,
+                    user_input=request.user_input,
+                    requested_count=request.metadata.get("requested_image_count"),
+                    has_reference=bool(
+                        context_snapshot.get("selected_visual_references")
+                        or context_snapshot.get("selected_output_assets")
+                        or context_snapshot.get("uploaded_reference_assets")
+                    ),
+                    selected_size=request.metadata.get("requested_image_size"),
+                )
+            )
         if advanced_reference_controls:
             base["advanced_reference_controls"] = dict(advanced_reference_controls)
         if manifest.template_id != ECOMMERCE_TEMPLATE_ID:
@@ -7826,30 +7890,52 @@ class V3ProjectModeService:
         }
         return {key: value for key, value in payload.items() if value not in (None, [], {})}
 
-    def _general_variation_contract(self, metadata: dict[str, Any] | None) -> dict[str, Any]:
+    def _general_variation_contract(
+        self,
+        metadata: dict[str, Any] | None,
+        *,
+        user_input: str | None = None,
+        requested_count: object | None = None,
+        has_reference: bool = False,
+        selected_size: object | None = None,
+    ) -> dict[str, Any]:
         metadata = dict(metadata or {})
-        allowed = {
-            "auto",
-            "selection_candidates",
-            "delivery_suite",
-            "creative_exploration",
-            "format_layout_adaptation",
-        }
-        requested = str(
+        allowed = _GENERAL_VARIATION_MODES
+
+        def canonical(value: object) -> str:
+            normalized = str(value or "").strip().lower()
+            normalized = _GENERAL_VARIATION_MODE_ALIASES.get(normalized, normalized)
+            return normalized if normalized in allowed else ""
+
+        requested = canonical(
             metadata.get("variation_mode_override")
             or metadata.get("variation_mode")
             or metadata.get("continuation_mode")
             or metadata.get("effective_variation_mode")
-            or "auto"
-        ).strip()
-        if requested not in allowed:
-            requested = "auto"
-        inferred = str(metadata.get("inferred_variation_mode") or "").strip()
-        if inferred not in allowed:
+        ) or "auto"
+        inferred = canonical(metadata.get("inferred_variation_mode"))
+        if inferred == "auto":
             inferred = ""
-        effective = str(metadata.get("effective_variation_mode") or "").strip()
-        if effective not in allowed:
-            effective = requested
+        if not inferred:
+            inferred = _infer_general_variation_mode(
+                user_input,
+                requested_count=(
+                    requested_count
+                    if requested_count is not None
+                    else metadata.get("requested_image_count")
+                ),
+                has_reference=bool(
+                    has_reference
+                    or metadata.get("has_reference")
+                    or metadata.get("has_product_reference")
+                ),
+                selected_size=(
+                    selected_size
+                    if selected_size is not None
+                    else metadata.get("requested_image_size")
+                ),
+            )
+        effective = canonical(metadata.get("effective_variation_mode")) or requested
         if effective == "auto":
             effective = inferred or "delivery_suite"
         source = str(metadata.get("variation_mode_source") or ("auto" if requested == "auto" else "manual")).strip()
@@ -7879,7 +7965,18 @@ class V3ProjectModeService:
 
         metadata = dict(request.metadata or {})
         if template_id == GENERAL_TEMPLATE_ID:
-            contract = self._general_variation_contract(metadata)
+            contract = self._general_variation_contract(
+                metadata,
+                user_input=request.user_input,
+                requested_count=(
+                    scenario_parameters.get("requested_image_count")
+                    or metadata.get("requested_image_count")
+                ),
+                selected_size=(
+                    scenario_parameters.get("requested_image_size")
+                    or metadata.get("requested_image_size")
+                ),
+            )
             general = GeneralGenerationPreferences(
                 variation_mode=contract.get("variation_mode"),
                 effective_variation_mode=contract.get("effective_variation_mode"),
@@ -9211,6 +9308,20 @@ class V3ProjectModeService:
                     for key, value in generation_overrides.items()
                     if value is not None
                 }
+            )
+        if effective_template_id == GENERAL_TEMPLATE_ID:
+            context_generation_metadata.update(
+                self._general_variation_contract(
+                    context_generation_metadata,
+                    user_input=continuation_instruction or project.user_goal,
+                    requested_count=context_generation_metadata.get("requested_image_count"),
+                    has_reference=bool(
+                        active_references
+                        or selected_refs_for_context
+                        or legacy_uploaded_references
+                    ),
+                    selected_size=context_generation_metadata.get("requested_image_size"),
+                )
             )
         version = stable_id(
             "project_context",
@@ -12729,6 +12840,53 @@ _REQUESTED_IMAGE_SIZE_ALIASES = {
 def _explicit_requested_image_size(value: object) -> str | None:
     normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
     return _REQUESTED_IMAGE_SIZE_ALIASES.get(normalized)
+
+
+def _infer_general_variation_mode(
+    user_input: str | None,
+    *,
+    requested_count: object | None = None,
+    has_reference: bool = False,
+    selected_size: object | None = None,
+) -> str:
+    """Resolve the neutral General mode when a legacy caller omits metadata.
+
+    The browser normally sends a normalized contract, but Project Mode also
+    accepts older clients and direct API callers.  Those callers must receive
+    the same semantic mode instead of silently inheriting the delivery-suite
+    fallback.  The order mirrors the public General controls: explicit layout
+    language, creative exploration, delivery/set language, close candidates,
+    then evidence/count fallbacks.
+    """
+
+    text = re.sub(r"\s+", " ", str(user_input or "").strip().lower())
+    if re.search(
+        r"尺寸|画幅|比例|版式|横版|竖版|方图|封面|海报|留白|裁切|裁剪|layout|format|ratio|size|crop|adapt",
+        text,
+    ):
+        return "format_layout_adaptation"
+    if re.search(
+        r"探索|不同方向|不同概念|尝试新风格|不同风格|多种风格|explore|different directions|different concepts|try new styles|different styles|new concepts",
+        text,
+    ):
+        return "creative_exploration"
+    if re.search(
+        r"沿.{0,12}方向.{0,12}(一组|系列|套图)|套图|一组|系列|组图|延展|扩展|\b(series|suite|set|extend|campaign)\b",
+        text,
+    ):
+        return "delivery_suite"
+    if re.search(
+        r"相似|备选|多给|挑选|同一|同款|不同姿势|不同角度|similar|alternative|same person|same product|different pose|different angle",
+        text,
+    ):
+        return "selection_candidates"
+    if _bounded_requested_image_count(requested_count) and _bounded_requested_image_count(requested_count) > 1:
+        return "selection_candidates"
+    if has_reference:
+        return "selection_candidates"
+    if _explicit_requested_image_size(selected_size):
+        return "format_layout_adaptation"
+    return "delivery_suite"
 
 
 def _infer_general_requested_image_size(user_input: str | None) -> str | None:

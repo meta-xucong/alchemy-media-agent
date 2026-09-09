@@ -1,6 +1,10 @@
 from types import SimpleNamespace
 
+import pytest
+
+from alchemy_creative_agent_3_0.app.llm_brain import V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.product_api.contracts import SelectResultRequest
+from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatus, ProductJobStatusValue
 from alchemy_creative_agent_3_0.app.product_api.route_handlers import V3ProductRouteHandlers
 from alchemy_creative_agent_3_0.app.product_api.service import V3ProductApiService
 from alchemy_creative_agent_3_0.app.project_mode.contracts import CreateProjectJobRequest
@@ -145,6 +149,83 @@ def test_project_reopens_with_server_resolved_general_generation_preferences() -
     assert preferences["effective_variation_mode"] == "delivery_suite"
     assert preferences["requested_image_count"] == 3
     assert preferences["requested_image_size"] == "1536x1024"
+
+
+@pytest.mark.parametrize(
+    ("user_input", "requested_count", "expected_mode"),
+    [
+        ("同一个人物，多给几张相似备选", 3, "selection_candidates"),
+        ("沿这个方向做一组图", 3, "delivery_suite"),
+        ("探索不同方向，尝试新风格", 3, "creative_exploration"),
+        ("做一张横版封面，留出标题空间", 1, "format_layout_adaptation"),
+    ],
+)
+def test_server_resolves_general_mode_from_raw_request_without_metadata(
+    user_input: str,
+    requested_count: int,
+    expected_mode: str,
+) -> None:
+    handlers = V3ProductRouteHandlers()
+    service = handlers.project_service
+
+    contract = service._general_variation_contract(  # noqa: SLF001
+        {"requested_image_count": requested_count},
+        user_input=user_input,
+        requested_count=requested_count,
+    )
+
+    assert contract["variation_mode"] == "auto"
+    assert contract["inferred_variation_mode"] == expected_mode
+    assert contract["effective_variation_mode"] == expected_mode
+    assert contract["continuation_mode"] == expected_mode
+
+
+def test_project_job_carries_server_resolved_mode_through_context_and_brain_request(monkeypatch) -> None:
+    handlers = V3ProductRouteHandlers()
+    project = handlers.post_projects({"user_goal": "Create a visual set"})["project"]
+    captured: dict[str, object] = {}
+
+    def capture_create_job(payload: dict, **_kwargs):
+        captured["payload"] = payload
+        return ProductJobStatus(
+            job_id="job_mode_contract",
+            status=ProductJobStatusValue.PLANNED,
+            api_namespace="v3_product_api",
+            ui_entry_route="/api/v3/projects/job_mode_contract",
+        )
+
+    monkeypatch.setattr(handlers.service, "create_project_visual_asset_bound_job", capture_create_job)
+    job = handlers.post_project_job(
+        project["project_id"],
+        {
+            "user_input": "探索不同方向，尝试新风格",
+            "template_id": "general_template",
+            "metadata": {"requested_image_count": 3},
+        },
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    metadata = payload["metadata"]
+    scenario_parameters = metadata["scenario_parameters"]
+    context_metadata = metadata["project_context_snapshot"]["metadata"]
+    assert metadata["effective_variation_mode"] == "creative_exploration"
+    assert scenario_parameters["effective_variation_mode"] == "creative_exploration"
+    assert context_metadata["effective_variation_mode"] == "creative_exploration"
+    assert metadata["requested_image_count"] == 3
+    assert scenario_parameters["requested_image_count"] == 3
+    assert context_metadata["requested_image_count"] == 3
+    assert job["metadata"]["effective_variation_mode"] == "creative_exploration"
+
+    brain_request = V3LLMBrainAdapter().build_request(
+        user_input=payload["user_input"],
+        stage="generate",
+        scenario_id=payload["scenario_selection"]["scenario_id"],
+        template_id="general_template",
+        metadata=metadata,
+    )
+    assert brain_request.metadata["effective_variation_mode"] == "creative_exploration"
+    assert brain_request.requested_image_count == 3
 
 
 def test_project_context_uses_current_request_mode_and_count_for_role_plan() -> None:

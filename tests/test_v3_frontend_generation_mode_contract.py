@@ -124,7 +124,7 @@ def test_frontends_do_not_boot_with_an_ecommerce_only_count_contract() -> None:
     assert '<option value="3">3</option>' in mobile_html
     assert '<option value="7">7</option>' not in mobile_html
     assert "legacyVariationMode" in mobile_js
-    assert "project?.metadata?.effective_variation_mode" in mobile_js
+    assert "metadata.effective_variation_mode" in mobile_js
 
 
 def test_desktop_repaint_reapplies_restored_mode_before_count_projection() -> None:
@@ -132,3 +132,27 @@ def test_desktop_repaint_reapplies_restored_mode_before_count_projection() -> No
     render = _function_body(desktop, "renderV3ScenarioState")
     assert render.index('setV3VariationMode(v3State.selectedVariationMode || "auto")') < render.index("setV3Preset")
     assert "els.v3CountInput.value = String(v3State.generationCount)" in render
+
+
+def test_frontend_preferences_are_response_authoritative_and_reset_missing_project_values() -> None:
+    desktop = _read(DESKTOP_JS)
+    mobile = _read(MOBILE_JS)
+
+    assert "const metadataPreferences" in desktop
+    assert "const projectPreferences" in desktop
+    assert "const existing = project.generation_preferences" not in desktop
+    assert 'v3State.selectedSize = restoredSize ? String(restoredSize).trim() : ""' in desktop
+    assert "const stateCount" in desktop
+    assert "selected_mode_id: v3State.selectedPreset" in desktop
+    assert "selected_preset_id: v3State.selectedPreset" in desktop
+    assert "scene_domain: v3State.selectedPhotographyScene" in desktop
+    assert "reference_role: v3State.selectedPhotographyReferenceRole" in desktop
+
+    assert "metadata.generation_preferences" in mobile
+    assert 'mobileV3State.selectedPhotographyMode = "single_hero"' in mobile
+    assert 'mobileV3State.selectedPhotographyScene = "portrait"' in mobile
+    assert 'mobileV3State.selectedPhotographyReferenceRole = "face_reference"' in mobile
+    assert 'mobileV3State.selectedSize = ""' in mobile
+    assert "...(responsePreferences" in mobile
+    assert "selected_mode_id: mobileV3State.selectedPhotographyMode" in mobile
+    assert "reference_role: mobileV3State.selectedPhotographyReferenceRole" in mobile
