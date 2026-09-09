@@ -2448,6 +2448,7 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 generation_prompt,
                 protected_user_direction,
                 prompt_source="remote_brain_canonical" if canonical_prompt else "legacy_local_materializer",
+                user_direction_integrity=self._brain_user_direction_integrity(request),
             ),
             input_fidelity=self._input_fidelity_for_asset_plan(asset_plan),
             prompt_source="remote_brain_canonical" if canonical_prompt else "legacy_local_materializer",
@@ -6020,10 +6021,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
         protected_user_direction: str,
         *,
         prompt_source: str = "legacy_local_materializer",
+        user_direction_integrity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         prompt = str(prompt or "")
         user_chars = len(str(protected_user_direction or ""))
         internal_chars = max(0, len(prompt) - user_chars)
+        literal_user_direction_in_prompt = bool(
+            not protected_user_direction or str(protected_user_direction) in prompt
+        )
+        semantic_status = str((user_direction_integrity or {}).get("status") or "").strip().lower()
+        semantic_user_direction_verified = (
+            prompt_source == "remote_brain_canonical"
+            and semantic_status in {"preserved", "rewritten"}
+        )
         return {
             "user_direction_chars": user_chars,
             "internal_guidance_chars": internal_chars,
@@ -6037,8 +6047,29 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 *(["reference_channel_policy"] if "Reference channel policy:" in prompt else []),
                 *(["identity_repair_delta"] if "Identity-local repair operation:" in prompt else []),
             ],
-            "user_direction_lossless": bool(not protected_user_direction or protected_user_direction in prompt),
+            # Doc293 makes the Brain's signed semantic decision authoritative
+            # for canonical prompts. Literal substring containment remains a
+            # diagnostic, not a semantic acceptance rule.
+            "user_direction_lossless": bool(
+                semantic_user_direction_verified
+                if prompt_source == "remote_brain_canonical"
+                else literal_user_direction_in_prompt
+            ),
+            "user_direction_literal_in_prompt": literal_user_direction_in_prompt,
+            "user_direction_semantic_status": semantic_status or "unverified",
         }
+
+    @staticmethod
+    def _brain_user_direction_integrity(request: GenerationRequest) -> dict[str, Any]:
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        llm_brain = metadata.get("llm_brain")
+        if not isinstance(llm_brain, dict):
+            return {}
+        records = llm_brain.get("canonical_provider_prompts")
+        if not isinstance(records, list) or len(records) != 1:
+            return {}
+        integrity = records[0].get("user_direction_integrity") if isinstance(records[0], dict) else None
+        return dict(integrity) if isinstance(integrity, dict) else {}
 
     def _brain_signed_provider_prompt(self, request: GenerationRequest) -> str:
         """Return the one exact provider prompt signed by the remote Brain.

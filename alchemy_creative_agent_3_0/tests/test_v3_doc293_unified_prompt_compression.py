@@ -75,6 +75,21 @@ def test_previous_prompt_is_lossless_in_brain_request_and_policy_is_not_payload_
     assert '"do_not_apply_to": "brain_request_payload_or_token_budget"' in payload
 
 
+def test_provider_audit_uses_brain_semantic_receipt_for_canonical_prompt() -> None:
+    provider = ProductionImageGenerationProvider(output_store=SimpleNamespace())
+
+    audit = provider._provider_prompt_audit(  # noqa: SLF001
+        "A complete canonical direction that is not a literal copy.",
+        "The original user direction.",
+        prompt_source="remote_brain_canonical",
+        user_direction_integrity={"status": "preserved"},
+    )
+
+    assert audit["user_direction_lossless"] is True
+    assert audit["user_direction_literal_in_prompt"] is False
+    assert audit["user_direction_semantic_status"] == "preserved"
+
+
 @pytest.mark.parametrize("length", [V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS - 1, V3_UNIFIED_PROMPT_COMPRESSION_THRESHOLD_CHARS])
 def test_prompt_at_or_below_threshold_is_sent_unchanged(length: int) -> None:
     prompt = "A" * length
