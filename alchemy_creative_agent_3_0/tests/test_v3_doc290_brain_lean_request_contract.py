@@ -71,15 +71,15 @@ GATE_A_BASELINE = {
         # remain the historical comparison baseline.
         # Doc294 adds the typed Brain source-projection receipt to the fresh
         # finalizer schema; transport invariants remain otherwise unchanged.
-        "provider_prompt_finalize": (5359, 29721, 50459, "957dafdfe2056df1512d545594d85bdbda4cb643e962084bb4a19d4a785f0d9a"),
+        "provider_prompt_finalize": (5359, 29721, 50459, "de1887bc72e8d65cbd605724ed6b4d6915c69957f559b9f885acc4acc966a2f8"),
     },
     "general_multi": {
         "plan": (21480, 14997, 40889, "445c229005a7ff089dff5d32a9f0f90eae0dcfa3b6f788c5b5a6b554842586eb"),
-        "provider_prompt_finalize": (5359, 65281, 88469, "9e30f9a88dbf0bb86d2ffe77c5b004ce7ec0c56cf93446ba859f946e7d2efcef"),
+        "provider_prompt_finalize": (5359, 65281, 88469, "a163fe363051cfec4a720a5fc91455f77b44966ea17860b6c193b2f7e710026f"),
     },
     "professional_ecommerce": {
         "plan": (21480, 21210, 47495, "5c485b5493ae3538fe006292cf296adde4e1a3d464fd01d0964c7dab33badd5b"),
-        "provider_prompt_finalize": (5359, 82486, 106797, "7e18c160f5fda5969f98c3df5963db43fc4b90432a663811d2a8af42318516b3"),
+        "provider_prompt_finalize": (5359, 82486, 106797, "3e7bab9522cce1770656f1d0c8b6640f0a03e339bd829ff05e484214bcdfa20b"),
     },
 }
 
