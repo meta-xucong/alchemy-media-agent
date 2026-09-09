@@ -6080,26 +6080,79 @@ class ProductionImageGenerationProvider(GenerationProvider):
         generation_metadata = getattr(generation_plan, "metadata", None)
         generation_metadata = generation_metadata if isinstance(generation_metadata, dict) else {}
         raw_index = generation_metadata.get("output_index", metadata.get("output_index", 0))
-        try:
-            output_index = int(raw_index) + 1
-        except (TypeError, ValueError):
+        # Output position is a server-owned integer binding. Coercing a
+        # string, float, or bool here can select a different Brain receipt
+        # than the frozen generation lane and breaks prompt/audit closure.
+        if type(raw_index) is not int or raw_index < 0:
             return None
+        output_index = raw_index + 1
+        integrity_required = ProductionImageGenerationProvider._brain_user_direction_integrity_required(
+            request,
+            llm_brain=llm_brain,
+        )
         matches = [
             item
             for item in records
             if isinstance(item, dict)
+            and type(item.get("output_index")) is int
             and item.get("output_index") == output_index
-            and str(item.get("review_status") or "") == "approved"
+            and item.get("review_status") == "approved"
+            and (
+                not integrity_required
+                or ProductionImageGenerationProvider._valid_user_direction_integrity(
+                    item.get("user_direction_integrity")
+                )
+            )
         ]
         if len(matches) != 1:
             return None
         return matches[0]
 
     @staticmethod
+    def _valid_user_direction_integrity(value: Any) -> dict[str, Any] | None:
+        """Return a valid Brain integrity receipt without coercing fields."""
+
+        if not isinstance(value, dict):
+            return None
+        if (
+            value.get("contract_version") != "v3_user_direction_integrity_v1"
+            or value.get("owner") != "remote_v3_llm_brain"
+            or value.get("status") not in {"preserved", "rewritten"}
+        ):
+            return None
+        return dict(value)
+
+    @staticmethod
+    def _brain_user_direction_integrity_required(
+        request: GenerationRequest,
+        *,
+        llm_brain: dict[str, Any],
+    ) -> bool:
+        """Require integrity for complete real-image prompts, not slot deltas."""
+
+        metadata = request.metadata if isinstance(request.metadata, dict) else {}
+        audit = llm_brain.get("audit") if isinstance(llm_brain.get("audit"), dict) else {}
+        if metadata.get("require_lossless_user_direction") is True:
+            return True
+        if audit.get("user_direction_integrity_required") is True:
+            return True
+        if not ProductionImageGenerationProvider._requires_brain_signed_provider_prompt(request):
+            return False
+        # Character-card slot-delta prompts intentionally have a narrower
+        # scope and are governed by their slot receipt instead of the
+        # complete user-direction receipt.
+        return not bool(
+            audit.get("character_card_slot_delta_recovery_used")
+            or audit.get("reference_led_slot_delta_decision_required")
+        )
+
+    @staticmethod
     def _brain_user_direction_integrity(request: GenerationRequest) -> dict[str, Any]:
         record = ProductionImageGenerationProvider._brain_canonical_provider_record(request)
-        integrity = record.get("user_direction_integrity") if isinstance(record, dict) else None
-        return dict(integrity) if isinstance(integrity, dict) else {}
+        integrity = ProductionImageGenerationProvider._valid_user_direction_integrity(
+            record.get("user_direction_integrity") if isinstance(record, dict) else None
+        )
+        return integrity or {}
 
     def _brain_signed_provider_prompt(self, request: GenerationRequest) -> str:
         """Return the one exact provider prompt signed by the remote Brain.

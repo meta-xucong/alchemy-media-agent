@@ -236,6 +236,11 @@ def _set_remote_canonical_prompt(request: GenerationRequest, prompt: str) -> Non
                     "semantic_coverage": "complete",
                     "compression_decision": "none",
                     "compression_receipt": None,
+                    "user_direction_integrity": {
+                        "contract_version": "v3_user_direction_integrity_v1",
+                        "status": "preserved",
+                        "owner": "remote_v3_llm_brain",
+                    },
                 }
             ],
         }

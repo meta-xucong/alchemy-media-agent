@@ -7,6 +7,7 @@ from typing import Any
 
 from ...creative_core.prompt_language import product_language_allowed
 from ...creative_core.rules import stable_id
+from ..activation.fallback import has_product_profile_facts
 from ..base import SharedCapabilityModule
 from ..contracts import (
     AssetRole,
@@ -1688,7 +1689,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             capability_input.scenario_id == "ecommerce"
             or "product_identity" in active_capabilities
             or self._brain_owned_forward_has_visible_subject(capability_input, "product")
-            or self._has_product_profile_facts(capability_input.product_profile)
+            or has_product_profile_facts(capability_input.product_profile)
         ):
             return True
         for asset in capability_input.uploaded_assets:
@@ -1722,42 +1723,16 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         if not isinstance(entities, list):
             return False
         wanted = str(entity_type or "").strip().casefold()
+        wanted_types = (
+            {"person", "human", "character"}
+            if wanted in {"person", "human", "character"}
+            else {wanted}
+        )
         return any(
             isinstance(entity, dict)
-            and str(entity.get("entity_type") or "").strip().casefold() == wanted
+            and str(entity.get("entity_type") or "").strip().casefold() in wanted_types
             and entity.get("visible_in_target") is not False
             for entity in entities
-        )
-
-    @staticmethod
-    def _has_product_profile_facts(product_profile: dict[str, Any]) -> bool:
-        if not isinstance(product_profile, dict):
-            return False
-        # General Project Mode transports its title, goal, context, and
-        # variation contract through this compatibility field as well. Only
-        # the typed product facts can activate product semantics here.
-        product_fact_keys = {
-            "product_name",
-            "product_category",
-            "platform",
-            "market",
-            "price_positioning",
-            "target_audience",
-            "selling_points",
-            "core_selling_points",
-            "facts",
-            "product_specs",
-            "claims",
-            "keyword_roots",
-            "keywords",
-            "competitor_notes",
-            "apparel_construction",
-            "has_product_reference",
-            "text_to_image_fallback",
-        }
-        return any(
-            key in product_fact_keys and value not in (None, "", [], {})
-            for key, value in product_profile.items()
         )
 
     @staticmethod
@@ -1924,6 +1899,15 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         subject_type = str(raw.get("subject_type") or "").strip().lower()
         if subject_type not in {"generic", "character", "product"}:
             raise ValueError("general variation execution role binding is invalid")
+        # The runtime binding is intentionally a pre-Brain compatibility
+        # hint. Once the Brain has typed a visible human entity, that semantic
+        # decision owns the General suite subject even when the compatibility
+        # envelope also carried product facts or a product reference.
+        if VisualCapabilityClusterModule._brain_owned_forward_has_visible_subject(
+            capability_input,
+            "person",
+        ):
+            subject_type = "character"
         has_identity_anchor = raw.get("has_identity_anchor")
         if not isinstance(has_identity_anchor, bool):
             raise ValueError("general variation execution role binding is invalid")

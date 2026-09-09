@@ -2020,12 +2020,13 @@ def _matches_canonical_provider_prompt_cardinality(candidate: Any, *, expected_c
     for item in candidate:
         if not isinstance(item, dict):
             return False
-        try:
-            index = int(item.get("output_index"))
-        except (TypeError, ValueError):
+        index = item.get("output_index")
+        if type(index) is not int:
             return False
-        prompt = " ".join(str(item.get("prompt") or "").split())
-        if index < 1 or len(prompt) < 24 or str(item.get("review_status") or "approved") != "approved":
+        prompt = item.get("prompt")
+        if not isinstance(prompt, str):
+            return False
+        if index < 1 or len(" ".join(prompt.split())) < 24 or item.get("review_status") != "approved":
             return False
         indexes.append(index)
     return indexes == list(range(1, expected_count + 1))

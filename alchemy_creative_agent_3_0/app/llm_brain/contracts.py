@@ -372,7 +372,7 @@ class BrainCanonicalProviderPrompt(V3BaseModel):
     scene, or retry wording after the Brain has approved it.
     """
 
-    output_index: int = Field(ge=1)
+    output_index: StrictInt = Field(ge=1)
     prompt: str
     review_status: Literal["approved"] = "approved"
     # New unified policy fields are optional for historical records.  Fresh

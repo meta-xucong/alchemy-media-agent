@@ -183,6 +183,16 @@ def test_adapter_accepts_short_signed_prompt_without_second_compression_call() -
     assert audit["unified_prompt_compression_decisions"] == ["none"]
 
 
+@pytest.mark.parametrize("bad_output_index", ["1", 1.0, True])
+def test_adapter_rejects_non_integer_canonical_output_index(bad_output_index) -> None:
+    record = _record(PREVIOUS_PROMPT)
+    record["output_index"] = bad_output_index
+    provider = _FinalizerProvider(record)
+
+    with pytest.raises(BrainPromptContractInvalid):
+        V3LLMBrainAdapter(provider=provider).finalize_canonical_provider_prompts(_finalizer_request())
+
+
 def test_adapter_preserves_exact_brain_prompt_whitespace() -> None:
     prompt = "真实相机人像。\n\n保留原始换行、双空格  与中文标点。"
     provider = _FinalizerProvider(_record(prompt))
