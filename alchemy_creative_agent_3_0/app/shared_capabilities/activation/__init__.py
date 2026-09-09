@@ -36,7 +36,7 @@ from .contracts import (
     VisualSubjectEntity,
     VisualTaskProfile,
 )
-from .fallback import build_task_profile_and_intent
+from .fallback import build_task_profile_and_intent, has_product_profile_facts
 from .planner import CapabilityActivationError, CapabilityActivationPlanner
 from .template_policies import compatibility_policy, ecommerce_capability_policy, general_capability_policy, photography_capability_policy
 
@@ -79,6 +79,7 @@ __all__ = [
     "VisualTaskProfile",
     "active_capability_ids",
     "build_task_profile_and_intent",
+    "has_product_profile_facts",
     "compatibility_policy",
     "default_manifest_inventory",
     "ecommerce_capability_policy",

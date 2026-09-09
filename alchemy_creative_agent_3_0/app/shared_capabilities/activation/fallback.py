@@ -367,11 +367,19 @@ def _has_non_negated_person_signal(text: str) -> bool:
     )
 
 
-def _has_product_facts(product_profile: dict[str, Any]) -> bool:
+def has_product_profile_facts(product_profile: dict[str, Any]) -> bool:
+    """Recognize typed product facts, excluding generic project context."""
+
     return isinstance(product_profile, dict) and any(
         key in PRODUCT_FACT_FIELDS and value not in (None, "", [], {})
         for key, value in product_profile.items()
     )
+
+
+def _has_product_facts(product_profile: dict[str, Any]) -> bool:
+    """Compatibility alias for the historical fallback helper."""
+
+    return has_product_profile_facts(product_profile)
 
 
 def _dedupe_requested(items: list[RequestedCapability]) -> list[RequestedCapability]:

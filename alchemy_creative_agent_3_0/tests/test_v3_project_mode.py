@@ -1267,7 +1267,9 @@ def test_general_project_preserves_multiple_selected_continuation_references(tmp
         second_generated["job_id"],
         {"selected_candidate_id": second_generated["candidates"][0]["candidate_id"]},
     )
-    second_output_id = second_selected["project"]["selected_output_refs"][0]["output_id"]
+    # Selected output refs are append-only; the second selection is the
+    # second entry, while entry zero remains the first continuation anchor.
+    second_output_id = second_selected["project"]["selected_output_refs"][1]["output_id"]
     context = handlers.get_project_context(project["project_id"])
 
     assert first_output_id != second_output_id

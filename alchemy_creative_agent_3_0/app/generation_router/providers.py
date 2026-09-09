@@ -6060,15 +6060,45 @@ class ProductionImageGenerationProvider(GenerationProvider):
         }
 
     @staticmethod
-    def _brain_user_direction_integrity(request: GenerationRequest) -> dict[str, Any]:
+    def _brain_canonical_provider_record(request: GenerationRequest) -> dict[str, Any] | None:
+        """Select one approved Brain record for the current output lane.
+
+        Prompt text and its integrity receipt must come from the same
+        output-index binding. Keeping this selector shared prevents the
+        provider prompt path and its audit path from disagreeing on a
+        multi-output batch.
+        """
+
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         llm_brain = metadata.get("llm_brain")
         if not isinstance(llm_brain, dict):
-            return {}
+            return None
         records = llm_brain.get("canonical_provider_prompts")
-        if not isinstance(records, list) or len(records) != 1:
-            return {}
-        integrity = records[0].get("user_direction_integrity") if isinstance(records[0], dict) else None
+        if not isinstance(records, list):
+            return None
+        generation_plan = getattr(request, "generation_plan", None)
+        generation_metadata = getattr(generation_plan, "metadata", None)
+        generation_metadata = generation_metadata if isinstance(generation_metadata, dict) else {}
+        raw_index = generation_metadata.get("output_index", metadata.get("output_index", 0))
+        try:
+            output_index = int(raw_index) + 1
+        except (TypeError, ValueError):
+            return None
+        matches = [
+            item
+            for item in records
+            if isinstance(item, dict)
+            and item.get("output_index") == output_index
+            and str(item.get("review_status") or "") == "approved"
+        ]
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
+    @staticmethod
+    def _brain_user_direction_integrity(request: GenerationRequest) -> dict[str, Any]:
+        record = ProductionImageGenerationProvider._brain_canonical_provider_record(request)
+        integrity = record.get("user_direction_integrity") if isinstance(record, dict) else None
         return dict(integrity) if isinstance(integrity, dict) else {}
 
     def _brain_signed_provider_prompt(self, request: GenerationRequest) -> str:
@@ -6084,36 +6114,19 @@ class ProductionImageGenerationProvider(GenerationProvider):
         llm_brain = request.metadata.get("llm_brain")
         if not isinstance(llm_brain, dict):
             return ""
-        records = llm_brain.get("canonical_provider_prompts")
-        if not isinstance(records, list):
-            return ""
         audit = llm_brain.get("audit") if isinstance(llm_brain.get("audit"), dict) else {}
         unified_policy_required = (
             audit.get("unified_prompt_compression_policy_revision")
             == V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV
         )
-        generation_metadata = (
-            request.generation_plan.metadata if isinstance(request.generation_plan.metadata, dict) else {}
-        )
-        raw_index = generation_metadata.get("output_index", request.metadata.get("output_index", 0))
-        try:
-            output_index = int(raw_index) + 1
-        except (TypeError, ValueError):
-            return ""
-        matches = [
-            item
-            for item in records
-            if isinstance(item, dict)
-            and item.get("output_index") == output_index
-            and str(item.get("review_status") or "") == "approved"
-        ]
-        if len(matches) != 1:
+        record = self._brain_canonical_provider_record(request)
+        if record is None:
             return ""
         if unified_policy_required:
-            valid, _reason, _decision = validate_unified_prompt_record(matches[0], required=True)
+            valid, _reason, _decision = validate_unified_prompt_record(record, required=True)
             if not valid:
                 return ""
-        return str(matches[0].get("prompt") or "")
+        return str(record.get("prompt") or "")
 
     @staticmethod
     def _requires_brain_signed_provider_prompt(request: GenerationRequest) -> bool:

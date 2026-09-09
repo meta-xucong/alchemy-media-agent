@@ -75,6 +75,7 @@ from ..shared_capabilities.activation import (
     VisualCapabilityRegistry,
     VisualTaskProfile,
     compatibility_policy,
+    has_product_profile_facts,
 )
 from ..shared_capabilities.visual_cluster.plugins import VisualCapabilityPlugin, VisualClusterPluginRegistry
 from ..shared_capabilities.visual_cluster.human_photorealism import (
@@ -4358,7 +4359,7 @@ class ScenarioRuntime:
         }
         if roles & person_anchor_roles:
             subject_type = "character"
-        elif "product_reference" in roles or bool(request.product_profile):
+        elif "product_reference" in roles or has_product_profile_facts(request.product_profile):
             subject_type = "product"
         else:
             subject_type = "generic"
@@ -4367,7 +4368,7 @@ class ScenarioRuntime:
             "has_identity_anchor": bool(roles & identity_anchor_roles),
             "source": (
                 "runtime_typed_reference_facts"
-                if roles & identity_anchor_roles or bool(request.product_profile)
+                if roles & identity_anchor_roles or has_product_profile_facts(request.product_profile)
                 else "runtime_subject_facts_unresolved"
             ),
         }

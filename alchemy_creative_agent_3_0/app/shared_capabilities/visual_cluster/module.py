@@ -1628,9 +1628,19 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         portrait_like = _contains_latin_terms(text, ["portrait", "woman", "girl", "person", "model", "face"]) or any(
             token in user_input for token in ["人像", "写真", "美女", "人物", "脸", "发型"]
         )
+        ecommerce_scope = scenario_id == "ecommerce" or template_id in {
+            "ecommerce_template",
+            "ecommerce",
+        }
+        # Product wording is an orthogonal capability.  In a General scene a
+        # visible person remains the primary subject even when a bottle,
+        # package, or other object is part of the requested action.  The
+        # specialized E-Commerce scope keeps product truth primary.
+        if portrait_like and not ecommerce_scope:
+            return self._portrait_identity_template_policy()
         if allow_product_language:
             return self._product_truth_template_policy()
-        if _contains_latin_terms(text, ["photographer"]) or portrait_like:
+        if _contains_latin_terms(text, ["photographer"]):
             return self._portrait_identity_template_policy()
         return self._general_visual_grammar_template_policy()
 
@@ -1640,6 +1650,22 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         *,
         allow_product_language: bool,
     ) -> dict[str, Any]:
+        project_context = _as_dict(capability_input.metadata.get("project_context_snapshot"))
+        template_id = str(
+            capability_input.metadata.get("resolved_template_id")
+            or project_context.get("template_id")
+            or capability_input.metadata.get("template_id")
+            or ""
+        ).strip().lower()
+        ecommerce_scope = capability_input.scenario_id == "ecommerce" or template_id in {
+            "ecommerce_template",
+            "ecommerce",
+        }
+        # A co-visible product must not demote the Brain-typed visible person
+        # in General Template.  Product capability activation still remains
+        # true and its explicit product references are preserved downstream.
+        if not ecommerce_scope and self._brain_owned_forward_has_visible_subject(capability_input, "person"):
+            return self._portrait_identity_template_policy()
         if allow_product_language:
             return self._product_truth_template_policy()
         active_capabilities = set(self._active_capability_ids(capability_input))
@@ -1765,8 +1791,9 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         }
 
     def _subject_type_from_policy(self, template_policy: dict[str, Any], *, allow_product_language: bool) -> str:
-        if allow_product_language:
-            return "product"
+        # ``allow_product_language`` controls product facts/wording only. The
+        # policy's identity lock is the authoritative primary-subject choice.
+        # Keep the argument for compatibility with older callers.
         lock_default = str(template_policy.get("identity_lock_default") or "").strip().lower()
         if lock_default == "product":
             return "product"
@@ -3041,10 +3068,12 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
     ) -> list[StrongReferenceBinding]:
         bindings: list[StrongReferenceBinding] = []
         policy_lock = str(template_policy.get("identity_lock_default") or "generic")
-        selected_role = "product_identity_reference" if allow_product_language else (
+        selected_role = "product_identity_reference" if policy_lock == "product" else (
             "generated_identity_reference" if policy_lock == "character" else "style_reference"
         )
-        selected_use_policy = "product_identity" if allow_product_language else ("identity" if policy_lock == "character" else "style")
+        selected_use_policy = "product_identity" if policy_lock == "product" else (
+            "identity" if policy_lock == "character" else "style"
+        )
         for item in selected_outputs:
             source_id = _identity(item, "output_id", "asset_id", "candidate_id", "output_ref_id")
             if not source_id:
@@ -3062,7 +3091,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     role=selected_role,
                     strength="medium",
                     use_policy=selected_use_policy,
-                    lock_targets=self._lock_targets_for_policy(policy_lock, allow_product_language=allow_product_language),
+                    lock_targets=self._lock_targets_for_policy(
+                        policy_lock,
+                        allow_product_language=allow_product_language,
+                        use_policy=selected_use_policy,
+                    ),
                     provider_input_required=bool(file_path),
                     prompt_only_fallback=not bool(file_path),
                     confidence=0.82 if file_path else 0.58,
@@ -3090,7 +3123,11 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
                     role=self._reference_role_for_policy(use_policy),
                     strength=strength,
                     use_policy=use_policy,
-                    lock_targets=self._lock_targets_for_policy(policy_lock, allow_product_language=allow_product_language),
+                    lock_targets=self._lock_targets_for_policy(
+                        policy_lock,
+                        allow_product_language=allow_product_language,
+                        use_policy=use_policy,
+                    ),
                     provider_input_required=bool(file_path and strength == "hard"),
                     prompt_only_fallback=not bool(file_path),
                     confidence=0.86 if file_path else 0.54,
@@ -3104,7 +3141,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         normalized = str(role or "").lower()
         if "nonhuman_identity_reference" in normalized or "nonhuman_subject_identity" in normalized:
             return "nonhuman_subject_identity"
-        if allow_product_language or "product" in normalized:
+        if "product" in normalized or policy_lock == "product":
             return "product_identity"
         if "logo" in normalized or "brand" in normalized:
             return "brand_asset"
@@ -3130,10 +3167,20 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             "lighting": "lighting_reference",
         }.get(use_policy, "style_reference")
 
-    def _lock_targets_for_policy(self, policy_lock: str, *, allow_product_language: bool) -> list[str]:
-        if allow_product_language or policy_lock == "product":
+    def _lock_targets_for_policy(
+        self,
+        policy_lock: str,
+        *,
+        allow_product_language: bool,
+        use_policy: str | None = None,
+    ) -> list[str]:
+        # Product wording permission is not a lock policy. Explicit product
+        # references still receive product truth targets inside a character-
+        # led frame, while generic/style references follow the primary policy.
+        normalized_use_policy = str(use_policy or "").strip().lower()
+        if normalized_use_policy == "product_identity" or policy_lock == "product":
             return ["shape", "material", "color", "logo_or_label_position", "proportions"]
-        if policy_lock == "character":
+        if normalized_use_policy == "identity" or policy_lock == "character":
             return ["face_identity", "body_identity_direction", "natural_complexion_direction"]
         return ["style", "composition", "palette", "lighting"]
 
@@ -3228,7 +3275,7 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
         wardrobe_locked = _reference_channel_is_locked(reference_policy_package, "wardrobe_structure")
         camera_locked = _reference_channel_is_locked(reference_policy_package, "camera_composition")
         lighting_locked = _reference_channel_is_locked(reference_policy_package, "lighting_color")
-        if allow_product_language or policy_lock == "product":
+        if policy_lock == "product":
             subject_type = "product"
             keep_rules = [
                 "preserve product shape, material, color, and proportions",
@@ -3358,9 +3405,15 @@ class VisualCapabilityClusterModule(SharedCapabilityModule):
             raw_controls.update(_clean_advanced_reference_controls(source))
         has_identity_binding = any(self._binding_is_person_identity(binding) for binding in strong_bindings)
         has_any_binding = bool(strong_bindings)
+        has_product_binding = any(
+            str(binding.use_policy or "").strip().lower() == "product_identity"
+            for binding in strong_bindings
+        )
         defaults = {
             "preserve_person_identity": bool(has_identity_binding or (subject_type == "character" and has_any_binding)),
-            "preserve_product_appearance": bool(subject_type == "product" and has_any_binding),
+            "preserve_product_appearance": bool(
+                has_any_binding and (subject_type == "product" or has_product_binding)
+            ),
             "preserve_scene_consistency": False,
         }
         controls = {
