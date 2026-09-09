@@ -507,9 +507,27 @@ class V3LLMBrainProvider:
             raise BrainExecutionBudgetExceeded(
                 "remote Brain logical execution budget exhausted before another remote decision"
             )
+        # A real-image preparation has two required remote decisions: the
+        # semantic plan and the canonical renderer sign-off.  The provider's
+        # transient retry is bounded inside ``run``, but without a stage-aware
+        # reserve a slow first plan can consume the handoff window with its
+        # retry and leave the finalizer only a few seconds.  Keep the existing
+        # shared budget and retry policy; make the already-defined handoff
+        # portion authoritative for the later finalizer instead of letting a
+        # plan retry borrow it.
+        finalizer_reserve = _required_finalizer_reserve_seconds(request)
+        available_for_stage = remaining - finalizer_reserve
+        if available_for_stage < BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS:
+            if finalizer_reserve:
+                raise BrainExecutionBudgetExceeded(
+                    "remote Brain logical execution budget must preserve the canonical finalizer handoff window"
+                )
+            raise BrainExecutionBudgetExceeded(
+                "remote Brain logical execution budget exhausted before another remote decision"
+            )
         # A non-zero timeout is required by all supported transports.  The
         # value is still bounded by the remaining logical preparation budget.
-        return max(0.1, min(base_timeout, remaining))
+        return max(0.1, min(base_timeout, available_for_stage))
 
     def _run_openai_compatible(
         self,
@@ -817,6 +835,28 @@ def _request_timeout_cap_seconds(request: BrainRunRequest) -> float | None:
         BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
         min(BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS, value),
     )
+
+
+def _required_finalizer_reserve_seconds(request: BrainRunRequest) -> float:
+    """Reserve the existing handoff window before a real-image plan retry.
+
+    Ordinary compatibility planning may still use the complete remaining
+    budget.  Real-image requests are different: the runtime will not send a
+    provider operation until the remote Brain signs the canonical prompt, so
+    a plan retry must not consume the only bounded window in which that sign-
+    off can complete.
+    """
+
+    if str(getattr(request, "stage", "") or "").strip() != "plan":
+        return 0.0
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    policy = getattr(request, "template_capability_policy", None)
+    requires_remote_brain = bool(
+        metadata.get("require_real_images")
+        or metadata.get("real_image_generation")
+        or getattr(policy, "requires_remote_creative_brain", False)
+    )
+    return float(BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS) if requires_remote_brain else 0.0
 
 
 def _call_with_timeout(

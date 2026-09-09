@@ -14,6 +14,7 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     _call_with_timeout,
     _collect_openai_chat_completion_stream,
     _new_transport_trace,
+    BrainExecutionBudgetExceeded,
     BrainInvalidJsonResponse,
     BrainOutputTruncated,
     BrainTransportTimeoutError,
@@ -539,6 +540,57 @@ def test_brain_progress_grace_cannot_cross_logical_execution_budget() -> None:
     assert finished.wait(0.5)
     elapsed = time.perf_counter() - started
     assert 0.28 <= elapsed < 0.8
+
+
+def test_real_image_plan_retry_preserves_canonical_finalizer_handoff_window() -> None:
+    provider = object.__new__(V3LLMBrainProvider)
+    provider.timeout = 300.0
+    request = BrainRunRequest(
+        user_input="Prepare a real image.",
+        stage="plan",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"require_real_images": True},
+    )
+    # Model a plan attempt that has already consumed 250 seconds of the
+    # default 520-second logical preparation budget.  The remaining timeout
+    # must exclude the existing 220-second finalizer handoff window.
+    budget = _BrainExecutionBudget(total_seconds=520.0, started_at=time.perf_counter() - 250.0)
+    token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    try:
+        timeout = provider._effective_timeout_seconds(request)
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(token)
+    assert 45.0 <= timeout <= 55.0
+
+    exhausted_budget = _BrainExecutionBudget(total_seconds=520.0, started_at=time.perf_counter() - 305.0)
+    token = _ACTIVE_EXECUTION_BUDGET.set(exhausted_budget)
+    try:
+        with pytest.raises(BrainExecutionBudgetExceeded, match="handoff window"):
+            provider._effective_timeout_seconds(request)
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(token)
+
+
+def test_finalizer_receives_the_remaining_budget_without_plan_reservation() -> None:
+    provider = object.__new__(V3LLMBrainProvider)
+    provider.timeout = 300.0
+    request = BrainRunRequest(
+        user_input="Sign the final renderer prompt.",
+        stage="provider_prompt_finalize",
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"canonical_prompt_context": {}},
+    )
+    budget = _BrainExecutionBudget(total_seconds=520.0, started_at=time.perf_counter() - 250.0)
+    token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    try:
+        timeout = provider._effective_timeout_seconds(request)
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(token)
+    assert 265.0 <= timeout <= 275.0
 
 
 def test_openai_chat_transport_timeout_is_normalized(monkeypatch) -> None:
