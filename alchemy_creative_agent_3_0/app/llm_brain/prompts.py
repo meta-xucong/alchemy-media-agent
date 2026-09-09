@@ -1561,8 +1561,11 @@ def _canonical_provider_prompt_finalization_payload(request: BrainRunRequest) ->
         }
         response_contract += (
             " The frozen_render_context.brain_source_projection is the complete server-owned Brain semantic source. "
-            "Use all of its prompt_guidance and image_set_plan fields when authoring each complete natural-language "
-            "prompt; do not reconstruct, discard, or replace those facts with a local recipe. For every output, "
+            "Use all of its prompt_guidance, image_set_plan, and capability_guidance fields when authoring each "
+            "complete natural-language prompt. Translate its positive and negative capability directions into one "
+            "coherent renderer instruction while preserving the user's protected intent; do not reconstruct, "
+            "discard, or replace those facts with a local recipe, and never emit capability IDs or internal field "
+            "names as renderer wording. For every output, "
             "return source_projection_receipt with contract_version "
             f"{V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV}, the exact source_digest from that projection, the matching "
             "output_index, requested_image_count, semantic_coverage complete, owner remote_v3_llm_brain, and the "

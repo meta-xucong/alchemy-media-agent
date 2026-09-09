@@ -24,6 +24,15 @@ V3_UNIFIED_PROMPT_TRANSPORT_REQUIRED_SAFE_UTF8_BYTES: Final = (
 V3_UNIFIED_PROMPT_MAX_LENGTH_POLICY_RECOVERY: Final = 1
 V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV: Final = "v3_brain_source_projection_v1"
 V3_BRAIN_SOURCE_PROJECTION_FINALIZER_STAGE: Final = "provider_prompt_finalize"
+V3_BRAIN_CAPABILITY_GUIDANCE_CONTRACT_REV: Final = "v3_brain_capability_guidance_v1"
+
+_V3_BRAIN_CAPABILITY_GUIDANCE_STAGES: frozenset[str] = frozenset(
+    {
+        "creative_strategy",
+        "generation_prompt",
+        "negative_prompt",
+    }
+)
 
 
 def _canonical_value_sha256(value: Any) -> str:
@@ -95,6 +104,104 @@ def brain_source_projection_receipt_sha256(receipt: Mapping[str, Any]) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def _normalized_text_list(value: Any) -> list[str]:
+    """Normalize bounded server-owned text directions without authoring prose."""
+
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        values = []
+    return list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in values
+            if isinstance(item, str) and str(item).strip()
+        )
+    )
+
+
+def build_brain_capability_guidance(
+    *,
+    capability_projection: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project active capability directions into the Brain-owned source.
+
+    The capability composer remains the authority for these directions.  This
+    helper translates its typed contribution records into a narrow semantic
+    package for the Brain finalizer; it does not append renderer text and it
+    deliberately excludes provider, review, retry, and metadata payloads.
+    """
+
+    projection = dict(capability_projection or {})
+    raw_cluster = projection.get("visual_cluster")
+    raw_cluster = raw_cluster if isinstance(raw_cluster, Mapping) else {}
+    composed = projection.get("composed_visual_contribution")
+    composed = composed if isinstance(composed, Mapping) else {}
+
+    active_capability_ids = _normalized_text_list(composed.get("active_capability_ids"))
+    raw_contributions = raw_cluster.get("capability_contributions")
+    if not isinstance(raw_contributions, list):
+        raw_contributions = projection.get("capability_contributions")
+    if not isinstance(raw_contributions, list):
+        raw_contributions = []
+    if not active_capability_ids:
+        active_capability_ids = _normalized_text_list(
+            [
+                item.get("capability_id")
+                for item in raw_contributions
+                if isinstance(item, Mapping)
+            ]
+        )
+    active_set = set(active_capability_ids)
+
+    obligations: list[dict[str, Any]] = []
+    positive_directions: list[str] = []
+    negative_directions: list[str] = []
+    for raw_contribution in raw_contributions:
+        if not isinstance(raw_contribution, Mapping):
+            continue
+        capability_id = str(raw_contribution.get("capability_id") or "").strip()
+        if not capability_id or capability_id not in active_set:
+            continue
+        stages = _normalized_text_list(raw_contribution.get("stages"))
+        applicable_stages = [
+            stage for stage in stages if stage in _V3_BRAIN_CAPABILITY_GUIDANCE_STAGES
+        ]
+        if not applicable_stages:
+            continue
+        positive = _normalized_text_list(raw_contribution.get("prompt_additions"))
+        negative = _normalized_text_list(raw_contribution.get("negative_additions"))
+        if not positive and not negative:
+            continue
+        obligations.append(
+            {
+                "capability_id": capability_id,
+                "applies_to_stages": applicable_stages,
+                "positive_directions": positive,
+                "negative_directions": negative,
+            }
+        )
+        positive_directions.extend(positive)
+        negative_directions.extend(negative)
+
+    # The composed aggregate is the compatibility fallback for an older
+    # envelope that does not retain the per-capability rows.  In the current
+    # enforced path it is also a completeness check: no composed direction may
+    # disappear merely because a row was not materialized in the projection.
+    positive_directions.extend(_normalized_text_list(composed.get("prompt_additions")))
+    negative_directions.extend(_normalized_text_list(composed.get("negative_additions")))
+    return {
+        "contract_version": V3_BRAIN_CAPABILITY_GUIDANCE_CONTRACT_REV,
+        "semantic_coverage": "complete",
+        "active_capability_ids": active_capability_ids,
+        "generation_obligations": obligations,
+        "positive_directions": _normalized_text_list(positive_directions),
+        "negative_directions": _normalized_text_list(negative_directions),
+    }
+
+
 def with_brain_source_projection_digest(source_projection: Mapping[str, Any]) -> dict[str, Any]:
     """Return a source package with its stable server-owned digest attached."""
 
@@ -108,12 +215,14 @@ def build_brain_source_projection(
     prompt_guidance: Mapping[str, Any],
     image_set_plan: Mapping[str, Any],
     requested_image_count: int,
+    capability_guidance: Mapping[str, Any] | None = None,
     binding_facts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the complete, scenario-neutral source package for finalization."""
 
     plan = dict(image_set_plan)
     guidance = dict(prompt_guidance)
+    capability_guidance = dict(capability_guidance or {})
     binding_facts = dict(binding_facts or {})
     projected_guidance_and_plan = {
         "prompt_guidance": guidance,
@@ -124,6 +233,7 @@ def build_brain_source_projection(
         "user_intent_digest": _canonical_value_sha256(binding_facts.get("user_intent")),
         "planning_result_digest": _canonical_value_sha256(binding_facts.get("planning_result")),
         "prompt_guidance_image_set_digest": _canonical_value_sha256(projected_guidance_and_plan),
+        "capability_guidance_digest": _canonical_value_sha256(capability_guidance),
         "active_capability_contract_digest": _canonical_value_sha256(
             binding_facts.get("active_capability_contracts", [])
         ),
@@ -152,6 +262,7 @@ def build_brain_source_projection(
             "requested_image_count": int(requested_image_count),
             "prompt_guidance": guidance,
             "image_set_plan": plan,
+            "capability_guidance": capability_guidance,
             "source_binding": source_binding,
             "per_output_directions": directions,
         }

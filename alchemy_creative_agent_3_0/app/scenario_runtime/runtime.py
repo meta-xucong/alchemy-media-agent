@@ -19,6 +19,7 @@ from ..llm_brain.prompt_policy import (
     V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
     V3_BRAIN_SOURCE_PROJECTION_FINALIZER_STAGE,
     V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
+    build_brain_capability_guidance,
     build_brain_source_projection,
 )
 from ..llm_brain.providers import (
@@ -3539,6 +3540,12 @@ class ScenarioRuntime:
         # actual frozen source, not an earlier partial context snapshot.
         planning_result = ScenarioRuntime._json_safe_projection_value(brain_result)
         planning_result.pop("canonical_provider_prompts", None)
+        capability_projection = getattr(envelope, "provider_projection", {})
+        if not isinstance(capability_projection, dict):
+            capability_projection = {}
+        capability_guidance = build_brain_capability_guidance(
+            capability_projection=capability_projection,
+        )
         context["brain_source_projection"] = build_brain_source_projection(
             requested_image_count=effective_image_count,
             prompt_guidance=ScenarioRuntime._json_safe_projection_value(
@@ -3547,6 +3554,7 @@ class ScenarioRuntime:
             image_set_plan=ScenarioRuntime._json_safe_projection_value(
                 getattr(brain_result, "image_set_plan", {})
             ),
+            capability_guidance=capability_guidance,
             binding_facts={
                 "user_intent": context.get("protected_user_intent"),
                 "planning_result": planning_result,

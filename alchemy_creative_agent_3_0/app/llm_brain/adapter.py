@@ -542,6 +542,23 @@ class V3LLMBrainAdapter:
                 if isinstance(source_projection, Mapping)
                 else None
             )
+            expected_source_binding_keys = {
+                "contract_version",
+                "user_intent_digest",
+                "planning_result_digest",
+                "prompt_guidance_image_set_digest",
+                "active_capability_contract_digest",
+                "reference_channel_ownership_digest",
+                "frozen_runtime_binding_digest",
+                "policy_revision",
+                "finalizer_stage",
+                "binding_digest",
+            }
+            # Historical frozen projections predate the capability guidance
+            # extension.  They remain readable, while every fresh projection
+            # must carry the new digest and its Brain-visible source package.
+            if isinstance(source_projection, Mapping) and "capability_guidance" in source_projection:
+                expected_source_binding_keys.add("capability_guidance_digest")
             if (
                 not isinstance(source_projection, Mapping)
                 or source_projection.get("contract_version") != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
@@ -549,19 +566,7 @@ class V3LLMBrainAdapter:
                 or brain_source_projection_sha256(source_projection) != expected_source_digest
                 or source_projection.get("requested_image_count") != expected_count
                 or not isinstance(source_binding, Mapping)
-                or set(source_binding)
-                != {
-                    "contract_version",
-                    "user_intent_digest",
-                    "planning_result_digest",
-                    "prompt_guidance_image_set_digest",
-                    "active_capability_contract_digest",
-                    "reference_channel_ownership_digest",
-                    "frozen_runtime_binding_digest",
-                    "policy_revision",
-                    "finalizer_stage",
-                    "binding_digest",
-                }
+                or set(source_binding) != expected_source_binding_keys
                 or source_binding.get("contract_version") != V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV
                 or source_binding.get("binding_digest") != expected_binding_digest
                 or brain_source_projection_binding_sha256(source_binding) != expected_binding_digest

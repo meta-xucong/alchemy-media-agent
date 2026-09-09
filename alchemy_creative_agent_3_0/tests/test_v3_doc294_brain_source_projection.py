@@ -9,9 +9,12 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.llm_brain import BrainRunRequest, V3LLMBrainAdapter
 from alchemy_creative_agent_3_0.app.llm_brain.prompt_policy import (
+    V3_BRAIN_CAPABILITY_GUIDANCE_CONTRACT_REV,
     V3_BRAIN_SOURCE_PROJECTION_CONTRACT_REV,
     V3_UNIFIED_PROMPT_COMPRESSION_POLICY_REV,
     brain_source_projection_sha256,
+    brain_source_projection_binding_sha256,
+    build_brain_capability_guidance,
     build_brain_source_projection_receipt,
     build_brain_source_projection,
     validate_brain_source_projection_receipt,
@@ -26,7 +29,34 @@ PREVIOUS_PROMPT = (
 )
 
 
-def _projection() -> dict:
+def _capability_guidance() -> dict:
+    return {
+        "contract_version": V3_BRAIN_CAPABILITY_GUIDANCE_CONTRACT_REV,
+        "semantic_coverage": "complete",
+        "active_capability_ids": ["visual_grammar", "scene_continuity"],
+        "generation_obligations": [
+            {
+                "capability_id": "visual_grammar",
+                "applies_to_stages": ["creative_strategy", "generation_prompt"],
+                "positive_directions": ["preserve the requested subject hierarchy"],
+                "negative_directions": [],
+            },
+            {
+                "capability_id": "scene_continuity",
+                "applies_to_stages": ["generation_prompt", "negative_prompt"],
+                "positive_directions": ["preserve the warehouse shelf landmarks"],
+                "negative_directions": ["avoid replacing the requested scene"],
+            },
+        ],
+        "positive_directions": [
+            "preserve the requested subject hierarchy",
+            "preserve the warehouse shelf landmarks",
+        ],
+        "negative_directions": ["avoid replacing the requested scene"],
+    }
+
+
+def _projection(*, capability_guidance: dict | None = None) -> dict:
     return build_brain_source_projection(
         requested_image_count=2,
         prompt_guidance={
@@ -48,6 +78,7 @@ def _projection() -> dict:
             "composition_rules": ["preserve subject hierarchy"],
             "quality_bar": ["credible photographic materiality"],
         },
+        capability_guidance=capability_guidance or _capability_guidance(),
     )
 
 
@@ -108,6 +139,7 @@ def _request(projection: dict, *, records: list[dict]) -> BrainRunRequest:
 def test_projection_digest_covers_all_brain_guidance_and_image_plan_fields() -> None:
     projection = _projection()
     assert projection["source_digest"] == brain_source_projection_sha256(projection)
+    assert projection["capability_guidance"] == _capability_guidance()
     assert set(projection["prompt_guidance"]) == {
         "optimized_direction",
         "visual_direction_addons",
@@ -127,6 +159,85 @@ def test_projection_digest_covers_all_brain_guidance_and_image_plan_fields() -> 
         "composition_rules",
         "quality_bar",
     }
+
+
+def test_capability_guidance_projects_only_active_generation_semantics() -> None:
+    guidance = build_brain_capability_guidance(
+        capability_projection={
+            "visual_cluster": {
+                "capability_contributions": [
+                    {
+                        "capability_id": "visual_grammar",
+                        "stages": ["creative_strategy", "generation_prompt"],
+                        "prompt_additions": ["preserve the subject hierarchy"],
+                        "negative_additions": [],
+                        "review_contract": {"internal": "must not be forwarded"},
+                    },
+                    {
+                        "capability_id": "scene_continuity",
+                        "stages": ["generation_prompt", "negative_prompt"],
+                        "prompt_additions": ["keep the warehouse landmarks"],
+                        "negative_additions": ["avoid scene replacement"],
+                    },
+                    {
+                        "capability_id": "inactive_capability",
+                        "stages": ["generation_prompt"],
+                        "prompt_additions": ["must not reach the Brain"],
+                        "negative_additions": [],
+                    },
+                ]
+            },
+            "composed_visual_contribution": {
+                "active_capability_ids": ["visual_grammar", "scene_continuity"],
+                "prompt_additions": ["keep the warehouse landmarks"],
+                "negative_additions": ["avoid scene replacement"],
+            },
+        }
+    )
+
+    serialized = json.dumps(guidance, ensure_ascii=False)
+    assert guidance["contract_version"] == V3_BRAIN_CAPABILITY_GUIDANCE_CONTRACT_REV
+    assert guidance["active_capability_ids"] == ["visual_grammar", "scene_continuity"]
+    assert [item["capability_id"] for item in guidance["generation_obligations"]] == [
+        "visual_grammar",
+        "scene_continuity",
+    ]
+    assert "must not reach the Brain" not in serialized
+    assert "review_contract" not in serialized
+    assert "prompt_additions" not in serialized
+    assert "negative_additions" not in serialized
+
+
+def test_capability_guidance_is_bound_into_source_and_binding_digests() -> None:
+    projection = _projection()
+    changed_guidance = deepcopy(_capability_guidance())
+    changed_guidance["positive_directions"][0] = "changed capability direction"
+    changed = _projection(capability_guidance=changed_guidance)
+
+    assert changed["capability_guidance"] == changed_guidance
+    assert changed["source_digest"] != projection["source_digest"]
+    assert changed["source_binding"]["capability_guidance_digest"] != (
+        projection["source_binding"]["capability_guidance_digest"]
+    )
+
+
+def test_historical_projection_without_capability_guidance_remains_readable() -> None:
+    projection = _projection()
+    historical = deepcopy(projection)
+    historical.pop("capability_guidance")
+    historical["source_binding"].pop("capability_guidance_digest")
+    historical["source_binding"]["binding_digest"] = brain_source_projection_binding_sha256(
+        historical["source_binding"]
+    )
+    historical["source_digest"] = brain_source_projection_sha256(historical)
+    provider = _FinalizerProvider([_record(historical), _record(historical, 2)])
+
+    prompts, audit = V3LLMBrainAdapter(provider=provider).finalize_canonical_provider_prompts(
+        _request(historical, records=provider.records)
+    )
+
+    assert len(prompts) == 2
+    assert audit["brain_source_projection_receipts"] == ["valid", "valid"]
 
 
 def test_payload_exposes_complete_source_projection_and_typed_receipt_schema() -> None:

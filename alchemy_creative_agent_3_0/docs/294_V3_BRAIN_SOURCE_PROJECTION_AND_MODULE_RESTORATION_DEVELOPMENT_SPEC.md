@@ -194,8 +194,8 @@ user request + frozen facts
   -> first Brain planning
   -> existing shared capability execution
   -> complete typed Brain source package
-       (prompt_guidance + image_set_plan + active contracts
-        + ownership/reference/context facts)
+       (prompt_guidance + image_set_plan + capability_guidance
+        + active contracts + ownership/reference/context facts)
   -> one server-owned source projection with output binding/digest
   -> Brain canonical finalizer
        (semantic reconciliation, natural prompt, semantic receipt)
@@ -216,6 +216,7 @@ For each output, the source binding must include:
 - frozen user-intent/source digest;
 - Brain planning result digest;
 - projected prompt-guidance/image-set digest;
+- capability-guidance digest;
 - active capability contract digest;
 - reference/channel ownership digest where applicable;
 - policy revision and finalizer stage;
@@ -320,6 +321,8 @@ authority model; do not weaken semantic requirements.
 
 - [x] `prompt_guidance` fields are inventoried.
 - [x] `image_set_plan` fields are inventoried.
+- [x] Active capability generation and negative directions are projected as
+  typed `capability_guidance` rather than local renderer text.
 - [x] Shared capability contracts are inventoried.
 - [x] Reference/channel ownership is inventoried separately from Human Realism.
 - [x] Product truth and apparel facts remain server-frozen.
@@ -340,7 +343,8 @@ authority model; do not weaken semantic requirements.
 ### 10.1 Source projection tests
 
 1. Full `prompt_guidance` and full `image_set_plan` survive into the finalizer
-   context with the same semantic values and a stable digest.
+   context with the same semantic values and a stable digest; active module
+   directions survive in `capability_guidance` with its own binding digest.
 2. Missing, stale, swapped, malformed or cross-output source envelopes fail
    closed before Provider request.
 3. Internal IDs and contract keys are not emitted as renderer wording.
