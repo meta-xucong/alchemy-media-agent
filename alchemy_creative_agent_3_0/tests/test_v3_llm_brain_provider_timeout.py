@@ -6,7 +6,10 @@ import types
 
 import pytest
 
-from alchemy_creative_agent_3_0.app.llm_brain.contracts import BrainRunRequest
+from alchemy_creative_agent_3_0.app.llm_brain.contracts import (
+    BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS,
+    BrainRunRequest,
+)
 from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     _ACTIVE_EXECUTION_BUDGET,
     _ACTIVE_TRANSPORT_TRACE,
@@ -617,6 +620,51 @@ def test_real_image_provider_run_does_not_retry_after_plan_budget_reaches_handof
     finally:
         _ACTIVE_EXECUTION_BUDGET.reset(token)
     assert provider.calls == 1
+
+
+@pytest.mark.parametrize("stage", ["plan", "generate"])
+def test_real_image_pre_finalizer_progress_ceiling_is_handoff_bounded(monkeypatch, stage) -> None:
+    """The outer worker deadline must receive the narrowed plan ceiling."""
+
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    provider = object.__new__(V3LLMBrainProvider)
+    provider.timeout = 300.0
+    request = BrainRunRequest(
+        user_input="Prepare a real image.",
+        stage=stage,
+        scenario_id="general_creative",
+        template_id="general_template",
+        requested_image_count=1,
+        metadata={"require_real_images": True},
+    )
+    budget = _BrainExecutionBudget(
+        total_seconds=520.0,
+        started_at=time.perf_counter() - 250.0,
+    )
+    captured: dict[str, float | None] = {}
+
+    def fake_call(callable_obj, *, timeout_seconds, trace, maximum_deadline=None):  # noqa: ANN001
+        captured["timeout_seconds"] = timeout_seconds
+        captured["maximum_deadline"] = maximum_deadline
+        return {"ok": True}
+
+    monkeypatch.setattr(providers_module, "_call_with_timeout", fake_call)
+    token = _ACTIVE_EXECUTION_BUDGET.set(budget)
+    try:
+        assert provider._run_remote_attempt(  # noqa: SLF001
+            lambda _request, *, json_recovery: {"ignored": json_recovery},
+            request,
+            json_recovery=False,
+        ) == {"ok": True}
+    finally:
+        _ACTIVE_EXECUTION_BUDGET.reset(token)
+
+    assert captured["timeout_seconds"] is not None
+    assert 15.0 <= float(captured["timeout_seconds"]) <= 25.0
+    assert captured["maximum_deadline"] is not None
+    expected_ceiling = budget.deadline - BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS
+    assert abs(float(captured["maximum_deadline"]) - expected_ceiling) < 0.1
 
 
 def test_finalizer_receives_the_remaining_budget_without_plan_reservation() -> None:

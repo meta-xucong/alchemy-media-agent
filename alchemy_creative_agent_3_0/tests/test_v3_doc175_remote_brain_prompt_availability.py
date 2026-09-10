@@ -60,14 +60,14 @@ def test_doc175_provider_shares_one_budget_and_blocks_before_a_late_remote_call(
     clock = [0.0]
     monkeypatch.setattr(providers_module.time, "perf_counter", lambda: clock[0])
     monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "openai")
-    monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "1")
+    monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "300")
     provider = V3LLMBrainProvider()
     monkeypatch.setattr(provider, "_run_openai_compatible", lambda *_args, **_kwargs: {"ok": True})
 
     with provider.execution_scope():
         result = provider.run(_request())
         assert result["_alchemy_brain_transport"]["execution_budget"]["state"] == "within_budget"
-        clock[0] = 1.1
+        clock[0] = 301.1
         with pytest.raises(BrainExecutionBudgetExceeded):
             provider.run(_request())
 

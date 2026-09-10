@@ -475,7 +475,7 @@ class V3LLMBrainProvider:
             )
 
     def _run_remote_attempt(self, runner: Any, request: BrainRunRequest, *, json_recovery: bool) -> dict[str, Any]:
-        timeout_seconds = self._effective_timeout_seconds(request)
+        timeout_seconds, maximum_deadline = self._effective_timeout_and_deadline(request)
         trace = _new_transport_trace(stage=request.stage, json_recovery=json_recovery)
         token = _ACTIVE_TRANSPORT_TRACE.set(trace)
         try:
@@ -483,6 +483,7 @@ class V3LLMBrainProvider:
                 lambda: runner(request, json_recovery=json_recovery),
                 timeout_seconds=timeout_seconds,
                 trace=trace,
+                maximum_deadline=maximum_deadline,
             )
         finally:
             _ACTIVE_TRANSPORT_TRACE.reset(token)
@@ -497,12 +498,27 @@ class V3LLMBrainProvider:
     def _effective_timeout_seconds(self, request: BrainRunRequest) -> float:
         """Use the remaining shared deadline, never a stale full call timeout."""
 
+        timeout_seconds, _ = self._effective_timeout_and_deadline(request)
+        return timeout_seconds
+
+    def _effective_timeout_and_deadline(self, request: BrainRunRequest) -> tuple[float, float | None]:
+        """Return one transport timeout and its absolute progress ceiling.
+
+        The hard timeout intentionally leaves room for one bounded streaming
+        progress grace window.  When a real-image planning request also has a
+        canonical-finalizer reserve, the grace ceiling must stop at the end of
+        the planning window rather than at the full logical deadline.  Keeping
+        both values from one clock snapshot prevents the outer worker guard
+        from silently borrowing the downstream handoff reserve.
+        """
+
         budget = _ACTIVE_EXECUTION_BUDGET.get()
         request_cap = _request_timeout_cap_seconds(request)
         base_timeout = min(self.timeout, request_cap) if request_cap is not None else self.timeout
         if budget is None:
-            return base_timeout
-        remaining = budget.remaining_seconds()
+            return base_timeout, None
+        now = time.perf_counter()
+        remaining = max(0.0, budget.deadline - now)
         if remaining <= 0.0:
             raise BrainExecutionBudgetExceeded(
                 "remote Brain logical execution budget exhausted before another remote decision"
@@ -540,7 +556,10 @@ class V3LLMBrainProvider:
             )
         # A non-zero timeout is required by all supported transports.  The
         # value is still bounded by the remaining logical preparation budget.
-        return max(0.1, min(base_timeout, stage_timeout_budget if finalizer_reserve else available_for_stage))
+        return (
+            max(0.1, min(base_timeout, stage_timeout_budget if finalizer_reserve else available_for_stage)),
+            now + available_for_stage,
+        )
 
     def _run_openai_compatible(
         self,
@@ -851,16 +870,16 @@ def _request_timeout_cap_seconds(request: BrainRunRequest) -> float | None:
 
 
 def _required_finalizer_reserve_seconds(request: BrainRunRequest) -> float:
-    """Reserve the existing handoff window before a real-image plan retry.
+    """Reserve the existing handoff window before a real-image pre-finalizer call.
 
     Ordinary compatibility planning may still use the complete remaining
-    budget.  Real-image requests are different: the runtime will not send a
-    provider operation until the remote Brain signs the canonical prompt, so
-    a plan retry must not consume the only bounded window in which that sign-
-    off can complete.
+    budget.  Real-image plan and generate preparation calls are different: the
+    runtime will not send a provider operation until the remote Brain signs
+    the canonical prompt, so either pre-finalizer call must not consume the
+    only bounded window in which that sign-off can complete.
     """
 
-    if str(getattr(request, "stage", "") or "").strip() != "plan":
+    if str(getattr(request, "stage", "") or "").strip() not in {"plan", "generate"}:
         return 0.0
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     policy = getattr(request, "template_capability_policy", None)
@@ -877,6 +896,7 @@ def _call_with_timeout(
     *,
     timeout_seconds: float,
     trace: dict[str, Any] | None = None,
+    maximum_deadline: float | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
     started = time.perf_counter()
@@ -886,11 +906,17 @@ def _call_with_timeout(
     progress_grace_seconds = min(_STREAM_PROGRESS_GRACE_SECONDS, timeout_seconds)
     progress_grace_deadline = hard_deadline + progress_grace_seconds
     execution_budget = _ACTIVE_EXECUTION_BUDGET.get()
-    maximum_deadline = (
-        execution_budget.deadline
-        if execution_budget is not None
-        else progress_grace_deadline
-    )
+    if maximum_deadline is None:
+        maximum_deadline = (
+            execution_budget.deadline
+            if execution_budget is not None
+            else progress_grace_deadline
+        )
+    elif execution_budget is not None:
+        # The caller may provide a narrower stage ceiling (for example, the
+        # planning window before a canonical-finalizer reserve).  Never allow
+        # that ceiling to escape the shared logical deadline.
+        maximum_deadline = min(float(maximum_deadline), execution_budget.deadline)
 
     def runner() -> None:
         cancellation_token = _ACTIVE_TRANSPORT_CANCELLATION.set(cancellation)
