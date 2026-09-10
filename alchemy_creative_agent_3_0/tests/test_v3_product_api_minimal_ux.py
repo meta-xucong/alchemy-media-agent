@@ -219,6 +219,46 @@ def test_public_remote_brain_projection_preserves_runtime_error_class(remote_err
     assert projected["remote_error_class"] == remote_error_class
 
 
+def test_public_remote_brain_projection_preserves_safe_serialization_failure() -> None:
+    projected = V3ProductApiService._public_remote_brain_lifecycle_outcome(
+        {
+            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "state": "blocked",
+            "reason_code": "remote_creative_brain_prompt_signoff_unavailable",
+            "outcome_class": "remote_prompt_signoff_unavailable",
+            "remote_brain_serialization_failure": {
+                "schema_version": "v3_brain_truncated_response_v1",
+                "stage": "provider_prompt_finalize",
+                "transport_error_class": "truncated_response",
+                "error_family": "output_truncated",
+                "json_failure_kind": "output_truncated",
+                "attempts": 2,
+                "json_serialization_recovery_attempted": True,
+                "json_serialization_recovery_succeeded": False,
+                "json_parse_started": False,
+                "json_parse_completed": False,
+                "raw_response": "must not leak",
+                "provider_payload": {"secret": True},
+            },
+        }
+    )
+
+    assert projected["remote_brain_serialization_failure"] == {
+        "schema_version": "v3_brain_truncated_response_v1",
+        "stage": "provider_prompt_finalize",
+        "transport_error_class": "truncated_response",
+        "error_family": "output_truncated",
+        "json_failure_kind": "output_truncated",
+        "attempts": 2,
+        "json_serialization_recovery_attempted": True,
+        "json_serialization_recovery_succeeded": False,
+        "json_parse_started": False,
+        "json_parse_completed": False,
+    }
+    assert "must not leak" not in str(projected)
+    assert "provider_payload" not in str(projected)
+
+
 def _provider_no_pixel_retry_summary() -> dict[str, object]:
     return {
         "executed_count": 0,
@@ -991,6 +1031,39 @@ def test_remote_finalizer_timeout_block_has_closed_lifecycle_failure_on_create_a
         assert "provider.invalid" not in durable_payload
         assert "D:/unsafe" not in durable_payload
         assert "asset_internal_must_not_leak" not in durable_payload
+
+
+def test_blocked_planning_receipt_is_not_reentered_by_ordinary_generate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _ = _service("blocked_planning_generate_guard")
+    service.scenario_runtime = _RemoteFinalizerTimeoutRuntime(
+        service.scenario_runtime,
+        block_stage="plan",
+    )
+    blocked = service.create_job({"user_input": "Create one neutral Character Card body view."})
+    before_record = service.job_store.get(blocked.job_id)
+    assert before_record is not None
+    assert before_record.status == ProductJobStatusValue.BLOCKED
+    assert before_record.planning_result is None
+    assert before_record.generation_result is None
+    before_payload = before_record.request.model_dump(mode="json")
+    before_status = service.get_job(blocked.job_id).model_dump(mode="json")
+    calls: list[object] = []
+
+    def fail_if_reentered(*_args, **_kwargs):  # noqa: ANN001, ANN002
+        calls.append(True)
+        pytest.fail("ordinary Generate must not probe a blocked planning receipt")
+
+    monkeypatch.setattr(service.scenario_runtime, "generate_job", fail_if_reentered)
+
+    returned = service.generate_job(blocked.job_id, {"quality_mode": "strict", "metadata": {}})
+    after_record = service.job_store.get(blocked.job_id)
+    assert after_record is not None
+    assert returned.status == ProductJobStatusValue.BLOCKED
+    assert calls == []
+    assert after_record.request.model_dump(mode="json") == before_payload
+    assert service.get_job(blocked.job_id).model_dump(mode="json") == before_status
 
 
 def test_remote_finalizer_lifecycle_distinguishes_brain_request_from_image_provider_start() -> None:

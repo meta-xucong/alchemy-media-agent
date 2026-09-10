@@ -1088,7 +1088,7 @@ def test_required_remote_truncated_response_is_not_reported_as_json_decode(monke
         "attempts": 2,
         "json_serialization_recovery_attempted": True,
         "json_serialization_recovery_succeeded": False,
-        "json_parse_started": True,
+        "json_parse_started": False,
         "json_parse_completed": False,
     }
     assert "remote_image_set_validation_audit" not in result.audit
@@ -1821,7 +1821,7 @@ def test_remote_brain_stops_after_one_output_token_truncation(monkeypatch) -> No
         "attempts": 2,
         "json_serialization_recovery_attempted": True,
         "json_serialization_recovery_succeeded": False,
-        "json_parse_started": True,
+        "json_parse_started": False,
         "json_parse_completed": False,
     }
 

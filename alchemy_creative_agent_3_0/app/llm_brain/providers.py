@@ -135,6 +135,15 @@ class BrainInvalidJsonResponse(BrainProviderError):
 class BrainOutputTruncated(BrainInvalidJsonResponse):
     """The remote Brain exhausted its transport output budget before JSON completed."""
 
+    def __init__(self, message: str, **kwargs: Any) -> None:
+        # An output-limit signal is raised before the response is handed to
+        # the JSON parser. Enforce that invariant at the exception boundary
+        # so provider implementations and test doubles cannot accidentally
+        # publish it as a parse failure.
+        kwargs["json_parse_started"] = False
+        kwargs["json_parse_completed"] = False
+        super().__init__(message, **kwargs)
+
     def safe_metadata(self) -> dict[str, Any]:
         """Return public-safe truncation facts without model text or prompts."""
 

@@ -3406,6 +3406,15 @@ class V3ProductApiService:
         resume_finalizing_review = bool(generate_request.metadata.pop("_v3_resume_finalizing_review", False))
         if worker_claim and not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
+        if self._blocked_planning_reentry_requires_explicit_resume(
+            record,
+            resume_finalizing_review=resume_finalizing_review,
+            resume_interrupted_mcp_materialization=resume_interrupted_mcp_materialization,
+        ):
+            # A failed planning receipt is terminal until an explicit
+            # continuation contract owns the resume. Ordinary Generate is
+            # not a planning probe and must not erase the original failure.
+            return self._status_from_record(record)
         if record.status == ProductJobStatusValue.FINALIZING:
             checkpoint_status = self._checkpoint_mcp_generation_result(record, record.generation_result)
             if checkpoint_status is not None:
@@ -5586,6 +5595,40 @@ class V3ProductApiService:
             active_attempt_id == background_attempt_id
             and record.status in {ProductJobStatusValue.GENERATING, ProductJobStatusValue.FINALIZING}
         )
+
+    @staticmethod
+    def _blocked_planning_reentry_requires_explicit_resume(
+        record: ProductJobRecord,
+        *,
+        resume_finalizing_review: bool,
+        resume_interrupted_mcp_materialization: bool,
+    ) -> bool:
+        """Keep a blocked, result-less planning receipt terminal.
+
+        A normal POST generate request is only a materialization request for
+        an existing PlanningResult. Re-entering the runtime when planning
+        never produced one can create a second, unrelated failure and
+        overwrite the original Brain evidence. Server-owned MCP and review
+        resume flags remain explicit continuation contracts.
+        """
+
+        if (
+            record.status != ProductJobStatusValue.BLOCKED
+            or record.planning_result is not None
+            or record.generation_result is not None
+        ):
+            return False
+        if resume_finalizing_review or resume_interrupted_mcp_materialization:
+            return False
+        if V3ProductApiService._is_professional_character_card_body_mcp_generation(record):
+            # The first Body MCP call still needs its dedicated planning
+            # required receipt. Once any lifecycle failure exists, keep that
+            # receipt immutable just like every other blocked plan.
+            return isinstance(
+                dict(record.request.metadata or {}).get("generation_lifecycle_failure"),
+                dict,
+            )
+        return not V3ProductApiService._is_submitted_body_mcp_resume(record)
 
     @staticmethod
     def _can_resume_interrupted_mcp_materialization(record: ProductJobRecord) -> bool:
@@ -11295,6 +11338,11 @@ class V3ProductApiService:
         )
         if transport:
             projected["remote_brain_transport_failure"] = transport
+        serialization = cls._public_remote_brain_serialization_failure(
+            outcome.get("remote_brain_serialization_failure")
+        )
+        if serialization:
+            projected["remote_brain_serialization_failure"] = serialization
         budget = cls._public_remote_brain_execution_budget(
             outcome.get("remote_brain_execution_budget") or outcome.get("execution_budget")
         )
@@ -11311,6 +11359,60 @@ class V3ProductApiService:
         if finalizer_lifecycle:
             projected["remote_brain_finalizer_lifecycle"] = finalizer_lifecycle
         return projected
+
+    @classmethod
+    def _public_remote_brain_serialization_failure(cls, value: Any) -> dict[str, Any]:
+        """Project JSON/truncation facts without model text or provider data."""
+
+        if not isinstance(value, dict):
+            return {}
+        schema_version = value.get("schema_version")
+        transport_error_class = value.get("transport_error_class")
+        error_family = value.get("error_family")
+        json_failure_kind = value.get("json_failure_kind")
+        if schema_version == "v3_brain_serialization_failure_v1":
+            if (
+                transport_error_class != "invalid_json_response"
+                or error_family != "json_decode"
+                or json_failure_kind
+                not in {
+                    "empty_json",
+                    "malformed_json",
+                    "missing_complete_marker",
+                    "non_object_json",
+                    "unknown",
+                }
+            ):
+                return {}
+        elif schema_version == "v3_brain_truncated_response_v1":
+            if (
+                transport_error_class != "truncated_response"
+                or error_family != "output_truncated"
+                or json_failure_kind != "output_truncated"
+            ):
+                return {}
+        else:
+            return {}
+        stage = cls._closed_string(value.get("stage"), allowed=_REMOTE_BRAIN_LIFECYCLE_STAGES)
+        attempts = value.get("attempts")
+        if not stage or not isinstance(attempts, int) or isinstance(attempts, bool) or attempts not in {1, 2}:
+            return {}
+        return {
+            "schema_version": schema_version,
+            "stage": stage,
+            "transport_error_class": transport_error_class,
+            "error_family": error_family,
+            "json_failure_kind": json_failure_kind,
+            "attempts": attempts,
+            "json_serialization_recovery_attempted": bool(
+                value.get("json_serialization_recovery_attempted")
+            ),
+            "json_serialization_recovery_succeeded": bool(
+                value.get("json_serialization_recovery_succeeded")
+            ),
+            "json_parse_started": bool(value.get("json_parse_started")),
+            "json_parse_completed": bool(value.get("json_parse_completed")),
+        }
 
     @classmethod
     def _public_remote_brain_transport_failure(cls, value: Any) -> dict[str, Any]:
