@@ -1,6 +1,6 @@
 # V3 Mode Execution, Module Activation, and Result Projection Closure
 
-Status: implementation complete; real-provider/VPS revalidation remains a separate acceptance phase
+Status: implementation complete; VPS acceptance rerun required after the 2026-09-10 audit correction
 
 ## 1. Scope and objective
 
@@ -242,13 +242,80 @@ environment cannot collect the legacy Doc290 suite because its virtualenv is
 missing `playwright`; this is an environment dependency failure, not a
 product assertion failure. Compileall and `git diff --check` passed.
 
-### Remaining acceptance dependency
+## 7. Controlled real-provider acceptance (2026-09-10)
 
-No new VPS mutation or remote Provider generation was performed in this
-documentation/code/test phase. Doc296 remains the latest
-guarded real-image acceptance for the original comparison prompt; a new
-original-prompt render and VPS deployment should be run as an explicitly
-authorized follow-up after this commit is available. A passing unit-test phase
-is not a substitute for that visual acceptance: total production completion
-still requires canonical prompt comparison, module activation review, pixel
-review, commit/push verification, and VPS health confirmation.
+The previously incomplete acceptance was resumed after commit
+`b6533903877ddd4f4a78e8bef0bf4b56ae6f9756` was deployed to the governed VPS
+release. The exact comparison prompt was read from the VPS project's
+`project.json` and verified before planning:
+
+- project: `project_200ef57976` (the woman crouching in a warehouse
+  supermarket to pick up an amber bottle);
+- prompt: 2,196 UTF-8 characters, 5,420 bytes;
+- prompt SHA-256: `f37928b680e56b7258583f0ab27b4232ea5bafe68703d3fb8628bde3b6a5d2d7`;
+- generation signal: `v3_user_initiated_generation=true`, so the run could not
+  be mistaken for an idempotent replay of an old terminal job;
+- job: `job_28e023b228`; planning 268.442 seconds, generation 561.704 seconds;
+- result IDs: `planning_result_6b1b5ccc82`,
+  `generation_result_6b1b5ccc82`, `asset_pack_856ae3f705`.
+
+The run completed with two requested and two delivery-ready outputs. The
+server-owned audit reported `delivery_suite`, requested count `2`, active
+contract, and `suite_direction_active=true`. The public-safe activation audit
+reported `activation_mode=enforced`, the required baseline plus suite
+direction active, and `inactive=[]`; optional portrait identity and scene
+continuity were also active for this record. The finalizer produced four
+canonical prompt receipts (two initial candidates and two bounded retry
+outputs), all approved, complete, semantically complete, and marked
+`user_direction_lossless=true`:
+
+| Output | Prompt length | Prompt SHA-256 | Final image SHA-256 |
+| --- | ---: | --- | --- |
+| initial 1 | 651 | `97d5b506287fe30f6a1d79263bba9c216a9f465ccee49674066abd9369ae6315` | — |
+| initial 2 | 519 | `6ef9abc5fd03a0f8bfa547fcbdaf1abe24d76049a0f72817e742af35a74c9dfa` | — |
+| retry/final 1 | 687 | `a189376b1e7c7624217b29e4114d0860d415d5e94ac67833c85463859da5d5f2` | `b8a56e2b88a493e8989e5152496401082142b2584d24c5d93e177726c385e0cb` |
+| retry/final 2 | 390 | `f1345a40649e9462437998415e09c63e15a43e1ca18413685e1939aea7642e78` | `cc405f54ee4fec03edf84072c91c8be54037ea2047f4c79cdf717842dc84dd0e` |
+
+Both final outputs were 1024x1536, passed hybrid and real-pixel review, had
+no detected issues, were recommended for delivery, and made the automatic
+delivery surface ready. One bounded visual retry was executed for the initial
+composition/uncanny-detail findings; retry records remained append-only and
+the public result contained only the two final outputs. Visual inspection
+confirmed the requested adult East Asian woman, low crouch, amber bottle held
+with both hands, red warehouse shelving, aisle context, bag, heels, and EXIT
+sign, with a credible phone-photo look.
+
+The first exploratory POST without the fresh-generation signal intentionally
+reused the existing terminal job under the product's idempotency contract; it
+was preserved as evidence and excluded from acceptance. The official fresh
+signal then created the new job above. This confirms the earlier apparent
+"no response" behavior was an invocation/idempotency distinction, not a
+remaining Brain or Aiself prompt-loss defect.
+
+The acceptance was executed inside the deployed container with the real
+DeepSeek Brain (`deepseek-v4-pro`), real image provider, Vision review, and
+V3 storage. `VEYRA_AUTH_ENABLED=false` was scoped to the isolated TestClient
+acceptance process only; the running public service remained protected. The
+post-acceptance VPS health check reported all three V2 services active, V1
+health 200, V2 health 200, and public V2 health 200.
+
+Evidence: `.controlled-validation/doc297-vps-real-20260910/run-output.txt` and
+the final-output thumbnails in the same append-only evidence directory.
+
+## 8. Audit correction and rerun gate
+
+The independent final audit found that the first remote run was not yet a
+release-grade acceptance receipt. Its compact evidence proved the lifecycle,
+counts, review gate, and final delivery, but did not prove the real Brain and
+Provider flags, bind each final output to its final prompt and output index, or
+bind each output to its mode role. It also reproduced a P2 shadow/legacy edge
+case in `_authoritative_mode_execution_projection`: an empty
+`provider_projection.capability_projection` could return an uninitialized
+local. The minimal correction initializes that projection to an empty mapping
+while preserving atomic no-fallback behavior; a focused regression test was
+added. The prior remote output remains provisional evidence and is not counted
+as final acceptance until the corrected release is deployed and the evidence
+is re-collected with these bindings.
+
+The legacy Doc290 collection remains unavailable in the current local
+environment solely because its virtualenv lacks `playwright`.

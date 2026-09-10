@@ -7881,6 +7881,7 @@ class V3ProductApiService:
             # Shadow/legacy envelopes may have a provider capability
             # projection.  It is still consumed atomically, never merged with
             # another source.
+            projection: dict[str, Any] = {}
             if isinstance(ledger_projection, dict):
                 capability_projection = ledger_projection.get("capability_projection")
                 if isinstance(capability_projection, dict) and capability_projection:

@@ -377,6 +377,22 @@ def test_doc297_enforced_empty_ledger_does_not_leak_dormant_outer_visual_cluster
     assert projected["mode_execution_audit"]["projection_status"] == "missing"
 
 
+def test_doc297_shadow_empty_ledger_projection_is_a_safe_empty_projection():
+    envelope = _enforced_envelope({})
+    envelope["activation_mode"] = "shadow"
+    envelope["activation_plan"]["activation_mode"] = "shadow"
+    envelope["provider_projection"] = {
+        "visual_cluster": {
+            "mode_execution_policy": {"mode": "delivery_suite"},
+        }
+    }
+    result = _result(metadata={"capability_execution_envelope": envelope})
+
+    projection = V3ProductApiService()._authoritative_mode_execution_projection(result)  # noqa: SLF001
+
+    assert projection == {}
+
+
 def test_doc297_incomplete_canonical_prompt_does_not_override_blocked_review():
     result = _result(
         metadata={
