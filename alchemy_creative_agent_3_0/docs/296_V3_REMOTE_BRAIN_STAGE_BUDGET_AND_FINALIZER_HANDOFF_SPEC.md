@@ -276,7 +276,28 @@ or treated as a successful run.
 
 ### Release verification
 
-Release SHA, GitHub push verification, and governed VPS release/health facts
-are appended after the candidate commit and final release deployment. The
-final record must show that the VPS symlink, repository HEAD, and running
-service release all resolve to the same pushed SHA.
+The candidate implementation commit was pushed to GitHub and deployed through
+the governed release-layout script:
+
+- candidate GitHub SHA: `1a1ac3168692b96682569037344edb467f42afc6`;
+- GitHub `origin/main`: verified at the same SHA;
+- VPS release path:
+  `/opt/alchemy-media-agent-releases/v3-release-governed-20260910T031333Z-1a1ac3168692`;
+- VPS release worktree HEAD: verified at the candidate SHA;
+- release worktree status: clean;
+- all three services (`alchemy-v2-api.service`,
+  `alchemy-v2-worker.service`, and `alchemy-v2-sync-worker.service`):
+  `active`;
+- running service cwd for each unit: the candidate release's
+  `custom_media_agent_2_0` directory;
+- local `/healthz`, local `/api/v2/health`, and public
+  `https://alchemy.aiself.vip/api/v2/health`: all returned HTTP success and
+  the expected V2 isolation payload.
+
+The remote repository's historical `/opt/alchemy-media-agent-repository`
+main worktree reports pre-existing deletion entries; it was not modified or
+used as the release truth. The clean detached release worktree, its symlink,
+and service cwd are the governed runtime authorities. After this evidence
+appendix is committed, the same release procedure is rerun against the final
+GitHub `origin/main` SHA so the VPS remains exactly aligned with the final
+documentation commit.
