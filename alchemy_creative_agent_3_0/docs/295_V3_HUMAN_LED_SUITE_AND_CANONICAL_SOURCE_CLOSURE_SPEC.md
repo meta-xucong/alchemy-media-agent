@@ -1,8 +1,7 @@
 # V3 Human-Led Suite and Canonical Source Closure
 
-Status: implementation candidate; acceptance requires focused regression tests,
-independent audit, local real-image validation, GitHub push, and governed VPS
-release verification.
+Status: implementation accepted in local validation; GitHub push and governed
+VPS release verification are recorded below.
 
 ## 1. Scope and evidence
 
@@ -119,3 +118,89 @@ release path/health verification, and any remaining external dependency.
 Task routing uses `multi-agent-dev` contract `v1.3.1-route-guard`, complexity
 gate `ESCALATE_REQUIRED`, one mainline writer, and an independent read-only
 audit after the candidate version is frozen.
+
+## 6. Implementation and acceptance record
+
+### Implemented correction
+
+The repair was delivered on the mainline in three bounded commits:
+
+- `8d6cf558` — correct General human-led suite precedence and replace the
+  multi-output integrity singleton assumption with output-aware selection.
+- `070fd871` — close the Brain canonical-record contract: strict output-index
+  binding, valid same-record user-direction integrity, General aliases for
+  `person`/`human`/`character`, runtime-binding reconciliation, and one shared
+  typed product-fact authority.
+- `28b4d332` — fail closed for malformed canonical prompt types and loose
+  string-valued Character Card slot-delta flags; add regression coverage.
+
+No prompt threshold was relaxed, no local prompt author was added, and no
+review threshold or General vertical deliverable map was changed.
+
+### Audit and regression evidence
+
+The independent audit rounds were run as read-only work. The first frozen
+candidate was intentionally rejected by the auditors for three defects:
+provider receipt closure, inconsistent human vocabulary, and duplicated
+product-fact authority; a second audit also found the pre-Brain product role
+binding could override a Brain-typed visible person. Those findings were
+closed before the final commit. The final fixed diff was then checked against
+the same call path and exercised by these offline regression groups (external
+Brain and Vision disabled):
+
+| Scope | Result |
+| --- | --- |
+| Doc293 + Doc294 + Doc295 + Provider output | `110 passed` |
+| Project Mode | `78 passed` |
+| General role director + de-productization + prompt/replay | `36 passed` |
+| Foundation visual/reference/LLM ownership | `25 passed` |
+| Frontend generation-mode repair + desktop/mobile contract | `23 passed` |
+| Python compileall, Node desktop/mobile syntax, `git diff --check` | passed |
+
+The Doc290 lean-request suite could not be collected in the local V3 virtual
+environment because its transitive legacy fixture imports `playwright`, which
+is not installed there. This is an environment dependency, not a failure from
+the changed files; the focused Brain/Provider suites above passed.
+
+### Local real-image acceptance
+
+The exact original user direction was read from
+`.media_storage/v3_projects/project_f49cb9b5da/project.json`, not retyped:
+
+- prompt length: `2196` characters;
+- SHA-256: `f37928b680e56b7258583f0ab27b4232ea5bafe68703d3fb8628bde3b6a5d2d7`;
+- valid-path real generation ran on `070fd871`; `28b4d332` only adds
+  fail-closed handling for malformed receipts and leaves valid receipt
+  forwarding unchanged;
+- replay: `general_template`, `campaign_poster`, `delivery_suite`, two outputs;
+- project/job: `project_df88c957e6` / `job_0a78458a76`;
+- outputs: `v3_output_61e3bb20eef74ab79954` and
+  `v3_output_f935a5b7092f43429275`.
+
+Both Brain canonical records were `approved + complete + preserved`, with
+canonical prompt lengths `3093` and `2367`. Both Provider audits reported
+`prompt_source=remote_brain_canonical`, `user_direction_lossless=true`, and
+`user_direction_semantic_status=preserved`. The active shared capability set
+was `visual_grammar`, `universal_visual_quality`, `commercial_quality`,
+`human_realism`, and `suite_direction`; no E-Commerce capability was loaded.
+
+The two real outputs were distinct: the first is a full-body environmental
+hero frame showing the supermarket aisle, crouched pose, bottle, shelves and
+heels; the second is a closer subject/detail frame with the same person,
+wardrobe, bottle and aisle context. The hybrid pixel review verified both with
+`status=pass`, `verification_state=verified`, no detected issues, and delivered
+exactly two outputs. The provider returned its standard vertical `1024x1536`
+canvas; the user direction's 3:4 requirement remained present in both Brain
+prompts, while the replay did not include an explicit image-size option.
+
+Local evidence files:
+
+- `.controlled-validation/doc295-local-real-20260910-rerun/result.json`
+- `.controlled-validation/doc295-local-real-20260910-rerun/output-1-v3_output_61e3bb20eef74ab79954.png`
+- `.controlled-validation/doc295-local-real-20260910-rerun/output-2-v3_output_f935a5b7092f43429275.png`
+
+### Release record
+
+- final code audit commit: `28b4d332aa907b0aeb9cb26c2050491ca88ad1aa`;
+- GitHub push: pending at document authoring time;
+- VPS release/health: pending at document authoring time.
