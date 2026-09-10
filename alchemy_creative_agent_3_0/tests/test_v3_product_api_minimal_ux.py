@@ -32,6 +32,7 @@ from alchemy_creative_agent_3_0.app.scenario_runtime.contracts import (
     ScenarioRuntimeResult,
     ScenarioRuntimeStatus,
 )
+from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
 from alchemy_creative_agent_3_0.app.schemas import IndustryCategory, Platform
 
 
@@ -259,6 +260,98 @@ def test_public_remote_brain_projection_preserves_safe_serialization_failure() -
     assert "provider_payload" not in str(projected)
 
 
+def test_public_projection_preserves_safe_capability_activation_failure() -> None:
+    runtime = ScenarioRuntime()
+    resolution = runtime.scenario_registry.resolve({"scenario_id": "general_creative"})
+    runtime_result = ScenarioRuntimeResult(
+        status=ScenarioRuntimeStatus.BLOCKED,
+        scenario_resolution=resolution,
+        metadata={
+            "capability_activation_error_code": "general_variation_suite_direction_not_active",
+            "raw_exception": "must not leak",
+        },
+    )
+
+    projected = V3ProductApiService._generation_lifecycle_failure_from_runtime_result(runtime_result)
+
+    assert projected == {
+        "schema_version": "v3_generation_lifecycle_failure_v1",
+        "status": "blocked",
+        "owner": "v3_product_api_runtime",
+        "failure_family": "capability_activation",
+        "failure_code": "capability_activation_blocked",
+        "reason_code": "capability_activation_blocked",
+        "provider_request_started": False,
+    }
+    assert "must not leak" not in str(projected)
+    assert V3ProductApiService._generation_lifecycle_failure_metadata(projected) == {
+        "generation_lifecycle_failure": projected,
+    }
+
+
+def test_local_capability_failure_persists_without_assuming_remote_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("V3_LLM_BRAIN_REMOTE_ENABLED", "false")
+
+    planning_service, _, _ = _service("local_capability_failure_create")
+    planning_service.scenario_runtime = _LocalCapabilityActivationFailureRuntime(
+        planning_service.scenario_runtime
+    )
+    planning_blocked = planning_service.create_job(
+        {
+            "user_input": "Create a coherent two-image supermarket photo set.",
+            "scenario_selection": {
+                "scenario_id": "general_creative",
+                "parameters": {"requested_image_count": 2},
+            },
+            "metadata": {"requested_image_count": 2},
+        }
+    )
+
+    assert planning_blocked.status == ProductJobStatusValue.BLOCKED
+    assert planning_blocked.metadata["generation_lifecycle_failure"] == {
+        "schema_version": "v3_generation_lifecycle_failure_v1",
+        "status": "blocked",
+        "owner": "v3_product_api_runtime",
+        "failure_family": "capability_activation",
+        "failure_code": "capability_activation_blocked",
+        "reason_code": "capability_activation_blocked",
+        "provider_request_started": False,
+    }
+    assert "remote_creative_brain_outcome" not in planning_blocked.metadata
+    assert "private activation detail" not in planning_blocked.model_dump_json()
+
+    generation_service, _, _ = _service("local_capability_failure_generate")
+    generated_candidate = generation_service.create_job(
+        {"user_input": "Create one clean still-life image."}
+    )
+    generation_service.scenario_runtime = _LocalCapabilityActivationFailureRuntime(
+        generation_service.scenario_runtime
+    )
+    generation_blocked = generation_service.generate_job(
+        generated_candidate.job_id,
+        {"quality_mode": "strict"},
+    )
+
+    assert generation_blocked.status == ProductJobStatusValue.BLOCKED
+    assert generation_blocked.metadata["generation_lifecycle_failure"] == planning_blocked.metadata[
+        "generation_lifecycle_failure"
+    ]
+    assert "remote_creative_brain_outcome" not in generation_blocked.metadata
+
+    for service, status in (
+        (planning_service, planning_blocked),
+        (generation_service, generation_blocked),
+    ):
+        record = service.job_store.get(status.job_id)
+        assert record is not None
+        assert record.request.metadata["generation_lifecycle_failure"] == status.metadata[
+            "generation_lifecycle_failure"
+        ]
+        assert "remote_creative_brain_outcome" not in record.request.metadata
+
+
 def _provider_no_pixel_retry_summary() -> dict[str, object]:
     return {
         "executed_count": 0,
@@ -329,6 +422,37 @@ class _RemoteFinalizerTimeoutRuntime:
                 "remote_creative_brain_prompt_signoff_unavailable"
             ],
             metadata={"remote_creative_brain_outcome": self.outcome},
+        )
+
+
+class _LocalCapabilityActivationFailureRuntime:
+    def __init__(self, base_runtime: object) -> None:
+        self.scenario_registry = base_runtime.scenario_registry
+
+    def plan_job(self, payload):  # noqa: ANN001, ANN201
+        selection = payload.get("scenario_selection", {}) if isinstance(payload, dict) else {}
+        resolution = self.scenario_registry.resolve(selection)
+        return ScenarioRuntimeResult(
+            status=ScenarioRuntimeStatus.BLOCKED,
+            scenario_resolution=resolution,
+            warnings=["capability_activation_failed: general_variation_suite_direction_not_active"],
+            metadata={
+                "capability_activation_error_code": "general_variation_suite_direction_not_active",
+                "raw_exception": "private activation detail must not leak",
+            },
+        )
+
+    def generate_job(self, payload, **_kwargs):  # noqa: ANN001, ANN201
+        selection = payload.get("scenario_selection", {}) if isinstance(payload, dict) else {}
+        resolution = self.scenario_registry.resolve(selection)
+        return ScenarioRuntimeResult(
+            status=ScenarioRuntimeStatus.BLOCKED,
+            scenario_resolution=resolution,
+            warnings=["capability_activation_failed: general_variation_suite_direction_not_active"],
+            metadata={
+                "capability_activation_error_code": "general_variation_suite_direction_not_active",
+                "raw_exception": "private activation detail must not leak",
+            },
         )
 
 

@@ -6050,6 +6050,15 @@ class ScenarioRuntime:
         intent = brain_result.capability_activation_intent
         if profile is None or intent is None:
             raise CapabilityActivationError("Brain did not produce a valid capability activation profile")
+        intent = self._apply_runtime_required_capability_bindings(
+            request,
+            resolution,
+            intent,
+        )
+        # Persist the server-owned augmentation alongside the plan.  The
+        # remote Brain remains the semantic author, but it cannot weaken a
+        # variation contract that the runtime froze before the Brain call.
+        brain_result.capability_activation_intent = intent
         plan = self.capability_activation_planner.plan(
             task_profile=profile,
             intent=intent,
@@ -6066,6 +6075,84 @@ class ScenarioRuntime:
                 "required capability is unavailable or not safely activated: " + ", ".join(missing_required)
             )
         return plan
+
+    def _apply_runtime_required_capability_bindings(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+        intent: CapabilityActivationIntent,
+    ) -> CapabilityActivationIntent:
+        """Promote only server-owned contracts to required capabilities.
+
+        General multi-output variation is frozen before the remote Brain runs.
+        The Brain still owns creative direction, but an omitted or even
+        negatively-worded ``suite_direction`` proposal must not deactivate
+        the runtime contract that the user selected.  This narrow bridge is
+        intentionally outside the General template policy so single-image
+        General jobs and specialized templates remain neutral.
+        """
+
+        required_ids = self._runtime_required_capability_ids(request, resolution)
+        if not required_ids:
+            return intent
+        required_set = set(required_ids)
+        requests: list[RequestedCapability] = []
+        seen: set[str] = set()
+        for item in intent.requested_capabilities:
+            if item.capability_id in required_set:
+                item = item.model_copy(
+                    update={
+                        "activation_mode": "required",
+                        "reason_codes": self._dedupe_preserve_order(
+                            [*item.reason_codes, "runtime_bound_variation_contract"]
+                        ),
+                        "confidence": 1.0,
+                    }
+                )
+            requests.append(item)
+            seen.add(item.capability_id)
+        for capability_id in required_ids:
+            if capability_id in seen:
+                continue
+            requests.append(
+                RequestedCapability(
+                    capability_id=capability_id,
+                    activation_mode="required",
+                    reason_codes=["runtime_bound_variation_contract"],
+                    confidence=1.0,
+                )
+            )
+        # A remote rejection is not retained when the runtime owns a valid
+        # frozen contract for that same capability; retaining both would make
+        # the typed intent internally contradictory.
+        rejected = [
+            item
+            for item in intent.rejected_capabilities
+            if item.capability_id not in required_set
+        ]
+        return intent.model_copy(
+            update={
+                "requested_capabilities": requests,
+                "rejected_capabilities": rejected,
+            }
+        )
+
+    def _runtime_required_capability_ids(
+        self,
+        request: ScenarioRuntimeRequest,
+        resolution,
+    ) -> list[str]:
+        """Return capabilities required by a frozen runtime contract only."""
+
+        if request.metadata.get("variation_execution_contract_enforced") is not True:
+            return []
+        if (
+            str(resolution.manifest.scenario_id or "").strip() != "general_creative"
+            or str(self._template_id(request, resolution) or "").strip() != "general_template"
+            or self._requested_image_count_for_brain(request) <= 1
+        ):
+            return []
+        return ["suite_direction"]
 
     @staticmethod
     def _capability_activation_plan_metadata(
@@ -6477,6 +6564,11 @@ class ScenarioRuntime:
     def _activation_blocked_result(self, request: ScenarioRuntimeRequest, resolution, exc: Exception) -> ScenarioRuntimeResult:
         remote_brain_outcome = getattr(exc, "remote_creative_brain_outcome", None)
         required_failures = self._required_capability_ids(request)
+        error_code = (
+            "general_variation_suite_direction_not_active"
+            if str(exc).strip() == "general_variation_suite_direction_not_active"
+            else "capability_activation_error"
+        )
         capability_run = CapabilityRunResult(
             status=CapabilityRunStatus.FAILED,
             warnings=[
@@ -6498,6 +6590,7 @@ class ScenarioRuntime:
                 **self._runtime_metadata(request, "blocked"),
                 "capability_activation_mode": self._capability_activation_mode(request),
                 "capability_activation_error": type(exc).__name__,
+                "capability_activation_error_code": error_code,
                 **(
                     {"remote_creative_brain_outcome": dict(remote_brain_outcome)}
                     if isinstance(remote_brain_outcome, dict)
@@ -7423,6 +7516,10 @@ class ScenarioRuntime:
         planned = specialized.required_capability_ids if specialized is not None else []
         if request.metadata.get("professional_anchor_pack_preparation") is True:
             planned = [*planned, "portrait_identity", "reference_channel_policy", "human_realism"]
+        planned = [
+            *planned,
+            *self._runtime_required_capability_ids(request, resolution),
+        ]
         return self._dedupe_preserve_order([str(item) for item in [*explicit, *planned] if str(item).strip()])
 
     def _uploaded_assets(self, request: ScenarioRuntimeRequest) -> list[UploadedAssetInfo]:

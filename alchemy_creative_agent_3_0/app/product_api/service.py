@@ -206,6 +206,11 @@ _REMOTE_BRAIN_LIFECYCLE_STAGES = {
     "unknown",
 }
 
+_CAPABILITY_ACTIVATION_FAILURE_CODES = {
+    "capability_activation_error",
+    "general_variation_suite_direction_not_active",
+}
+
 _REMOTE_BRAIN_TRANSPORT_ERROR_CLASSES = {
     "timeout",
     "protocol_error",
@@ -1954,11 +1959,9 @@ class V3ProductApiService:
             generation_lifecycle_failure = self._generation_lifecycle_failure_from_runtime_result(runtime_result)
             create_request.metadata = self._without_raw_remote_brain_outcome(create_request.metadata)
             if generation_lifecycle_failure:
-                safe_remote_outcome = generation_lifecycle_failure["remote_creative_brain_outcome"]
                 create_request.metadata = {
                     **dict(create_request.metadata or {}),
-                    "generation_lifecycle_failure": generation_lifecycle_failure,
-                    "remote_creative_brain_outcome": safe_remote_outcome,
+                    **self._generation_lifecycle_failure_metadata(generation_lifecycle_failure),
                 }
         self._bind_capability_plan_provenance(create_request, job_id)
         self._bind_frozen_remote_creative_brain(create_request, runtime_result)
@@ -3620,11 +3623,9 @@ class V3ProductApiService:
             )
             record.request.metadata = self._without_raw_remote_brain_outcome(record.request.metadata)
             if generation_lifecycle_failure:
-                safe_remote_outcome = generation_lifecycle_failure["remote_creative_brain_outcome"]
                 record.request.metadata = {
                     **dict(record.request.metadata),
-                    "generation_lifecycle_failure": generation_lifecycle_failure,
-                    "remote_creative_brain_outcome": safe_remote_outcome,
+                    **self._generation_lifecycle_failure_metadata(generation_lifecycle_failure),
                 }
             record.warnings.extend(generation_runtime_result.warnings)
             record.lifecycle = self._build_lifecycle(record)
@@ -11265,29 +11266,54 @@ class V3ProductApiService:
 
         metadata = dict(getattr(runtime_result, "metadata", {}) or {})
         remote_outcome = metadata.get("remote_creative_brain_outcome")
-        if not isinstance(remote_outcome, dict):
-            return None
-        safe_remote_outcome = cls._public_remote_brain_lifecycle_outcome(remote_outcome)
-        if not safe_remote_outcome:
-            return None
-        reason_code = str(safe_remote_outcome.get("reason_code") or "").strip()
-        if not reason_code:
-            return None
-        return {
-            "schema_version": "v3_generation_lifecycle_failure_v1",
-            "status": "blocked",
-            "owner": "v3_product_api_runtime",
-            "failure_family": "remote_creative_brain",
-            "failure_code": reason_code,
-            "reason_code": reason_code,
-            "provider_request_started": False,
-            **(
-                {"remote_brain_request_started": safe_remote_outcome["remote_brain_request_started"]}
-                if isinstance(safe_remote_outcome.get("remote_brain_request_started"), bool)
-                else {}
-            ),
-            "remote_creative_brain_outcome": safe_remote_outcome,
-        }
+        if isinstance(remote_outcome, dict):
+            safe_remote_outcome = cls._public_remote_brain_lifecycle_outcome(remote_outcome)
+            if safe_remote_outcome:
+                reason_code = str(safe_remote_outcome.get("reason_code") or "").strip()
+                if reason_code:
+                    return {
+                        "schema_version": "v3_generation_lifecycle_failure_v1",
+                        "status": "blocked",
+                        "owner": "v3_product_api_runtime",
+                        "failure_family": "remote_creative_brain",
+                        "failure_code": reason_code,
+                        "reason_code": reason_code,
+                        "provider_request_started": False,
+                        **(
+                            {"remote_brain_request_started": safe_remote_outcome["remote_brain_request_started"]}
+                            if isinstance(safe_remote_outcome.get("remote_brain_request_started"), bool)
+                            else {}
+                        ),
+                        "remote_creative_brain_outcome": safe_remote_outcome,
+                    }
+        activation_error_code = cls._closed_string(
+            metadata.get("capability_activation_error_code"),
+            allowed=_CAPABILITY_ACTIVATION_FAILURE_CODES,
+        )
+        if activation_error_code:
+            return {
+                "schema_version": "v3_generation_lifecycle_failure_v1",
+                "status": "blocked",
+                "owner": "v3_product_api_runtime",
+                "failure_family": "capability_activation",
+                # Keep the internal activation code out of the beginner-facing
+                # projection.  It remains available in private diagnostics;
+                # public status receives one stable, non-creative category.
+                "failure_code": "capability_activation_blocked",
+                "reason_code": "capability_activation_blocked",
+                "provider_request_started": False,
+            }
+        return None
+
+    @staticmethod
+    def _generation_lifecycle_failure_metadata(failure: dict[str, Any]) -> dict[str, Any]:
+        """Persist a safe failure and only attach a remote receipt when present."""
+
+        metadata = {"generation_lifecycle_failure": dict(failure)}
+        safe_remote_outcome = failure.get("remote_creative_brain_outcome")
+        if isinstance(safe_remote_outcome, dict):
+            metadata["remote_creative_brain_outcome"] = dict(safe_remote_outcome)
+        return metadata
 
     @staticmethod
     def _without_raw_remote_brain_outcome(metadata: dict[str, Any] | None) -> dict[str, Any]:
