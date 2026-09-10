@@ -503,6 +503,23 @@ class GenerationProvider:
                 # record before the execution envelope is frozen.
                 role = dict(specialized_contract)
                 role_metadata = role.get("metadata") if isinstance(role.get("metadata"), dict) else {}
+                if str(projection.get("template_id") or "").strip() == "general_template":
+                    # General multi-output mode has two identities by design:
+                    # the asset-series view exposes the human-readable Doc59
+                    # role, while the Provider candidate is bound to the
+                    # opaque TemplateDeliverable id.  Keep the semantic role
+                    # in metadata and make the output index explicit so
+                    # Product API can verify the binding without guessing.
+                    role["role_key"] = str(item.get("deliverable_id") or f"general_output_{index}")
+                    role["index"] = index
+                    role["metadata"] = {
+                        **dict(role_metadata),
+                        "source": "resolved_constraint_ledger",
+                        "template_role_contract": True,
+                        "static_recipe_present": False,
+                        "semantic_role_key": metadata.get("specialized_role_key"),
+                    }
+                    return role
                 role["role_key"] = str(metadata.get("specialized_role_key") or role["role_key"])
                 role["metadata"] = {
                     **dict(role_metadata),
@@ -523,18 +540,27 @@ class GenerationProvider:
                         "remote_image_intent_bound": True,
                     }
                 return role
+            is_general_template = str(projection.get("template_id") or "").strip() == "general_template"
             return {
                 "role_key": str(
-                    metadata.get("specialized_role_key")
+                    (item.get("deliverable_id") or f"general_output_{index}")
+                    if is_general_template
+                    else metadata.get("specialized_role_key")
                     or item.get("deliverable_id")
                     or f"general_output_{index}"
                 ),
+                "index": index,
                 "label": f"Output {index}",
                 "purpose": direction,
                 "prompt_pressure": direction,
                 "metadata": {
                     "source": "resolved_constraint_ledger",
                     "static_recipe_present": False,
+                    **(
+                        {"semantic_role_key": metadata.get("specialized_role_key")}
+                        if is_general_template
+                        else {}
+                    ),
                     **dict(metadata),
                 },
             }

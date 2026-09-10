@@ -6739,28 +6739,80 @@ class V3ProductApiService:
     def _mode_review_candidates(self, result: PlanningResult) -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []
         assets_by_id = {asset.asset_id: asset for asset in result.series_plan.assets}
-        for packaged in result.asset_pack.assets:
-            candidate_metadata = packaged.metadata.get("candidate_metadata")
-            if not isinstance(candidate_metadata, dict):
-                candidate_metadata = {}
+        for ordinal, packaged in enumerate(result.asset_pack.assets, 1):
             asset_spec = assets_by_id.get(packaged.asset_id)
             asset_metadata = dict(asset_spec.metadata) if asset_spec else dict(packaged.metadata.get("asset_metadata") or {})
-            recipe = (
-                candidate_metadata.get("mode_role_recipe")
-                or asset_metadata.get("mode_role_recipe")
-                or packaged.metadata.get("mode_role_recipe")
+            raw_candidate_metadata = (
+                dict(packaged.metadata.get("candidate_metadata") or {})
+                if packaged.metadata
+                else {}
             )
+            output_index = self._output_index_for_packaged(
+                asset_spec,
+                packaged,
+                raw_candidate_metadata,
+                asset_metadata,
+                ordinal,
+            )
+            if (
+                not self._mode_role_recipe_matches_output_index(
+                    raw_candidate_metadata.get("mode_role_recipe"),
+                    output_index,
+                )
+                and isinstance(asset_metadata.get("mode_role_recipe"), dict)
+                and self._mode_role_recipe_matches_output_index(
+                    asset_metadata.get("mode_role_recipe"),
+                    output_index,
+                )
+            ):
+                # Asset metadata is a valid source only after it is checked
+                # against the server-owned output position below.
+                raw_candidate_metadata["mode_role_recipe"] = dict(asset_metadata["mode_role_recipe"])
+            candidate_metadata = self._project_candidate_metadata_from_result(
+                result,
+                raw_candidate_metadata,
+                output_index=output_index,
+            )
+            review_asset_metadata = dict(asset_metadata)
+            if not self._mode_role_recipe_matches_output_index(
+                review_asset_metadata.get("mode_role_recipe"),
+                output_index if type(output_index) is int else candidate_metadata.get("output_index"),
+            ):
+                for key in (
+                    "mode_role_recipe",
+                    "mode_role_key",
+                    "mode_role_label",
+                    "mode_role_purpose",
+                    "role_specific_prompt_pressure",
+                ):
+                    review_asset_metadata.pop(key, None)
+            bound_index = output_index if type(output_index) is int else candidate_metadata.get("output_index")
+            recipe = candidate_metadata.get("mode_role_recipe")
+            recipe_bound = self._mode_role_recipe_matches_output_index(recipe, bound_index)
+            review_candidate_metadata = dict(candidate_metadata)
+            if not recipe_bound:
+                recipe = {}
+                for key in (
+                    "mode_role_recipe",
+                    "mode_role_key",
+                    "mode_role_label",
+                    "mode_role_purpose",
+                    "role_specific_prompt_pressure",
+                ):
+                    review_candidate_metadata.pop(key, None)
             payloads.append(
                 {
                     "candidate_id": packaged.metadata.get("selected_candidate_id"),
                     "asset_id": packaged.asset_id,
                     "output_id": candidate_metadata.get("output_id"),
                     "mode_role_recipe": recipe if isinstance(recipe, dict) else {},
-                    "mode_role_key": candidate_metadata.get("mode_role_key") or asset_metadata.get("mode_role_key"),
-                    "mode_role_label": candidate_metadata.get("mode_role_label") or asset_metadata.get("mode_role_label"),
+                    "mode_role_key": review_candidate_metadata.get("mode_role_key")
+                    or review_asset_metadata.get("mode_role_key"),
+                    "mode_role_label": review_candidate_metadata.get("mode_role_label")
+                    or review_asset_metadata.get("mode_role_label"),
                     "requested_image_size": candidate_metadata.get("requested_image_size"),
                     "aspect_ratio": packaged.aspect_ratio,
-                    "metadata": {**asset_metadata, **candidate_metadata},
+                    "metadata": {**review_asset_metadata, **review_candidate_metadata},
                 }
             )
         return payloads
@@ -7697,18 +7749,785 @@ class V3ProductApiService:
     def _activation_plan_from_result(self, result: PlanningResult) -> dict[str, Any]:
         creative_job = getattr(result, "creative_job", None)
         creative_job_metadata = getattr(creative_job, "metadata", {})
-        for source in (getattr(result, "metadata", {}), creative_job_metadata):
+        sources = (getattr(result, "metadata", {}), creative_job_metadata)
+        # A recovery/result view can retain a stale direct plan while the
+        # server-frozen envelope is stored on the creative job.  Envelopes
+        # always win over compatibility copies, regardless of storage view.
+        for source in sources:
             if not isinstance(source, dict):
                 continue
             envelope = source.get("capability_execution_envelope")
             if isinstance(envelope, dict) and isinstance(envelope.get("activation_plan"), dict):
                 return dict(envelope["activation_plan"])
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
             plan = source.get("capability_activation_plan")
             if isinstance(plan, dict):
                 return dict(plan)
         cluster = self._visual_cluster_metadata_from_result(result)
         summary = cluster.get("capability_activation_plan_summary") if isinstance(cluster, dict) else None
         return dict(summary) if isinstance(summary, dict) else {}
+
+    @staticmethod
+    def _projection_value_is_non_empty(value: Any) -> bool:
+        if value is None or value == "":
+            return False
+        if isinstance(value, (dict, list, tuple, set)):
+            return bool(value)
+        return True
+
+    @staticmethod
+    def _capability_execution_envelope_from_result(result: PlanningResult) -> dict[str, Any]:
+        """Read one persisted execution envelope across result/recovery views."""
+
+        fallback: dict[str, Any] = {}
+        for source in (
+            getattr(result, "metadata", {}),
+            getattr(getattr(result, "creative_job", None), "metadata", {}),
+        ):
+            if not isinstance(source, dict):
+                continue
+            envelope = source.get("capability_execution_envelope")
+            if isinstance(envelope, dict) and envelope:
+                if isinstance(envelope.get("activation_plan"), dict):
+                    return dict(envelope)
+                if not fallback:
+                    fallback = dict(envelope)
+        return fallback
+
+    def _authoritative_mode_execution_projection(self, result: PlanningResult) -> dict[str, Any]:
+        """Read mode execution facts from the frozen source before legacy metadata.
+
+        The Provider candidate is normally the first place these fields appear,
+        but a failed or compacted Provider response can leave its candidate
+        metadata empty while the server-owned execution envelope still has the
+        complete decision.  This adapter recovers facts only; it never creates
+        creative instructions or invents a single-image variation contract.
+        """
+
+        mode_keys = (
+            "mode_execution_policy",
+            "role_specific_generation_plan",
+            "mode_role_recipe",
+            "mode_quality_profile",
+            "variation_execution_contract",
+            "variation_execution_contract_binding",
+            "variation_execution_mode",
+            "variation_execution_requested_image_count",
+            "variation_execution_suite_direction_authoritative",
+            "variation_execution_contract_enforced",
+        )
+        result_metadata = getattr(result, "metadata", {})
+        if not isinstance(result_metadata, dict):
+            result_metadata = {}
+        envelope = self._capability_execution_envelope_from_result(result)
+        activation_plan_fallback = result_metadata.get("capability_activation_plan")
+        if not isinstance(activation_plan_fallback, dict):
+            creative_job_metadata = getattr(getattr(result, "creative_job", None), "metadata", {})
+            activation_plan_fallback = (
+                creative_job_metadata.get("capability_activation_plan")
+                if isinstance(creative_job_metadata, dict)
+                else None
+            )
+        envelope_activation_mode = str(
+            envelope.get("activation_mode")
+            or (
+                envelope.get("activation_plan", {}).get("activation_mode")
+                if isinstance(envelope.get("activation_plan"), dict)
+                else ""
+            )
+            or (
+                activation_plan_fallback.get("activation_mode")
+                if isinstance(activation_plan_fallback, dict)
+                else ""
+            )
+            or result_metadata.get("capability_activation_mode")
+            or ""
+        ).strip().lower()
+        if isinstance(envelope, dict):
+            activation_plan = envelope.get("activation_plan")
+            envelope_activation_mode = str(
+                envelope.get("activation_mode")
+                or (activation_plan.get("activation_mode") if isinstance(activation_plan, dict) else "")
+                or ""
+            ).strip().lower()
+            ledger = envelope.get("resolved_constraint_ledger")
+            ledger_projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
+
+            # An enforced envelope is fail-closed at this boundary.  Its
+            # ledger projection is the only source allowed to cross into
+            # candidate metadata; the outer visual cluster may contain
+            # dormant/inactive role plans and must never be used as fallback.
+            if envelope and envelope_activation_mode == "enforced":
+                capability_projection = (
+                    ledger_projection.get("capability_projection")
+                    if isinstance(ledger_projection, dict)
+                    else None
+                )
+                if not isinstance(capability_projection, dict) or not capability_projection:
+                    return {}
+                projection = {
+                    key: capability_projection[key]
+                    for key in mode_keys
+                    if self._projection_value_is_non_empty(capability_projection.get(key))
+                }
+                if projection:
+                    projection["mode_execution_projection_source"] = (
+                        "resolved_constraint_ledger.provider_projection.capability_projection"
+                    )
+                return projection
+
+            # Shadow/legacy envelopes may have a provider capability
+            # projection.  It is still consumed atomically, never merged with
+            # another source.
+            if isinstance(ledger_projection, dict):
+                capability_projection = ledger_projection.get("capability_projection")
+                if isinstance(capability_projection, dict) and capability_projection:
+                    projection = {
+                        key: capability_projection[key]
+                        for key in mode_keys
+                        if self._projection_value_is_non_empty(capability_projection.get(key))
+                    }
+                    if projection:
+                        projection["mode_execution_projection_source"] = (
+                            "resolved_constraint_ledger.provider_projection.capability_projection"
+                        )
+                return projection
+
+        # An explicitly enforced plan without its persisted envelope is not a
+        # legacy record.  Refuse to project dormant visual-cluster metadata.
+        if envelope_activation_mode == "enforced":
+            return {}
+
+        # Historical/non-enforced records have no frozen ledger authority.  A
+        # single legacy source may be read for compatibility, but fields are
+        # never mixed across clusters.
+        legacy_sources: list[tuple[str, Any]] = [
+            ("result.visual_cluster", result_metadata.get("visual_cluster")),
+            (
+                "result.shared_capabilities.visual_cluster",
+                (
+                    result_metadata.get("shared_capabilities", {}).get("visual_cluster")
+                    if isinstance(result_metadata.get("shared_capabilities"), dict)
+                    else None
+                ),
+            ),
+        ]
+        creative_job_metadata = getattr(getattr(result, "creative_job", None), "metadata", {})
+        if isinstance(creative_job_metadata, dict):
+            legacy_sources.append(("creative_job.visual_cluster", creative_job_metadata.get("visual_cluster")))
+        for source_name, source in legacy_sources:
+            if not isinstance(source, dict) or not source:
+                continue
+            projection = {
+                key: source[key]
+                for key in mode_keys
+                if self._projection_value_is_non_empty(source.get(key))
+            }
+            if projection:
+                projection["mode_execution_projection_source"] = source_name
+                return projection
+        return {}
+
+    def _requested_image_count_from_result(
+        self,
+        result: PlanningResult,
+        projection: dict[str, Any] | None = None,
+    ) -> int | None:
+        result_metadata = getattr(result, "metadata", {})
+        if not isinstance(result_metadata, dict):
+            result_metadata = {}
+        creative_job_metadata = getattr(getattr(result, "creative_job", None), "metadata", {})
+        if not isinstance(creative_job_metadata, dict):
+            creative_job_metadata = {}
+        envelope = self._capability_execution_envelope_from_result(result)
+        activation_plan_fallback = result_metadata.get("capability_activation_plan")
+        if not isinstance(activation_plan_fallback, dict):
+            activation_plan_fallback = creative_job_metadata.get("capability_activation_plan")
+        envelope_activation_mode = ""
+        normalized_envelope_intent: dict[str, Any] | None = None
+        if isinstance(envelope, dict):
+            activation_plan = envelope.get("activation_plan")
+            envelope_activation_mode = str(
+                envelope.get("activation_mode")
+                or (activation_plan.get("activation_mode") if isinstance(activation_plan, dict) else "")
+                or ""
+            ).strip().lower()
+            candidate_intent = envelope.get("normalized_job_intent")
+            if isinstance(candidate_intent, dict):
+                normalized_envelope_intent = candidate_intent
+        if not envelope_activation_mode and isinstance(activation_plan_fallback, dict):
+            envelope_activation_mode = str(activation_plan_fallback.get("activation_mode") or "").strip().lower()
+        if not envelope_activation_mode:
+            envelope_activation_mode = str(result_metadata.get("capability_activation_mode") or "").strip().lower()
+        normalized_intent = result_metadata.get("normalized_v3_job_intent")
+        sources: list[dict[str, Any]] = []
+        if envelope and envelope_activation_mode == "enforced":
+            # The server-frozen intent and ledger-derived projection own the
+            # count once an enforced envelope exists.  Result/job metadata is
+            # only a compatibility source for old or non-enforced records.
+            if normalized_envelope_intent is not None:
+                sources.append(normalized_envelope_intent)
+            if isinstance(projection, dict):
+                sources.append(projection)
+            # No result/job fallback is allowed once the record declares an
+            # enforced plan: a missing frozen count is an invalid receipt.
+            frozen_count = self._first_valid_image_count(sources)
+            return frozen_count
+        else:
+            if isinstance(projection, dict):
+                sources.append(projection)
+            sources.extend([result_metadata, creative_job_metadata])
+            if isinstance(normalized_intent, dict):
+                sources.append(normalized_intent)
+            if normalized_envelope_intent is not None:
+                sources.append(normalized_envelope_intent)
+        return self._first_valid_image_count(sources)
+
+    @staticmethod
+    def _first_valid_image_count(sources: list[dict[str, Any]]) -> int | None:
+        for source in sources:
+            for key in (
+                "requested_image_count",
+                "effective_image_count",
+                "variation_execution_requested_image_count",
+            ):
+                value = source.get(key)
+                if isinstance(value, bool):
+                    continue
+                try:
+                    candidate_count = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if candidate_count >= 1:
+                    return candidate_count
+        return None
+
+    def _mode_execution_audit_from_result(
+        self,
+        result: PlanningResult,
+        projection: dict[str, Any],
+        *,
+        projection_conflicts: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Return a compact audit that distinguishes single-image scope from drift."""
+
+        result_metadata = getattr(result, "metadata", {})
+        if not isinstance(result_metadata, dict):
+            result_metadata = {}
+        creative_job_metadata = getattr(getattr(result, "creative_job", None), "metadata", {})
+        if not isinstance(creative_job_metadata, dict):
+            creative_job_metadata = {}
+
+        plan = self._activation_plan_from_result(result)
+        envelope = self._capability_execution_envelope_from_result(result)
+        envelope_plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
+        activation_mode = str(
+            envelope.get("activation_mode")
+            or (envelope_plan.get("activation_mode") if isinstance(envelope_plan, dict) else "")
+            or (plan.get("activation_mode") if isinstance(plan, dict) else "")
+            or ""
+        ).strip().lower()
+        enforced = activation_mode == "enforced"
+        frozen_envelope_enforced = bool(envelope) and enforced
+
+        mode: str | None = None
+        mode_sources = [projection] if isinstance(projection, dict) and projection else []
+        if not frozen_envelope_enforced:
+            mode_sources.extend([result_metadata, creative_job_metadata])
+        for source in mode_sources:
+            for key in (
+                "effective_variation_mode",
+                "variation_mode",
+                "variation_execution_mode",
+                "mode",
+            ):
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    mode = value.strip()
+                    break
+            if mode:
+                break
+            for key in (
+                "mode_execution_policy",
+                "role_specific_generation_plan",
+                "variation_execution_contract",
+            ):
+                value = source.get(key)
+                if isinstance(value, dict) and isinstance(value.get("mode"), str) and value["mode"].strip():
+                    mode = value["mode"].strip()
+                    break
+            if mode:
+                break
+
+        requested_count = self._requested_image_count_from_result(result, projection)
+
+        active_ids = {
+            str(item).strip()
+            for item in (plan.get("dependency_order") or plan.get("active_capability_ids") or [])
+            if str(item).strip()
+        }
+        suite_active = "suite_direction" in active_ids
+        contract = projection.get("variation_execution_contract")
+        contract_enforced = any(
+            source.get("variation_execution_contract_enforced") is True
+            for source in (result_metadata, creative_job_metadata, projection)
+        ) or enforced
+        if enforced and requested_count is None:
+            contract_status = "missing"
+        elif requested_count is not None and requested_count <= 1:
+            contract_status = "not_applicable"
+        elif isinstance(contract, dict) and contract:
+            contract_status = "active"
+        elif contract_enforced or suite_active:
+            contract_status = "missing"
+        else:
+            contract_status = "not_required"
+
+        if mode is None and requested_count is None and not projection and not frozen_envelope_enforced:
+            return {}
+        audit = {
+            "schema_version": "v3_mode_execution_audit_v1",
+            "mode": mode,
+            "requested_image_count": requested_count,
+            "contract_status": contract_status,
+            "suite_direction_active": suite_active,
+            "projection_source": projection.get("mode_execution_projection_source"),
+        }
+        if frozen_envelope_enforced and not projection:
+            audit["projection_status"] = "missing"
+        if projection_conflicts:
+            audit["projection_conflicts"] = list(dict.fromkeys(projection_conflicts))
+        return audit
+
+    def _canonical_prompt_review_from_result(self, result: PlanningResult) -> dict[str, Any] | None:
+        """Use finalizer evidence for public review status without copying prompt text."""
+
+        sources: list[dict[str, Any]] = []
+        result_metadata = getattr(result, "metadata", {})
+        if isinstance(result_metadata, dict):
+            sources.append(result_metadata)
+        creative_job_metadata = getattr(getattr(result, "creative_job", None), "metadata", {})
+        if isinstance(creative_job_metadata, dict):
+            sources.append(creative_job_metadata)
+        for source in sources:
+            brain = source.get("llm_brain")
+            if not isinstance(brain, dict):
+                continue
+            audit = brain.get("audit") if isinstance(brain.get("audit"), dict) else {}
+            if not (
+                audit.get("remote_canonical_provider_prompts_received") is True
+                or audit.get("character_card_slot_delta_recovery_prompts_received") is True
+            ):
+                continue
+            # A canonical prompt list is public approval evidence only after
+            # the remote Brain finalizer has completed.  Transported prompt
+            # data, a local fallback, or a planning checkpoint must remain
+            # blocked even if individual prompt rows look complete.
+            if brain.get("llm_used") is not True or brain.get("fallback_used") is not False:
+                return None
+            allowed_finalizer_stages = {
+                "provider_prompt_finalize",
+                "provider_prompt_professional_capture_resign",
+            }
+            finalizer_stage = str(audit.get("canonical_provider_prompt_stage") or "").strip()
+            if finalizer_stage not in allowed_finalizer_stages:
+                return None
+            stages = audit.get("canonical_provider_prompt_stages")
+            if not isinstance(stages, list) or finalizer_stage not in stages:
+                return None
+            prompts = brain.get("canonical_provider_prompts")
+            if not isinstance(prompts, list) or not prompts:
+                return None
+            execution_projection = self._authoritative_mode_execution_projection(result)
+            requested_count = self._requested_image_count_from_result(result, execution_projection)
+            # A finalizer prompt list is not a delivery receipt until the
+            # server can prove which requested output set it covers.  This is
+            # required for legacy/non-enforced records too; otherwise a
+            # complete-looking one-row list could be presented as approval
+            # for an unknown request cardinality.
+            if requested_count is None:
+                return None
+            envelope = self._capability_execution_envelope_from_result(result)
+            envelope_plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
+            activation_plan = self._activation_plan_from_result(result)
+            activation_mode = str(
+                envelope.get("activation_mode")
+                or (envelope_plan.get("activation_mode") if isinstance(envelope_plan, dict) else "")
+                or (activation_plan.get("activation_mode") if isinstance(activation_plan, dict) else "")
+                or result_metadata.get("capability_activation_mode")
+                or ""
+            ).strip().lower()
+            if activation_mode == "enforced":
+                ledger = envelope.get("resolved_constraint_ledger") if isinstance(envelope, dict) else None
+                ledger_projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
+                envelope_id = str(envelope.get("envelope_id") or "").strip() if isinstance(envelope, dict) else ""
+                ledger_id = str(ledger.get("ledger_id") or "").strip() if isinstance(ledger, dict) else ""
+                if (
+                    not isinstance(envelope, dict)
+                    or not envelope_id
+                    or not str(envelope.get("execution_fingerprint") or "").strip()
+                    or not isinstance(activation_plan, dict)
+                    or not str(activation_plan.get("plan_id") or "").strip()
+                    or not str(activation_plan.get("fingerprint") or "").strip()
+                    or not isinstance(ledger, dict)
+                    or not ledger_id
+                    or not isinstance(ledger_projection, dict)
+                    or requested_count is None
+                ):
+                    return None
+                binding = audit.get("canonical_provider_prompt_binding")
+                if not isinstance(binding, dict):
+                    return None
+                if str(binding.get("activation_plan_id") or "").strip() != str(
+                    activation_plan.get("plan_id") or ""
+                ).strip():
+                    return None
+                if str(binding.get("execution_envelope_id") or "").strip() != envelope_id:
+                    return None
+                if str(binding.get("constraint_ledger_id") or "").strip() != ledger_id:
+                    return None
+            valid = True
+            output_indices: list[int] = []
+            for item in prompts:
+                prompt_text = " ".join(str(item.get("prompt") or "").split()) if isinstance(item, dict) else ""
+                if not isinstance(item, dict) or len(prompt_text) < 24:
+                    valid = False
+                    break
+                output_index = item.get("output_index")
+                if type(output_index) is not int or output_index < 1:
+                    valid = False
+                    break
+                output_indices.append(output_index)
+                if item.get("review_status") != "approved":
+                    valid = False
+                    break
+                if item.get("prompt_status") not in {None, "complete"}:
+                    valid = False
+                    break
+                if item.get("semantic_coverage") not in {None, "complete"}:
+                    valid = False
+                    break
+                if item.get("semantic_preflight_status") not in {None, "approved"}:
+                    valid = False
+                    break
+            if len(output_indices) != len(set(output_indices)):
+                valid = False
+            if sorted(output_indices) != list(range(1, requested_count + 1)):
+                valid = False
+            if not valid:
+                return None
+            return {
+                "status": "approved",
+                "source": "canonical_provider_prompts",
+                "prompt_count": len(prompts),
+            }
+        return None
+
+    @staticmethod
+    def _mode_role_recipe_from_projection(
+        projection: dict[str, Any],
+        candidate_metadata: dict[str, Any],
+        output_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Recover one role recipe only through an exact output binding."""
+
+        if not isinstance(projection, dict):
+            return {}
+        bound_index = output_index
+        if type(bound_index) is not int or bound_index < 1:
+            candidate_index = candidate_metadata.get("output_index")
+            bound_index = candidate_index if type(candidate_index) is int and candidate_index >= 1 else None
+        if bound_index is None:
+            return {}
+
+        candidates: list[dict[str, Any]] = []
+        direct = projection.get("mode_role_recipe")
+        if isinstance(direct, dict):
+            candidates.append(direct)
+        role_plan = projection.get("role_specific_generation_plan")
+        if isinstance(role_plan, dict):
+            recipes = role_plan.get("role_recipes")
+            if isinstance(recipes, list):
+                candidates.extend(item for item in recipes if isinstance(item, dict))
+        for recipe in candidates:
+            if V3ProductApiService._mode_role_recipe_matches_output_index(recipe, bound_index):
+                return dict(recipe)
+        return {}
+
+    @staticmethod
+    def _mode_role_recipe_matches_output_index(recipe: Any, output_index: int | None) -> bool:
+        if not isinstance(recipe, dict) or type(output_index) is not int or output_index < 1:
+            return False
+        recipe_index = recipe.get("output_index", recipe.get("index"))
+        return type(recipe_index) is int and recipe_index == output_index
+
+    @staticmethod
+    def _output_index_for_packaged(
+        asset_spec: Any,
+        packaged: Any,
+        candidate_metadata: dict[str, Any],
+        asset_metadata: dict[str, Any],
+        ordinal: int,
+    ) -> int | None:
+        """Resolve a server-owned package position for compatibility views."""
+
+        for source in (candidate_metadata, getattr(packaged, "metadata", {}), asset_metadata):
+            if not isinstance(source, dict):
+                continue
+            for key in ("output_index", "ecommerce_slot_index"):
+                value = source.get(key)
+                if type(value) is int and value >= 1:
+                    return value
+        priority = getattr(asset_spec, "priority", None)
+        if type(priority) is int and priority >= 1 and (priority > 1 or ordinal == 1):
+            return priority
+        return ordinal if type(ordinal) is int and ordinal >= 1 else None
+
+    def _project_candidate_metadata_from_result(
+        self,
+        result: PlanningResult,
+        candidate_metadata: Any,
+        *,
+        output_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Project frozen execution facts once for all candidate/lifecycle views."""
+
+        projected = dict(candidate_metadata) if isinstance(candidate_metadata, dict) else {}
+        bound_output_index = output_index
+        if type(bound_output_index) is not int or bound_output_index < 1:
+            candidate_index = projected.get("output_index")
+            bound_output_index = candidate_index if type(candidate_index) is int and candidate_index >= 1 else None
+        existing_recipe = projected.get("mode_role_recipe")
+        if existing_recipe is not None and not self._mode_role_recipe_matches_output_index(
+            existing_recipe,
+            bound_output_index,
+        ):
+            # Do not expose an unbound legacy/global recipe as if it described
+            # this output.  The authoritative ledger may re-add one below
+            # when it carries the same exact output index.
+            for key in (
+                "mode_role_recipe",
+                "mode_role_key",
+                "mode_role_label",
+                "mode_role_purpose",
+                "role_specific_prompt_pressure",
+            ):
+                projected.pop(key, None)
+        execution_projection = self._authoritative_mode_execution_projection(result)
+        projection_conflicts: list[str] = []
+        for key, value in execution_projection.items():
+            if key == "mode_execution_projection_source":
+                continue
+            if key == "mode_role_recipe":
+                # A frozen role-plan object is often batch-global.  It may
+                # enter one candidate only when its own index matches the
+                # server-owned output position; otherwise leave the existing
+                # candidate fact untouched and do not invent a role binding.
+                value = self._mode_role_recipe_from_projection(
+                    execution_projection,
+                    projected,
+                    output_index=bound_output_index,
+                )
+                if not value:
+                    continue
+            current = projected.get(key)
+            if self._projection_value_is_non_empty(current):
+                if current != value:
+                    projection_conflicts.append(key)
+                continue
+            projected[key] = value
+
+        mode_audit = self._mode_execution_audit_from_result(
+            result,
+            execution_projection,
+            projection_conflicts=projection_conflicts,
+        )
+        if mode_audit:
+            projected["mode_execution_audit"] = mode_audit
+
+        final_review = self._canonical_prompt_review_from_result(result)
+        candidate_brain = projected.get("llm_brain")
+        if final_review and isinstance(candidate_brain, dict):
+            projected_brain = dict(candidate_brain)
+            planning_review = projected_brain.get("prompt_review")
+            if isinstance(planning_review, dict) and planning_review.get("status") != "approved":
+                projected_brain.setdefault("planning_prompt_review", dict(planning_review))
+            projected_brain["prompt_review"] = {
+                **(dict(planning_review) if isinstance(planning_review, dict) else {}),
+                **final_review,
+            }
+            projected["llm_brain"] = projected_brain
+        elif final_review:
+            projected["llm_brain"] = {"prompt_review": final_review}
+        return projected
+
+    def _capability_activation_audit_from_result(self, result: PlanningResult) -> dict[str, Any]:
+        """Expose typed activation decisions without exposing Brain prose or traces."""
+
+        plan = self._activation_plan_from_result(result)
+        if not isinstance(plan, dict) or not plan:
+            return {}
+        active_capabilities = [item for item in (plan.get("active_capabilities") or []) if isinstance(item, dict)]
+        inactive_capabilities = [item for item in (plan.get("inactive_capabilities") or []) if isinstance(item, dict)]
+        active_ids = [
+            str(item).strip()
+            for item in (plan.get("dependency_order") or plan.get("active_capability_ids") or [])
+            if str(item).strip()
+        ]
+        active_modes = {
+            str(item.get("capability_id")): str(item.get("activation_mode") or "")
+            for item in active_capabilities
+            if str(item.get("capability_id") or "").strip()
+        }
+        active_reason_codes = {
+            str(item.get("capability_id")): [
+                str(reason).strip()
+                for reason in (item.get("reason_codes") or [])
+                if str(reason).strip()
+            ]
+            for item in active_capabilities
+            if str(item.get("capability_id") or "").strip()
+        }
+        active_evidence_ids = {
+            str(item.get("capability_id")): [
+                str(evidence_id).strip()
+                for evidence_id in (item.get("evidence_ids") or [])
+                if str(evidence_id).strip()
+            ]
+            for item in active_capabilities
+            if str(item.get("capability_id") or "").strip()
+        }
+        active_confidence = {
+            str(item.get("capability_id")): item.get("confidence")
+            for item in active_capabilities
+            if str(item.get("capability_id") or "").strip()
+            and isinstance(item.get("confidence"), (int, float))
+            and not isinstance(item.get("confidence"), bool)
+        }
+        brain = (getattr(result, "metadata", {}) or {}).get("llm_brain")
+        intent = brain.get("capability_activation_intent") if isinstance(brain, dict) else None
+        result_metadata = getattr(result, "metadata", {})
+        result_metadata = result_metadata if isinstance(result_metadata, dict) else {}
+        plan_metadata = plan.get("metadata") if isinstance(plan.get("metadata"), dict) else {}
+        provenance = {}
+        for source in (
+            result_metadata.get("capability_plan_provenance"),
+            plan_metadata.get("capability_plan_provenance"),
+            plan_metadata.get("provenance"),
+        ):
+            if not isinstance(source, dict):
+                continue
+            for key in ("authority", "source", "kind", "reuse_kind", "provenance_type"):
+                value = source.get(key)
+                if isinstance(value, str) and value.strip() and key not in provenance:
+                    provenance[key] = value.strip()
+        requested_ids = [
+            str(item.get("capability_id")).strip()
+            for item in (intent.get("requested_capabilities") or [])
+            if isinstance(item, dict) and str(item.get("capability_id") or "").strip()
+        ] if isinstance(intent, dict) else []
+        rejected_ids = [
+            str(item.get("capability_id")).strip()
+            for item in (intent.get("rejected_capabilities") or [])
+            if isinstance(item, dict) and str(item.get("capability_id") or "").strip()
+        ] if isinstance(intent, dict) else []
+        requested_details: dict[str, Any] = {}
+        rejected_details: dict[str, Any] = {}
+        if isinstance(intent, dict):
+            for item in (intent.get("requested_capabilities") or []):
+                if not isinstance(item, dict) or not str(item.get("capability_id") or "").strip():
+                    continue
+                capability_id = str(item["capability_id"]).strip()
+                requested_details[capability_id] = {
+                    "activation_mode": item.get("activation_mode"),
+                    "reason_codes": [
+                        str(reason).strip()
+                        for reason in (item.get("reason_codes") or [])
+                        if str(reason).strip()
+                    ],
+                    "evidence_ids": [
+                        str(evidence_id).strip()
+                        for evidence_id in (item.get("evidence_ids") or [])
+                        if str(evidence_id).strip()
+                    ],
+                    "confidence": item.get("confidence"),
+                }
+            for item in (intent.get("rejected_capabilities") or []):
+                if not isinstance(item, dict) or not str(item.get("capability_id") or "").strip():
+                    continue
+                capability_id = str(item["capability_id"]).strip()
+                rejected_details[capability_id] = {
+                    "reason_code": item.get("reason_code"),
+                    "evidence_ids": [
+                        str(evidence_id).strip()
+                        for evidence_id in (item.get("evidence_ids") or [])
+                        if str(evidence_id).strip()
+                    ],
+                    "confidence": item.get("confidence"),
+                }
+        inactive_ids = [
+            str(item.get("capability_id")).strip()
+            for item in inactive_capabilities
+            if str(item.get("capability_id") or "").strip()
+        ]
+        return {
+            "schema_version": "v3_capability_activation_audit_v1",
+            "source": "frozen_activation_plan",
+            "plan_id": plan.get("plan_id"),
+            "fingerprint": plan.get("fingerprint"),
+            "plan_version": plan.get("plan_version"),
+            "catalog_version": plan.get("catalog_version"),
+            "activation_mode": plan.get("activation_mode"),
+            "plan_provenance": provenance,
+            "active_capability_ids": active_ids,
+            "required_capability_ids": [
+                capability_id for capability_id in active_ids if active_modes.get(capability_id) == "required"
+            ],
+            "optional_active_capability_ids": [
+                capability_id for capability_id in active_ids if active_modes.get(capability_id) != "required"
+            ],
+            "active_reason_codes": active_reason_codes,
+            "active_evidence_ids": active_evidence_ids,
+            "active_confidence": active_confidence,
+            "inactive_capability_ids": inactive_ids,
+            "inactive_reason_codes": {
+                str(item.get("capability_id")): str(item.get("reason_code") or "")
+                for item in inactive_capabilities
+                if str(item.get("capability_id") or "").strip()
+            },
+            "inactive_evidence_ids": {
+                str(item.get("capability_id")): [
+                    str(evidence_id).strip()
+                    for evidence_id in (item.get("evidence_ids") or [])
+                    if str(evidence_id).strip()
+                ]
+                for item in inactive_capabilities
+                if str(item.get("capability_id") or "").strip()
+            },
+            "requested_capability_ids": list(dict.fromkeys(requested_ids)),
+            "rejected_capability_ids": list(dict.fromkeys(rejected_ids)),
+            "requested_capability_details": requested_details,
+            "rejected_capability_details": rejected_details,
+        }
+
+    def _doc270_public_capability_activation_audit(self, result: PlanningResult) -> dict[str, Any]:
+        """Keep Doc270's public boundary to activation state, not evidence."""
+
+        audit = self._capability_activation_audit_from_result(result)
+        if not isinstance(audit, dict) or not audit:
+            return {}
+        return {
+            "schema_version": "v3_capability_activation_public_state_v1",
+            "activation_mode": audit.get("activation_mode"),
+            "active_capability_ids": list(audit.get("active_capability_ids") or []),
+            "required_capability_ids": list(audit.get("required_capability_ids") or []),
+            "optional_active_capability_ids": list(audit.get("optional_active_capability_ids") or []),
+            "inactive_capability_ids": list(audit.get("inactive_capability_ids") or []),
+            "requested_capability_ids": list(audit.get("requested_capability_ids") or []),
+            "rejected_capability_ids": list(audit.get("rejected_capability_ids") or []),
+        }
 
     def _doc73_retry_metadata(self, result: PlanningResult) -> dict[str, Any]:
         """Reuse only a canonical, persisted Doc73 source output on retry.
@@ -10340,9 +11159,14 @@ class V3ProductApiService:
                 "generation_lifecycle_timeout",
                 "generation_lifecycle_failure",
                 "background_generation_watchdog",
+                "mode_execution_audit",
             )
             if key in lifecycle_metadata
         }
+        if result is not None:
+            public_activation_audit = self._doc270_public_capability_activation_audit(result)
+            if public_activation_audit:
+                public_lifecycle["capability_activation_audit"] = public_activation_audit
         return ProductJobStatus(
             job_id=record.job_id,
             status=record.status,
@@ -11175,6 +11999,13 @@ class V3ProductApiService:
                     if capability_id in active:
                         friendly.append(message)
                 status_metadata["capability_summary"] = friendly
+            public_activation_audit = self._doc270_public_capability_activation_audit(result)
+            if public_activation_audit:
+                status_metadata["capability_activation_audit"] = public_activation_audit
+            execution_projection = self._authoritative_mode_execution_projection(result)
+            mode_audit = self._mode_execution_audit_from_result(result, execution_projection)
+            if mode_audit:
+                status_metadata["mode_execution_audit"] = mode_audit
         return status_metadata
 
     @staticmethod
@@ -12159,13 +12990,23 @@ class V3ProductApiService:
         final_prompt = ""
         candidate_llm_brain: dict[str, Any] = {}
         for asset in result.asset_pack.assets:
-            candidate_metadata = asset.metadata.get("candidate_metadata", {}) if asset.metadata else {}
+            candidate_metadata = self._project_candidate_metadata_from_result(
+                result,
+                asset.metadata.get("candidate_metadata", {}) if asset.metadata else {},
+                output_index=getattr(asset, "priority", None),
+            )
             final_prompt = str(candidate_metadata.get("final_provider_prompt") or "").strip()
             if isinstance(candidate_metadata.get("llm_brain"), dict):
                 candidate_llm_brain = candidate_metadata["llm_brain"]
             if final_prompt:
                 break
         result_llm_brain = result.metadata.get("llm_brain") if isinstance(result.metadata.get("llm_brain"), dict) else {}
+        projected_result_metadata = self._project_candidate_metadata_from_result(
+            result,
+            {"llm_brain": result_llm_brain},
+        )
+        if isinstance(projected_result_metadata.get("llm_brain"), dict):
+            result_llm_brain = projected_result_metadata["llm_brain"]
         prompt_llm_summary = (
             prompt.provider_notes.get("llm_brain_summary", {})
             if prompt is not None and isinstance(prompt.provider_notes.get("llm_brain_summary"), dict)
@@ -12223,7 +13064,7 @@ class V3ProductApiService:
         }
 
     def _candidate_metadata_from_output_record(self, record: V3GeneratedOutputRecord) -> dict[str, Any]:
-        return {
+        metadata = {
             **dict(record.metadata or {}),
             "output_id": record.output_id,
             "download_url": record.download_url,
@@ -12238,6 +13079,7 @@ class V3ProductApiService:
             "format": record.output_format,
             "v3_owned_output": True,
         }
+        return self._project_candidate_metadata_from_result(record, metadata)
 
     def _aspect_ratio_from_output_record(self, record: V3GeneratedOutputRecord) -> str:
         width = int(record.width or 0)
@@ -12335,7 +13177,11 @@ class V3ProductApiService:
             render_manifest = packaged.metadata.get("render_manifest") if packaged else None
             selected_candidate_id = packaged.metadata.get("selected_candidate_id") if packaged else None
             candidate_metadata = self._public_metadata_projection(
-                packaged.metadata.get("candidate_metadata", {}) if packaged else {}
+                self._project_candidate_metadata_from_result(
+                    result,
+                    packaged.metadata.get("candidate_metadata", {}) if packaged else {},
+                    output_index=getattr(asset, "priority", None),
+                )
             )
             output_id = str(candidate_metadata.get("output_id") or "").strip()
             if (
@@ -12392,13 +13238,48 @@ class V3ProductApiService:
             for asset in result.asset_pack.assets
             if asset.metadata.get("selected_candidate_id")
         }
-        for asset in result.asset_pack.assets:
+        for ordinal, asset in enumerate(result.asset_pack.assets, 1):
             candidate_id = asset.metadata.get("selected_candidate_id")
             if not candidate_id:
                 continue
             report = evals_by_candidate_id.get(candidate_id)
             asset_spec = assets_by_id.get(asset.asset_id)
-            candidate_metadata = self._public_metadata_projection(asset.metadata.get("candidate_metadata", {}))
+            raw_candidate_metadata = (
+                dict(asset.metadata.get("candidate_metadata") or {})
+                if asset.metadata
+                else {}
+            )
+            raw_asset_metadata = (
+                dict(asset_spec.metadata)
+                if asset_spec
+                else dict(asset.metadata.get("asset_metadata") or {})
+            )
+            output_index = self._output_index_for_packaged(
+                asset_spec,
+                asset,
+                raw_candidate_metadata,
+                raw_asset_metadata,
+                ordinal,
+            )
+            if (
+                not self._mode_role_recipe_matches_output_index(
+                    raw_candidate_metadata.get("mode_role_recipe"),
+                    output_index,
+                )
+                and isinstance(raw_asset_metadata.get("mode_role_recipe"), dict)
+                and self._mode_role_recipe_matches_output_index(
+                    raw_asset_metadata.get("mode_role_recipe"),
+                    output_index,
+                )
+            ):
+                raw_candidate_metadata["mode_role_recipe"] = dict(raw_asset_metadata["mode_role_recipe"])
+            candidate_metadata = self._public_metadata_projection(
+                self._project_candidate_metadata_from_result(
+                    result,
+                    raw_candidate_metadata,
+                    output_index=output_index,
+                )
+            )
             output_id = str(candidate_metadata.get("output_id") or "").strip()
             if (
                 visible_output_ids is not None
@@ -12408,7 +13289,7 @@ class V3ProductApiService:
             ):
                 continue
             asset_metadata = self._public_metadata_projection(
-                dict(asset_spec.metadata) if asset_spec else dict(asset.metadata.get("asset_metadata", {}))
+                raw_asset_metadata
             )
             candidates.append(
                 CandidateSummary(
@@ -12550,6 +13431,11 @@ class V3ProductApiService:
                 if not candidate_id:
                     continue
                 report = evals_by_candidate_id.get(candidate_id)
+                candidate_metadata = self._project_candidate_metadata_from_result(
+                    record.generation_result,
+                    asset.metadata.get("candidate_metadata", {}),
+                    output_index=getattr(asset, "priority", None),
+                )
                 candidates.append(
                     CandidateRecord(
                         candidate_id=candidate_id,
@@ -12557,12 +13443,12 @@ class V3ProductApiService:
                         run_id=run_id,
                         asset_id=asset.asset_id,
                         status="selected_for_pack",
-                        preview_uri=self._output_preview_uri(asset.uri, asset.metadata.get("candidate_metadata", {})),
+                        preview_uri=self._output_preview_uri(asset.uri, candidate_metadata),
                         overall_score=report.overall_score if report else None,
                         recommendation=report.recommendation.value if report else None,
                         metadata={
                             "asset_pack_id": record.generation_result.asset_pack.asset_pack_id,
-                            **asset.metadata.get("candidate_metadata", {}),
+                            **candidate_metadata,
                         },
                     )
                 )
