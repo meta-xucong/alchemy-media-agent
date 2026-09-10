@@ -297,6 +297,14 @@ def _vision_provider_timeout_seconds(metadata: dict[str, Any]) -> float:
     return max(0.05, min(300.0, value))
 
 
+class VisionInspectionTimeoutError(TimeoutError):
+    """Timeout outcome that records whether a retry can be safely started."""
+
+    def __init__(self, message: str, *, worker_stopped: bool) -> None:
+        super().__init__(message)
+        self.worker_stopped = bool(worker_stopped)
+
+
 def _inspect_with_timeout(
     provider: VisionInspectionProvider,
     resolution: GeneratedOutputResolution,
@@ -314,11 +322,28 @@ def _inspect_with_timeout(
 
     thread = threading.Thread(target=runner, name="v3-vision-inspection", daemon=True)
     thread.start()
-    thread.join(timeout=max(0.05, float(timeout_seconds)))
+    timeout_seconds = max(0.05, float(timeout_seconds))
+    thread.join(timeout=timeout_seconds)
     if thread.is_alive():
-        raise TimeoutError(f"Vision inspection timed out after {timeout_seconds:.2f} seconds.")
+        # A provider call runs in a daemon worker so a broken SDK cannot hold
+        # the Product API forever.  Give a timed-out provider a short,
+        # bounded settle window before deciding whether another inspection
+        # may start; retrying while the first request is still alive would
+        # create overlapping upstream review calls.
+        settle_seconds = min(5.0, max(0.1, timeout_seconds * 0.1))
+        thread.join(timeout=settle_seconds)
+        raise VisionInspectionTimeoutError(
+            f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
+            worker_stopped=not thread.is_alive(),
+        )
     if "error" in result:
-        raise result["error"]
+        error = result["error"]
+        if isinstance(error, TimeoutError):
+            raise VisionInspectionTimeoutError(
+                str(error) or f"Vision inspection timed out after {timeout_seconds:.2f} seconds.",
+                worker_stopped=True,
+            ) from error
+        raise error
     payload = result.get("payload")
     return payload if isinstance(payload, dict) else {}
 
@@ -442,6 +467,7 @@ class VisionOutputInspector:
         max_attempts = _vision_provider_attempt_limit(metadata)
         payload: dict[str, Any] | None = None
         provider_error: VisionInspectionProviderError | None = None
+        provider_timeout_recovery_attempted = False
         for attempt in range(1, max_attempts + 1):
             try:
                 timeout_seconds = _vision_provider_timeout_seconds(metadata)
@@ -453,6 +479,11 @@ class VisionOutputInspector:
                 )
                 break
             except TimeoutError as exc:
+                worker_stopped = getattr(exc, "worker_stopped", False) is True
+                if attempt < max_attempts and worker_stopped:
+                    provider_timeout_recovery_attempted = True
+                    time.sleep(float(attempt * 2))
+                    continue
                 return self._manual_report(
                     resolution,
                     "provider_timeout",
@@ -462,6 +493,9 @@ class VisionOutputInspector:
                         "provider_error": str(exc)[:240],
                         "provider_review_attempts": attempt,
                         "provider_timeout_seconds": timeout_seconds,
+                        "provider_timeout_recovery_attempted": provider_timeout_recovery_attempted,
+                        "provider_timeout_recovery_succeeded": False,
+                        "provider_worker_stopped": worker_stopped,
                     },
                 )
             except VisionInspectionProviderUnavailable:
@@ -487,6 +521,9 @@ class VisionOutputInspector:
             mode=mode,
             provider_name=getattr(provider, "provider_name", "vision_provider"),
             metadata=metadata,
+            provider_review_attempts=attempt,
+            provider_timeout_recovery_attempted=provider_timeout_recovery_attempted,
+            provider_timeout_recovery_succeeded=provider_timeout_recovery_attempted,
         )
 
     def _from_provider_payload(
@@ -497,6 +534,9 @@ class VisionOutputInspector:
         mode: str,
         provider_name: str,
         metadata: dict[str, Any],
+        provider_review_attempts: int = 1,
+        provider_timeout_recovery_attempted: bool = False,
+        provider_timeout_recovery_succeeded: bool = False,
     ) -> VisualInspectionReport:
         # A historical provider payload may still carry a detailed Human
         # Realism label. Normalize it before the frozen review contract filters
@@ -621,6 +661,9 @@ class VisionOutputInspector:
                 "provider_name": provider_name,
                 "provider_status": payload.get("status"),
                 "provider_pixel_result_certified": True,
+                "provider_review_attempts": max(1, int(provider_review_attempts)),
+                "provider_timeout_recovery_attempted": bool(provider_timeout_recovery_attempted),
+                "provider_timeout_recovery_succeeded": bool(provider_timeout_recovery_succeeded),
                 "provider_issue_codes": issue_codes,
                 "identity_deltas": _string_list(payload.get("identity_deltas")),
                 "identity_metric": identity_metric,

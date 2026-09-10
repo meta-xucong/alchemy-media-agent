@@ -276,16 +276,37 @@ class _StaticVisionProvider:
 class _HangingVisionProvider:
     provider_name = "hanging_test_vision"
 
+    def __init__(self) -> None:
+        self.calls = 0
+
     def available(self, *, force: bool = False) -> bool:
         return True
 
     def inspect(self, resolution: GeneratedOutputResolution, *, metadata: dict | None = None) -> dict:
+        self.calls += 1
         time.sleep(0.3)
         return {"status": "pass", "confidence": 0.95, "issue_codes": []}
 
 
+class _SettledTimeoutThenPassVisionProvider:
+    provider_name = "settled_timeout_then_pass_vision"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def available(self, *, force: bool = False) -> bool:
+        return True
+
+    def inspect(self, resolution: GeneratedOutputResolution, *, metadata: dict | None = None) -> dict:
+        self.calls += 1
+        if self.calls == 1:
+            raise TimeoutError("transient settled review timeout")
+        return {"status": "pass", "confidence": 0.95, "issue_codes": []}
+
+
 def test_vision_provider_outer_timeout_returns_fail_closed_manual_report(tmp_path) -> None:
-    report = VisionOutputInspector(vision_provider=_HangingVisionProvider()).inspect(
+    provider = _HangingVisionProvider()
+    report = VisionOutputInspector(vision_provider=provider).inspect(
         _ready_resolution(tmp_path),
         metadata={
             "enable_real_vision_inspection": True,
@@ -296,6 +317,45 @@ def test_vision_provider_outer_timeout_returns_fail_closed_manual_report(tmp_pat
     assert report.status == "manual_review"
     assert any(issue.get("code") == "provider_timeout" for issue in report.detected_issues)
     assert report.evidence["provider_timeout_seconds"] == 0.05
+    assert provider.calls == 1
+
+
+def test_settled_vision_timeout_uses_the_frozen_bounded_retry(tmp_path) -> None:
+    provider = _SettledTimeoutThenPassVisionProvider()
+    report = VisionOutputInspector(vision_provider=provider).inspect(
+        _ready_resolution(tmp_path),
+        metadata={
+            "enable_real_vision_inspection": True,
+            "capability_execution_envelope": {
+                "resolved_constraint_ledger": {"hard_semantic_contract": True},
+            },
+        },
+    )
+
+    assert report.status == "pass"
+    assert report.verification_state == "verified"
+    assert provider.calls == 2
+    assert report.evidence["provider_review_attempts"] == 2
+    assert report.evidence["provider_timeout_recovery_attempted"] is True
+    assert report.evidence["provider_timeout_recovery_succeeded"] is True
+
+
+def test_unsettled_vision_timeout_does_not_overlap_a_second_review_call(tmp_path) -> None:
+    provider = _HangingVisionProvider()
+    report = VisionOutputInspector(vision_provider=provider).inspect(
+        _ready_resolution(tmp_path),
+        metadata={
+            "enable_real_vision_inspection": True,
+            "vision_inspection_timeout_seconds": 0.05,
+            "capability_execution_envelope": {
+                "resolved_constraint_ledger": {"hard_semantic_contract": True},
+            },
+        },
+    )
+
+    assert report.status == "manual_review"
+    assert any(issue.get("code") == "provider_timeout" for issue in report.detected_issues)
+    assert provider.calls == 1
 
 
 class _SequencedVisionProvider(_StaticVisionProvider):

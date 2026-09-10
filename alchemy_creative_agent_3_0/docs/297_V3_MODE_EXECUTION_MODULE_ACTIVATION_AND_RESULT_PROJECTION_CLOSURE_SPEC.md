@@ -201,7 +201,9 @@ known requested count is also blocked for both enforced and legacy records.
 | --- | --- |
 | `app/product_api/service.py` | Frozen execution projection, finalizer approval gate, role binding, activation audit, and Doc270 public-safe projection |
 | `app/generation_router/providers.py` | Restores the General Provider candidate's opaque deliverable binding while retaining full per-output role direction |
+| `app/shared_capabilities/visual_cluster/vision_inspector.py` | Settled Vision timeout retry with fail-closed protection for still-running review workers |
 | `tests/test_v3_doc297_mode_execution_projection.py` | Regression coverage for all four modes, single-image semantics, frozen-source precedence, recovery storage, role binding, finalizer evidence, and Doc270 privacy |
+| `tests/test_v3_post_generation_vision_review.py` | Regression coverage for settled versus uncooperative Vision timeout recovery |
 | `docs/297_V3_MODE_EXECUTION_MODULE_ACTIVATION_AND_RESULT_PROJECTION_CLOSURE_SPEC.md` | This correction model, acceptance matrix, and evidence record |
 
 ### Independent audit outcome
@@ -319,3 +321,38 @@ is re-collected with these bindings.
 
 The legacy Doc290 collection remains unavailable in the current local
 environment solely because its virtualenv lacks `playwright`.
+
+## 9. Vision-review timeout correction model (2026-09-10)
+
+The corrected release was deployed and a fresh real run reached the remote
+Brain, the GPT Image Provider, and the shared Vision reviewer. That run
+produced real pixels, but one Vision call timed out and the other returned a
+valid pixel review without the required Doc276 face-integrity attestation. A
+separate fresh run was blocked in Brain planning by an upstream HTTP error;
+neither event indicates prompt loss or image-provider substitution. The
+records are retained as non-acceptance evidence.
+
+The owning defect is in the shared Visual Capability Cluster review adapter:
+`_vision_provider_attempt_limit()` declares two attempts for hard semantic
+pixel contracts, while `_vision_model_report()` returned immediately on a
+`TimeoutError`. This made the implementation contradict its own bounded
+review-recovery contract and needlessly converted a transient Vision outage
+into a manual-only result.
+
+The correction authority is the shared review lifecycle, not Brain prompt
+composition, Provider rendering, or public projection. A Vision timeout is
+safe to retry only after the previous inspection worker has stopped; an
+uncooperative worker must remain fail-closed and must not be overlapped by a
+second request. Missing, malformed, or `not_verifiable` Doc276 attestations
+remain non-certifying and are never relaxed or converted into a pass. The
+repair therefore consists of a typed timeout outcome carrying worker-settled
+state, a bounded retry only for a settled timeout within the frozen attempt
+budget, and attempt provenance in the internal inspection evidence. No retry
+creates an image job, changes a prompt, or bypasses the face-integrity gate.
+
+Regression coverage must prove both branches: a settled transient timeout is
+retried once and can certify a subsequent valid review, while a still-running
+worker is held manually without a concurrent second inspection. Real VPS
+acceptance remains pending until a later fresh job has complete Brain/provider
+receipts, two exact output bindings, two verified pixel reviews including
+Doc276 evidence, and automatic final delivery.
