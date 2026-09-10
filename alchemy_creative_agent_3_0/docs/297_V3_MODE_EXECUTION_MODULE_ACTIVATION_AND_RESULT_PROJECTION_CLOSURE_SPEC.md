@@ -1,6 +1,6 @@
 # V3 Mode Execution, Module Activation, and Result Projection Closure
 
-Status: implementation complete; VPS acceptance rerun required after the 2026-09-10 audit correction
+Status: implementation complete; corrected VPS real-provider acceptance passed on 2026-09-10
 
 ## 1. Scope and objective
 
@@ -353,6 +353,83 @@ creates an image job, changes a prompt, or bypasses the face-integrity gate.
 Regression coverage must prove both branches: a settled transient timeout is
 retried once and can certify a subsequent valid review, while a still-running
 worker is held manually without a concurrent second inspection. Real VPS
-acceptance remains pending until a later fresh job has complete Brain/provider
-receipts, two exact output bindings, two verified pixel reviews including
-Doc276 evidence, and automatic final delivery.
+acceptance remained pending until a later fresh job had complete
+Brain/provider receipts, two exact output bindings, two verified pixel reviews
+including Doc276 evidence, and automatic final delivery. That gate was
+satisfied by the acceptance record in section 10.
+
+## 10. Corrected release real-provider acceptance (2026-09-10)
+
+The corrected implementation was deployed from commit
+`9ef8e91d8ef1694874beb361a8a306c51dbe8219`, verified at `origin/main`, and
+the running V2 service resolved to:
+
+`/opt/alchemy-media-agent-releases/v3-release-governed-20260910T131323Z-9ef8e91d8ef1/custom_media_agent_2_0`
+
+The fresh acceptance used the same VPS comparison project and its original
+prompt, with `v3_user_initiated_generation=true`:
+
+- project: `project_200ef57976` (the woman crouching in a warehouse
+  supermarket to pick up an amber bottle);
+- prompt: 2,196 UTF-8 characters, 5,420 bytes;
+- prompt SHA-256:
+  `f37928b680e56b7258583f0ab27b4232ea5bafe68703d3fb8628bde3b6a5d2d7`;
+- job: `job_a16185ba8d`;
+- planning: HTTP 200, `planned`, 353.152 seconds;
+- generation: HTTP 200, `generated`, 372.685 seconds.
+
+The server-owned execution contract was `delivery_suite`, active for two
+outputs, with `suite_direction_active=true`, frozen projection source
+`resolved_constraint_ledger.provider_projection.capability_projection`, and
+mode-differentiation review `pass` with complete role coverage. The public
+activation projection was `enforced`; its required baseline and optional
+intent-driven capabilities were active, `inactive=[]`, and the two roles were
+covered. `commercial_quality` appears as an active required baseline even
+though it is not part of the optional Brain-requested list; the planner's
+baseline authority remains intact.
+
+The Brain/provider chain was real and canonical:
+
+- Brain: DeepSeek `deepseek-v4-pro`, `llm_used=true`, `fallback_used=false`,
+  `creative_fallback_executed=false`;
+- remote Brain canonical Provider prompts were received and both variation
+  execution receipts were signed;
+- output 1 prompt: 673 characters, 1,947 bytes,
+  `7be12ccae111d0a68b1ab132b4cc4cbc51fff2fa0900a03e23684f27a11cb7d3`;
+- output 2 prompt: 466 characters, 1,362 bytes,
+  `9c37ecc6e44a43ad3f4176b7f86dd261dbc2e17212d724deb4f8285a5ae6e727`;
+- both prompt receipts were approved, complete, and semantically complete,
+  with user-direction integrity preserved.
+
+The image Provider was real `openai_gpt_image` / `gpt-image-2`, with one
+reference image admitted for each output and pixels received. The two final
+outputs were bound to the corresponding prompt and suite role:
+
+| Output | Provider prompt index | Mode role | Review |
+| --- | ---: | --- | --- |
+| `v3_output_68e5b7d8c9aa41808b72` | 1 | Output 1 / cover hero | hybrid, verified, pass |
+| `v3_output_e6604650aaf9404388c3` | 2 | Output 2 / subject focus | hybrid, verified, pass |
+
+Both Vision inspections used one review attempt, passed real-pixel
+certification, carried a passing Doc276 face-integrity attestation, and had
+no detected issue codes. The review receipt was `complete`; automatic final
+delivery was `ready`, with two reviewed and two final outputs and no manual
+confirmation requirement. Visual auto-retry remained enabled but executed
+zero retries because the accepted outputs passed the shared review gate.
+
+The earlier fresh jobs remain preserved but are excluded from the final
+acceptance count: `job_0d117e0235` and `job_6d66023714` stopped before Provider
+execution on transient upstream Brain HTTP errors, while `job_8ff5cc5e11`
+correctly withheld delivery after a Vision timeout and missing Doc276
+attestation under the pre-correction behavior. The latest job demonstrates
+that the bounded settled-timeout correction did not weaken the fail-closed
+Doc276 gate and that the complete Brain-to-Provider-to-Vision-to-delivery
+path now closes successfully.
+
+Evidence is append-only under
+`.controlled-validation/doc297-vps-real-20260910/`, including the corrected
+acceptance manifest, current read-only review/provider/binding captures, and
+the original run output. The helper-level commit field in the original
+compact capture was stale; the manifest binds this acceptance to the verified
+`origin/main` commit and VPS release path, so no additional generation was
+issued merely to rewrite that field.
