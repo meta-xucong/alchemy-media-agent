@@ -1,6 +1,6 @@
 # V3 Mode Execution, Module Activation, and Result Projection Closure
 
-Status: implementation complete; corrected VPS real-provider acceptance passed on 2026-09-10
+Status: implementation complete; delivery_suite and selection_candidates real-provider acceptance passed; creative_exploration and format_layout_adaptation remain externally blocked in supplementary VPS validation
 
 ## 1. Scope and objective
 
@@ -433,3 +433,44 @@ the original run output. The helper-level commit field in the original
 compact capture was stale; the manifest binds this acceptance to the verified
 `origin/main` commit and VPS release path, so no additional generation was
 issued merely to rewrite that field.
+
+## 11. Supplementary single-image mode validation (2026-09-10)
+
+To verify that the earlier failures were not limited to the delivery-suite
+path, the same original VPS project and exact user prompt were run again with
+one requested image in the previously unsuccessful general modes. Every run
+used the corrected release `9ef8e91d8ef1694874beb361a8a306c51dbe8219`,
+`v3_user_initiated_generation=true`, the real DeepSeek Brain, the real image
+Provider, and mock generation disabled. The prompt remained lossless: 2,196
+UTF-8 characters, 5,420 bytes, SHA-256
+`f37928b680e56b7258583f0ab27b4232ea5bafe68703d3fb8628bde3b6a5d2d7`.
+
+| Mode | Fresh job(s) | Planning/Brain | Provider pixels | Vision/final delivery | Result |
+| --- | --- | --- | --- | --- | --- |
+| `selection_candidates` | `job_cf55d0976f` | completed with real DeepSeek; no fallback | received | `pass/verified`, no issue codes; one recommended output `v3_output_94012182189b44c3882d` | technical acceptance passed |
+| `creative_exploration` | `job_c8d31c50ea`, `job_98f3267125`, `job_a0d5c89155` | two plans completed with canonical Brain prompts; one stopped on `remote_brain_unavailable` | both completed plans stopped on `non_retryable_provider_failure: provider_timeout` | no pixels, so no Vision or final-delivery acceptance | not accepted in this window |
+| `format_layout_adaptation` | `job_10d83db215`, `job_9e9774dd0a` | one stopped on `remote_brain_unavailable`; one plan completed with a canonical Brain prompt | completed plan stopped on `non_retryable_provider_failure: provider_timeout` | no pixels, so no Vision or final-delivery acceptance | not accepted in this window |
+
+The successful selection run preserved the requested mode through the
+request, effective mode, continuation mode, and variation mode fields. Its
+real-pixel review was complete and verified, which rules out the earlier
+mode-field loss and prompt-truncation hypothesis for that path. The two other
+modes also preserved their mode fields and produced canonical Brain prompt
+receipts when planning completed; their failures occurred at intermittent
+remote Brain availability or image-provider transport, before any image was
+available for review. Aiself `/v1/models` and minimal DeepSeek chat probes
+returned HTTP 200 during diagnosis, but that only proves basic endpoint
+availability, not stability for the much longer production request.
+
+These are non-acceptance records, not successful image results. The provider
+transport guard correctly treats an unknown request outcome as non-replayable
+to prevent duplicate upstream jobs, so each retry was a new fresh job rather
+than an unsafe replay of the same request. No new code change is justified by
+these records alone: the mode routing and prompt-preservation contract are
+observed working, while the remaining failure is an external availability
+problem that needs provider/Brain observability and a later guarded rerun.
+
+Evidence: `audit-mode-jobs-current-9ef8e91d8ef1694874beb361a8a306c51dbe8219.json`,
+`selection-cf55-review.json`, `selection-cf55-provider.json`, and
+`selection-cf55-bindings.json` under
+`.controlled-validation/doc297-vps-real-20260910/`.
