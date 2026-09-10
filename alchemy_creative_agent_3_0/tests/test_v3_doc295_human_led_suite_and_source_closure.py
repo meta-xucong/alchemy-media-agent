@@ -10,11 +10,17 @@ from alchemy_creative_agent_3_0.app.generation_router.providers import (
     ProductionImageGenerationProvider,
 )
 from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import ScenarioRuntime
-from alchemy_creative_agent_3_0.app.shared_capabilities.activation import has_product_profile_facts
+from alchemy_creative_agent_3_0.app.shared_capabilities.activation import (
+    has_product_profile_facts,
+    product_profile_fact_items,
+)
 from alchemy_creative_agent_3_0.app.shared_capabilities import CapabilityInput, SharedCapabilityRegistry
 from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster import (
     ModeAwareRoleDirector,
     VisualCapabilityClusterModule,
+)
+from alchemy_creative_agent_3_0.app.shared_capabilities.visual_cluster.review_evidence import (
+    ExactReviewEvidenceResolver,
 )
 
 
@@ -262,14 +268,59 @@ def test_doc295_runtime_product_hint_is_reconciled_with_brain_human_profile() ->
 
 def test_doc295_visual_product_evidence_uses_the_shared_typed_fact_authority() -> None:
     assert has_product_profile_facts({"product_type": "bottle"}) is True
+    assert has_product_profile_facts({"required_text": ["Launch"]}) is True
     assert has_product_profile_facts({"platform": "amazon_us"}) is False
-    assert has_product_profile_facts(
+    compatibility_profile = {
+        "brand_or_project_name": "project",
+        "project_goal": "a human lifestyle image",
+        "project_context": {"template_id": "general_template"},
+        "variation_mode": "delivery_suite",
+    }
+    assert has_product_profile_facts(compatibility_profile) is False
+    assert product_profile_fact_items(compatibility_profile) == {}
+
+
+def test_doc295_general_compatibility_profile_does_not_activate_product_truth_path() -> None:
+    runtime = ScenarioRuntime()
+    result = runtime.plan_job(
         {
+            "user_input": "A woman crouching and holding a bottle in a supermarket aisle.",
+            "scenario_selection": {"scenario_id": "general_creative"},
+            "product_profile": {
+                "brand_or_project_name": "project",
+                "project_goal": "a human lifestyle image",
+                "project_context": {"template_id": "general_template"},
+                "variation_mode": "delivery_suite",
+                "effective_variation_mode": "delivery_suite",
+            },
+            "metadata": {"template_id": "general_template", "requested_image_count": 1},
+        }
+    )
+
+    assert result.status.value == "planned"
+    module_ids = [item.module_id for item in (result.capability_run.results if result.capability_run else [])]
+    assert "information_integrity_lock" not in module_ids
+    assert result.metadata["normalized_v3_job_intent"]["source_truth_locks"] == []
+    assert result.metadata["resolved_constraint_ledger"]["provider_projection"]["product_truth"] == {}
+
+
+def test_doc295_review_evidence_does_not_treat_compatibility_profile_as_product_source() -> None:
+    resolver = ExactReviewEvidenceResolver(asset_store=SimpleNamespace(), output_store=SimpleNamespace())
+    compatibility_request = SimpleNamespace(
+        product_profile={
             "brand_or_project_name": "project",
             "project_goal": "a human lifestyle image",
             "project_context": {"template_id": "general_template"},
-        }
-    ) is False
+        },
+        uploaded_asset_ids=[],
+    )
+    typed_request = SimpleNamespace(
+        product_profile={"required_text": ["Launch"]},
+        uploaded_asset_ids=[],
+    )
+
+    assert resolver._requested_channels(compatibility_request)["product_truth"] is False  # noqa: SLF001
+    assert resolver._requested_channels(typed_request)["product_truth"] is True  # noqa: SLF001
 
 
 def test_doc295_multi_output_provider_audit_reads_the_matching_brain_receipt() -> None:

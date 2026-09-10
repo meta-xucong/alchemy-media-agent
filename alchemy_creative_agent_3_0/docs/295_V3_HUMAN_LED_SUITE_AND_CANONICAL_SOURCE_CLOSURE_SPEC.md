@@ -79,20 +79,23 @@ For a fresh enforced V3 real-image request:
 1. Make the provider use one shared selector for the approved canonical record
    and resolve `user_direction_integrity` by the request's output index,
    preserving exact canonical prompt text and the Brain semantic receipt.
-2. In ScenarioRuntime, use typed product facts—not a non-empty compatibility
-   envelope—to create a pre-Brain General product binding.
+2. In ScenarioRuntime, use one shared typed-product-fact extractor—not a
+   non-empty compatibility envelope—for General product binding, capability
+   activation, normalized source-truth locks, and the resolved ledger.
 3. In the shared visual cluster, separate “product wording is allowed” from
    “product is the primary subject.” Make visible-person precedence explicit in
    General, then carry that primary subject through identity locks, references,
    mode quality, and suite role planning. Explicit product references remain
    product truth bindings even inside a human-led frame.
-4. Add regression coverage for:
+4. Review evidence must use the same typed-product-fact authority when deciding
+   whether product truth was requested; generic Project context remains context.
+5. Add regression coverage for:
    - a two-output canonical audit;
    - an enforced General mixed person/product profile;
    - E-Commerce isolation;
    - source projection and canonical prompt forwarding already covered by
      Doc293/294.
-5. Freeze and independently audit the candidate commit before any external
+6. Freeze and independently audit the candidate commit before any external
    mutation. Run local real generation with the same original test direction,
    inspect final prompt/source receipts and pixels, push the verified commit,
    then deploy that exact SHA through the governed release migration script.

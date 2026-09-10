@@ -95,7 +95,9 @@ PRODUCT_FACT_FIELDS = {
     "product_name", "product_category", "product_type", "category", "sku",
     "brand", "brand_name", "material", "materials", "color", "colors",
     "dimensions", "size", "features", "selling_points", "claims",
-    "must_keep_facts", "product_facts", "appearance",
+    "must_keep_facts", "product_facts", "appearance", "required_text",
+    "facts", "visible_attributes", "immutable_attributes", "product_specs",
+    "core_selling_points", "avoid_claims", "apparel_construction",
 }
 
 
@@ -367,13 +369,24 @@ def _has_non_negated_person_signal(text: str) -> bool:
     )
 
 
-def has_product_profile_facts(product_profile: dict[str, Any]) -> bool:
+def product_profile_fact_items(product_profile: dict[str, Any] | None) -> dict[str, Any]:
+    """Return only typed product facts from a profile transport envelope."""
+
+    if not isinstance(product_profile, dict):
+        return {}
+    return {
+        key: value
+        for key, value in product_profile.items()
+        if isinstance(key, str)
+        and key in PRODUCT_FACT_FIELDS
+        and value not in (None, "", [], {})
+    }
+
+
+def has_product_profile_facts(product_profile: dict[str, Any] | None) -> bool:
     """Recognize typed product facts, excluding generic project context."""
 
-    return isinstance(product_profile, dict) and any(
-        key in PRODUCT_FACT_FIELDS and value not in (None, "", [], {})
-        for key, value in product_profile.items()
-    )
+    return bool(product_profile_fact_items(product_profile))
 
 
 def _has_product_facts(product_profile: dict[str, Any]) -> bool:

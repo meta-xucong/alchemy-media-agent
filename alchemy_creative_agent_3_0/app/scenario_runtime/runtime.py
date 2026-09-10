@@ -76,6 +76,7 @@ from ..shared_capabilities.activation import (
     VisualTaskProfile,
     compatibility_policy,
     has_product_profile_facts,
+    product_profile_fact_items,
 )
 from ..shared_capabilities.visual_cluster.plugins import VisualCapabilityPlugin, VisualClusterPluginRegistry
 from ..shared_capabilities.visual_cluster.human_photorealism import (
@@ -4493,6 +4494,7 @@ class ScenarioRuntime:
             else "provider_native_no_forced_text"
         )
         template_id = self._template_id(request, resolution)
+        product_facts = product_profile_fact_items(request.product_profile)
         normalized = NormalizedV3JobIntent(
             intent_id=stable_id(
                 "normalized_v3_job_intent",
@@ -4531,10 +4533,10 @@ class ScenarioRuntime:
                     "channel": "product_truth",
                     "owner": "product_identity",
                     "source": "product_profile",
-                    "fields": sorted(str(key) for key, value in request.product_profile.items() if value not in (None, "", [], {})),
+                    "fields": sorted(product_facts),
                 }
             ]
-            if request.product_profile
+            if product_facts
             else [],
             provenance=[
                 {
@@ -5171,7 +5173,7 @@ class ScenarioRuntime:
             executor_ref = self.visual_capability_registry.executor_ref(capability_id)
             if executor_ref:
                 executor_ids.append(executor_ref)
-            if capability_id == "product_identity" and request.product_profile:
+            if capability_id == "product_identity" and has_product_profile_facts(request.product_profile):
                 executor_ids.append("information_integrity_lock")
         parameters = request.scenario_selection.parameters if request.scenario_selection else {}
         if isinstance(parameters, dict) and parameters.get("use_case_library"):
@@ -5669,9 +5671,8 @@ class ScenarioRuntime:
             has_reference_evidence=bool(self._uploaded_assets(request)),
         )
 
-        for key, value in sorted(dict(request.product_profile or {}).items()):
-            if value in (None, "", [], {}):
-                continue
+        product_facts = product_profile_fact_items(request.product_profile)
+        for key, value in sorted(product_facts.items()):
             entries.append(
                 ResolvedConstraintEntry(
                     constraint_id=stable_id("constraint", normalized_intent.intent_id, "product_truth", key),
@@ -5759,11 +5760,7 @@ class ScenarioRuntime:
                     "resolution": matching.resolution if matching is not None else "accepted",
                 }
             )
-        product_truth = {
-            str(key): value
-            for key, value in dict(request.product_profile or {}).items()
-            if value not in (None, "", [], {})
-        }
+        product_truth = dict(product_facts)
         template_evidence_retry_contract = self._template_delivery_evidence_retry_contract(resolved_deliverables)
         provider_projection = {
             "projection_version": "resolved_constraint_ledger_v1",
@@ -7387,7 +7384,7 @@ class ScenarioRuntime:
                 module_ids.append("history_reference")
         if request.uploaded_assets or request.uploaded_asset_ids:
             module_ids.extend(["asset_role_analyzer", "asset_binding_planner", "prompt_constraint_compiler"])
-        if request.product_profile:
+        if has_product_profile_facts(request.product_profile):
             module_ids.extend(["information_integrity_lock", "prompt_constraint_compiler"])
         use_case_library = isinstance(parameters, dict) and bool(parameters.get("use_case_library"))
         if use_case_library:

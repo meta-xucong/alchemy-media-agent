@@ -12,6 +12,7 @@ from ...creative_core.doc281_output_plan_binding import (
     DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY,
     validate_doc73_binding,
 )
+from ..activation.fallback import has_product_profile_facts
 from .contracts import ReviewEvidenceChannel, ReviewEvidencePlan
 
 
@@ -886,7 +887,11 @@ class ExactReviewEvidenceResolver:
             reasons.append("mcp_operation_binding")
         return list(dict.fromkeys(reasons))
     def _requested_channels(self, request: Any) -> dict[str, bool]:
-        product = bool(getattr(request, "product_profile", None)) if request is not None else False
+        product = (
+            has_product_profile_facts(getattr(request, "product_profile", None))
+            if request is not None
+            else False
+        )
         person = False
         uploaded_ids = _dedupe_strings(getattr(request, "uploaded_asset_ids", []) if request is not None else [])
         for asset_id in uploaded_ids:
