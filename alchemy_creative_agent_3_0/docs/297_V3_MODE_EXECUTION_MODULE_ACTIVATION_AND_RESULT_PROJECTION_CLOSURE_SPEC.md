@@ -1,6 +1,6 @@
 # V3 Mode Execution, Module Activation, and Result Projection Closure
 
-Status: implementation complete; delivery_suite and selection_candidates real-provider acceptance passed; creative_exploration and format_layout_adaptation remain externally blocked in supplementary VPS validation
+Status: implementation complete; the four explicitly validated General routes (`delivery_suite`, `selection_candidates`, `creative_exploration`, and `format_layout_adaptation`) passed real-provider acceptance; one-image mode-audit projection follow-up remains open
 
 ## 1. Scope and objective
 
@@ -474,3 +474,54 @@ Evidence: `audit-mode-jobs-current-9ef8e91d8ef1694874beb361a8a306c51dbe8219.json
 `selection-cf55-review.json`, `selection-cf55-provider.json`, and
 `selection-cf55-bindings.json` under
 `.controlled-validation/doc297-vps-real-20260910/`.
+
+## 12. Transport attribution correction and final supplementary acceptance (2026-09-11)
+
+Fresh submissions were run after a code audit of the two prior
+failure classes. The concrete Provider failure was not a missing mode prompt
+or a second retry opportunity: the OpenAI-compatible image adapter had already
+made its bounded three total fresh requests and received an explicit upstream
+502 (`terminal_failed`, `exhausted`, `explicit_failure=true`,
+`acceptance_unknown=false`). Doc286 therefore correctly prevented the outer
+router from reopening another retry budget. The defect was failure-code
+materialization: nested timeout configuration fields caused the stable 502
+failure to be reported as `provider_timeout` instead of `provider_unavailable`.
+The separate `remote_brain_unavailable` jobs stopped before durable planning
+and remain external availability evidence; no local Brain fallback was added.
+
+The minimal correction was committed as
+`65034864ec23443d6e517b83132e3f09ba3dbb30` in
+`alchemy_creative_agent_3_0/app/generation_router/providers.py`: a structured
+5xx status now takes precedence over timeout text when deriving the stable
+Provider failure code. The adapter/outer retry ownership, accepted-unknown
+guard, mode routing, Brain prompt authority, and review gate were unchanged.
+The focused transport suite passed 6 tests; adjacent Provider, Vision, Brain
+timeout, and mode-projection suites passed 48, 40, 17, and 21 tests. Compile
+and whitespace checks passed. The independent read-only audit for this fixed
+code returned PASS; its bounded evidence and limitations are recorded in
+`.controlled-validation/doc297-vps-real-20260910/audit-receipt-65034864-20260911.md`.
+
+The corrected commit was deployed to the governed VPS release
+`/opt/alchemy-media-agent-releases/v3-release-governed-20260911T004509Z-65034864ec23`.
+Using the same project `project_200ef57976` and the exact original prompt
+(2,196 UTF-8 characters, 5,420 bytes, SHA-256
+`f37928b680e56b7258583f0ab27b4232ea5bafe68703d3fb8628bde3b6a5d2d7`), fresh
+real-provider submissions completed:
+
+| Mode | Job | Prompt/Brain | Provider and review | Delivery |
+| --- | --- | --- | --- | --- |
+| `creative_exploration` | `job_f69a410466` | real DeepSeek `deepseek-v4-pro`; canonical prompt approved and semantically complete; protected user intent lossless | real `gpt-image-2`; real pixels; Vision `pass/verified`; no issue codes | `ready`, output `v3_output_e8efcfaf49d248458cc6` |
+| `format_layout_adaptation` | `job_869ca3ff66` | real DeepSeek `deepseek-v4-pro`; canonical prompt approved and semantically complete; protected user intent lossless | real `gpt-image-2`; real pixels; Vision `pass/verified`; no issue codes | `ready`, output `v3_output_c813fa8fc6a946adb046` |
+
+Both jobs preserved their requested, effective, and continuation variation-mode
+fields and used no deterministic creative fallback. Because each run asked for
+one image, the set-level variation contract is correctly `not_applicable` and
+no multi-output variation receipt is fabricated. A remaining public compact
+projection limitation is visible in both records: `mode_execution_audit` has
+`mode=null` and `projection_status=missing`, while the underlying planning and
+generation metadata retain the effective variation mode and selected mode
+fields. This is an observability follow-up and is not evidence of prompt loss,
+module activation failure, Provider substitution, or failed real-pixel review.
+
+Append-only evidence is recorded in
+`.controlled-validation/doc297-vps-real-20260910/retest-summary-65034864-20260911.md`.
