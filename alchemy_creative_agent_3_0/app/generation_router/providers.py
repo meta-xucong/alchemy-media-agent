@@ -2104,6 +2104,13 @@ class ProductionImageGenerationProvider(GenerationProvider):
                 if has_references
                 else "image_generation_invalid_request_unattributed"
             )
+        # A concrete upstream 5xx is an availability failure even when the
+        # adapter also includes timeout settings in nested transport audit.
+        # Those settings describe the configured deadline, not the observed
+        # terminal cause. Prefer the typed response status over diagnostic
+        # text so an explicit 502 is not projected as provider_timeout.
+        if structured_status_code is not None and 500 <= structured_status_code < 600:
+            return "provider_unavailable"
 
         timeout_markers = ("timeouterror", "timeout", "timed out", "gateway timeout", "read timeout")
         if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or any(marker in message for marker in timeout_markers):

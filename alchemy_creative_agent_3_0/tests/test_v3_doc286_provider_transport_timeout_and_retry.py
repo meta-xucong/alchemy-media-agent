@@ -198,3 +198,25 @@ def test_v3_wrapper_does_not_replay_an_adapter_terminal_outcome(monkeypatch) -> 
         )
 
     assert calls == 1
+
+
+def test_v3_explicit_5xx_failure_code_ignores_nested_timeout_configuration() -> None:
+    provider = ProductionImageGenerationProvider()
+    error = ProviderRuntimeError(
+        "OpenAI image generation failed.",
+        provider="openai_gpt_image",
+        detail={
+            "status_code": 502,
+            "operation_timeout_seconds": 600.0,
+            "runtime_transport": {"client_timeout_seconds": 600.0},
+            "transport_outcome": {
+                "request_state": "terminal_failed",
+                "retryability": "exhausted",
+                "status_code": 502,
+                "failure_code": "provider_transient",
+                "acceptance_unknown": False,
+            },
+        },
+    )
+
+    assert provider._provider_failure_code(error, reference_assets=[]) == "provider_unavailable"  # noqa: SLF001
