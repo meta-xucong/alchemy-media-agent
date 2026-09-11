@@ -4,6 +4,7 @@ import pytest
 
 from alchemy_creative_agent_3_0.app.product_api import V3ProductApiService
 from alchemy_creative_agent_3_0.app.product_api.contracts import ProductJobStatusValue
+from alchemy_creative_agent_3_0.app.product_api.outputs import V3GeneratedOutputStore
 from alchemy_creative_agent_3_0.app.schemas import (
     AssetSpec,
     AssetType,
@@ -97,6 +98,95 @@ def _enforced_envelope(capability_projection: dict) -> dict:
             },
         },
     }
+
+
+_ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+
+def _mode_restore_result(mode: str, image_count: int):
+    specs = [
+        AssetSpec(
+            asset_id=f"asset_doc297_{index}",
+            asset_type=AssetType.SOCIAL_COVER,
+            platform=Platform.GENERIC_SOCIAL,
+            aspect_ratio="4:5",
+            purpose="mode restore regression fixture",
+            priority=index,
+        )
+        for index in range(1, image_count + 1)
+    ]
+    packaged = [
+        PackagedAsset(
+            asset_id=spec.asset_id,
+            asset_type=spec.asset_type,
+            platform=spec.platform,
+            aspect_ratio=spec.aspect_ratio,
+            purpose=spec.purpose,
+            uri=f"memory://doc297-output-{index}",
+            metadata={
+                "selected_candidate_id": f"candidate_doc297_{index}",
+                "candidate_metadata": {
+                    "output_id": f"v3_output_{index:020x}",
+                    "output_index": index,
+                },
+            },
+        )
+        for index, spec in enumerate(specs, 1)
+    ]
+    capability_projection = {
+        "effective_variation_mode": mode,
+        "mode_execution_policy": {"mode": mode, "role_strategy": f"{mode}_roles"},
+        "mode_quality_profile": {"mode": mode, "profile": "regression"},
+        "variation_execution_mode": mode,
+        "variation_execution_requested_image_count": image_count,
+        "variation_execution_contract_enforced": True,
+    }
+    if image_count > 1:
+        capability_projection.update(
+            {
+                "role_specific_generation_plan": {
+                    "mode": mode,
+                    "role_recipes": [
+                        {"index": index, "role_key": f"{mode}_role_{index}"}
+                        for index in range(1, image_count + 1)
+                    ],
+                },
+                "variation_execution_contract": {"mode": mode, "count": image_count},
+                "variation_execution_contract_binding": {"mode": mode, "count": image_count},
+                "variation_execution_suite_direction_authoritative": True,
+            }
+        )
+    envelope = _enforced_envelope(capability_projection)
+    if image_count == 1:
+        envelope["activation_plan"]["dependency_order"] = ["visual_grammar"]
+        envelope["activation_plan"]["active_capabilities"] = [
+            {"capability_id": "visual_grammar", "activation_mode": "required"}
+        ]
+        envelope["active_capability_ids"] = ["visual_grammar"]
+    return SimpleNamespace(
+        planning_result_id="planning_doc297_mode_restore",
+        metadata={
+            "scenario_id": "general_creative",
+            "template_id": "general_template",
+            "requested_image_count": image_count,
+            "effective_variation_mode": mode,
+            "capability_execution_envelope": envelope,
+        },
+        creative_job=SimpleNamespace(metadata={}),
+        series_plan=SeriesPlan(
+            series_plan_id="series_doc297_mode_restore",
+            job_id="job_doc297_mode_restore",
+            assets=specs,
+        ),
+        asset_pack=CommercialAssetPack(
+            asset_pack_id="pack_doc297_mode_restore",
+            job_id="job_doc297_mode_restore",
+            assets=packaged,
+            planning_only=False,
+        ),
+        evaluation_reports=[],
+        prompt_compilations=[],
+    )
 
 
 def test_doc297_projects_frozen_multi_image_mode_into_candidate_and_lifecycle():
@@ -421,6 +511,23 @@ def test_doc297_enforced_single_image_reads_resolved_mode_identity_without_suite
     assert projected["mode_execution_audit"]["mode"] == "format_layout_adaptation"
     assert "variation_execution_contract" not in projected
     assert "role_specific_generation_plan" not in projected
+
+
+def test_doc297_enforced_top_level_provider_projection_is_not_mode_authority():
+    envelope = _enforced_envelope({})
+    envelope["resolved_constraint_ledger"]["provider_projection"]["effective_variation_mode"] = (
+        "delivery_suite"
+    )
+    result = _result(
+        metadata={
+            "effective_variation_mode": "delivery_suite",
+            "capability_execution_envelope": envelope,
+        }
+    )
+
+    projection = V3ProductApiService()._authoritative_mode_execution_projection(result)  # noqa: SLF001
+
+    assert projection == {}
 
 
 def test_doc297_shadow_empty_ledger_projection_is_a_safe_empty_projection():
@@ -774,8 +881,12 @@ def test_doc297_doc270_phase3_status_exposes_both_public_audits(monkeypatch):
             "requested_image_count": 2,
             "capability_execution_envelope": _enforced_envelope(
                 {
+                    "effective_variation_mode": "delivery_suite",
                     "mode_execution_policy": {"mode": "delivery_suite"},
                     "variation_execution_contract": {"mode": "delivery_suite", "count": 2},
+                    "variation_execution_mode": "delivery_suite",
+                    "variation_execution_requested_image_count": 2,
+                    "variation_execution_contract_enforced": True,
                 }
             ),
         }
@@ -790,6 +901,8 @@ def test_doc297_doc270_phase3_status_exposes_both_public_audits(monkeypatch):
     status = service._doc270_general_phase3_safe_status(_record(result))  # noqa: SLF001
 
     assert status is not None
+    assert status.metadata["effective_variation_mode"] == "delivery_suite"
+    assert status.metadata["variation_execution_mode"] == "delivery_suite"
     assert status.metadata["mode_execution_audit"]["mode"] == "delivery_suite"
     public_activation_audit = status.metadata["capability_activation_audit"]
     assert public_activation_audit["activation_mode"] == "enforced"
@@ -797,3 +910,106 @@ def test_doc297_doc270_phase3_status_exposes_both_public_audits(monkeypatch):
     assert "plan_id" not in public_activation_audit
     assert "fingerprint" not in public_activation_audit
     assert "active_evidence_ids" not in public_activation_audit
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "selection_candidates",
+        "delivery_suite",
+        "creative_exploration",
+        "format_layout_adaptation",
+    ],
+)
+@pytest.mark.parametrize("image_count", [1, 2])
+def test_doc297_output_store_restore_preserves_nested_mode_projection(tmp_path, mode, image_count):
+    result = _mode_restore_result(mode, image_count)
+    # Model the pre-runtime-patch result: Product API receives the effective
+    # General mode, but the nested durable projection has not been completed.
+    result.metadata["capability_execution_envelope"]["resolved_constraint_ledger"]["provider_projection"][
+        "capability_projection"
+    ].pop("effective_variation_mode")
+    output_store = V3GeneratedOutputStore(tmp_path / "outputs")
+    service = V3ProductApiService(output_store=output_store)
+
+    for packaged in result.asset_pack.assets:
+        index = packaged.metadata["candidate_metadata"]["output_index"]
+        output_store.save_base64_output(
+            job_id=result.asset_pack.job_id,
+            candidate_id=packaged.metadata["selected_candidate_id"],
+            asset_id=packaged.asset_id,
+            provider="local-test",
+            model="fixture",
+            encoded_image=_ONE_PIXEL_PNG,
+            output_id=packaged.metadata["candidate_metadata"]["output_id"],
+            metadata={"output_index": index},
+        )
+
+    service._persist_mode_execution_projection_to_output_store(result)  # noqa: SLF001
+
+    persisted = output_store.get_output("v3_output_00000000000000000001")
+    assert persisted is not None
+    persisted_projection = (
+        persisted.metadata["capability_execution_envelope"]["resolved_constraint_ledger"]
+        ["provider_projection"]["capability_projection"]
+    )
+    assert persisted_projection["effective_variation_mode"] == mode
+    assert "effective_variation_mode" not in persisted.metadata
+
+    restored = V3ProductApiService(
+        output_store=V3GeneratedOutputStore(tmp_path / "outputs"),
+    )._status_from_output_store(result.asset_pack.job_id)  # noqa: SLF001
+
+    assert restored is not None
+    assert restored.metadata["effective_variation_mode"] == mode
+    assert restored.metadata["mode_execution_audit"]["mode"] == mode
+    assert restored.metadata["mode_execution_audit"]["requested_image_count"] == image_count
+    assert restored.metadata["mode_execution_audit"]["contract_status"] == (
+        "not_applicable" if image_count == 1 else "active"
+    )
+    for candidate in restored.candidates:
+        assert candidate.metadata["effective_variation_mode"] == mode
+        assert candidate.metadata["variation_execution_mode"] == mode
+        if image_count == 1:
+            assert "variation_execution_contract" not in candidate.metadata
+            assert "role_specific_generation_plan" not in candidate.metadata
+        else:
+            assert candidate.metadata["variation_execution_contract"] == {"mode": mode, "count": image_count}
+            assert candidate.metadata["role_specific_generation_plan"]["mode"] == mode
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "selection_candidates",
+        "delivery_suite",
+        "creative_exploration",
+        "format_layout_adaptation",
+    ],
+)
+@pytest.mark.parametrize("image_count", [1, 2])
+def test_doc297_closure_status_preserves_nested_mode_execution_facts(mode, image_count):
+    result = _mode_restore_result(mode, image_count)
+    record = _record(result)
+    record.status = ProductJobStatusValue.BLOCKED
+    record.request.metadata = {
+        "project_id": "project_doc297",
+        "template_id": "general_template",
+        "provider_deliverability_closure_receipt": {"state": "closed"},
+    }
+
+    status = V3ProductApiService()._status_from_record(record)  # noqa: SLF001
+
+    assert status.metadata["effective_variation_mode"] == mode
+    assert status.metadata["variation_execution_mode"] == mode
+    assert status.metadata["mode_execution_audit"]["mode"] == mode
+    assert status.metadata["mode_execution_audit"]["requested_image_count"] == image_count
+    assert status.metadata["mode_execution_audit"]["contract_status"] == (
+        "not_applicable" if image_count == 1 else "active"
+    )
+    if image_count == 1:
+        assert "variation_execution_contract" not in status.metadata
+        assert "role_specific_generation_plan" not in status.metadata
+    else:
+        assert status.metadata["variation_execution_contract"]["mode"] == mode
+        assert status.metadata["role_specific_generation_plan"]["mode"] == mode

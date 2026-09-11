@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import base64
+import copy
 import hashlib
 import json
 import math
@@ -3604,6 +3605,7 @@ class V3ProductApiService:
             return self._blocked_submitted_body_mcp_resume(record)
         if submitted_mcp_generation_result is not None:
             record.generation_result = submitted_mcp_generation_result
+            self._persist_mode_execution_projection_to_output_store(record.generation_result)
             record.status = ProductJobStatusValue.FINALIZING
             record.lifecycle = self._build_lifecycle(record)
             self.job_store.save(record)
@@ -3648,6 +3650,7 @@ class V3ProductApiService:
         # nothing to inspect, retry visually, or deliver.
         no_pixel_failure = self._specialized_no_pixel_failure_summary(generation_result)
         if no_pixel_failure is not None:
+            self._persist_mode_execution_projection_to_output_store(generation_result)
             record.generation_result = generation_result
             record.scenario_resolution = generation_runtime_result.scenario_resolution
             record.capability_run = generation_runtime_result.capability_run
@@ -3725,6 +3728,7 @@ class V3ProductApiService:
         generation_result = self._apply_reviewed_delivery_preference(generation_result)
         if not self._background_generation_attempt_is_current(record, background_attempt_id):
             return self._status_from_record(record)
+        self._persist_mode_execution_projection_to_output_store(generation_result)
         record.generation_result = generation_result
         record.scenario_resolution = generation_runtime_result.scenario_resolution
         record.capability_run = generation_runtime_result.capability_run
@@ -8293,6 +8297,116 @@ class V3ProductApiService:
             return priority
         return ordinal if type(ordinal) is int and ordinal >= 1 else None
 
+    def _persist_mode_execution_projection_to_output_store(self, result: PlanningResult | Any) -> None:
+        """Bind the frozen mode projection to each durable generated output."""
+
+        self._ensure_effective_mode_in_authoritative_projection(result)
+        projection = self._authoritative_mode_execution_projection(result)
+        if not projection:
+            return
+        updater = getattr(self.output_store, "update_metadata", None)
+        if not callable(updater):
+            return
+        persisted_projection = {
+            key: value
+            for key, value in projection.items()
+            if key != "mode_execution_projection_source"
+        }
+        envelope = self._capability_execution_envelope_from_result(result)
+        ledger = envelope.get("resolved_constraint_ledger") if isinstance(envelope, dict) else None
+        if not isinstance(ledger, dict):
+            return
+        assets_by_id = {
+            asset.asset_id: asset
+            for asset in (getattr(result, "series_plan", None).assets or [])
+        } if getattr(result, "series_plan", None) is not None else {}
+        for ordinal, packaged in enumerate(getattr(result.asset_pack, "assets", []) or [], 1):
+            candidate_metadata = dict(getattr(packaged, "metadata", {}).get("candidate_metadata") or {})
+            output_id = str(candidate_metadata.get("output_id") or "").strip()
+            if not output_id:
+                continue
+            asset_spec = assets_by_id.get(getattr(packaged, "asset_id", None))
+            output_index = self._output_index_for_packaged(
+                asset_spec,
+                packaged,
+                candidate_metadata,
+                dict(getattr(asset_spec, "metadata", {}) or {}),
+                ordinal,
+            )
+            bound_projection = dict(persisted_projection)
+            if output_index is not None:
+                bound_projection["output_index"] = output_index
+                recipe = self._mode_role_recipe_from_projection(
+                    projection,
+                    candidate_metadata,
+                    output_index=output_index,
+                )
+                if recipe:
+                    bound_projection["mode_role_recipe"] = recipe
+                else:
+                    bound_projection.pop("mode_role_recipe", None)
+            durable_envelope = {
+                key: copy.deepcopy(envelope[key])
+                for key in (
+                    "activation_mode",
+                    "envelope_id",
+                    "execution_fingerprint",
+                    "activation_plan",
+                    "active_capability_ids",
+                )
+                if key in envelope
+            }
+            durable_envelope["resolved_constraint_ledger"] = {
+                "ledger_id": ledger.get("ledger_id"),
+                "provider_projection": {
+                    "capability_projection": copy.deepcopy(bound_projection),
+                },
+            }
+            updater(
+                output_id,
+                {
+                    # Doc297's nested ledger projection is the only durable
+                    # mode authority.  Do not add a sibling effective-mode
+                    # fallback for restore or closure readers.
+                    "capability_execution_envelope": durable_envelope,
+                    **({"output_index": output_index} if output_index is not None else {}),
+                },
+            )
+
+    def _ensure_effective_mode_in_authoritative_projection(self, result: PlanningResult | Any) -> None:
+        """Complete the durable ledger projection before any output is stored."""
+
+        result_metadata = getattr(result, "metadata", {})
+        if not isinstance(result_metadata, dict):
+            return
+        envelope = self._capability_execution_envelope_from_result(result)
+        activation_plan = envelope.get("activation_plan") if isinstance(envelope, dict) else None
+        activation_mode = str(
+            envelope.get("activation_mode")
+            or (activation_plan.get("activation_mode") if isinstance(activation_plan, dict) else "")
+            or ""
+        ).strip().lower()
+        if activation_mode != "enforced":
+            return
+        scenario_id = str(result_metadata.get("scenario_id") or "").strip()
+        template_id = str(result_metadata.get("template_id") or "").strip()
+        if scenario_id != "general_creative" or template_id != "general_template":
+            return
+        ledger = envelope.get("resolved_constraint_ledger")
+        provider_projection = ledger.get("provider_projection") if isinstance(ledger, dict) else None
+        capability_projection = (
+            provider_projection.get("capability_projection")
+            if isinstance(provider_projection, dict)
+            else None
+        )
+        if not isinstance(capability_projection, dict):
+            return
+        if self._projection_value_is_non_empty(capability_projection.get("effective_variation_mode")):
+            return
+        effective_mode = result_metadata.get("effective_variation_mode")
+        if self._projection_value_is_non_empty(effective_mode):
+            capability_projection["effective_variation_mode"] = effective_mode
+
     def _project_candidate_metadata_from_result(
         self,
         result: PlanningResult,
@@ -11167,6 +11281,16 @@ class V3ProductApiService:
                 "generation_lifecycle_timeout",
                 "generation_lifecycle_failure",
                 "background_generation_watchdog",
+                "effective_variation_mode",
+                "mode_execution_policy",
+                "role_specific_generation_plan",
+                "mode_quality_profile",
+                "variation_execution_contract",
+                "variation_execution_contract_binding",
+                "variation_execution_mode",
+                "variation_execution_requested_image_count",
+                "variation_execution_suite_direction_authoritative",
+                "variation_execution_contract_enforced",
                 "mode_execution_audit",
             )
             if key in lifecycle_metadata
@@ -11228,6 +11352,7 @@ class V3ProductApiService:
                 "source": "V3ProductApiService",
                 "rules_version": RULE_VERSION,
                 "v3_independent_product_api": True,
+                **self._mode_execution_status_projection(record, authoritative_only=True),
                 **{
                     key: metadata[key]
                     for key in ("project_id", "template_id", "template_manifest_id", "project_mode")
@@ -11901,11 +12026,13 @@ class V3ProductApiService:
             # A closure is consumed through Project Mode's deliberately small
             # current-operation projection. Do not turn a terminal Job status
             # into another route for its prompt or private binding evidence.
-            return {
+            status_metadata = {
                 key: request_metadata[key]
                 for key in ("project_id", "template_id", "template_manifest_id", "project_mode")
                 if key in request_metadata
             }
+            status_metadata.update(self._mode_execution_status_projection(record, authoritative_only=True))
+            return status_metadata
         allowed_keys = {
             "project_id",
             "template_id",
@@ -12010,11 +12137,41 @@ class V3ProductApiService:
             public_activation_audit = self._doc270_public_capability_activation_audit(result)
             if public_activation_audit:
                 status_metadata["capability_activation_audit"] = public_activation_audit
-            execution_projection = self._authoritative_mode_execution_projection(result)
-            mode_audit = self._mode_execution_audit_from_result(result, execution_projection)
-            if mode_audit:
-                status_metadata["mode_execution_audit"] = mode_audit
+            status_metadata.update(self._mode_execution_status_projection(record))
         return status_metadata
+
+    def _mode_execution_status_projection(
+        self,
+        record: ProductJobRecord | Any,
+        *,
+        authoritative_only: bool = False,
+    ) -> dict[str, Any]:
+        """Expose only the frozen ledger mode facts on public status surfaces."""
+
+        result = getattr(record, "generation_result", None) or getattr(record, "planning_result", None)
+        if result is None and hasattr(record, "metadata"):
+            result = record
+        if result is None:
+            return {}
+        execution_projection = self._authoritative_mode_execution_projection(result)
+        if not execution_projection:
+            if authoritative_only:
+                return {}
+            mode_audit = self._mode_execution_audit_from_result(result, {})
+            return {"mode_execution_audit": mode_audit} if mode_audit else {}
+        if authoritative_only and execution_projection.get("mode_execution_projection_source") != (
+            "resolved_constraint_ledger.provider_projection.capability_projection"
+        ):
+            return {}
+        public_projection = {
+            key: value
+            for key, value in execution_projection.items()
+            if key not in {"mode_execution_projection_source", "mode_role_recipe"}
+        }
+        mode_audit = self._mode_execution_audit_from_result(result, execution_projection)
+        if mode_audit:
+            public_projection["mode_execution_audit"] = mode_audit
+        return public_projection
 
     @staticmethod
     def _doc270_general_activation_public_state(record: ProductJobRecord) -> dict[str, str] | None:
@@ -12974,6 +13131,7 @@ class V3ProductApiService:
         if not records:
             return None
         records = sorted(records, key=lambda item: item.created_at or "")
+        restored_mode_projection = self._mode_execution_status_projection(records[0], authoritative_only=True)
         asset_series: list[AssetSeriesItem] = []
         candidates: list[CandidateSummary] = []
         for index, record in enumerate(records):
@@ -13039,6 +13197,7 @@ class V3ProductApiService:
                 "v3_independent_product_api": True,
                 "restored_from_output_store": True,
                 "output_count": len(records),
+                **restored_mode_projection,
                 **self._workflow_artifacts_from_output_records(records),
             },
         )
@@ -13137,7 +13296,12 @@ class V3ProductApiService:
             "format": record.output_format,
             "v3_owned_output": True,
         }
-        return self._project_candidate_metadata_from_result(record, metadata)
+        projected = self._project_candidate_metadata_from_result(record, metadata)
+        # The nested envelope is a durable restore input, not a public
+        # metadata surface. Its safe mode facts were flattened above.
+        projected.pop("capability_execution_envelope", None)
+        projected.pop("resolved_constraint_ledger", None)
+        return projected
 
     def _aspect_ratio_from_output_record(self, record: V3GeneratedOutputRecord) -> str:
         width = int(record.width or 0)
