@@ -1,6 +1,6 @@
 # V3 Brain 容量、请求归因与输出恢复闭环收口规范
 
-状态：本地实现、确定性验收与独立审计完成，部署后 VPS 验收待执行（2026-09-12）
+状态：本地实现、确定性验收与独立审计完成；部署后 VPS Brain 探针和四模式受控真实任务已通过链路验收，`creative_exploration` 的 Doc276 人工确认仍待完成（2026-09-12）
 范围：V3 foundation 的 LLM Brain transport/adapter、finalizer lifecycle、Product API 输出恢复与 Project Mode 选择恢复。
 上游参考：Doc286、Doc288、Doc290、Doc294、Doc296、Doc297、Doc298，以及仓库 `AGENTS.md` 的 theory-first、code-first audit 和 Core/Enhanced/Auxiliary 分层规则。
 
@@ -126,7 +126,7 @@ Project Mode 的公共 response 也统一经过安全投影：mutation 返回中
 - 全量 V3 + 根目录回归：`3673 passed, 4 warnings`；
 - `compileall`、`git diff --check`：通过；release staging hygiene：`2 tests OK`；
 - 最终独立只读审计：Brain lifecycle、Runtime/Product fail-closed、Project Mode 公共响应投影均 PASS；
-- 以上是部署前证据，不能替代 VPS 健康检查、Brain 探针、原始 prompt 受控真实生成和图像质量复核。
+- 以上是部署前证据，不能替代 VPS 健康检查、Brain 探针、原始 prompt 受控真实生成和图像质量复核。部署后上述链路已执行；其中一个模式的图像因人脸一致性 attestation 不可验证而保留人工确认状态，不能把该模式报告为自动交付通过。
 
 ## 6. 验收矩阵
 
@@ -147,14 +147,14 @@ Project Mode 的公共 response 也统一经过安全投影：mutation 返回中
 
 ### 6.2 VPS 受控真实验收
 
-部署后按以下顺序执行：
+部署后按以下顺序执行（本轮已完成第 1–5 项）：
 
 1. 健康检查和 `/v1/models`；
 2. 最小 non-stream/stream Chat Completions；
-3. 原始 prompt 的完整 production-shape Brain 请求，核对 prompt SHA、`max_tokens`、finish reason、content/JSON 完整性和安全 lifecycle；
-4. 使用真实 V3 入口跑一次目标项目/模式，检查 Brain source projection、能力模块 receipt、canonical prompt 长度和 Provider 输入；
+3. 原始 prompt 的完整 production-shape Brain 请求，核对 prompt SHA、`max_tokens`、finish reason、content/JSON 完整性和安全 lifecycle；本轮 `max_tokens=20000`、`deepseek-v4-pro`、约 139.8 秒完成，完整 receipt 通过；
+4. 使用真实 V3 入口跑目标项目的四个生成模式，检查 Brain source projection、能力模块 receipt、canonical prompt 长度和 Provider 输入；四个任务均 `generated`，每个都有真实输出和完成的 pixel review，但 `creative_exploration` 因 `face_integrity_unverified` 保留人工确认；
 5. 失败时只保留 append-only safe audit，不自动重复真实生图；需要重试时必须先修复/验证代码假设；
-6. 只有本地测试、部署后链路和真实输出视觉复核都通过，才能报告总目标完成。
+6. 只有本地测试、部署后链路、四模式交付状态和真实输出视觉复核都通过，才能报告总目标完成；当前还不能越过 `creative_exploration` 的人工确认门槛，也未完成浏览器端可视化复核。
 
 VPS 证据只记录 job id、attempt id、prompt SHA、耗时、token 用量、finish reason、request acceptance 和状态，不记录 key、完整 prompt、response body 或 reasoning 原文。
 
@@ -169,4 +169,4 @@ VPS 证据只记录 job id、attempt id、prompt SHA、耗时、token 用量、f
 / 上游响应已开始但截断 / 合同返回不合格 / 本地响应校验错误
 ```
 
-未完成部署后真实验收前，不把本地回归通过描述为生产 Brain 已完全可用。
+部署后真实 Brain 探针和四模式链路目前证明：上游可达、复杂请求在 20k budget 下可完整返回、Alchemy 能正确记录 lifecycle 并让四种模式分别落盘；这不等于所有输出均已自动交付。`creative_exploration` 的 `face_integrity_unverified` 必须经过真实用户/浏览器确认后才能关闭剩余验收门槛。

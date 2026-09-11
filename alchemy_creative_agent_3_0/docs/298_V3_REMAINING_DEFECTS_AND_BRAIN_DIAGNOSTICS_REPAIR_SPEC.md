@@ -1,6 +1,6 @@
 # V3 剩余边界缺陷与 Brain 不可用诊断修复规范
 
-状态：本地实现、确定性验收与独立审计完成，部署后 VPS 验收待执行（2026-09-12）
+状态：本地实现、确定性验收与独立审计完成；VPS 健康、Brain 探针、原始提示词与四模式受控真实链路已执行。`creative_exploration` 的 Doc276 人脸一致性人工确认仍待用户验收（2026-09-12）
 范围：V3 Product API、LLM Brain transport/adapter、V3 generated-output restore  
 上游参考：Doc290、Doc293、Doc294、Doc296、Doc297，以及仓库 `AGENTS.md` 的 theory-first、code-first audit 和 Core/Enhanced/Auxiliary 分层规则。
 
@@ -19,7 +19,7 @@
 
 ### 2.1 Brain “不可用”不是单一故障
 
-只读探针显示：VPS 容器中的 `GET /v1/models`、最小 Chat Completions 请求、最小 streaming 请求均可通过 `aiself.vip` 返回 200；简化的 production-shape 请求也可返回。相同原始提示词的完整生产请求则在两次尝试中出现“已收到响应/开始流式响应，但未观察到完整 JSON”的长尾读取超时。
+只读探针显示：VPS 容器中的 `GET /v1/models`、最小 Chat Completions 请求、最小 streaming 请求均可通过 `aiself.vip` 返回 200；简化的 production-shape 请求也可返回。此前相同原始提示词的完整生产请求曾出现“已收到响应/开始流式响应，但未观察到完整 JSON”的长尾读取超时；在本次部署后的 `max_tokens=20000` 受控探针和真实 V3 任务中，Brain 均取得了完整合同。
 
 因此当前证据支持的结论是：
 
@@ -101,6 +101,15 @@ finalizer 遇到没有 typed receipt 的 `BrainProviderUnavailable` 时，`remot
 - 原始提示词 SHA-256 仍为 `f37928b680e56b7258583f0ab27b4232ea5bafe68703d3fb8628bde3b6a5d2d7`；
 - 真实 Brain 失败时能明确给出 `request_acceptance`、timeout phase、response/JSON 进度，而不泄露 prompt/body/provider 原文。
 
+部署后 VPS 证据（2026-09-12）：
+
+- active release 为 `/opt/alchemy-media-agent-releases/v3-release-governed-20260911T201923Z-4db73233b331`，代码提交为 `4db73233b331cdadef86fd74c902d67d8ee32579`；`/healthz`、`/api/v2/health` 和容器内 V2 health 均返回 200，V2 systemd 单元保持 active。
+- `aiself.vip` `/v1/models`、最小 non-stream/stream Chat Completions 均成功；完整 production-shape Brain 请求使用 `deepseek-v4-pro`、`max_tokens=20000`，约 139.8 秒完成，receipt 依次包含 dispatched、response_started、first_content_observed、complete_response_observed、json_parse_completed，无 recovery。
+- 四个真实 V3 任务均使用冻结原始提示词（2196 字符、5420 字节、SHA-256 `f37928b680e56b7258583f0ab27b4232ea5bafe68703d3fb8628bde3b6a5d2d7`），且持久化 `effective_variation_mode` 分别为 `selection_candidates`、`delivery_suite`、`creative_exploration`、`format_layout_adaptation`；四个 Provider prompt 指纹互不相同。
+- `selection_candidates`（`job_eb091e7eca`）、`delivery_suite`（`job_431ce8844e`）和 `format_layout_adaptation`（`job_c4275eea02`）各产生 1 个有预览/缩略图的输出，Brain `llm_used=true`、无 fallback，真实像素审查为 pass、推荐保留。
+- `creative_exploration`（`job_4da79ed1ab`）也产生了有预览/缩略图的真实输出，Brain 和模式质量均通过，视觉审查报告核心要求满足；但因 `face_integrity_unverified` 被置为 `manual_review`，不自动重试或自动交付。这是 Doc276 的安全人工确认门槛，不是上游不可达。
+- 本次每个模式请求 1 张图；多图模式的正式 variation contract 仍以本地确定性测试为依据，未把单图真实运行夸大为多图套图最终验收。浏览器端可视化复核因当前 CUA 浏览器不可用，未标记为通过。
+
 阶段通过不等于总目标完成；只有本地回归、独立审计、部署后探针和受控真实验收全部完成，才可报告最终可用。
 
 ## Addendum — Doc299 实施收口优先级（2026-09-11）
@@ -114,5 +123,4 @@ Brain response-capacity 缺陷：同一冻结请求在 VPS 上使用 12000 outpu
 收口；Doc299 仅 supersede 本文对应的容量/归因段落，其余 server-owned
 metadata、closure、mode projection 和 Core/Enhanced/Auxiliary 规则仍以本文为准。
 
-Doc299 的部署后真实 VPS 验收尚未完成前，本规范与 Doc299 都不得被解读为
-“Brain 生产可用”或“总目标已完成”。
+本次部署后真实验收证明 Brain 链路可达且 20k budget 下可取得完整合同；但因一个模式仍处于 Doc276 人工确认、且浏览器端可视化复核未完成，本规范与 Doc299 仍不得被解读为“所有输出已自动交付”或“总目标已完成”。
