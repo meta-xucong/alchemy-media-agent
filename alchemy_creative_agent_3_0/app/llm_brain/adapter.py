@@ -61,6 +61,7 @@ from .providers import (
     BrainTransportTimeoutError,
     V3LLMBrainProvider,
     pop_transport_receipt,
+    transport_failure_receipt,
 )
 from .stage_trace import record_stage_event
 from ..scenario_packs.ecommerce import (
@@ -123,10 +124,11 @@ class V3LLMBrainAdapter:
         execution_budget = self.execution_budget_receipt()
         http_status_code = _remote_provider_http_status_code(exc)
         transport_kind = _remote_provider_transport_kind(exc)
+        attempt_receipt = transport_failure_receipt(exc)
         finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
             getattr(exc, "_remote_brain_finalizer_lifecycle", None)
         )
-        return {
+        audit = {
             "remote_provider_error_class": _remote_provider_error_class(exc),
             "remote_brain_stage": _safe_remote_brain_stage(stage),
             **(
@@ -150,6 +152,11 @@ class V3LLMBrainAdapter:
                 else {}
             ),
             **(
+                {"remote_brain_transport_attempt": attempt_receipt}
+                if attempt_receipt
+                else {}
+            ),
+            **(
                 {"remote_brain_transport_failure": transport_failure}
                 if transport_failure
                 else {}
@@ -165,6 +172,13 @@ class V3LLMBrainAdapter:
                 else {}
             ),
         }
+        if attempt_receipt:
+            audit["remote_brain_request_started"] = bool(attempt_receipt.get("request_dispatched"))
+        elif finalizer_lifecycle:
+            audit["remote_brain_request_started"] = bool(
+                finalizer_lifecycle.get("remote_brain_request_started")
+            )
+        return audit
 
     def run(self, request: BrainRunRequest) -> BrainRunResult:
         if not _enabled():
@@ -327,6 +341,7 @@ class V3LLMBrainAdapter:
             }
             return result
         except (BrainProviderError, BrainProviderUnavailable, ValidationError) as exc:
+            failure_audit = self.provider_failure_audit(exc, stage=request.stage)
             serialization_failure = _remote_brain_serialization_failure(exc)
             record_stage_event(
                 "brain_adapter",
@@ -335,13 +350,18 @@ class V3LLMBrainAdapter:
                 terminal_reason=_remote_provider_error_class(exc),
                 extra=serialization_failure,
             )
-            fallback.warnings.append(str(exc))
             remote_http_status_code = _remote_provider_http_status_code(exc)
             remote_transport_failure = _remote_brain_transport_failure(exc)
+            safe_error_class = failure_audit.get(
+                "remote_provider_error_class", _remote_provider_error_class(exc)
+            )
+            fallback.warnings.append(
+                f"远程 Brain 请求失败（{safe_error_class}）；未使用未经签名的远程创意结果。"
+            )
             fallback.audit = {
                 **fallback.audit,
-                "remote_provider_error": str(exc)[:260],
-                "remote_provider_error_class": _remote_provider_error_class(exc),
+                "remote_provider_failure_recorded": True,
+                "remote_provider_error_class": safe_error_class,
                 **(
                     {"remote_provider_http_status_code": remote_http_status_code}
                     if remote_http_status_code is not None
@@ -349,6 +369,21 @@ class V3LLMBrainAdapter:
                 ),
                 "remote_brain_elapsed_ms": _elapsed_ms(started),
                 "remote_brain_stage": request.stage,
+                **(
+                    {"remote_brain_request_started": failure_audit["remote_brain_request_started"]}
+                    if isinstance(failure_audit.get("remote_brain_request_started"), bool)
+                    else {}
+                ),
+                **(
+                    {"remote_provider_transport_kind": failure_audit["remote_provider_transport_kind"]}
+                    if failure_audit.get("remote_provider_transport_kind")
+                    else {}
+                ),
+                **(
+                    {"remote_brain_transport_attempt": failure_audit["remote_brain_transport_attempt"]}
+                    if failure_audit.get("remote_brain_transport_attempt")
+                    else {}
+                ),
                 **(
                     {"remote_brain_transport_failure": remote_transport_failure}
                     if remote_transport_failure
@@ -434,11 +469,17 @@ class V3LLMBrainAdapter:
             data = self.provider.run(request)
             record_stage_event("brain_adapter", "canonical_finalizer_provider_returned", stage=request.stage)
         except (BrainProviderError, BrainProviderUnavailable) as exc:
+            attempt_receipt = transport_failure_receipt(exc)
+            request_started = (
+                bool(attempt_receipt.get("request_dispatched"))
+                if attempt_receipt
+                else True
+            )
             _attach_remote_brain_finalizer_lifecycle(
                 exc,
                 stage=request.stage,
                 provider_available=True,
-                remote_brain_request_started=True,
+                remote_brain_request_started=request_started,
                 response_started=_remote_brain_finalizer_response_started(exc),
                 failure_code=_remote_brain_finalizer_failure_code(exc),
             )

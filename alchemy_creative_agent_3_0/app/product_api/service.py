@@ -38,6 +38,7 @@ from ..generation_router.providers import (
     build_provider_generation_request,
 )
 from ..generation_router.mcp_materialization import McpMaterializationHandoffStore
+from ..llm_brain.contracts import BRAIN_TRANSPORT_TIMEOUT_PHASES
 from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
 from ..platform_adapters import V3BalanceAdapter, V3BalanceEstimate
 from ..photography_profiles import (
@@ -222,12 +223,16 @@ _REMOTE_BRAIN_TRANSPORT_ERROR_CLASSES = {
     "unknown",
 }
 
-_REMOTE_BRAIN_TIMEOUT_PHASES = {
-    "connect_timeout",
-    "read_timeout",
-    "write_timeout",
-    "pool_timeout",
-    "unknown",
+_REMOTE_BRAIN_TIMEOUT_PHASES = set(BRAIN_TRANSPORT_TIMEOUT_PHASES)
+_REMOTE_BRAIN_PROVIDER_TRANSPORT_KINDS = {
+    "connection_error",
+    "network_error",
+    "protocol_error",
+    "provider_api_error",
+    "read_error",
+    "timeout",
+    "transport_error",
+    "write_error",
 }
 
 # A deterministic, local-only pixel fixture for the mock runtime.  It gives
@@ -7807,6 +7812,7 @@ class V3ProductApiService:
         """
 
         mode_keys = (
+            "effective_variation_mode",
             "mode_execution_policy",
             "role_specific_generation_plan",
             "mode_role_recipe",
@@ -7865,16 +7871,17 @@ class V3ProductApiService:
                     if isinstance(ledger_projection, dict)
                     else None
                 )
-                if not isinstance(capability_projection, dict) or not capability_projection:
-                    return {}
+                if not isinstance(capability_projection, dict):
+                    capability_projection = {}
                 projection = {
                     key: capability_projection[key]
                     for key in mode_keys
                     if self._projection_value_is_non_empty(capability_projection.get(key))
                 }
                 if projection:
-                    projection["mode_execution_projection_source"] = (
-                        "resolved_constraint_ledger.provider_projection.capability_projection"
+                    projection.setdefault(
+                        "mode_execution_projection_source",
+                        "resolved_constraint_ledger.provider_projection.capability_projection",
                     )
                 return projection
 
@@ -12196,6 +12203,11 @@ class V3ProductApiService:
         )
         if transport:
             projected["remote_brain_transport_failure"] = transport
+        attempt_receipt = cls._public_remote_brain_transport_attempt(
+            outcome.get("remote_brain_transport_attempt")
+        )
+        if attempt_receipt:
+            projected["remote_brain_transport_attempt"] = attempt_receipt
         serialization = cls._public_remote_brain_serialization_failure(
             outcome.get("remote_brain_serialization_failure")
         )
@@ -12211,12 +12223,57 @@ class V3ProductApiService:
                 projected[key] = outcome[key]
         if isinstance(outcome.get("remote_brain_request_started"), bool):
             projected["remote_brain_request_started"] = outcome["remote_brain_request_started"]
+        status_code = outcome.get("remote_http_status_code")
+        if (
+            isinstance(status_code, int)
+            and not isinstance(status_code, bool)
+            and 100 <= status_code <= 599
+        ):
+            projected["remote_http_status_code"] = status_code
+        transport_kind = cls._closed_string(
+            outcome.get("remote_provider_transport_kind"),
+            allowed=_REMOTE_BRAIN_PROVIDER_TRANSPORT_KINDS,
+        )
+        if transport_kind:
+            projected["remote_provider_transport_kind"] = transport_kind
         finalizer_lifecycle = safe_remote_brain_finalizer_lifecycle(
             outcome.get("remote_brain_finalizer_lifecycle")
         )
         if finalizer_lifecycle:
             projected["remote_brain_finalizer_lifecycle"] = finalizer_lifecycle
         return projected
+
+    @classmethod
+    def _public_remote_brain_transport_attempt(cls, value: Any) -> dict[str, Any]:
+        """Project the closed aggregate attempt receipt for diagnostics."""
+
+        if not isinstance(value, dict):
+            return {}
+        if value.get("schema_version") != "v3_brain_transport_attempt_v1":
+            return {}
+        stage = cls._closed_string(value.get("stage"), allowed=_REMOTE_BRAIN_LIFECYCLE_STAGES)
+        attempts = value.get("attempts")
+        if not stage or not isinstance(attempts, int) or isinstance(attempts, bool) or attempts not in {0, 1, 2}:
+            return {}
+        boolean_keys = (
+            "request_dispatched",
+            "response_started",
+            "first_content_observed",
+            "complete_response_observed",
+            "json_parse_started",
+            "json_parse_completed",
+            "json_recovery",
+            "json_serialization_recovery_attempted",
+            "transient_recovery_attempted",
+        )
+        if any(not isinstance(value.get(key), bool) for key in boolean_keys):
+            return {}
+        return {
+            "schema_version": "v3_brain_transport_attempt_v1",
+            "stage": stage,
+            "attempts": attempts,
+            **{key: value[key] for key in boolean_keys},
+        }
 
     @classmethod
     def _public_remote_brain_serialization_failure(cls, value: Any) -> dict[str, Any]:

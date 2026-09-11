@@ -34,6 +34,16 @@ BRAIN_TRANSPORT_TIMEOUT_DEFAULT_SECONDS = 300.0
 BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS = 360.0
 BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS = 520.0
 BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS = 220.0
+BRAIN_TRANSPORT_TIMEOUT_PHASES = frozenset(
+    {
+        "connect_timeout",
+        "ttfb_timeout",
+        "read_timeout",
+        "complete_response_timeout",
+        "json_parse_timeout",
+        "unknown_transport_timeout",
+    }
+)
 
 
 class BrainIntentSummary(V3BaseModel):

@@ -17,6 +17,7 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     _call_with_timeout,
     _collect_openai_chat_completion_stream,
     _new_transport_trace,
+    _transport_timeout_phase,
     BrainExecutionBudgetExceeded,
     BrainInvalidJsonResponse,
     BrainOutputTruncated,
@@ -64,6 +65,16 @@ def test_brain_provider_request_timeout_is_outer_hard_cap(monkeypatch) -> None:
         "json_parse_completed": False,
     }
     assert 900 <= failure.value.elapsed_ms <= 1600
+
+
+def test_transport_timeout_phase_distinguishes_complete_response_and_json_parse() -> None:
+    complete = _new_transport_trace(stage="plan", json_recovery=False)
+    complete["complete_response_started"] = True
+    assert _transport_timeout_phase(complete) == "complete_response_timeout"
+
+    parsing = _new_transport_trace(stage="plan", json_recovery=False)
+    parsing["json_parse_started"] = True
+    assert _transport_timeout_phase(parsing) == "json_parse_timeout"
 
 
 class _FakeTimeout:

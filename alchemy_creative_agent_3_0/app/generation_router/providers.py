@@ -1118,6 +1118,29 @@ class ProductionImageGenerationProvider(GenerationProvider):
             visual_cluster = request.metadata.get("visual_cluster") if isinstance(request.metadata.get("visual_cluster"), dict) else {}
             if not visual_cluster and isinstance(shared_capabilities.get("visual_cluster"), dict):
                 visual_cluster = shared_capabilities["visual_cluster"]
+        mode_execution_facts: dict[str, Any] = {}
+        if self._activation_enforced(request):
+            ledger = self._resolved_constraint_ledger(request)
+            ledger_projection = ledger.get("provider_projection") if isinstance(ledger, dict) else {}
+            capability_projection = (
+                ledger_projection.get("capability_projection")
+                if isinstance(ledger_projection, dict)
+                else {}
+            )
+            if isinstance(capability_projection, dict):
+                mode_execution_facts = {
+                    key: capability_projection[key]
+                    for key in (
+                        "effective_variation_mode",
+                        "variation_execution_contract",
+                        "variation_execution_contract_binding",
+                        "variation_execution_mode",
+                        "variation_execution_requested_image_count",
+                        "variation_execution_suite_direction_authoritative",
+                        "variation_execution_contract_enforced",
+                    )
+                    if capability_projection.get(key) not in (None, "", {}, [], False)
+                }
         mode_role_recipe = self._mode_role_recipe(request)
         role_specific_plan = self._role_specific_generation_plan(request)
         mode_policy = self._mode_execution_policy(request)
@@ -1364,7 +1387,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                     "mode_role_key": mode_role_recipe.get("role_key"),
                     "mode_role_label": mode_role_recipe.get("label"),
                     "strong_reference_closure_package": strong_reference_closure,
-                    "mode_quality_profile": mode_quality_profile,
+                     "mode_quality_profile": mode_quality_profile,
+                     **mode_execution_facts,
                     **(
                         {DOC73_AUTO_IDENTITY_ANCHOR_SKELETON_KEY: doc73_skeleton}
                         if doc73_skeleton
@@ -1469,7 +1493,8 @@ class ProductionImageGenerationProvider(GenerationProvider):
                         "mode_role_key": mode_role_recipe.get("role_key"),
                         "mode_role_label": mode_role_recipe.get("label"),
                         "strong_reference_closure_package": strong_reference_closure,
-                        "mode_quality_profile": mode_quality_profile,
+                         "mode_quality_profile": mode_quality_profile,
+                         **mode_execution_facts,
                         DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY: record.metadata.get(
                             DOC73_AUTO_IDENTITY_ANCHOR_BINDING_KEY
                         ),

@@ -280,7 +280,13 @@ def test_doc295_visual_product_evidence_uses_the_shared_typed_fact_authority() -
     assert product_profile_fact_items(compatibility_profile) == {}
 
 
-def test_doc295_general_compatibility_profile_does_not_activate_product_truth_path() -> None:
+def test_doc295_general_compatibility_profile_does_not_activate_product_truth_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This regression owns local capability reconciliation; it must not make
+    # an accidental real Brain call merely because the process default enables
+    # the remote adapter.
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "false")
     runtime = ScenarioRuntime()
     result = runtime.plan_job(
         {
@@ -293,7 +299,11 @@ def test_doc295_general_compatibility_profile_does_not_activate_product_truth_pa
                 "variation_mode": "delivery_suite",
                 "effective_variation_mode": "delivery_suite",
             },
-            "metadata": {"template_id": "general_template", "requested_image_count": 1},
+            "metadata": {
+                "template_id": "general_template",
+                "requested_image_count": 1,
+                "effective_variation_mode": "delivery_suite",
+            },
         }
     )
 
@@ -302,6 +312,9 @@ def test_doc295_general_compatibility_profile_does_not_activate_product_truth_pa
     assert "information_integrity_lock" not in module_ids
     assert result.metadata["normalized_v3_job_intent"]["source_truth_locks"] == []
     assert result.metadata["resolved_constraint_ledger"]["provider_projection"]["product_truth"] == {}
+    assert result.metadata["resolved_constraint_ledger"]["provider_projection"]["capability_projection"][
+        "effective_variation_mode"
+    ] == "delivery_suite"
 
 
 def test_doc295_review_evidence_does_not_treat_compatibility_profile_as_product_source() -> None:

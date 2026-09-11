@@ -377,6 +377,52 @@ def test_doc297_enforced_empty_ledger_does_not_leak_dormant_outer_visual_cluster
     assert projected["mode_execution_audit"]["projection_status"] == "missing"
 
 
+def test_doc297_enforced_single_image_reads_resolved_mode_identity_without_suite_recipe():
+    envelope = _enforced_envelope({})
+    envelope["activation_plan"]["dependency_order"] = ["visual_grammar"]
+    envelope["activation_plan"]["active_capabilities"] = [
+        {"capability_id": "visual_grammar", "activation_mode": "required"},
+    ]
+    envelope["active_capability_ids"] = ["visual_grammar"]
+    envelope["normalized_job_intent"] = {"effective_image_count": 1}
+    envelope["resolved_constraint_ledger"]["provider_projection"]["capability_projection"] = {
+        "effective_variation_mode": "format_layout_adaptation"
+    }
+    result = _result(
+        metadata={
+            "requested_image_count": 1,
+            "capability_execution_envelope": envelope,
+        },
+        candidate_metadata={"output_id": "output_doc297_single_mode"},
+    )
+
+    service = V3ProductApiService()
+    projection = service._authoritative_mode_execution_projection(result)  # noqa: SLF001
+    audit = service._mode_execution_audit_from_result(result, projection)  # noqa: SLF001
+
+    assert projection == {
+        "effective_variation_mode": "format_layout_adaptation",
+        "mode_execution_projection_source": (
+            "resolved_constraint_ledger.provider_projection.capability_projection"
+        ),
+    }
+    assert audit == {
+        "schema_version": "v3_mode_execution_audit_v1",
+        "mode": "format_layout_adaptation",
+        "requested_image_count": 1,
+        "contract_status": "not_applicable",
+        "suite_direction_active": False,
+        "projection_source": "resolved_constraint_ledger.provider_projection.capability_projection",
+    }
+    projected = service._project_candidate_metadata_from_result(  # noqa: SLF001
+        result,
+        result.asset_pack.assets[0].metadata["candidate_metadata"],
+    )
+    assert projected["mode_execution_audit"]["mode"] == "format_layout_adaptation"
+    assert "variation_execution_contract" not in projected
+    assert "role_specific_generation_plan" not in projected
+
+
 def test_doc297_shadow_empty_ledger_projection_is_a_safe_empty_projection():
     envelope = _enforced_envelope({})
     envelope["activation_mode"] = "shadow"

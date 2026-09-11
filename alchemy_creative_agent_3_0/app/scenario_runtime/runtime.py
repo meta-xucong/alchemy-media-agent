@@ -12,6 +12,7 @@ from ..creative_core.pipeline import run_creative_planning, run_generation_loop
 from ..generation_router import GenerationRouter
 from ..creative_core.rules import RULE_VERSION, stable_id
 from ..llm_brain import BrainCanonicalProviderPrompt, BrainRunRequest, BrainRunResult, V3LLMBrainAdapter
+from ..llm_brain.contracts import BRAIN_TRANSPORT_TIMEOUT_PHASES
 from ..llm_brain.fallback import build_remote_required_result
 from ..llm_brain.finalizer_lifecycle import safe_remote_brain_finalizer_lifecycle
 from ..llm_brain.stage_trace import record_stage_event
@@ -93,7 +94,7 @@ from ..shared_capabilities.visual_cluster.contracts import (
     GENERAL_VARIATION_MAX_OUTPUTS,
     VariationExecutionContract,
 )
-from ..shared_capabilities.visual_cluster.mode_role_director import ModeAwareRoleDirector
+from ..shared_capabilities.visual_cluster.mode_role_director import ALLOWED_MODES, ModeAwareRoleDirector
 from ..shared_capabilities.visual_cluster.module import VisualCapabilityClusterModule
 from ..visual_assets import (
     CanonicalProviderPromptReceipt,
@@ -194,20 +195,17 @@ def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
     elapsed_ms = value.get("elapsed_ms")
     if schema_version != "v3_brain_transport_failure_v1":
         return {}
-    if not isinstance(stage, str) or not stage.strip():
+    if not isinstance(stage, str) or stage.strip() not in _SAFE_REMOTE_BRAIN_STAGES:
         return {}
     if error_class != "timeout":
         return {}
-    if timeout_phase not in {
-        "connect_timeout",
-        "ttfb_timeout",
-        "read_timeout",
-        "complete_response_timeout",
-        "json_parse_timeout",
-        "unknown_transport_timeout",
-    }:
+    if timeout_phase not in BRAIN_TRANSPORT_TIMEOUT_PHASES:
         return {}
-    if not isinstance(timeout_seconds, (int, float)) or float(timeout_seconds) <= 0.0:
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or float(timeout_seconds) <= 0.0
+    ):
         return {}
     if not isinstance(elapsed_ms, int) or elapsed_ms < 0:
         return {}
@@ -223,6 +221,40 @@ def _safe_remote_brain_transport_failure(value: Any) -> dict[str, Any]:
         "complete_response_observed": bool(value.get("complete_response_observed")),
         "json_parse_started": bool(value.get("json_parse_started")),
         "json_parse_completed": bool(value.get("json_parse_completed")),
+    }
+
+
+def _safe_remote_brain_transport_attempt(value: Any) -> dict[str, Any]:
+    """Whitelist the aggregate attempt receipt without provider payload data."""
+
+    if not isinstance(value, dict):
+        return {}
+    if value.get("schema_version") != "v3_brain_transport_attempt_v1":
+        return {}
+    stage = str(value.get("stage") or "").strip()
+    attempts = value.get("attempts")
+    if stage not in _SAFE_REMOTE_BRAIN_STAGES:
+        return {}
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts not in {0, 1, 2}:
+        return {}
+    boolean_keys = (
+        "request_dispatched",
+        "response_started",
+        "first_content_observed",
+        "complete_response_observed",
+        "json_parse_started",
+        "json_parse_completed",
+        "json_recovery",
+        "json_serialization_recovery_attempted",
+        "transient_recovery_attempted",
+    )
+    if any(not isinstance(value.get(key), bool) for key in boolean_keys):
+        return {}
+    return {
+        "schema_version": "v3_brain_transport_attempt_v1",
+        "stage": stage,
+        "attempts": attempts,
+        **{key: value[key] for key in boolean_keys},
     }
 
 
@@ -255,9 +287,9 @@ def _safe_remote_brain_serialization_failure(value: Any) -> dict[str, Any]:
             return {}
     else:
         return {}
-    if not isinstance(stage, str) or not stage.strip():
+    if not isinstance(stage, str) or stage.strip() not in _SAFE_REMOTE_BRAIN_STAGES:
         return {}
-    if not isinstance(attempts, int) or attempts not in {1, 2}:
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts not in {1, 2}:
         return {}
     return {
         "schema_version": schema_version,
@@ -307,6 +339,24 @@ _SAFE_REMOTE_BRAIN_STAGES = {
     "provider_prompt_human_naturalness_resign",
     "provider_prompt_professional_capture_resign",
     "remote_intent",
+}
+
+_SAFE_REMOTE_BRAIN_ERROR_CLASSES = {
+    "timeout",
+    "budget_exceeded",
+    "execution_budget_exhausted",
+    "provider_error",
+    "provider_api_error",
+    "unavailable",
+    "upstream_transport_error",
+    "upstream_http_error",
+    "invalid_response",
+    "truncated_response",
+    "content_policy",
+    "canceled",
+    "serialization_failure",
+    "contract_validation",
+    "unknown",
 }
 
 
@@ -2889,9 +2939,21 @@ class ScenarioRuntime:
                     )
                 )
             except Exception as exc:
+                capture_resign_failure_audit = self.llm_brain_adapter.provider_failure_audit(
+                    exc,
+                    stage="provider_prompt_professional_capture_resign",
+                )
+                blocked_brain_result = brain_result.model_copy(
+                    update={
+                        "audit": {
+                            **dict(brain_result.audit or {}),
+                            **capture_resign_failure_audit,
+                        }
+                    }
+                )
                 raise self._remote_creative_brain_block(
                     "professional_anchor_capture_resign_unavailable",
-                    brain_result,
+                    blocked_brain_result,
                 ) from exc
             if isinstance(capture_resign_audit.get("remote_brain_transport"), dict):
                 finalizer_transport_history.append(
@@ -3935,7 +3997,7 @@ class ScenarioRuntime:
         """
 
         audit = dict(brain_result.audit or {})
-        if audit.get("remote_provider_error"):
+        if audit.get("remote_provider_error") or audit.get("remote_provider_failure_recorded") is True:
             outcome_class = "remote_provider_error"
         elif audit.get("remote_provider_available") is False:
             outcome_class = "remote_provider_unavailable"
@@ -3999,8 +4061,9 @@ class ScenarioRuntime:
                 else {}
             ),
             **(
-                {"remote_error_class": str(audit["remote_provider_error_class"])}
-                if audit.get("remote_provider_error_class")
+                {"remote_error_class": audit["remote_provider_error_class"]}
+                if str(audit.get("remote_provider_error_class") or "").strip()
+                in _SAFE_REMOTE_BRAIN_ERROR_CLASSES
                 else {}
             ),
             **(
@@ -4016,6 +4079,15 @@ class ScenarioRuntime:
                 }
                 if isinstance(audit.get("remote_brain_transport_failure"), dict)
                 and _safe_remote_brain_transport_failure(audit["remote_brain_transport_failure"])
+                else {}
+            ),
+            **(
+                {
+                    "remote_brain_transport_attempt": _safe_remote_brain_transport_attempt(
+                        audit["remote_brain_transport_attempt"]
+                    )
+                }
+                if _safe_remote_brain_transport_attempt(audit.get("remote_brain_transport_attempt"))
                 else {}
             ),
             **(
@@ -4043,6 +4115,7 @@ class ScenarioRuntime:
             **(
                 {"remote_http_status_code": int(audit["remote_provider_http_status_code"])}
                 if isinstance(audit.get("remote_provider_http_status_code"), int)
+                and not isinstance(audit.get("remote_provider_http_status_code"), bool)
                 and 100 <= int(audit["remote_provider_http_status_code"]) <= 599
                 else {}
             ),
@@ -5762,6 +5835,14 @@ class ScenarioRuntime:
             )
         product_truth = dict(product_facts)
         template_evidence_retry_contract = self._template_delivery_evidence_retry_contract(resolved_deliverables)
+        effective_general_mode = self._resolved_general_mode_for_ledger(request, normalized_intent)
+        capability_projection = self._ledger_capability_projection(raw_cluster, plan)
+        if effective_general_mode is not None:
+            # Mode identity is a resolved Project Mode fact, but the atomic
+            # provider projection remains the sole enforced-record authority.
+            # Keeping it inside this projection also makes the fact durable for
+            # output-store restore without reviving dormant cluster metadata.
+            capability_projection["effective_variation_mode"] = effective_general_mode
         provider_projection = {
             "projection_version": "resolved_constraint_ledger_v1",
             "template_id": normalized_intent.template_id,
@@ -5778,7 +5859,7 @@ class ScenarioRuntime:
             "quality_guidance": [],
             "negative_guidance": [],
             "retry_patch": {},
-            "capability_projection": self._ledger_capability_projection(raw_cluster, plan),
+            "capability_projection": capability_projection,
             "legacy_adapter": {
                 "source": "accepted_active_executor_results",
                 "raw_cluster_retained": False,
@@ -5837,6 +5918,39 @@ class ScenarioRuntime:
                 }
             ],
         )
+
+    @staticmethod
+    def _resolved_general_mode_for_ledger(
+        request: ScenarioRuntimeRequest,
+        normalized_intent: NormalizedV3JobIntent,
+    ) -> str | None:
+        """Carry only the already-resolved General mode into the ledger.
+
+        Project Mode canonicalizes the user-facing selection before runtime
+        preparation.  The ledger may preserve that identity, but it must not
+        infer a mode from prompt prose or accept the ``auto`` sentinel as an
+        effective mode.  Unknown values fail closed rather than becoming a
+        new public mode.
+        """
+
+        if (
+            normalized_intent.scenario_id != "general_creative"
+            or normalized_intent.template_id != "general_template"
+        ):
+            return None
+        parameters = dict(request.scenario_selection.parameters) if request.scenario_selection else {}
+        for raw_value in (
+            request.metadata.get("effective_variation_mode"),
+            parameters.get("effective_variation_mode"),
+            request.metadata.get("variation_mode"),
+            parameters.get("variation_mode"),
+        ):
+            value = str(raw_value or "").strip().lower()
+            if value == "format_adaptation":
+                value = "format_layout_adaptation"
+            if value in ALLOWED_MODES:
+                return value
+        return None
 
     @staticmethod
     def _template_delivery_evidence_retry_contract(deliverables: list[dict[str, Any]]) -> dict[str, Any]:

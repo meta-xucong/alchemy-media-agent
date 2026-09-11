@@ -23,7 +23,11 @@ from alchemy_creative_agent_3_0.app.llm_brain.providers import (
     V3LLMBrainProvider,
 )
 from alchemy_creative_agent_3_0.app.scenario_runtime import ScenarioRuntime
-from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import _safe_remote_brain_execution_budget
+from alchemy_creative_agent_3_0.app.scenario_runtime.runtime import (
+    _safe_remote_brain_execution_budget,
+    _safe_remote_brain_transport_failure,
+    _safe_remote_brain_transport_attempt,
+)
 from alchemy_creative_agent_3_0.app.shared_capabilities.activation import ecommerce_capability_policy
 from alchemy_creative_agent_3_0.tests.ecommerce_test_support import EcommerceRemoteBrainTestProvider
 from services.alchemy_codex_local_adapter.native_planner import CodexNativeImageGenPlanner
@@ -403,6 +407,98 @@ def test_doc175_execution_budget_projection_rejects_bool_values() -> None:
     assert _safe_remote_brain_execution_budget(
         {"logical_budget_seconds": 520.0, "remaining_ms": False, "state": "within_budget"}
     ) == {}
+
+
+def test_doc175_transport_failure_projection_rejects_unsafe_stage() -> None:
+    valid = {
+        "schema_version": "v3_brain_transport_failure_v1",
+        "stage": "plan",
+        "transport_error_class": "timeout",
+        "timeout_phase": "read_timeout",
+        "timeout_seconds": 7.0,
+        "elapsed_ms": 7000,
+        "response_started": True,
+        "first_content_observed": False,
+        "complete_response_observed": False,
+        "json_parse_started": False,
+        "json_parse_completed": False,
+    }
+    assert _safe_remote_brain_transport_failure(valid)["stage"] == "plan"
+    assert _safe_remote_brain_transport_failure({**valid, "stage": "https://unsafe.example/path"}) == {}
+
+
+def test_doc175_transport_attempt_projection_is_closed_and_preserves_dispatch_facts() -> None:
+    receipt = {
+        "schema_version": "v3_brain_transport_attempt_v1",
+        "stage": "plan",
+        "attempts": 2,
+        "request_dispatched": True,
+        "response_started": True,
+        "first_content_observed": False,
+        "complete_response_observed": False,
+        "json_parse_started": False,
+        "json_parse_completed": False,
+        "json_recovery": True,
+        "json_serialization_recovery_attempted": True,
+        "transient_recovery_attempted": False,
+        "raw_prompt": "must not leak",
+    }
+
+    projected = _safe_remote_brain_transport_attempt(receipt)
+
+    assert projected["attempts"] == 2
+    assert projected["request_dispatched"] is True
+    assert "raw_prompt" not in projected
+    assert _safe_remote_brain_transport_attempt({**receipt, "stage": "unsafe/path"}) == {}
+
+
+def test_doc175_semantic_transport_attempt_reaches_blocked_outcome_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import alchemy_creative_agent_3_0.app.llm_brain.providers as providers_module
+
+    monkeypatch.setenv("V3_LLM_BRAIN_ENABLED", "true")
+    monkeypatch.setenv("V3_LLM_BRAIN_PROVIDER", "deepseek")
+    monkeypatch.setenv("V3_LLM_BRAIN_MODEL", "deepseek-test")
+    monkeypatch.setenv("V3_LLM_BRAIN_API_KEY", "test-key")
+    monkeypatch.setenv("V3_LLM_BRAIN_BASE_URL", "https://brain.example.test/v1")
+    monkeypatch.setenv("V3_LLM_BRAIN_EXECUTION_BUDGET_SECONDS", "520")
+    monkeypatch.setenv("V3_LLM_BRAIN_TIMEOUT_SECONDS", "7")
+
+    def failed_stream(**_kwargs):  # noqa: ANN003
+        providers_module._mark_transport_event("request_dispatched")  # noqa: SLF001
+        providers_module._mark_transport_event("response_started")  # noqa: SLF001
+        raise BrainTransportTimeoutError(
+            stage="plan",
+            timeout_seconds=7,
+            elapsed_ms=7000,
+            timeout_phase="read_timeout",
+            response_started=True,
+        )
+
+    monkeypatch.setattr(providers_module, "_collect_openai_chat_completion_stream", failed_stream)
+    provider = V3LLMBrainProvider()
+    runtime = ScenarioRuntime(llm_brain_adapter=V3LLMBrainAdapter(provider=provider))
+    result = runtime.plan_job(
+        {
+            "user_input": "Create one real-camera product image.",
+            "scenario_selection": {"scenario_id": "ecommerce"},
+            "metadata": {
+                "template_id": "ecommerce_template",
+                "requested_image_count": 1,
+                "require_real_images": True,
+            },
+        }
+    )
+
+    assert result.status.value == "blocked"
+    outcome = result.metadata["remote_creative_brain_outcome"]
+    assert outcome["remote_error_class"] == "timeout"
+    assert outcome["remote_brain_request_started"] is True
+    assert outcome["remote_brain_transport_attempt"]["attempts"] == 2
+    assert outcome["remote_brain_transport_attempt"]["transient_recovery_attempted"] is True
+    assert outcome["remote_brain_transport_failure"]["timeout_phase"] == "read_timeout"
+    assert "test-key" not in json.dumps(outcome, sort_keys=True)
 
 
 def test_doc175_finalizer_generic_provider_failure_reaches_blocked_outcome_safely(

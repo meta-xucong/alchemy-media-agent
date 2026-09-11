@@ -15,6 +15,7 @@ from typing import Any
 from .contracts import (
     BRAIN_EXECUTION_BUDGET_DEFAULT_SECONDS,
     BRAIN_EXECUTION_BUDGET_HANDOFF_SECONDS,
+    BRAIN_TRANSPORT_TIMEOUT_PHASES,
     BRAIN_TRANSPORT_TIMEOUT_DEFAULT_SECONDS,
     BRAIN_TRANSPORT_TIMEOUT_MAX_SECONDS,
     BRAIN_TRANSPORT_TIMEOUT_MIN_SECONDS,
@@ -46,6 +47,7 @@ class BrainTransportTimeoutError(BrainProviderError):
         timeout_seconds: float,
         elapsed_ms: int,
         timeout_phase: str,
+        request_dispatched: bool = False,
         response_started: bool = False,
         first_content_observed: bool = False,
         complete_response_observed: bool = False,
@@ -55,10 +57,11 @@ class BrainTransportTimeoutError(BrainProviderError):
         super().__init__(
             f"remote Brain provider timed out during {timeout_phase} after {timeout_seconds:.2f} seconds"
         )
-        self.stage = str(stage or "unknown")
+        self.stage = _safe_brain_stage(stage)
         self.timeout_seconds = max(0.0, float(timeout_seconds))
         self.elapsed_ms = max(0, int(elapsed_ms))
         self.timeout_phase = _safe_transport_timeout_phase(timeout_phase)
+        self.request_dispatched = bool(request_dispatched)
         self.response_started = bool(response_started)
         self.first_content_observed = bool(first_content_observed)
         self.complete_response_observed = bool(complete_response_observed)
@@ -331,6 +334,8 @@ _ACTIVE_TRANSPORT_CANCELLATION: ContextVar[_TransportCancellation | None] = Cont
     default=None,
 )
 _STREAM_PROGRESS_GRACE_SECONDS = 30.0
+_TRANSPORT_TRACE_ATTR = "_v3_brain_transport_trace"
+_TRANSPORT_FAILURE_RECEIPT_ATTR = "_v3_brain_transport_failure_receipt"
 
 
 class V3LLMBrainProvider:
@@ -424,7 +429,17 @@ class V3LLMBrainProvider:
         but only while the existing shared execution budget still has time.
         """
 
-        self._ensure_budget_available()
+        try:
+            self._ensure_budget_available()
+        except BrainExecutionBudgetExceeded as exc:
+            _annotate_transport_failure(
+                exc,
+                attempts=0,
+                json_recovery_attempted=False,
+                transient_recovery_attempted=False,
+                stage=request.stage,
+            )
+            raise
         if self.provider in {"anthropic", "kimi", "claude"}:
             runner = self._run_anthropic_compatible
         else:
@@ -436,7 +451,7 @@ class V3LLMBrainProvider:
                 json_recovery_attempted=False,
                 execution_budget=self.execution_budget_receipt(),
             )
-        except BrainInvalidJsonResponse:
+        except BrainInvalidJsonResponse as first_error:
             try:
                 return _with_transport_receipt(
                     self._run_remote_attempt(runner, request, json_recovery=True),
@@ -445,6 +460,12 @@ class V3LLMBrainProvider:
                     execution_budget=self.execution_budget_receipt(),
             )
             except BrainInvalidJsonResponse as recovery_error:
+                _annotate_transport_failure(
+                    recovery_error,
+                    attempts=2,
+                    json_recovery_attempted=True,
+                    transient_recovery_attempted=False,
+                )
                 if isinstance(recovery_error, BrainOutputTruncated):
                     raise BrainOutputTruncated(
                         "remote brain response was truncated after one bounded serialization recovery",
@@ -465,16 +486,54 @@ class V3LLMBrainProvider:
                     json_parse_completed=getattr(recovery_error, "json_parse_completed", False),
                     json_failure_kind=getattr(recovery_error, "json_failure_kind", "unknown"),
                 ) from recovery_error
+            except BrainProviderError as recovery_error:
+                _annotate_transport_failure(
+                    recovery_error,
+                    attempts=2,
+                    json_recovery_attempted=True,
+                    transient_recovery_attempted=False,
+                )
+                raise recovery_error from first_error
         except BrainProviderError as first_error:
             if not _is_retryable_transient_provider_error(first_error):
+                _annotate_transport_failure(
+                    first_error,
+                    attempts=1,
+                    json_recovery_attempted=False,
+                    transient_recovery_attempted=False,
+                )
                 raise
             # Keep the shared logical deadline authoritative.  A retry must
             # never reset the budget or turn an auth/contract failure into a
             # second remote call.
             if _ACTIVE_EXECUTION_BUDGET.get() is None:
+                _annotate_transport_failure(
+                    first_error,
+                    attempts=1,
+                    json_recovery_attempted=False,
+                    transient_recovery_attempted=False,
+                )
                 raise
-            self._ensure_budget_available()
-            recovered = self._run_remote_attempt(runner, request, json_recovery=False)
+            try:
+                self._ensure_budget_available()
+            except BrainExecutionBudgetExceeded as budget_error:
+                _annotate_transport_failure(
+                    budget_error,
+                    attempts=1,
+                    json_recovery_attempted=False,
+                    transient_recovery_attempted=False,
+                )
+                raise budget_error from first_error
+            try:
+                recovered = self._run_remote_attempt(runner, request, json_recovery=False)
+            except BrainProviderError as recovery_error:
+                _annotate_transport_failure(
+                    recovery_error,
+                    attempts=2,
+                    json_recovery_attempted=False,
+                    transient_recovery_attempted=True,
+                )
+                raise recovery_error from first_error
             return _with_transport_receipt(
                 recovered,
                 attempts=2,
@@ -494,6 +553,13 @@ class V3LLMBrainProvider:
                 trace=trace,
                 maximum_deadline=maximum_deadline,
             )
+        except BaseException as exc:
+            # Keep only a closed transport trace on the exception.  The
+            # adapter can aggregate it across a bounded recovery chain while
+            # prompt, URL, headers, body, and provider response text remain
+            # outside durable metadata.
+            setattr(exc, _TRANSPORT_TRACE_ATTR, _safe_transport_trace_receipt(trace))
+            raise
         finally:
             _ACTIVE_TRANSPORT_TRACE.reset(token)
 
@@ -641,7 +707,8 @@ class V3LLMBrainProvider:
             _mark_transport_event("client_constructed")
             client_registration = _register_transport_close(client)
             try:
-                _mark_transport_event("request_dispatched")
+                _mark_transport_event("complete_response_call_entered")
+                _mark_transport_event("request_call_entered")
                 response = client.responses.create(
                     model=self.model,
                     input=[
@@ -655,6 +722,8 @@ class V3LLMBrainProvider:
                     timeout=timeout_seconds,
                     max_output_tokens=self.max_tokens,
                 )
+                _mark_transport_event("request_dispatched")
+                _mark_transport_event("complete_response_started")
                 _mark_transport_event("complete_response_observed")
                 text = getattr(response, "output_text", None) or ""
                 if not text:
@@ -672,6 +741,7 @@ class V3LLMBrainProvider:
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
+            _mark_transport_dispatch_from_exception(exc)
             if _is_transport_timeout_exception(exc):
                 raise _transport_timeout_from_trace(
                     _ACTIVE_TRANSPORT_TRACE.get() or {},
@@ -744,6 +814,7 @@ class V3LLMBrainProvider:
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
+            _mark_transport_dispatch_from_exception(exc)
             if _is_transport_timeout_exception(exc):
                 raise _transport_timeout_from_trace(
                     _ACTIVE_TRANSPORT_TRACE.get() or {},
@@ -782,16 +853,19 @@ class V3LLMBrainProvider:
                 client_registration = _register_transport_close(client)
                 try:
                     _mark_transport_event("client_constructed")
-                    _mark_transport_event("request_dispatched")
+                    _mark_transport_event("complete_response_call_entered")
+                    _mark_transport_event("request_call_entered")
                     response = client.post(url, headers=headers, json=payload)
+                    _mark_transport_event("request_dispatched")
+                    _mark_transport_event("complete_response_started")
                     _mark_transport_event("complete_response_observed")
                     response.raise_for_status()
                 finally:
                     _unregister_transport_close(client_registration)
+            _mark_transport_event("json_parse_started")
             response_json = response.json()
             if _response_ended_at_output_limit(response_json):
                 raise BrainOutputTruncated("remote brain response ended at the configured output-token limit")
-            _mark_transport_event("json_parse_started")
             parsed = _loads_json_object(_anthropic_text(response_json))
             _mark_transport_event("json_parse_completed")
             return parsed
@@ -800,6 +874,7 @@ class V3LLMBrainProvider:
         except BrainInvalidJsonResponse:
             raise
         except Exception as exc:
+            _mark_transport_dispatch_from_exception(exc)
             if _is_transport_timeout_exception(exc):
                 raise _transport_timeout_from_trace(
                     _ACTIVE_TRANSPORT_TRACE.get() or {},
@@ -990,10 +1065,15 @@ def _new_transport_trace(*, stage: str, json_recovery: bool) -> dict[str, Any]:
         "stage": str(stage or "unknown"),
         "json_recovery": bool(json_recovery),
         "last_event": "created",
+        "response_kind": "",
+        "timeout_phase_hint": "",
+        "request_call_entered": False,
+        "request_dispatched": False,
         "response_started": False,
         "first_content_observed": False,
         "reasoning_content_observed": False,
         "reasoning_chunk_count": 0,
+        "complete_response_started": False,
         "complete_response_observed": False,
         "json_parse_started": False,
         "json_parse_completed": False,
@@ -1012,6 +1092,20 @@ def _mark_transport_event(event: str) -> None:
         trace["response_started"] = True
     if normalized == "response_started":
         trace["response_started"] = True
+    if normalized == "request_dispatched":
+        trace["request_call_entered"] = True
+        trace["request_dispatched"] = True
+        trace["response_started"] = bool(trace.get("response_started"))
+    if normalized == "request_call_entered":
+        trace["request_call_entered"] = True
+    if normalized == "stream_response_call_entered":
+        trace["response_kind"] = "stream"
+        trace["request_call_entered"] = True
+    if normalized == "complete_response_call_entered":
+        trace["response_kind"] = "complete"
+        trace["request_call_entered"] = True
+    if normalized == "complete_response_started":
+        trace["complete_response_started"] = True
     if normalized == "first_content_observed":
         trace["response_started"] = True
         trace["first_content_observed"] = True
@@ -1036,6 +1130,111 @@ def _mark_transport_event(event: str) -> None:
         trace["last_progress_at"] = time.perf_counter()
 
 
+def _safe_transport_trace_receipt(trace: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a closed failure trace with no provider-native payload data."""
+
+    trace = trace if isinstance(trace, dict) else {}
+    return {
+        "schema_version": "v3_brain_transport_attempt_v1",
+        "stage": _safe_brain_stage(trace.get("stage")),
+        "request_dispatched": bool(trace.get("request_dispatched")),
+        "response_started": bool(trace.get("response_started")),
+        "first_content_observed": bool(trace.get("first_content_observed")),
+        "complete_response_observed": bool(trace.get("complete_response_observed")),
+        "json_parse_started": bool(trace.get("json_parse_started")),
+        "json_parse_completed": bool(trace.get("json_parse_completed")),
+        "json_recovery": bool(trace.get("json_recovery")),
+    }
+
+
+def _annotate_transport_failure(
+    exc: BaseException,
+    *,
+    attempts: int,
+    json_recovery_attempted: bool,
+    transient_recovery_attempted: bool,
+    stage: str | None = None,
+) -> BaseException:
+    """Attach bounded attempt facts to a provider exception for safe audit."""
+
+    trace = getattr(exc, _TRANSPORT_TRACE_ATTR, None)
+    receipt = _safe_transport_trace_receipt(trace if isinstance(trace, dict) else None)
+    receipt.update(
+        {
+            "attempts": max(0, min(2, int(attempts))),
+            "json_serialization_recovery_attempted": bool(json_recovery_attempted),
+            "transient_recovery_attempted": bool(transient_recovery_attempted),
+        }
+    )
+    if receipt.get("stage") == "unknown" and stage:
+        receipt["stage"] = _safe_brain_stage(stage)
+    setattr(exc, _TRANSPORT_FAILURE_RECEIPT_ATTR, receipt)
+    return exc
+
+
+def transport_failure_receipt(exc: BaseException) -> dict[str, Any]:
+    """Aggregate closed attempt facts across one bounded exception chain."""
+
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    # Keep both layers of evidence.  A budget guard may be the terminal
+    # exception and carry an annotated receipt with ``request_dispatched``
+    # false, while its cause is the prior transport attempt that did dispatch.
+    # Dropping the cause trace would misclassify a real upstream call as a
+    # local preflight failure.
+    receipts: list[dict[str, Any]] = []
+    for item in chain:
+        annotated = getattr(item, _TRANSPORT_FAILURE_RECEIPT_ATTR, None)
+        if isinstance(annotated, dict):
+            receipts.append(annotated)
+        trace = getattr(item, _TRANSPORT_TRACE_ATTR, None)
+        if isinstance(trace, dict):
+            receipts.append(_safe_transport_trace_receipt(trace))
+    if not receipts:
+        return {}
+    stage = next(
+        (
+            str(item.get("stage") or "")
+            for item in receipts
+            if str(item.get("stage") or "").strip()
+            and str(item.get("stage") or "").strip() in _SAFE_BRAIN_STAGES
+            and str(item.get("stage") or "").strip() != "unknown"
+        ),
+        "unknown",
+    )
+    attempts = max(
+        int(item.get("attempts") or 0)
+        for item in receipts
+        if isinstance(item.get("attempts"), int) and not isinstance(item.get("attempts"), bool)
+    ) if any(
+        isinstance(item.get("attempts"), int) and not isinstance(item.get("attempts"), bool)
+        for item in receipts
+    ) else 0
+    return {
+        "schema_version": "v3_brain_transport_attempt_v1",
+        "stage": stage if stage in _SAFE_BRAIN_STAGES else "unknown",
+        "attempts": max(0, min(2, attempts)),
+        "request_dispatched": any(bool(item.get("request_dispatched")) for item in receipts),
+        "response_started": any(bool(item.get("response_started")) for item in receipts),
+        "first_content_observed": any(bool(item.get("first_content_observed")) for item in receipts),
+        "complete_response_observed": any(bool(item.get("complete_response_observed")) for item in receipts),
+        "json_parse_started": any(bool(item.get("json_parse_started")) for item in receipts),
+        "json_parse_completed": any(bool(item.get("json_parse_completed")) for item in receipts),
+        "json_recovery": any(bool(item.get("json_recovery")) for item in receipts),
+        "json_serialization_recovery_attempted": any(
+            bool(item.get("json_serialization_recovery_attempted")) for item in receipts
+        ),
+        "transient_recovery_attempted": any(
+            bool(item.get("transient_recovery_attempted")) for item in receipts
+        ),
+    }
+
+
 def _register_transport_close(resource: Any) -> tuple[_TransportCancellation, int] | None:
     cancellation = _ACTIVE_TRANSPORT_CANCELLATION.get()
     close = getattr(resource, "close", None)
@@ -1058,12 +1257,18 @@ def _transport_timeout_from_trace(
     timeout_seconds: float,
     elapsed_ms: int,
 ) -> BrainTransportTimeoutError:
+    # The outer bounded worker can be the first caller to observe a timeout.
+    # If the provider thread had entered the actual transport call, preserve
+    # that evidence even though no response object was returned.
+    if bool(trace.get("request_call_entered")) and not bool(trace.get("request_dispatched")):
+        trace["request_dispatched"] = True
     phase = _transport_timeout_phase(trace)
     return BrainTransportTimeoutError(
-        stage=str(trace.get("stage") or "unknown"),
+        stage=_safe_brain_stage(trace.get("stage")),
         timeout_seconds=timeout_seconds,
         elapsed_ms=elapsed_ms,
         timeout_phase=phase,
+        request_dispatched=bool(trace.get("request_dispatched")),
         response_started=bool(trace.get("response_started")),
         first_content_observed=bool(trace.get("first_content_observed")),
         complete_response_observed=bool(trace.get("complete_response_observed")),
@@ -1075,8 +1280,13 @@ def _transport_timeout_from_trace(
 def _transport_timeout_phase(trace: dict[str, Any]) -> str:
     if bool(trace.get("json_parse_started")) and not bool(trace.get("json_parse_completed")):
         return "json_parse_timeout"
+    hinted_phase = str(trace.get("timeout_phase_hint") or "").strip().lower()
+    if hinted_phase in BRAIN_TRANSPORT_TIMEOUT_PHASES:
+        return hinted_phase
     if bool(trace.get("first_content_observed")) or bool(trace.get("response_started")):
         return "read_timeout"
+    if bool(trace.get("complete_response_started")) and not bool(trace.get("complete_response_observed")):
+        return "complete_response_timeout"
     last_event = str(trace.get("last_event") or "").strip().lower()
     if last_event in {"client_constructing", "created"}:
         return "connect_timeout"
@@ -1087,14 +1297,7 @@ def _transport_timeout_phase(trace: dict[str, Any]) -> str:
 
 def _safe_transport_timeout_phase(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {
-        "connect_timeout",
-        "ttfb_timeout",
-        "read_timeout",
-        "complete_response_timeout",
-        "json_parse_timeout",
-        "unknown_transport_timeout",
-    }:
+    if normalized in BRAIN_TRANSPORT_TIMEOUT_PHASES:
         return normalized
     return "unknown_transport_timeout"
 
@@ -1112,12 +1315,71 @@ def _is_unsupported_brain_protocol_error(error: BaseException) -> bool:
         return False
 
 
-def _is_transport_timeout_exception(error: BaseException) -> bool:
-    """Recognize timeout types emitted by supported HTTP/SDK transports."""
+def _exception_chain(error: BaseException) -> list[BaseException]:
+    """Return a finite exception chain without retaining provider details."""
 
-    module = str(error.__class__.__module__ or "").strip().lower()
-    name = str(error.__class__.__name__ or "").strip().lower()
-    return "timeout" in name and module.startswith(("httpx", "httpcore", "openai"))
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _is_transport_timeout_exception(error: BaseException) -> bool:
+    """Recognize timeout types even when an SDK wraps their original cause."""
+
+    for item in _exception_chain(error):
+        module = str(item.__class__.__module__ or "").strip().lower()
+        name = str(item.__class__.__name__ or "").strip().lower()
+        if "timeout" in name and module.startswith(("httpx", "httpcore", "openai")):
+            return True
+    return False
+
+
+def _mark_transport_dispatch_from_exception(error: BaseException) -> None:
+    """Mark dispatch only for errors that prove a transport attempt occurred."""
+
+    trace = _ACTIVE_TRANSPORT_TRACE.get()
+    if not isinstance(trace, dict):
+        return
+    for item in _exception_chain(error):
+        status = getattr(item, "status_code", None)
+        if status is None:
+            response = getattr(item, "response", None)
+            status = getattr(response, "status_code", None)
+        if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
+            trace["request_dispatched"] = True
+            return
+        module = str(item.__class__.__module__ or "").strip().lower()
+        name = str(item.__class__.__name__ or "").strip().lower()
+        if not module.startswith(("httpx", "httpcore", "openai")):
+            continue
+        if "timeout" in name or any(
+            token in name
+            for token in (
+                "connecterror",
+                "connectionerror",
+                "networkerror",
+                "readerror",
+                "writeerror",
+                "protocolerror",
+            )
+        ):
+            if "connect" in name:
+                trace["timeout_phase_hint"] = "connect_timeout"
+            elif "read" in name:
+                trace["timeout_phase_hint"] = (
+                    "complete_response_timeout"
+                    if trace.get("response_kind") == "complete"
+                    else "read_timeout"
+                )
+            elif trace.get("response_kind") == "complete":
+                trace["timeout_phase_hint"] = "complete_response_timeout"
+            trace["request_dispatched"] = True
+            return
 
 
 _RETRYABLE_TRANSIENT_HTTP_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
@@ -1151,6 +1413,8 @@ def _is_retryable_transient_provider_error(error: BaseException) -> bool:
         if isinstance(item, (BrainExecutionBudgetExceeded, BrainPromptContractInvalid, BrainInvalidJsonResponse)):
             return False
         if isinstance(item, BrainTransportTimeoutError):
+            return True
+        if _is_transport_timeout_exception(item):
             return True
         for candidate in (
             getattr(item, "status_code", None),
@@ -1205,9 +1469,12 @@ def _collect_openai_chat_completion_stream(
         try:
             _mark_transport_event("client_constructed")
             record_stage_event("brain_provider", "stream_client_constructed")
-            _mark_transport_event("request_dispatched")
-            record_stage_event("brain_provider", "stream_request_dispatched")
+            _mark_transport_event("stream_response_call_entered")
+            _mark_transport_event("request_call_entered")
+            record_stage_event("brain_provider", "stream_request_call_entered")
             with client.stream("POST", url, headers=headers, json=payload) as response:
+                _mark_transport_event("request_dispatched")
+                record_stage_event("brain_provider", "stream_request_dispatched")
                 response_registration = _register_transport_close(response)
                 try:
                     _mark_transport_event("response_started")

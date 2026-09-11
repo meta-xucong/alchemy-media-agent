@@ -260,6 +260,52 @@ def test_public_remote_brain_projection_preserves_safe_serialization_failure() -
     assert "provider_payload" not in str(projected)
 
 
+def test_public_remote_brain_projection_preserves_current_transport_diagnostics() -> None:
+    projected = V3ProductApiService._public_remote_brain_lifecycle_outcome(
+        {
+            "schema_version": "v3_remote_creative_brain_outcome_v1",
+            "state": "blocked",
+            "reason_code": "remote_brain_unavailable",
+            "outcome_class": "remote_provider_error",
+            "remote_error_class": "timeout",
+            "remote_http_status_code": 502,
+            "remote_provider_transport_kind": "protocol_error",
+            "remote_brain_transport_failure": {
+                "schema_version": "v3_brain_transport_failure_v1",
+                "stage": "plan",
+                "transport_error_class": "timeout",
+                "timeout_phase": "ttfb_timeout",
+                "timeout_seconds": 30.0,
+                "elapsed_ms": 30000,
+            },
+            "remote_brain_transport_attempt": {
+                "schema_version": "v3_brain_transport_attempt_v1",
+                "stage": "plan",
+                "attempts": 2,
+                "request_dispatched": True,
+                "response_started": False,
+                "first_content_observed": False,
+                "complete_response_observed": False,
+                "json_parse_started": False,
+                "json_parse_completed": False,
+                "json_recovery": False,
+                "json_serialization_recovery_attempted": False,
+                "transient_recovery_attempted": True,
+            },
+            "raw_response": "must not leak",
+            "provider_url": "https://provider.invalid/private",
+        }
+    )
+
+    assert projected["remote_http_status_code"] == 502
+    assert projected["remote_provider_transport_kind"] == "protocol_error"
+    assert projected["remote_brain_transport_failure"]["timeout_phase"] == "ttfb_timeout"
+    assert projected["remote_brain_transport_attempt"]["attempts"] == 2
+    assert projected["remote_brain_transport_attempt"]["request_dispatched"] is True
+    assert "must not leak" not in str(projected)
+    assert "provider.invalid" not in str(projected)
+
+
 def test_public_projection_preserves_safe_capability_activation_failure() -> None:
     runtime = ScenarioRuntime()
     resolution = runtime.scenario_registry.resolve({"scenario_id": "general_creative"})
